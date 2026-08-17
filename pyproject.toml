@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atlas-agent"
+version = "0.1.0"
+description = "A lightweight, extensible local CLI agent scaffold"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Atlas" }
+]
+dependencies = []
+
+[project.optional-dependencies]
+local-llm = ["torch>=2.3"]
+
+[project.scripts]
+atlas-agent = "atlas_agent.cli:main"
+atlas-train-local-llm = "atlas_agent.local_llm.train:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
