@@ -22,6 +22,10 @@ import { renderChatJson, renderChatText, toChatOutput } from "./presentation/cha
 import { REPOSITORY_READ_ONLY_MODEL_TOOLS } from "./model/repository-tool-model-definitions.js";
 import { RepositoryTreeBuilder } from "./infrastructure/repository-tree-builder.js";
 import { renderTreeJson, renderTreeText } from "./presentation/tree-renderers.js";
+import { BoundedCommandRunner } from "./infrastructure/bounded-command-runner.js";
+import { GhCliRepositoryHost } from "./infrastructure/gh-cli-repository-host.js";
+import { executeGitHubCommand } from "./cli-github.js";
+import { renderGitHubJson, renderGitHubText } from "./presentation/github-renderers.js";
 
 const USAGE = `Usage:
   atlas inspect <repository-path> [--format text|json]
@@ -30,6 +34,9 @@ const USAGE = `Usage:
   atlas references <repository-path> <symbol-name> [--max-results N] [--format text|json]
   atlas read <repository-path> <relative-file-path> [--start-line N] [--end-line N] [--max-lines N] [--max-bytes N] [--format text|json]
   atlas tree <repository-path> [--max-depth N] [--max-entries N] [--format text|json]
+  atlas github repo <owner>/<repository> [--format text|json]
+  atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
+  atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]`;
 
 export async function main(args: readonly string[]): Promise<number> {
@@ -37,7 +44,7 @@ export async function main(args: readonly string[]): Promise<number> {
     console.log(USAGE);
     return 0;
   }
-  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "chat") || args[1] === undefined) {
+  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "github" && args[0] !== "chat") || args[1] === undefined) {
     console.error(USAGE);
     return 2;
   }
@@ -117,6 +124,9 @@ export async function main(args: readonly string[]): Promise<number> {
         : renderSymbolReferenceText(result));
       return 0;
     }
+    if (args[0] === "github") {
+      return await runGitHub(args.slice(1), format);
+    }
     if (args[0] === "chat") {
       return await runChat(args, format);
     }
@@ -148,6 +158,21 @@ export async function main(args: readonly string[]): Promise<number> {
     console.error(`Atlas failed: ${message}`);
     return 1;
   }
+}
+
+async function runGitHub(args: readonly string[], format: "json" | "text"): Promise<number> {
+  const host = new GhCliRepositoryHost(new BoundedCommandRunner({
+    repositoryRoot: process.cwd(),
+    allowedExecutables: ["gh"],
+    inheritedEnvironmentVariables: ["PATH", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOME", "GH_CONFIG_DIR"],
+    timeoutMs: 30_000,
+    maxStdoutBytes: 1_048_576,
+    maxStderrBytes: 64 * 1024,
+    maxCombinedOutputBytes: 1_048_576,
+  }));
+  const output = await executeGitHubCommand(args, host);
+  console.log(format === "json" ? renderGitHubJson(output) : renderGitHubText(output));
+  return 0;
 }
 
 async function runChat(args: readonly string[], format: "json" | "text"): Promise<number> {

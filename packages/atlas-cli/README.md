@@ -36,6 +36,8 @@ node .\dist\src\cli.js search C:\path\to\repository "config" --scope files --for
 node .\dist\src\cli.js symbols C:\path\to\repository --query Service
 node .\dist\src\cli.js references C:\path\to\repository Service
 node .\dist\src\cli.js read C:\path\to\repository src\service.ts --start-line 20 --end-line 60
+node .\dist\src\cli.js github repo cornerstonemarketingus/atlas
+node .\dist\src\cli.js github prs cornerstonemarketingus/atlas --state open
 node .\dist\src\cli.js chat C:\path\to\repository "Explain the architecture" --endpoint http://127.0.0.1:1234/v1/chat/completions --model local-model
 ```
 
@@ -58,6 +60,9 @@ atlas search <repository-path> <query> [--scope all|files|content] [--max-result
 atlas symbols <repository-path> [--query text] [--max-results N] [--format text|json]
 atlas references <repository-path> <symbol-name> [--max-results N] [--format text|json]
 atlas read <repository-path> <relative-file-path> [--start-line N] [--end-line N] [--max-lines N] [--max-bytes N] [--format text|json]
+atlas github repo <owner>/<repository> [--format text|json]
+atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
+atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
 atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
 atlas --help
 ```
@@ -108,6 +113,11 @@ Metadata tools are allowed by default; tools that return source content stop for
 approval unless `--allow-source` is supplied. The default output-token budget is
 8,192 across at most eight turns. Atlas sends no credentials and does not permit
 remote model endpoints through this adapter.
+
+GitHub commands use the locally authenticated `gh` CLI session and make only
+bounded, read-only GitHub API calls. They return repository metadata, pull
+requests, or issues; they never create branches, commits, pull requests, or
+modify GitHub state. Run `gh auth login` before using them.
 
 ## Validation
 
