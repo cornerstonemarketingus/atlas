@@ -7,6 +7,8 @@ inspect another Git repository and produce a deterministic structured summary.
 ## Current release
 
 The canonical implementation lives in [`packages/atlas-cli`](packages/atlas-cli).
+The hosted control plane lives in [`apps/web`](apps/web) and provides a private,
+authenticated task-intake surface for approval-gated autonomous changes.
 
 Requirements:
 
@@ -72,7 +74,18 @@ ordered next assignments are tracked in [`TODO.md`](TODO.md).
 - Public repository editing and validation workflows (internal approval-bound primitives exist)
 - Branch, commit, pull-request, browser, or multi-agent workflows
 - Public agent-driven code editing, validation execution, and repair workflows
-- Hosted web workspace or public deployment
+- Production agent-runner dispatch and hosted GitHub write credentials
+
+## Hosted control plane
+
+The web application builds to a Cloudflare Worker-compatible bundle and includes
+deployment metadata for Sites plus a root Vercel descriptor. Task submission is
+authenticated server-side and forwards only to a configured Atlas agent runner.
+GitHub credentials remain server-side; commit mode is approval-required.
+
+Configure `ATLAS_AGENT_DISPATCH_URL` and `ATLAS_AGENT_DISPATCH_TOKEN` as hosted
+secrets. The runner must validate the task ID, repository allowlist, requested
+user, approval, branch, and exact change-set digest before committing.
 
 ## Legacy Python prototype
 
