@@ -86,6 +86,8 @@ GitHub credentials remain server-side; commit mode is approval-required.
 Configure `ATLAS_AGENT_DISPATCH_URL` and `ATLAS_AGENT_DISPATCH_TOKEN` as hosted
 secrets. The runner must validate the task ID, repository allowlist, requested
 user, approval, branch, and exact change-set digest before committing.
+Set `ATLAS_ALLOWED_REPOSITORIES` to a comma-separated list of `owner/repository`
+names that may be submitted from the hosted task composer.
 
 ## Legacy Python prototype
 
