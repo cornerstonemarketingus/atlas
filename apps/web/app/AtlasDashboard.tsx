@@ -10,7 +10,7 @@ const activity = [
 export function AtlasDashboard() {
   const [repository, setRepository] = useState("cornerstonemarketingus/atlas");
   const [branch, setBranch] = useState("main");
-  const [mode, setMode] = useState("implement");
+  const [mode, setMode] = useState("inspect");
   const [objective, setObjective] = useState("");
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -21,7 +21,7 @@ export function AtlasDashboard() {
     try {
       const response = await fetch("/api/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repository, branch, mode, objective }) });
       const result = (await response.json()) as { message?: string; taskId?: string };
-      setNotice(response.ok ? `Task ${result.taskId ?? "queued"} is awaiting approval.` : result.message ?? "Task dispatch is not configured yet.");
+      setNotice(response.ok ? `Inspection ${result.taskId ?? "queued"} was sent to GitHub Actions.` : result.message ?? "Task dispatch is not configured yet.");
       if (response.ok) setObjective("");
     } catch { setNotice("The task dispatcher is temporarily unavailable."); }
     finally { setSubmitting(false); }
@@ -33,9 +33,9 @@ export function AtlasDashboard() {
         <div className="taskmeta">
           <label>Repository<input aria-label="Repository" value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="owner/repository" autoComplete="off" /></label>
           <label>Branch<input aria-label="Branch" value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" autoComplete="off" /></label>
-          <label>Mode<select aria-label="Task mode" value={mode} onChange={(event) => setMode(event.target.value)}><option value="inspect">Inspect</option><option value="plan">Plan</option><option value="implement">Implement</option><option value="review">Review</option></select></label>
+          <label>Mode<select aria-label="Task mode" value={mode} onChange={(event) => setMode(event.target.value)}><option value="inspect">Inspect</option></select></label>
         </div>
-        <label htmlFor="objective">What should Atlas do?</label><div className="objective"><span className="prompt">›</span><input id="objective" value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Add an API, repair a failing test, improve the architecture…" /><button disabled={submitting}>{submitting ? "QUEUING" : "START TASK"}</button></div><small>Read operations begin immediately · every mutation is previewed · commit requires approval</small>
+        <label htmlFor="objective">What should Atlas inspect?</label><div className="objective"><span className="prompt">›</span><input id="objective" value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Map an API, diagnose a failing test, review the architecture…" /><button disabled={submitting}>{submitting ? "QUEUING" : "START TASK"}</button></div><small>GitHub Actions runner · inspect-only until approval storage is connected</small>
       </form>{notice && <p className="notice" role="status">{notice}</p>}
     </section>
     <section className="metrics"><article><strong>145</strong><span>VALIDATION CHECKS</span></article><article><strong>05</strong><span>READ-ONLY TOOLS</span></article><article><strong>00</strong><span>UNREVIEWED COMMITS</span></article><article><strong>LOCAL</strong><span>DEFAULT MODEL ROUTE</span></article></section>

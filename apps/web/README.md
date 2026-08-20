@@ -94,6 +94,19 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 - `npm test`: build the starter and verify its rendered loading skeleton
 - `npm run db:generate`: generate Drizzle migrations after schema changes
 
+## GitHub Actions task runner
+
+Set `ATLAS_GITHUB_TOKEN` to a fine-grained token with Actions write access and
+optionally set `ATLAS_GITHUB_WORKFLOW` (defaults to `atlas-runner.yml`). Atlas
+dispatches that workflow in the selected allowlisted repository with
+`repository`, `branch`, `mode`, `objective`, and `task_id` inputs. The workflow
+must declare matching `workflow_dispatch` inputs. `ATLAS_ALLOWED_REPOSITORIES`
+is a comma-separated allowlist and defaults to `cornerstonemarketingus/atlas`.
+Until approval persistence is connected, the API accepts Inspect tasks only.
+
+When no GitHub token is configured, Atlas falls back to the existing
+`ATLAS_AGENT_DISPATCH_URL` and `ATLAS_AGENT_DISPATCH_TOKEN` runner settings.
+
 ## Learn More
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
