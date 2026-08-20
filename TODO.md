@@ -224,6 +224,8 @@ measurable quality, and transparent cost control.
 - [x] Add a responsive hosted task-intake and build-progression dashboard.
 - [x] Require authenticated identity for autonomous task submission.
 - [x] Add a bounded server-side agent-dispatch contract with no client secrets.
+- [x] Add GitHub App authentication with short-lived installation tokens.
+- [x] Add an authenticated GitHub connection-status and installation surface.
 - [x] Add Sites and Vercel deployment manifests.
 - [x] Add a bounded read-only GitHub Actions inspect runner and dispatch adapter.
 - [ ] Deploy and configure the production task-runner endpoint and secret.

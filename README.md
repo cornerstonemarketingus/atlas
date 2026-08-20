@@ -86,6 +86,12 @@ GitHub credentials remain server-side; commit mode is approval-required.
 Configure `ATLAS_AGENT_DISPATCH_URL` and `ATLAS_AGENT_DISPATCH_TOKEN` as hosted
 secrets. The runner must validate the task ID, repository allowlist, requested
 user, approval, branch, and exact change-set digest before committing.
+
+For production GitHub access, configure a GitHub App using
+`ATLAS_GITHUB_APP_ID`, `ATLAS_GITHUB_INSTALLATION_ID`,
+`ATLAS_GITHUB_APP_PRIVATE_KEY`, and `ATLAS_GITHUB_APP_SLUG`. Atlas exchanges the
+private key for short-lived installation tokens server-side. A personal token
+remains supported only as a single-operator fallback.
 Set `ATLAS_ALLOWED_REPOSITORIES` to a comma-separated list of `owner/repository`
 names that may be submitted from the hosted task composer.
 
