@@ -1,0 +1,99 @@
+name: Atlas Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: Stable Atlas task identifier
+        required: true
+        type: string
+      repository:
+        description: Repository in owner/name form
+        required: true
+        default: cornerstonemarketingus/atlas
+        type: string
+      branch:
+        description: Branch to inspect
+        required: true
+        default: main
+        type: string
+      mode:
+        description: Execution mode (only inspect is enabled)
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - plan
+          - implement
+          - review
+      objective:
+        description: Human-readable task objective
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-runner-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      ATLAS_TASK_ID: ${{ github.event.inputs.task_id }}
+      ATLAS_REPOSITORY: ${{ github.event.inputs.repository }}
+      ATLAS_BRANCH: ${{ github.event.inputs.branch }}
+      ATLAS_MODE: ${{ github.event.inputs.mode }}
+      ATLAS_OBJECTIVE: ${{ github.event.inputs.objective }}
+      ATLAS_OUTPUT_DIR: ${{ runner.temp }}/atlas-output
+      ATLAS_REPOSITORY_ROOT: ${{ github.workspace }}/target
+    steps:
+      - name: Check out trusted runner policy
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: cornerstonemarketingus/atlas
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate dispatch inputs
+        run: node scripts/runner/validate-inputs.mjs
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/atlas-cli/package-lock.json
+
+      - name: Build trusted Atlas CLI
+        working-directory: packages/atlas-cli
+        run: npm ci --ignore-scripts && npm run build
+
+      - name: Check out requested branch as untrusted data
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: cornerstonemarketingus/atlas
+          ref: ${{ github.event.inputs.branch }}
+          path: target
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run Atlas task
+        run: node scripts/runner/run-task.mjs
+
+      - name: Upload bounded task artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atlas-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/atlas-output
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 9
