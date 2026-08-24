@@ -6,7 +6,7 @@ const valid = { repository: "Cornerstonemarketingus/atlas", branch: "main", mode
 
 test("validates and normalizes a task against a case-insensitive allowlist", () => {
   const result = validateTask(valid, allowedRepositories("cornerstonemarketingus/atlas"));
-  assert.deepEqual(result, { task: { ...valid, objective: "Map the API." } });
+  assert.deepEqual(result, { task: { ...valid, repository: "cornerstonemarketingus/atlas", objective: "Map the API." } });
 });
 
 test("rejects unsafe branches, modes, objectives, and repositories", () => {
@@ -20,10 +20,11 @@ test("rejects unsafe branches, modes, objectives, and repositories", () => {
 test("builds a GitHub workflow dispatch without putting the token in its URL or body", () => {
   const task = validateTask(valid, allowedRepositories()).task;
   const request = githubDispatchRequest({ token: "super-secret", workflow: "atlas-runner.yml", task, taskId: "task-123" });
-  assert.equal(request.url, "https://api.github.com/repos/Cornerstonemarketingus/atlas/actions/workflows/atlas-runner.yml/dispatches");
+  assert.equal(request.url, "https://api.github.com/repos/cornerstonemarketingus/atlas/actions/workflows/atlas-runner.yml/dispatches");
   assert.equal(request.init.headers.authorization, "Bearer super-secret");
   assert.doesNotMatch(request.url + request.init.body, /super-secret/);
-  assert.deepEqual(JSON.parse(request.init.body), { ref: "main", inputs: { repository: valid.repository, branch: "main", mode: "inspect", objective: "Map the API.", task_id: "task-123" } });
+  assert.deepEqual(JSON.parse(request.init.body), { ref: "main", inputs: { repository: "cornerstonemarketingus/atlas", branch: "main", mode: "inspect", objective: "Map the API.", task_id: "task-123" } });
+  assert.throws(() => githubDispatchRequest({ token: "super-secret", workflowRef: "feature/unsafe", task, taskId: "task-123" }));
 });
 
 test("dispatch helper accepts an injected fetch implementation", async () => {

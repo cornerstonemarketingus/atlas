@@ -24,9 +24,6 @@ on:
         type: choice
         options:
           - inspect
-          - plan
-          - implement
-          - review
       objective:
         description: Human-readable task objective
         required: true
@@ -36,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: atlas-runner-${{ github.run_id }}-${{ github.run_attempt }}
+  group: atlas-runner-${{ github.event.inputs.repository }}-${{ github.event.inputs.branch }}
   cancel-in-progress: false
 
 jobs:

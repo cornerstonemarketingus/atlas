@@ -8,6 +8,6 @@ test("server-renders the Atlas control plane", async () => {
   const html = await response.text();
   assert.match(html, /Autonomous engineering control plane/);
   assert.match(html, /From intent to/);
-  assert.match(html, /145/);
+  assert.match(html, /149/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });

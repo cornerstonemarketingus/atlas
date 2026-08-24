@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { allowedRepositories, dispatchGitHub, validateTask } from "./dispatch.mjs";
+import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
 
 export async function POST(request: Request) {
   const userId = request.headers.get("oai-authenticated-user-id");
@@ -10,7 +11,13 @@ export async function POST(request: Request) {
   if ("error" in validated) return Response.json({ message: validated.error }, { status: validated.status });
   const task = validated.task;
   const taskId = randomUUID();
-  const githubToken = process.env.ATLAS_GITHUB_TOKEN;
+  let githubToken = process.env.ATLAS_GITHUB_TOKEN;
+  try {
+    const githubApp = githubAppConfiguration();
+    if (githubApp.configured) githubToken = await createInstallationToken(githubApp);
+  } catch {
+    return Response.json({ message: "GitHub App authentication is temporarily unavailable." }, { status: 502 });
+  }
   if (githubToken) {
     try {
       const response = await dispatchGitHub({ token: githubToken, workflow: process.env.ATLAS_GITHUB_WORKFLOW, task, taskId });
