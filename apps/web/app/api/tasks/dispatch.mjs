@@ -16,11 +16,12 @@ export function validateTask(body, allowlist) {
   if (typeof branch !== "string" || !branchPattern.test(branch)) return { error: "Branch name is invalid.", status: 400 };
   if (typeof mode !== "string" || !modes.has(mode)) return { error: "Task mode is invalid.", status: 400 };
   if (typeof objective !== "string" || !objective.trim() || objective.length > 4_000) return { error: "Objective is invalid.", status: 400 };
-  return { task: { repository, branch, mode, objective: objective.trim() } };
+  return { task: { repository: repository.toLowerCase(), branch, mode, objective: objective.trim() } };
 }
 
-export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", task, taskId }) {
+export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", workflowRef = "main", task, taskId }) {
   if (!workflowPattern.test(workflow)) throw new Error("ATLAS_GITHUB_WORKFLOW is invalid.");
+  if (workflowRef !== "main") throw new Error("ATLAS_RUNNER_WORKFLOW_REF must be 'main'.");
   const [owner, repo] = task.repository.split("/");
   return {
     url: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`,
@@ -34,7 +35,9 @@ export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", ta
         "x-github-api-version": "2022-11-28",
       },
       body: JSON.stringify({
-        ref: task.branch,
+        // The workflow definition must always come from the protected, trusted
+        // default branch. The requested branch is passed only as runner input.
+        ref: workflowRef,
         inputs: {
           repository: task.repository,
           branch: task.branch,

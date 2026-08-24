@@ -25,6 +25,9 @@ measurable quality, and transparent cost control.
 - [x] Bound repository traversal and skip symbolic links.
 - [x] Use read-only Git commands with fixed argument arrays for inspection.
 - [ ] Require explicit capabilities and approval gates before mutation.
+      Hosted approval-state contract is specified in
+      `docs/hosted-approval-state-design.md`; persistence and enforcement remain
+      to be implemented.
 - [ ] Isolate command execution from the Atlas control plane.
 - [ ] Redact secrets from prompts, logs, traces, diffs, and model requests.
 - [ ] Maintain complete audit records for externally visible actions.
@@ -113,6 +116,8 @@ measurable quality, and transparent cost control.
 - [ ] Support per-session, per-repository, per-user, and organization policies.
 - [ ] Require previews for mutations and externally visible actions.
 - [ ] Add approval expiration and scope-limited reusable approvals.
+      Hosted mutations must use digest-bound, single-use approvals; reusable
+      mutation approvals are intentionally out of scope.
 - [x] Add bounded, expiring, one-time approval-resume tokens bound to session,
       repository, tool, and tool-call identifiers.
 - [ ] Prevent repository instructions from modifying platform policy.
@@ -229,7 +234,10 @@ measurable quality, and transparent cost control.
 - [x] Add Sites and Vercel deployment manifests.
 - [x] Add a bounded read-only GitHub Actions inspect runner and dispatch adapter.
 - [ ] Deploy and configure the production task-runner endpoint and secret.
-- [ ] Add approval UI bound to exact change-set digests.
+- [ ] Add approval UI bound to exact change-set digests, base commit, policy,
+      immutable artifact manifest, expiry, and authenticated approver identity.
+- [ ] Persist atomic approval decision/consume state and immutable execution
+      receipts with replay detection and artifact provenance verification.
 - [ ] Add GitHub write/commit adapter behind approval and repository policy.
 
 - [x] Add guarded `atlas chat <repository-path> <objective>` for explicitly

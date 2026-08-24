@@ -18,6 +18,7 @@ test("creates a GitHub App JWT and installation token request", async () => {
   const token = await createInstallationToken(configuration, async (url, init) => {
     assert.equal(url, "https://api.github.com/app/installations/456/access_tokens");
     assert.match(init.headers.authorization, /^Bearer [^.]+\.[^.]+\.[^.]+$/u);
+    assert.deepEqual(JSON.parse(init.body), { repositories: ["atlas"], permissions: { actions: "write" } });
     return new Response(JSON.stringify({ token: "github-installation-token-value" }), { status: 201 });
   });
   assert.equal(token, "github-installation-token-value");
