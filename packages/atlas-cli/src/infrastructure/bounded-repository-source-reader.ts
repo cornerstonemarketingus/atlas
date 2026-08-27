@@ -92,6 +92,13 @@ export class BoundedRepositorySourceReader implements RepositorySourceReader {
     } catch (error) {
       throw unreadable(relativePath, error);
     }
+    const detectedEncoding = detectUnsupportedEncoding(buffer);
+    if (detectedEncoding !== null) {
+      throw new RepositorySourceReadError(
+        "UNSUPPORTED_ENCODING",
+        `Source content appears to be ${detectedEncoding} encoded, which is not supported. Only UTF-8 is supported.`,
+      );
+    }
     if (buffer.includes(0)) {
       throw new RepositorySourceReadError("BINARY_FILE", "Binary source files are not supported.");
     }
@@ -159,6 +166,19 @@ async function readPrefix(path: string, length: number): Promise<Buffer> {
   } finally {
     await handle.close();
   }
+}
+
+function detectUnsupportedEncoding(buffer: Buffer): string | null {
+  if (startsWith(buffer, [0x00, 0x00, 0xfe, 0xff])) return "UTF-32BE";
+  if (startsWith(buffer, [0xff, 0xfe, 0x00, 0x00])) return "UTF-32LE";
+  if (startsWith(buffer, [0xfe, 0xff])) return "UTF-16BE";
+  if (startsWith(buffer, [0xff, 0xfe])) return "UTF-16LE";
+  return null;
+}
+
+function startsWith(buffer: Buffer, prefix: readonly number[]): boolean {
+  if (buffer.length < prefix.length) return false;
+  return prefix.every((byte, index) => buffer[index] === byte);
 }
 
 function decodeUtf8Prefix(buffer: Buffer, wasByteTruncated: boolean): string {

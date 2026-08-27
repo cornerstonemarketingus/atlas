@@ -96,6 +96,31 @@ test("accepts an incomplete UTF-8 boundary but not a malformed boundary", async 
   );
 });
 
+test("reports the detected encoding for UTF-16 and UTF-32 BOM-marked files", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "utf16le.txt"), Buffer.from([0xff, 0xfe, 0x41, 0x00, 0x42, 0x00]));
+  await writeFile(join(root, "utf16be.txt"), Buffer.from([0xfe, 0xff, 0x00, 0x41, 0x00, 0x42]));
+  await writeFile(join(root, "utf32le.txt"), Buffer.from([0xff, 0xfe, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00]));
+  await writeFile(join(root, "utf32be.txt"), Buffer.from([0x00, 0x00, 0xfe, 0xff, 0x00, 0x00, 0x00, 0x41]));
+  const reader = new BoundedRepositorySourceReader();
+
+  await assert.rejects(reader.read(root, "utf16le.txt"), matchesEncodingError("UTF-16LE"));
+  await assert.rejects(reader.read(root, "utf16be.txt"), matchesEncodingError("UTF-16BE"));
+  await assert.rejects(reader.read(root, "utf32le.txt"), matchesEncodingError("UTF-32LE"));
+  await assert.rejects(reader.read(root, "utf32be.txt"), matchesEncodingError("UTF-32BE"));
+});
+
+test("reads UTF-8 content marked with a byte order mark", async (t) => {
+  const root = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "bom.txt"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("hello", "utf8")]));
+  const reader = new BoundedRepositorySourceReader();
+
+  const result = await reader.read(root, "bom.txt");
+  assert.equal(result.content, "hello");
+});
+
 test("rejects directories, missing paths, and symbolic links", async (t) => {
   const root = await fixture();
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -116,6 +141,13 @@ test("rejects directories, missing paths, and symbolic links", async (t) => {
 
 function hasCode(code: RepositorySourceReadError["code"]): (error: unknown) => boolean {
   return (error) => error instanceof RepositorySourceReadError && error.code === code;
+}
+
+function matchesEncodingError(encodingName: string): (error: unknown) => boolean {
+  return (error) =>
+    error instanceof RepositorySourceReadError &&
+    error.code === "UNSUPPORTED_ENCODING" &&
+    error.message.includes(encodingName);
 }
 
 function isWindowsSymlinkPermissionError(error: unknown): boolean {
