@@ -65,14 +65,14 @@ measurable quality, and transparent cost control.
 - [x] Add encoding detection with explicit unsupported-encoding warnings.
 - [x] Add bounded contextual source reads by path and line range.
 - [x] Add safe directory-tree output with depth and entry limits.
-- [ ] Add manifest-specific readers for major package ecosystems.
-- [ ] Add lockfile and workspace discovery.
+- [x] Add manifest-specific readers for major package ecosystems.
+- [x] Add lockfile and workspace discovery.
 - [ ] Add monorepo package/project graph discovery.
 - [ ] Add dependency graph extraction without executing package managers.
 - [ ] Add import/module graph extraction.
 - [ ] Add configuration and environment-variable reference discovery.
 - [ ] Add test-to-source relationship hints.
-- [ ] Add ownership hints from CODEOWNERS and repository metadata.
+- [x] Add ownership hints from CODEOWNERS and repository metadata.
 
 ### Language intelligence
 
@@ -99,7 +99,7 @@ measurable quality, and transparent cost control.
 
 - [ ] Generate deterministic architecture maps from repository evidence.
 - [ ] Identify entrypoints, runtime boundaries, data stores, APIs, and queues.
-- [ ] Detect build, test, lint, format, type-check, and development commands.
+- [x] Detect build, test, lint, format, type-check, and development commands.
 - [ ] Detect CI/CD workflows and deployment targets.
 - [ ] Detect database schemas and migration systems.
 - [ ] Detect API schemas such as OpenAPI, GraphQL, protobuf, and AsyncAPI.
