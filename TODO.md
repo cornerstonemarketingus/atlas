@@ -62,7 +62,7 @@ measurable quality, and transparent cost control.
 
 - [x] Extract one reusable, bounded repository file enumerator.
 - [x] Define normalized repository-relative path and source-location types.
-- [ ] Add encoding detection with explicit unsupported-encoding warnings.
+- [x] Add encoding detection with explicit unsupported-encoding warnings.
 - [x] Add bounded contextual source reads by path and line range.
 - [x] Add safe directory-tree output with depth and entry limits.
 - [ ] Add manifest-specific readers for major package ecosystems.
