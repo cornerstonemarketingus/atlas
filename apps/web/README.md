@@ -94,6 +94,24 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 - `npm test`: build the starter and verify its rendered loading skeleton
 - `npm run db:generate`: generate Drizzle migrations after schema changes
 
+## Deploying to Cloudflare Workers
+
+`npm run build` produces a complete Wrangler config at `dist/server/wrangler.json`
+(worker entry, static asset directory, compatibility settings) — no hand-written
+`wrangler.toml` is needed. `.github/workflows/deploy-cloudflare.yml` builds this
+app and runs `wrangler deploy --config dist/server/wrangler.json` on every push
+to `main` that touches `apps/web/**`, or on manual dispatch.
+
+Configure these repository secrets under Settings → Secrets and variables →
+Actions before the workflow can deploy:
+
+- `CLOUDFLARE_API_TOKEN` — an API token scoped to Workers Scripts: Edit (add
+  D1: Edit and R2: Edit only once this app actually uses those bindings).
+- `CLOUDFLARE_ACCOUNT_ID` — from the Cloudflare dashboard sidebar.
+
+Neither `/api/tasks` nor `/api/github/status` currently reads or writes D1 or
+R2, so no database or bucket needs to exist for this deployment to work.
+
 ## GitHub Actions task runner
 
 Set `ATLAS_GITHUB_TOKEN` to a fine-grained token with Actions write access and
