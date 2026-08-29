@@ -49,7 +49,7 @@ jobs:
       ATLAS_BRANCH: ${{ github.event.inputs.branch }}
       ATLAS_MODE: ${{ github.event.inputs.mode }}
       ATLAS_OBJECTIVE: ${{ github.event.inputs.objective }}
-      ATLAS_OUTPUT_DIR: ${{ runner.temp }}/atlas-output
+      ATLAS_OUTPUT_DIR: ${{ github.workspace }}/atlas-output
       ATLAS_REPOSITORY_ROOT: ${{ github.workspace }}/target
     steps:
       - name: Check out trusted runner policy
@@ -91,7 +91,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: atlas-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/atlas-output
+          path: ${{ env.ATLAS_OUTPUT_DIR }}
           if-no-files-found: warn
           retention-days: 7
           compression-level: 9
