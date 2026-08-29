@@ -18,12 +18,13 @@ on:
         default: main
         type: string
       mode:
-        description: Execution mode (only inspect is enabled)
+        description: Execution mode (inspect and debug are enabled)
         required: true
         default: inspect
         type: choice
         options:
           - inspect
+          - debug
       objective:
         description: Human-readable task objective
         required: true

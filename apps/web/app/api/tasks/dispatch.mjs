@@ -1,7 +1,7 @@
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const branchPattern = /^(?!\/|.*(?:\.\.|\/\/|@\{|\\|\s|[\x5b~^:?*]))[A-Za-z0-9._/-]{1,255}$/;
 const workflowPattern = /^(?:[A-Za-z0-9_.-]{1,128}|[1-9][0-9]{0,18})$/;
-const modes = new Set(["inspect"]);
+const modes = new Set(["inspect", "debug"]);
 
 export function allowedRepositories(value = "cornerstonemarketingus/atlas") {
   return new Set(value.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean));
