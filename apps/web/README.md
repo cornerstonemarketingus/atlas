@@ -112,6 +112,20 @@ Actions before the workflow can deploy:
 Neither `/api/tasks` nor `/api/github/status` currently reads or writes D1 or
 R2, so no database or bucket needs to exist for this deployment to work.
 
+Two more repository secrets, if present, are pushed to the Worker as secrets
+on every deploy (each step is skipped, not failed, if its secret is unset):
+
+- `ATLAS_GITHUB_TOKEN` — a fine-grained GitHub token scoped to this repository
+  with the "Actions" repository permission set to Read and write. Without this
+  (or a configured GitHub App, see below), task dispatch responds 503.
+- `ATLAS_OPERATOR_TOKEN` — a secret string of your choosing. `/api/tasks` and
+  `/api/github/status` normally require the `oai-authenticated-user-id` header
+  that only the OpenAI Sites platform injects; outside that platform (e.g. this
+  Cloudflare deployment) they instead accept `Authorization: Bearer
+  <ATLAS_OPERATOR_TOKEN>`. The dashboard prompts for this value once and
+  remembers it in the browser's `localStorage`. Without it configured, the
+  dashboard's access-code screen has nothing correct to accept.
+
 ## GitHub Actions task runner
 
 Set `ATLAS_GITHUB_TOKEN` to a fine-grained token with Actions write access and

@@ -7,6 +7,12 @@ const activity = [
   { title: "Hosted control plane", detail: "Deployment candidate", status: "Building" },
 ];
 
+const TOKEN_STORAGE_KEY = "atlas-operator-token";
+
+function storedToken(): string {
+  try { return localStorage.getItem(TOKEN_STORAGE_KEY) ?? ""; } catch { return ""; }
+}
+
 export function AtlasDashboard() {
   const [repository, setRepository] = useState("cornerstonemarketingus/atlas");
   const [branch, setBranch] = useState("main");
@@ -15,22 +21,54 @@ export function AtlasDashboard() {
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [github, setGitHub] = useState<{ connected: boolean; method: string; installUrl: string | null } | null>(null);
+  const [token, setToken] = useState("");
+  const [tokenInput, setTokenInput] = useState("");
+  useEffect(() => { setToken(storedToken()); }, []);
+  function authHeaders(): Record<string, string> {
+    return token ? { authorization: `Bearer ${token}` } : {};
+  }
+  function forgetToken() {
+    try { localStorage.removeItem(TOKEN_STORAGE_KEY); } catch { /* ignore */ }
+    setToken("");
+  }
+  function unlock(event: FormEvent) {
+    event.preventDefault();
+    if (!tokenInput.trim()) return;
+    try { localStorage.setItem(TOKEN_STORAGE_KEY, tokenInput.trim()); } catch { /* ignore */ }
+    setToken(tokenInput.trim());
+    setTokenInput("");
+  }
   useEffect(() => {
+    if (!token) return;
     let active = true;
-    void fetch("/api/github/status").then(async (response) => response.ok ? response.json() : null).then((value) => { if (active && value) setGitHub(value as { connected: boolean; method: string; installUrl: string | null }); }).catch(() => undefined);
+    void fetch("/api/github/status", { headers: authHeaders() }).then(async (response) => {
+      if (response.status === 401) { forgetToken(); return null; }
+      return response.ok ? response.json() : null;
+    }).then((value) => { if (active && value) setGitHub(value as { connected: boolean; method: string; installUrl: string | null }); }).catch(() => undefined);
     return () => { active = false; };
-  }, []);
+  }, [token]);
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!objective.trim()) return;
     setSubmitting(true); setNotice("");
     try {
-      const response = await fetch("/api/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repository, branch, mode, objective }) });
+      const response = await fetch("/api/tasks", { method: "POST", headers: { "content-type": "application/json", ...authHeaders() }, body: JSON.stringify({ repository, branch, mode, objective }) });
+      if (response.status === 401) { forgetToken(); setNotice("Your access code expired. Enter it again to continue."); return; }
       const result = (await response.json()) as { message?: string; taskId?: string };
       setNotice(response.ok ? `Inspection ${result.taskId ?? "queued"} was sent to GitHub Actions.` : result.message ?? "Task dispatch is not configured yet.");
       if (response.ok) setObjective("");
     } catch { setNotice("The task dispatcher is temporarily unavailable."); }
     finally { setSubmitting(false); }
+  }
+  if (!token) {
+    return <main className="hero" id="top">
+      <div className="eyebrow"><span>01</span> Autonomous engineering, under control</div>
+      <h1>Enter your<br /><em>access code.</em></h1>
+      <form className="command" onSubmit={unlock}>
+        <label htmlFor="operator-token">Access code</label>
+        <div className="objective"><span className="prompt">›</span><input id="operator-token" type="password" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="Paste the code you were given" autoComplete="off" /><button>UNLOCK</button></div>
+      </form>
+    </main>;
   }
   return <main>
     <header className="topbar"><a className="brand" href="#top"><span className="brandmark">A</span>ATLAS</a><nav><a href="#mission">Mission</a><a href="#activity">Activity</a><a href="#runtime">Runtime</a></nav><span className="online"><i /> Control plane online</span></header>
