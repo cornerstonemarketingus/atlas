@@ -55,7 +55,7 @@ export function AtlasDashboard() {
       const response = await fetch("/api/tasks", { method: "POST", headers: { "content-type": "application/json", ...authHeaders() }, body: JSON.stringify({ repository, branch, mode, objective }) });
       if (response.status === 401) { forgetToken(); setNotice("Your access code expired. Enter it again to continue."); return; }
       const result = (await response.json()) as { message?: string; taskId?: string };
-      setNotice(response.ok ? `Inspection ${result.taskId ?? "queued"} was sent to GitHub Actions.` : result.message ?? "Task dispatch is not configured yet.");
+      setNotice(response.ok ? `Task ${result.taskId ?? "queued"} was sent to GitHub Actions.` : result.message ?? "Task dispatch is not configured yet.");
       if (response.ok) setObjective("");
     } catch { setNotice("The task dispatcher is temporarily unavailable."); }
     finally { setSubmitting(false); }
@@ -77,9 +77,9 @@ export function AtlasDashboard() {
         <div className="taskmeta">
           <label>Repository<input aria-label="Repository" value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="owner/repository" autoComplete="off" /></label>
           <label>Branch<input aria-label="Branch" value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" autoComplete="off" /></label>
-          <label>Mode<select aria-label="Task mode" value={mode} onChange={(event) => setMode(event.target.value)}><option value="inspect">Inspect</option></select></label>
+          <label>Mode<select aria-label="Task mode" value={mode} onChange={(event) => setMode(event.target.value)}><option value="inspect">Inspect</option><option value="debug">Debug (build + test)</option></select></label>
         </div>
-        <label htmlFor="objective">What should Atlas inspect?</label><div className="objective"><span className="prompt">›</span><input id="objective" value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Map an API, diagnose a failing test, review the architecture…" /><button disabled={submitting || github?.connected === false}>{submitting ? "QUEUING" : "START TASK"}</button></div><small>GitHub Actions runner · inspect-only until a digest-bound proposal is approved</small>
+        <label htmlFor="objective">What should Atlas do?</label><div className="objective"><span className="prompt">›</span><input id="objective" value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Map an API, diagnose a failing test, review the architecture…" /><button disabled={submitting || github?.connected === false}>{submitting ? "QUEUING" : "START TASK"}</button></div><small>GitHub Actions runner · inspect and debug only until a digest-bound proposal is approved</small>
       </form>{notice && <p className="notice" role="status">{notice}</p>}
       <div className={`connection ${github?.connected ? "connected" : ""}`}><span>{github === null ? "Checking GitHub connection…" : github.connected ? `GitHub connected via ${github.method}` : "GitHub is not connected"}</span>{github?.installUrl && !github.connected && <a href={github.installUrl} rel="noreferrer">Install GitHub App ↗</a>}</div>
     </section>

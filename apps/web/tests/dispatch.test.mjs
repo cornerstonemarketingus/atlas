@@ -17,6 +17,13 @@ test("rejects unsafe branches, modes, objectives, and repositories", () => {
   assert.equal(validateTask({ ...valid, objective: " " }, allowlist).status, 400);
 });
 
+test("accepts debug mode alongside inspect", () => {
+  const allowlist = allowedRepositories("cornerstonemarketingus/atlas");
+  const result = validateTask({ ...valid, mode: "debug" }, allowlist);
+  assert.equal("error" in result, false);
+  assert.equal(result.task.mode, "debug");
+});
+
 test("builds a GitHub workflow dispatch without putting the token in its URL or body", () => {
   const task = validateTask(valid, allowedRepositories()).task;
   const request = githubDispatchRequest({ token: "super-secret", workflow: "atlas-runner.yml", task, taskId: "task-123" });
