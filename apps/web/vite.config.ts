@@ -6,6 +6,15 @@ import hostingConfig from "./.openai/hosting.json";
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
 
+// The placeholder above only works for local Miniflare simulation. A real
+// deploy needs the actual provisioned D1 database's id, supplied via env var
+// (see .github/workflows/deploy-cloudflare.yml) since it can't be hardcoded.
+// GitHub Actions sets an unconfigured secret to an empty string rather than
+// leaving the env var unset, so an empty string must also fall through to
+// the placeholder — hence `||`, not `??`.
+const productionDatabaseId = process.env.ATLAS_D1_DATABASE_ID || undefined;
+const productionDatabaseName = process.env.ATLAS_D1_DATABASE_NAME || undefined;
+
 const { d1, r2 } = hostingConfig;
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
@@ -18,8 +27,8 @@ const localBindingConfig = {
     ? [
         {
           binding: d1,
-          database_name: "site-creator-d1",
-          database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
+          database_name: productionDatabaseName ?? "site-creator-d1",
+          database_id: productionDatabaseId ?? SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
         },
       ]
     : [],

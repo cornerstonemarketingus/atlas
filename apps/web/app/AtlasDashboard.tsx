@@ -21,6 +21,8 @@ export function AtlasDashboard() {
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [github, setGitHub] = useState<{ connected: boolean; method: string; installUrl: string | null } | null>(null);
+  const [mergePolicy, setMergePolicy] = useState("manual");
+  const [mergePolicyNotice, setMergePolicyNotice] = useState("");
   const [token, setToken] = useState("");
   const [tokenInput, setTokenInput] = useState("");
   useEffect(() => { setToken(storedToken()); }, []);
@@ -47,6 +49,37 @@ export function AtlasDashboard() {
     }).then((value) => { if (active && value) setGitHub(value as { connected: boolean; method: string; installUrl: string | null }); }).catch(() => undefined);
     return () => { active = false; };
   }, [token]);
+  useEffect(() => {
+    if (!token) return;
+    const [owner, name] = repository.split("/");
+    if (!owner || !name) return;
+    let active = true;
+    void fetch("/api/settings/repositories", { headers: authHeaders() }).then(async (response) => {
+      if (response.status === 401) { forgetToken(); return null; }
+      return response.ok ? response.json() : null;
+    }).then((value) => {
+      if (!active || !value) return;
+      const match = (value as { repositories: { owner: string; name: string; mergePolicy: string }[] }).repositories
+        .find((row) => row.owner === owner.toLowerCase() && row.name === name.toLowerCase());
+      setMergePolicy(match?.mergePolicy ?? "manual");
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [token, repository]);
+  async function saveMergePolicy(nextPolicy: string) {
+    const [owner, name] = repository.split("/");
+    if (!owner || !name) { setMergePolicyNotice("Enter a repository as owner/name first."); return; }
+    setMergePolicy(nextPolicy);
+    try {
+      const response = await fetch("/api/settings/repositories", {
+        method: "PUT",
+        headers: { "content-type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ owner, name, mergePolicy: nextPolicy }),
+      });
+      if (response.status === 401) { forgetToken(); return; }
+      const result = (await response.json()) as { message?: string };
+      setMergePolicyNotice(response.ok ? "" : result.message ?? "Could not save the merge policy.");
+    } catch { setMergePolicyNotice("The settings service is temporarily unavailable."); }
+  }
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!objective.trim()) return;
@@ -82,6 +115,16 @@ export function AtlasDashboard() {
         <label htmlFor="objective">What should Atlas do?</label><div className="objective"><span className="prompt">›</span><input id="objective" value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Map an API, diagnose a failing test, review the architecture…" /><button disabled={submitting || github?.connected === false}>{submitting ? "QUEUING" : "START TASK"}</button></div><small>GitHub Actions runner · inspect and debug only until a digest-bound proposal is approved</small>
       </form>{notice && <p className="notice" role="status">{notice}</p>}
       <div className={`connection ${github?.connected ? "connected" : ""}`}><span>{github === null ? "Checking GitHub connection…" : github.connected ? `GitHub connected via ${github.method}` : "GitHub is not connected"}</span>{github?.installUrl && !github.connected && <a href={github.installUrl} rel="noreferrer">Install GitHub App ↗</a>}</div>
+      <div className="mergepolicy">
+        <label>Merge policy for {repository}
+          <select aria-label="Merge policy" value={mergePolicy} onChange={(event) => void saveMergePolicy(event.target.value)}>
+            <option value="manual">Manual — a person merges every PR</option>
+            <option value="ci-gated">Auto-merge when CI is green</option>
+            <option value="none">Auto-merge immediately, no check (not recommended)</option>
+          </select>
+        </label>
+        {mergePolicyNotice && <p className="notice" role="status">{mergePolicyNotice}</p>}
+      </div>
     </section>
     <section className="metrics"><article><strong>149</strong><span>VALIDATION CHECKS</span></article><article><strong>05</strong><span>READ-ONLY TOOLS</span></article><article><strong>00</strong><span>UNREVIEWED COMMITS</span></article><article><strong>LOCAL</strong><span>DEFAULT MODEL ROUTE</span></article></section>
     <section className="split" id="mission"><div><div className="eyebrow"><span>02</span> Operating model</div><h2>Autonomy with<br />hard boundaries.</h2></div><div className="principles"><article><b>01</b><div><h3>Understand first</h3><p>Deterministic repository maps, symbols, references, manifests, and source evidence.</p></div></article><article><b>02</b><div><h3>Preview every mutation</h3><p>Exact diffs, scoped capabilities, expiring approvals, and optimistic concurrency.</p></div></article><article><b>03</b><div><h3>Prove the result</h3><p>Baseline-aware builds and tests distinguish new failures from existing conditions.</p></div></article></div></section>

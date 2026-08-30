@@ -26,7 +26,11 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run build
+      - name: Build
+        env:
+          ATLAS_D1_DATABASE_ID: ${{ secrets.ATLAS_D1_DATABASE_ID }}
+          ATLAS_D1_DATABASE_NAME: ${{ secrets.ATLAS_D1_DATABASE_NAME }}
+        run: npm run build
 
       - name: Deploy to Cloudflare Workers
         env:

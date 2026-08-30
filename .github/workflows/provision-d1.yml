@@ -1,0 +1,47 @@
+name: Provision Atlas D1 database
+
+on:
+  workflow_dispatch:
+    inputs:
+      database_name:
+        description: D1 database name to create
+        required: true
+        default: atlas-db
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Create D1 database
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler d1 create "${{ github.event.inputs.database_name }}"
+
+      # This applies only the initial schema. A later schema change needs its
+      # own `npx wrangler d1 execute <name> --remote --file drizzle/<new>.sql`
+      # run by hand — this workflow is a one-time bootstrap, not a migration
+      # runner.
+      - name: Apply the initial schema to the new database
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler d1 execute "${{ github.event.inputs.database_name }}" --remote --file drizzle/0000_brown_firelord.sql
+
+      - name: Next steps
+        run: |
+          echo "Copy the database_id printed above into two new repository secrets:"
+          echo "  ATLAS_D1_DATABASE_ID   = <the database_id from 'Create D1 database' above>"
+          echo "  ATLAS_D1_DATABASE_NAME = ${{ github.event.inputs.database_name }}"
+          echo "Then re-run the 'Deploy Atlas web to Cloudflare Workers' workflow so the Worker picks up the real binding."
