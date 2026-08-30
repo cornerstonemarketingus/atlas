@@ -1,0 +1,108 @@
+name: Atlas Coder
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: Stable Atlas task identifier
+        required: true
+        type: string
+      repository:
+        description: Repository in owner/name form
+        required: true
+        default: cornerstonemarketingus/atlas
+        type: string
+      branch:
+        description: Branch to propose a change against
+        required: true
+        default: main
+        type: string
+      mode:
+        description: Execution mode (this workflow only ever runs coder)
+        required: true
+        default: coder
+        type: choice
+        options:
+          - coder
+      objective:
+        description: Human-readable task objective
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-coder-${{ github.event.inputs.repository }}-${{ github.event.inputs.branch }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Elevated relative to atlas-runner.yml (inspect/debug stay contents:read)
+    # because this job pushes a branch and opens a pull request. It never
+    # merges — see scripts/runner/create-coder-pull-request.mjs.
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      ATLAS_TASK_ID: ${{ github.event.inputs.task_id }}
+      ATLAS_REPOSITORY: ${{ github.event.inputs.repository }}
+      ATLAS_BRANCH: ${{ github.event.inputs.branch }}
+      ATLAS_MODE: ${{ github.event.inputs.mode }}
+      ATLAS_OBJECTIVE: ${{ github.event.inputs.objective }}
+      ATLAS_OUTPUT_DIR: ${{ github.workspace }}/atlas-output
+      ATLAS_REPOSITORY_ROOT: ${{ github.workspace }}/target
+    steps:
+      - name: Check out trusted runner policy
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: cornerstonemarketingus/atlas
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate dispatch inputs
+        run: node scripts/runner/validate-inputs.mjs
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/atlas-cli/package-lock.json
+
+      - name: Build trusted Atlas CLI
+        working-directory: packages/atlas-cli
+        run: npm ci --ignore-scripts && npm run build
+
+      - name: Check out requested branch as untrusted data
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: cornerstonemarketingus/atlas
+          ref: ${{ github.event.inputs.branch }}
+          path: target
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run Atlas task
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
+        run: node scripts/runner/run-task.mjs
+
+      - name: Open pull request for coder changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/runner/create-coder-pull-request.mjs
+
+      - name: Upload bounded task artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atlas-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.ATLAS_OUTPUT_DIR }}
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 9

@@ -1,7 +1,7 @@
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const branchPattern = /^(?!\/|.*(?:\.\.|\/\/|@\{|\\|\s|[\x5b~^:?*]))[A-Za-z0-9._/-]{1,255}$/;
 const workflowPattern = /^(?:[A-Za-z0-9_.-]{1,128}|[1-9][0-9]{0,18})$/;
-const modes = new Set(["inspect", "debug"]);
+const modes = new Set(["inspect", "debug", "coder"]);
 
 export function allowedRepositories(value = "cornerstonemarketingus/atlas") {
   return new Set(value.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean));
@@ -17,6 +17,17 @@ export function validateTask(body, allowlist) {
   if (typeof mode !== "string" || !modes.has(mode)) return { error: "Task mode is invalid.", status: 400 };
   if (typeof objective !== "string" || !objective.trim() || objective.length > 4_000) return { error: "Objective is invalid.", status: 400 };
   return { task: { repository: repository.toLowerCase(), branch, mode, objective: objective.trim() } };
+}
+
+/**
+ * coder tasks run in a separate workflow (atlas-coder.yml) with elevated
+ * contents/pull-requests permissions; inspect and debug stay on the
+ * read-only-permissioned atlas-runner.yml. Keeping them apart means
+ * inspect/debug's GITHUB_TOKEN never gains write scope it doesn't need.
+ */
+export function workflowForMode(mode, overrides = {}) {
+  if (mode === "coder") return overrides.coderWorkflow || "atlas-coder.yml";
+  return overrides.defaultWorkflow || "atlas-runner.yml";
 }
 
 export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", workflowRef = "main", task, taskId }) {

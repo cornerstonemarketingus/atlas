@@ -64,3 +64,19 @@ export const REPOSITORY_READ_ONLY_MODEL_TOOLS: readonly ModelToolDefinition[] = 
     },
   },
 ];
+
+export const REPOSITORY_WRITE_MODEL_TOOLS: readonly ModelToolDefinition[] = [
+  {
+    name: "repository.propose_file_edit",
+    description: "Create a new file or overwrite an existing one with exact full file content, using a repository-relative path. Read the file first if it already exists — this always replaces the whole file.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", minLength: 1, maxLength: 4096 },
+        content: { type: "string" },
+      },
+      required: ["path", "content"],
+      ...noAdditionalProperties,
+    },
+  },
+];

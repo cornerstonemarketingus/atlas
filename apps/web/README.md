@@ -159,18 +159,43 @@ above) stores one `mergePolicy` per `owner/name` in D1:
   repositories that want it; never auto-selected.
 
 The dashboard exposes this as a dropdown once you've entered a repository.
-Nothing yet reads this setting to actually gate a merge — that lands with
-the coder agent that creates the PRs in the first place.
+The coder agent (below) always opens a pull request rather than pushing
+straight to a branch, but currently ignores this setting and never merges
+its own PR regardless of what's selected — that enforcement is the next
+piece of work, deliberately shipped after the open-a-PR path is proven.
 
 ## GitHub Actions task runner
 
-Set `ATLAS_GITHUB_TOKEN` to a fine-grained token with Actions write access and
-optionally set `ATLAS_GITHUB_WORKFLOW` (defaults to `atlas-runner.yml`). Atlas
-dispatches that workflow in the selected allowlisted repository with
-`repository`, `branch`, `mode`, `objective`, and `task_id` inputs. The workflow
-must declare matching `workflow_dispatch` inputs. `ATLAS_ALLOWED_REPOSITORIES`
-is a comma-separated allowlist and defaults to `cornerstonemarketingus/atlas`.
-Until approval persistence is connected, the API accepts Inspect tasks only.
+Set `ATLAS_GITHUB_TOKEN` to a fine-grained token with Actions write access.
+Atlas dispatches a workflow in the selected allowlisted repository with
+`repository`, `branch`, `mode`, `objective`, and `task_id` inputs; the
+workflow must declare matching `workflow_dispatch` inputs.
+`ATLAS_ALLOWED_REPOSITORIES` is a comma-separated allowlist and defaults to
+`cornerstonemarketingus/atlas`.
+
+Three modes exist, each routed to its own workflow so a read-only mode's
+token never carries write scope it doesn't need:
+
+- `inspect` and `debug` → `atlas-runner.yml` (override with
+  `ATLAS_GITHUB_WORKFLOW`), `contents: read` only.
+- `coder` → `atlas-coder.yml` (override with `ATLAS_CODER_WORKFLOW`),
+  `contents: write` + `pull-requests: write` — it pushes a new branch and
+  opens a pull request, but never merges it.
+
+### Coder mode
+
+Reads the repository with the same tools `inspect` uses, proposes file edits
+through a digest-bound safe editor (`packages/atlas-cli`'s
+`SafeRepositoryFileEditor`), and opens a pull request summarizing what
+changed — it stops there. Needs one more repository secret:
+
+- `GROQ_API_KEY` — an API key from [console.groq.com](https://console.groq.com/keys).
+  Without it, coder tasks fail immediately with a clear message rather than
+  silently doing nothing.
+
+Optionally set the `ATLAS_CODER_MODEL` repository **variable** (Settings →
+Secrets and variables → Actions → Variables tab, not Secrets) to pick a
+different Groq-hosted model; defaults to `llama-3.3-70b-versatile`.
 
 When no GitHub token is configured, Atlas falls back to the existing
 `ATLAS_AGENT_DISPATCH_URL` and `ATLAS_AGENT_DISPATCH_TOKEN` runner settings.

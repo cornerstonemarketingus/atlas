@@ -86,6 +86,39 @@ test("rejects duplicate and unknown tools", async () => {
   }), hasCode("TOOL_NOT_FOUND"));
 });
 
+test("evaluates a tool's declared capability, not a hardcoded 'read'", async () => {
+  const target = new PolicyEnforcedReadOnlyToolRegistry({
+    policy: {
+      defaultDecision: "allow",
+      rules: [{ id: "deny-writes", capabilities: ["write"], scope: { kind: "global" }, decision: "deny" }],
+    },
+  });
+  registerEcho(target, []);
+  target.register({
+    name: "propose_edit",
+    description: "Write a file.",
+    risk: "high",
+    capability: "write",
+    validateInput: (input) => input,
+    execute: async () => "applied",
+  });
+
+  const readResult = await target.execute({
+    name: "read_source",
+    input: "atlas",
+    scope: { kind: "global" },
+    context: { repositoryId: "atlas" },
+  });
+  assert.equal(readResult.status, "completed");
+
+  await assert.rejects(target.execute({
+    name: "propose_edit",
+    input: "atlas",
+    scope: { kind: "global" },
+    context: { repositoryId: "atlas" },
+  }), hasCode("POLICY_DENIED"));
+});
+
 function hasCode(code: ReadOnlyToolRegistryError["code"]): (error: unknown) => boolean {
   return (error) => error instanceof ReadOnlyToolRegistryError && error.code === code;
 }

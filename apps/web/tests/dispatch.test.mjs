@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allowedRepositories, dispatchGitHub, githubDispatchRequest, validateTask } from "../app/api/tasks/dispatch.mjs";
+import { allowedRepositories, dispatchGitHub, githubDispatchRequest, validateTask, workflowForMode } from "../app/api/tasks/dispatch.mjs";
 
 const valid = { repository: "Cornerstonemarketingus/atlas", branch: "main", mode: "inspect", objective: " Map the API. " };
 
@@ -22,6 +22,22 @@ test("accepts debug mode alongside inspect", () => {
   const result = validateTask({ ...valid, mode: "debug" }, allowlist);
   assert.equal("error" in result, false);
   assert.equal(result.task.mode, "debug");
+});
+
+test("accepts coder mode alongside inspect and debug", () => {
+  const allowlist = allowedRepositories("cornerstonemarketingus/atlas");
+  const result = validateTask({ ...valid, mode: "coder" }, allowlist);
+  assert.equal("error" in result, false);
+  assert.equal(result.task.mode, "coder");
+});
+
+test("routes coder tasks to a separate, elevated-permission workflow", () => {
+  assert.equal(workflowForMode("inspect"), "atlas-runner.yml");
+  assert.equal(workflowForMode("debug"), "atlas-runner.yml");
+  assert.equal(workflowForMode("coder"), "atlas-coder.yml");
+  assert.equal(workflowForMode("inspect", { defaultWorkflow: "custom-runner.yml" }), "custom-runner.yml");
+  assert.equal(workflowForMode("coder", { coderWorkflow: "custom-coder.yml" }), "custom-coder.yml");
+  assert.equal(workflowForMode("coder", { defaultWorkflow: "custom-runner.yml" }), "atlas-coder.yml");
 });
 
 test("builds a GitHub workflow dispatch without putting the token in its URL or body", () => {

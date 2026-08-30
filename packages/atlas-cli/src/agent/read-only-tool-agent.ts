@@ -12,6 +12,13 @@ export interface ReadOnlyToolAgentOptions {
   readonly maximumTurns?: number;
   readonly maximumToolCalls?: number;
   readonly maximumToolResultCharacters?: number;
+  /**
+   * Overrides the default read-only system prompt. Set this whenever any
+   * offered tool is not capability "read" — the default text explicitly
+   * tells the model to "never request mutation", which would suppress a
+   * write tool's use even when the registry's policy allows it.
+   */
+  readonly systemPrompt?: string;
 }
 
 export interface ReadOnlyToolAgentRequest {
