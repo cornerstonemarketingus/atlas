@@ -105,12 +105,31 @@ to `main` that touches `apps/web/**`, or on manual dispatch.
 Configure these repository secrets under Settings → Secrets and variables →
 Actions before the workflow can deploy:
 
-- `CLOUDFLARE_API_TOKEN` — an API token scoped to Workers Scripts: Edit (add
-  D1: Edit and R2: Edit only once this app actually uses those bindings).
+- `CLOUDFLARE_API_TOKEN` — an API token scoped to Workers Scripts: Edit, plus
+  D1: Edit (repository settings — merge policy per repository — are stored
+  in D1; see below).
 - `CLOUDFLARE_ACCOUNT_ID` — from the Cloudflare dashboard sidebar.
 
-Neither `/api/tasks` nor `/api/github/status` currently reads or writes D1 or
-R2, so no database or bucket needs to exist for this deployment to work.
+### Provisioning the D1 database (one time)
+
+`GET`/`PUT /api/settings/repositories` (the per-repository merge-policy
+setting) needs a real D1 database — there is none until you create one:
+
+1. Run the **Provision Atlas D1 database** workflow by hand (Actions tab →
+   select it → Run workflow). It creates the database via `wrangler d1
+   create` and applies the initial schema (`apps/web/drizzle/0000_*.sql`) to
+   it. Note: this actually creates a billable-tier-eligible (though normally
+   free-tier) Cloudflare resource — it's meant to be run once, deliberately,
+   not automatically.
+2. Copy the `database_id` it prints into two new repository secrets:
+   `ATLAS_D1_DATABASE_ID` and `ATLAS_D1_DATABASE_NAME` (the name you gave it,
+   default `atlas-db`).
+3. Re-run **Deploy Atlas web to Cloudflare Workers** so the Worker's D1
+   binding picks up the real database instead of a placeholder.
+
+A later schema change needs its own manual `wrangler d1 execute <name>
+--remote --file drizzle/<new-migration>.sql` — the provisioning workflow only
+bootstraps the first migration.
 
 Two more repository secrets, if present, are pushed to the Worker as secrets
 on every deploy (each step is skipped, not failed, if its secret is unset):
@@ -125,6 +144,23 @@ on every deploy (each step is skipped, not failed, if its secret is unset):
   <ATLAS_OPERATOR_TOKEN>`. The dashboard prompts for this value once and
   remembers it in the browser's `localStorage`. Without it configured, the
   dashboard's access-code screen has nothing correct to accept.
+
+## Repository settings
+
+`GET`/`PUT /api/settings/repositories` (same operator auth as the routes
+above) stores one `mergePolicy` per `owner/name` in D1:
+
+- `manual` (default) — a person merges every PR Atlas opens.
+- `ci-gated` — Atlas merges its own PR once your existing build/test
+  validation comes back green.
+- `none` — Atlas merges immediately with no check at all. This is a real,
+  deliberate option, not a safe default: it means a model's output can reach
+  your default branch with nothing between it and production. Available for
+  repositories that want it; never auto-selected.
+
+The dashboard exposes this as a dropdown once you've entered a repository.
+Nothing yet reads this setting to actually gate a merge — that lands with
+the coder agent that creates the PRs in the first place.
 
 ## GitHub Actions task runner
 
