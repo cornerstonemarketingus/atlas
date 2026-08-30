@@ -13,6 +13,7 @@ interface StoredToolDefinition {
   readonly name: string;
   readonly description: string;
   readonly risk: ReadOnlyToolDefinition<unknown, unknown>["risk"];
+  readonly capability: NonNullable<ReadOnlyToolDefinition<unknown, unknown>["capability"]>;
   readonly validateInput: (input: unknown) => unknown;
   readonly execute: (input: unknown, context: ReadOnlyToolContext) => Promise<unknown>;
 }
@@ -34,6 +35,7 @@ export class PolicyEnforcedReadOnlyToolRegistry implements ReadOnlyToolRegistry 
       name,
       description: definition.description,
       risk: definition.risk,
+      capability: definition.capability ?? "read",
       validateInput: definition.validateInput,
       execute: async (input, context) => definition.execute(input as TInput, context),
     });
@@ -57,12 +59,12 @@ export class PolicyEnforcedReadOnlyToolRegistry implements ReadOnlyToolRegistry 
       );
     }
     const policy = evaluateToolPolicy(this.options.policy, {
-      capability: "read",
+      capability: definition.capability,
       risk: definition.risk,
       scope: request.scope,
     });
     if (policy.decision === "deny") {
-      throw new ReadOnlyToolRegistryError("POLICY_DENIED", `Policy denied read-only tool: ${request.name}`);
+      throw new ReadOnlyToolRegistryError("POLICY_DENIED", `Policy denied tool: ${request.name}`);
     }
     if (policy.decision === "ask") {
       return { status: "approval-required", policy };

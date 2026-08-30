@@ -1,4 +1,5 @@
 import type {
+  ToolCapability,
   ToolPolicy,
   ToolPolicyEvaluation,
   ToolRiskLevel,
@@ -14,6 +15,8 @@ export interface ReadOnlyToolDefinition<TInput, TOutput> {
   readonly name: string;
   readonly description: string;
   readonly risk: ToolRiskLevel;
+  /** Defaults to "read". Set explicitly for a tool that mutates anything. */
+  readonly capability?: ToolCapability;
   readonly validateInput: (input: unknown) => TInput;
   readonly execute: (input: TInput, context: ReadOnlyToolContext) => Promise<TOutput>;
 }

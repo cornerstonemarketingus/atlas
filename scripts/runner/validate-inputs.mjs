@@ -3,7 +3,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const ALLOWED_REPOSITORY = "cornerstonemarketingus/atlas";
-const allowedModes = new Set(["inspect", "debug"]);
+const allowedModes = new Set(["inspect", "debug", "coder"]);
 const outputDirectory = process.env.ATLAS_OUTPUT_DIR;
 
 if (!outputDirectory) {

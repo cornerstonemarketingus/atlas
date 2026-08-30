@@ -123,6 +123,44 @@ if (metadata.mode === "inspect") {
   }
   writeStatus("completed", "Build and test succeeded on the requested branch.");
   console.log("Atlas debug run completed: build and test passed.");
+} else if (metadata.mode === "coder") {
+  if (!process.env.GROQ_API_KEY) {
+    writeStatus("failed", "GROQ_API_KEY is not configured; coder tasks cannot run.");
+    console.error("Atlas coder mode requires GROQ_API_KEY.");
+    process.exit(2);
+  }
+  const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
+  const model = process.env.ATLAS_CODER_MODEL || "llama-3.3-70b-versatile";
+  const result = runCommand(
+    "code",
+    process.execPath,
+    [cli, "code", repositoryRoot, metadata.objective, "--api-key-env", "GROQ_API_KEY", "--model", model, "--format", "json"],
+    process.cwd(),
+  );
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    // leave parsed null; handled below as a failure
+  }
+  writeJson("code.json", parsed ?? { schema_version: 1, task_id: metadata.task_id, status: "failed", edits: [], stderr: result.stderr.slice(0, 8192) });
+
+  if (!result.ok || parsed === null) {
+    writeStatus("failed", `Coder run failed: ${result.timedOut ? "timed out" : `exit code ${result.exitCode ?? "unknown"}`}.`);
+    console.error(result.stderr.slice(0, 8192));
+    process.exit(1);
+  }
+  if (parsed.status !== "completed") {
+    writeStatus(parsed.status === "approval-required" ? "blocked" : parsed.status, parsed.message ?? `Coder agent stopped with status '${parsed.status}'.`);
+    console.log(`Atlas coder run stopped with status '${parsed.status}'.`);
+  } else if (parsed.edits.length === 0) {
+    writeStatus("completed", "Coder agent finished without proposing any file changes.");
+    console.log("Atlas coder run completed with no file changes.");
+  } else {
+    writeStatus("completed", `Coder agent proposed ${parsed.edits.length} file change(s); opening a pull request next.`);
+    console.log(`Atlas coder run completed: ${parsed.edits.length} file(s) changed.`);
+  }
 } else {
   writeStatus("unsupported", `Mode '${metadata.mode}' is not enabled; no repository mutation was attempted.`);
   console.error(`Atlas mode '${metadata.mode}' is intentionally unsupported in this read-only runner.`);

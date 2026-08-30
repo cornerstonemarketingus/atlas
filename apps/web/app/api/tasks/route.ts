@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { allowedRepositories, dispatchGitHub, validateTask } from "./dispatch.mjs";
+import { allowedRepositories, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
 import { authenticatedUserId } from "./operator-auth.mjs";
 
@@ -21,7 +21,8 @@ export async function POST(request: Request) {
   }
   if (githubToken) {
     try {
-      const response = await dispatchGitHub({ token: githubToken, workflow: process.env.ATLAS_GITHUB_WORKFLOW, task, taskId });
+      const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
+      const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId });
       if (!response.ok) return Response.json({ message: "GitHub Actions rejected the task dispatch." }, { status: 502 });
       return Response.json({ taskId, status: "dispatched", runner: "github-actions" }, { status: 202 });
     } catch {
