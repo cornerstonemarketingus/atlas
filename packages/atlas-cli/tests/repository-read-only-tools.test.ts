@@ -101,15 +101,14 @@ test("enforces repository binding even with a globally scoped registry request",
   });
   registerRepositoryReadOnlyTools(registry, tools);
 
-  await assert.rejects(
-    registry.execute({
-      name: "repository.inspect",
-      input: {},
-      scope: { kind: "global" },
-      context: { repositoryId: "other" },
-    }),
-    /bound to repository atlas/u,
-  );
+  const mismatchedResult = await registry.execute({
+    name: "repository.inspect",
+    input: {},
+    scope: { kind: "global" },
+    context: { repositoryId: "other" },
+  });
+  assert.equal(mismatchedResult.status, "failed");
+  assert.match(mismatchedResult.status === "failed" ? mismatchedResult.message : "", /bound to repository atlas/u);
   assert.deepEqual(calls, []);
 
   const result = await registry.execute({

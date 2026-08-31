@@ -135,6 +135,22 @@ export class ProviderReadOnlyToolAgent {
             this.options.audit.append("session.blocked", { sessionId: request.sessionId, summary: "approval required" });
             return { status: "approval-required", toolCallId: call.id, toolName: call.name, trace: trace() };
           }
+          if (result.status === "failed") {
+            this.options.audit.append("tool.completed", {
+              toolCallId: call.id,
+              outcome: "failed",
+              durationMs: 0,
+              resultCharacters: result.message.length,
+              ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode }),
+            });
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              isError: true,
+              content: [{ type: "text", text: JSON.stringify({ error: result.message, ...(result.errorCode === undefined ? {} : { code: result.errorCode }) }) }],
+            });
+            continue;
+          }
           const serialized = JSON.stringify(result.output);
           if (serialized.length > this.#maximumToolResultCharacters) {
             return this.block(request.sessionId, "Tool result exceeds the agent context limit.", trace());

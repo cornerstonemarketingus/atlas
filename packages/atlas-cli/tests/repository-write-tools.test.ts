@@ -7,7 +7,6 @@ import test from "node:test";
 import { PolicyEnforcedReadOnlyToolRegistry } from "../src/infrastructure/policy-enforced-read-only-tool-registry.js";
 import { SafeRepositoryFileEditor } from "../src/infrastructure/safe-repository-file-editor.js";
 import { createRepositoryWriteTools, registerRepositoryWriteTools } from "../src/infrastructure/repository-write-tools.js";
-import { RepositoryToolInputError } from "../src/infrastructure/repository-read-only-tools.js";
 
 async function fixture(): Promise<string> {
   return mkdtemp(join(tmpdir(), "atlas-write-tools-"));
@@ -70,15 +69,13 @@ test("rejects a path that resolves outside the repository before reading anythin
   const tools = createRepositoryWriteTools({ repositoryId: "atlas", repositoryRoot: join(root, "workspace") }, { editor: new SafeRepositoryFileEditor() });
   registerRepositoryWriteTools(registry, tools);
 
-  await assert.rejects(
-    registry.execute({
-      name: "repository.propose_file_edit",
-      input: { path: "../secret.txt", content: "overwritten" },
-      scope: { kind: "repository", repositoryId: "atlas" },
-      context: { repositoryId: "atlas" },
-    }),
-    (error: unknown) => error instanceof RepositoryToolInputError,
-  );
+  const result = await registry.execute({
+    name: "repository.propose_file_edit",
+    input: { path: "../secret.txt", content: "overwritten" },
+    scope: { kind: "repository", repositoryId: "atlas" },
+    context: { repositoryId: "atlas" },
+  });
+  assert.equal(result.status, "failed");
   assert.equal(await readFile(join(root, "secret.txt"), "utf8"), "top secret");
 });
 
@@ -116,10 +113,11 @@ test("rejects symlinked targets via the underlying editor's own validation", asy
   const tools = createRepositoryWriteTools({ repositoryId: "atlas", repositoryRoot: root }, { editor: new SafeRepositoryFileEditor() });
   registerRepositoryWriteTools(registry, tools);
 
-  await assert.rejects(registry.execute({
+  const result = await registry.execute({
     name: "repository.propose_file_edit",
     input: { path: "link.txt", content: "new" },
     scope: { kind: "repository", repositoryId: "atlas" },
     context: { repositoryId: "atlas" },
-  }));
+  });
+  assert.equal(result.status, "failed");
 });

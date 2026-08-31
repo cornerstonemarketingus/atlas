@@ -37,6 +37,19 @@ export type ReadOnlyToolExecutionResult =
   | {
       readonly status: "approval-required";
       readonly policy: ToolPolicyEvaluation;
+    }
+  | {
+      /**
+       * The tool was allowed to run and its own `execute` threw — an
+       * ordinary domain-level failure (a file that doesn't exist yet, a
+       * path outside the repository) rather than a policy or lookup
+       * problem. Callers should feed this back to the model as a failed
+       * tool result so it can adapt, not treat it as fatal to the session.
+       */
+      readonly status: "failed";
+      readonly policy: ToolPolicyEvaluation;
+      readonly message: string;
+      readonly errorCode?: string;
     };
 
 export type ReadOnlyToolRegistryErrorCode =

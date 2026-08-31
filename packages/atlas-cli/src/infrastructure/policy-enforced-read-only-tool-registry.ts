@@ -75,7 +75,19 @@ export class PolicyEnforcedReadOnlyToolRegistry implements ReadOnlyToolRegistry 
         : new Error("Tool execution was cancelled.");
     }
     const validatedInput = definition.validateInput(request.input);
-    const output = await definition.execute(validatedInput, request.context);
-    return { status: "completed", output, policy };
+    try {
+      const output = await definition.execute(validatedInput, request.context);
+      return { status: "completed", output, policy };
+    } catch (error: unknown) {
+      // A tool that passed policy and then threw during its own execution
+      // is an ordinary domain failure (missing file, path outside the
+      // repository) that the model should see and adapt to — not the same
+      // class of problem as a policy or lookup error above, which still
+      // ends the session.
+      const message = error instanceof Error ? error.message : "Tool execution failed.";
+      const rawCode = (error as { code?: unknown } | null)?.code;
+      const errorCode = typeof rawCode === "string" ? rawCode : undefined;
+      return { status: "failed", policy, message, ...(errorCode === undefined ? {} : { errorCode }) };
+    }
   }
 }
