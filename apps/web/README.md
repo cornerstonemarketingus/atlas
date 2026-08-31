@@ -197,6 +197,12 @@ Optionally set the `ATLAS_CODER_MODEL` repository **variable** (Settings →
 Secrets and variables → Actions → Variables tab, not Secrets) to pick a
 different Groq-hosted model; defaults to `openai/gpt-oss-120b`.
 
+Requests to Groq are capped at 4,096 output tokens per model turn (not the
+whole session budget at once) and automatically retry a transient rate limit
+or server error up to twice, honoring Groq's suggested wait when it names
+one — a free-tier tokens-per-minute limit surfaces as a normal, self-healing
+retry rather than an immediate task failure.
+
 When no GitHub token is configured, Atlas falls back to the existing
 `ATLAS_AGENT_DISPATCH_URL` and `ATLAS_AGENT_DISPATCH_TOKEN` runner settings.
 

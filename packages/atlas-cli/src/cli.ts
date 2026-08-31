@@ -11,6 +11,7 @@ import { InMemorySessionAuditLog } from "./infrastructure/in-memory-session-audi
 import { InMemoryUsageBudgetLedger } from "./infrastructure/in-memory-usage-budget-ledger.js";
 import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-openai-compatible-model-provider.js";
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
+import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
 import { createRepositoryReadOnlyTools, registerRepositoryReadOnlyTools } from "./infrastructure/repository-read-only-tools.js";
 import { createRepositoryWriteTools } from "./infrastructure/repository-write-tools.js";
@@ -343,7 +344,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     }],
   });
   const provider = new BudgetedModelProvider(
-    groqProvider,
+    new RetryingModelProvider(groqProvider),
     new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget }),
   );
   const sessionId = randomUUID();
