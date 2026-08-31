@@ -14,14 +14,17 @@ export class ProviderReadOnlyToolAgent {
   readonly #maximumTurns: number;
   readonly #maximumToolCalls: number;
   readonly #maximumToolResultCharacters: number;
+  readonly #maximumOutputTokensPerTurn: number;
 
   public constructor(private readonly options: ReadOnlyToolAgentOptions) {
     this.#maximumTurns = options.maximumTurns ?? 8;
     this.#maximumToolCalls = options.maximumToolCalls ?? 16;
     this.#maximumToolResultCharacters = options.maximumToolResultCharacters ?? 100_000;
+    this.#maximumOutputTokensPerTurn = options.maximumOutputTokensPerTurn ?? 4_096;
     assertBound("maximumTurns", this.#maximumTurns, 32);
     assertBound("maximumToolCalls", this.#maximumToolCalls, 128);
     assertBound("maximumToolResultCharacters", this.#maximumToolResultCharacters, 1_000_000);
+    assertBound("maximumOutputTokensPerTurn", this.#maximumOutputTokensPerTurn, 1_000_000);
     const registered = new Set(options.registry.list().map((tool) => tool.name));
     const offered = new Set<string>();
     for (const tool of options.tools) {
@@ -76,6 +79,7 @@ export class ProviderReadOnlyToolAgent {
           model: this.options.model,
           messages,
           tools: this.options.tools,
+          maxOutputTokens: this.#maximumOutputTokensPerTurn,
         }, request.signal === undefined ? {} : { signal: request.signal }));
         turns += 1;
         usage = addUsage(usage, response.usage);

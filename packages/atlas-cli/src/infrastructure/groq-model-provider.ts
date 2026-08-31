@@ -76,8 +76,13 @@ export class GroqModelProvider implements ModelProvider {
     }
     if (!response.ok) {
       const authFailure = response.status === 401 || response.status === 403;
+      // Groq's error responses (rate limits, oversized requests, invalid
+      // models) carry the actual reason in the body; without it every
+      // failure looks identical and has to be guessed at from the status
+      // code alone.
+      const detail = text.trim().slice(0, 500);
       throw new ModelProviderError({
-        message: `Groq endpoint returned HTTP ${response.status}`,
+        message: `Groq endpoint returned HTTP ${response.status}${detail.length > 0 ? `: ${detail}` : ""}`,
         code: authFailure ? "authentication" : response.status === 429 ? "rate-limit" : "provider-failure",
         providerId: this.metadata.id,
         retryable: !authFailure && (response.status === 429 || response.status >= 500),
