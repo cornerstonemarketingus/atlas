@@ -195,7 +195,7 @@ changed — it stops there. Needs one more repository secret:
 
 Optionally set the `ATLAS_CODER_MODEL` repository **variable** (Settings →
 Secrets and variables → Actions → Variables tab, not Secrets) to pick a
-different Groq-hosted model; defaults to `llama-3.3-70b-versatile`.
+different Groq-hosted model; defaults to `openai/gpt-oss-120b`.
 
 When no GitHub token is configured, Atlas falls back to the existing
 `ATLAS_AGENT_DISPATCH_URL` and `ATLAS_AGENT_DISPATCH_TOKEN` runner settings.
