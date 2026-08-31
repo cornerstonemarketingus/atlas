@@ -130,7 +130,7 @@ if (metadata.mode === "inspect") {
     process.exit(2);
   }
   const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
-  const model = process.env.ATLAS_CODER_MODEL || "llama-3.3-70b-versatile";
+  const model = process.env.ATLAS_CODER_MODEL || "openai/gpt-oss-120b";
   const result = runCommand(
     "code",
     process.execPath,
