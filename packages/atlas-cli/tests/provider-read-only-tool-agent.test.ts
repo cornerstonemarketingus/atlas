@@ -53,6 +53,35 @@ test("executes an allowed read tool and completes with an audited response", asy
   assert.equal(audit.snapshot().at(-1)?.type, "session.completed");
 });
 
+test("feeds a tool's own execution failure back to the model instead of ending the session", async () => {
+  const provider = new MockModelProvider({ metadata, responses: [
+    response("one", [{ type: "tool-call", id: "call-1", name: tool.name, arguments: {} }], "tool-calls"),
+    response("two", [{ type: "text", text: "The file did not exist yet, so I created it." }], "stop"),
+  ] });
+  const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
+  target.register({
+    name: "repository.inspect", description: "Inspect.", risk: "low",
+    validateInput: (input) => input,
+    execute: async () => { throw new Error("Unable to read repository path: missing.md"); },
+  });
+  const audit = new InMemorySessionAuditLog();
+  const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: target, tools: [tool], audit });
+
+  const result = await agent.run({
+    sessionId: "session", objective: "Read a file that may not exist", evidence: [],
+    scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" },
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.trace.toolCalls, 1);
+  const toolMessage = provider.requests[1]?.messages.find((message) => message.role === "tool");
+  assert.equal(toolMessage?.role === "tool" ? toolMessage.isError : undefined, true);
+  assert.match(
+    toolMessage?.role === "tool" ? toolMessage.content.map((part) => part.type === "text" ? part.text : "").join("") : "",
+    /Unable to read repository path/u,
+  );
+});
+
 test("stops before execution when policy requires approval", async () => {
   const provider = new MockModelProvider({ metadata, responses: [
     response("one", [{ type: "tool-call", id: "call-1", name: tool.name, arguments: {} }], "tool-calls"),
