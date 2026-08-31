@@ -40,12 +40,12 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Elevated relative to atlas-runner.yml (inspect/debug stay contents:read)
-    # because this job pushes a branch and opens a pull request. It never
-    # merges — see scripts/runner/create-coder-pull-request.mjs.
+    # Every checkout uses persist-credentials: false, and the push + pull
+    # request step authenticates with ATLAS_GITHUB_TOKEN (see below), not
+    # the default GITHUB_TOKEN — so the built-in token needs no write scope
+    # here at all. It never merges — see create-coder-pull-request.mjs.
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     env:
       ATLAS_TASK_ID: ${{ github.event.inputs.task_id }}
       ATLAS_REPOSITORY: ${{ github.event.inputs.repository }}
@@ -94,7 +94,12 @@ jobs:
 
       - name: Open pull request for coder changes
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The default GITHUB_TOKEN can push a branch but is blocked from
+          # opening pull requests unless the repository enables "Allow
+          # GitHub Actions to create and approve pull requests" — ATLAS_GITHUB_TOKEN
+          # (the fine-grained PAT already used to dispatch this workflow)
+          # needs its own "Pull requests: Read and write" permission for this.
+          GITHUB_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
         run: node scripts/runner/create-coder-pull-request.mjs
 
       - name: Upload bounded task artifacts

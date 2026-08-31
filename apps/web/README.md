@@ -135,8 +135,15 @@ Two more repository secrets, if present, are pushed to the Worker as secrets
 on every deploy (each step is skipped, not failed, if its secret is unset):
 
 - `ATLAS_GITHUB_TOKEN` — a fine-grained GitHub token scoped to this repository
-  with the "Actions" repository permission set to Read and write. Without this
-  (or a configured GitHub App, see below), task dispatch responds 503.
+  with the "Actions" repository permission set to Read and write, plus "Pull
+  requests" set to Read and write. Without Actions write, task dispatch
+  responds 503 (or falls back to a configured GitHub App, see below). Without
+  Pull requests write, coder mode pushes its branch but the `atlas-coder.yml`
+  workflow's own pull-request-creation step fails — GitHub blocks the default
+  `GITHUB_TOKEN` from opening pull requests unless the repository separately
+  enables Settings → Actions → General → "Allow GitHub Actions to create and
+  approve pull requests," so `atlas-coder.yml` uses this token for that step
+  instead.
 - `ATLAS_OPERATOR_TOKEN` — a secret string of your choosing. `/api/tasks` and
   `/api/github/status` normally require the `oai-authenticated-user-id` header
   that only the OpenAI Sites platform injects; outside that platform (e.g. this
