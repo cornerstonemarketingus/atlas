@@ -13,6 +13,16 @@ export interface ReadOnlyToolAgentOptions {
   readonly maximumToolCalls?: number;
   readonly maximumToolResultCharacters?: number;
   /**
+   * Caps `max_tokens` on every individual model request. Without this, a
+   * provider that reports a large remaining output-token budget (see
+   * BudgetedModelProvider) will ask for the entire remaining budget on a
+   * single turn — which real providers can reject outright (Groq returns
+   * HTTP 413 once a request's prompt + max_tokens exceeds its tokens-per-
+   * minute limit, well before the conversation itself is actually large).
+   * Defaults to 4,096, generous for a single tool call or summary turn.
+   */
+  readonly maximumOutputTokensPerTurn?: number;
+  /**
    * Overrides the default read-only system prompt. Set this whenever any
    * offered tool is not capability "read" — the default text explicitly
    * tells the model to "never request mutation", which would suppress a

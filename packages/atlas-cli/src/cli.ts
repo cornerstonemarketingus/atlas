@@ -231,12 +231,13 @@ async function runChat(args: readonly string[], format: "json" | "text"): Promis
       sourceReader: new BoundedRepositorySourceReader(),
     },
   ));
+  const maxOutputTokensPerTurn = Math.min(4_096, tokenBudget);
   const localProvider = new LocalOpenAiCompatibleModelProvider({
     endpoint,
     models: [{
       model,
       contextWindowTokens: 32_768,
-      maxOutputTokens: Math.min(4_096, tokenBudget),
+      maxOutputTokens: maxOutputTokensPerTurn,
       supportsTools: true,
       supportsJson: true,
       supportsStreaming: false,
@@ -254,6 +255,7 @@ async function runChat(args: readonly string[], format: "json" | "text"): Promis
     tools: REPOSITORY_READ_ONLY_MODEL_TOOLS,
     audit: new InMemorySessionAuditLog(),
     maximumTurns,
+    maximumOutputTokensPerTurn: maxOutputTokensPerTurn,
   }).run({
     sessionId,
     objective,
@@ -323,12 +325,18 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     },
   });
 
+  // Capped well under 8,192: Groq rejects a request outright (HTTP 413) once
+  // prompt tokens + max_tokens exceeds its tokens-per-minute limit for a
+  // model, and that limit can be as low as ~10,000 on shared/free tiers —
+  // a naive max_tokens of 8,192 leaves almost no room for the prompt itself,
+  // let alone the conversation history that accumulates over later turns.
+  const maxOutputTokensPerTurn = Math.min(4_096, tokenBudget);
   const groqProvider = new GroqModelProvider({
     apiKey,
     models: [{
       model,
       contextWindowTokens: 128_000,
-      maxOutputTokens: Math.min(8_192, tokenBudget),
+      maxOutputTokens: maxOutputTokensPerTurn,
       supportsTools: true,
       supportsJson: true,
       supportsStreaming: false,
@@ -346,6 +354,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     tools: [...REPOSITORY_READ_ONLY_MODEL_TOOLS, ...REPOSITORY_WRITE_MODEL_TOOLS],
     audit: new InMemorySessionAuditLog(),
     maximumTurns,
+    maximumOutputTokensPerTurn: maxOutputTokensPerTurn,
     systemPrompt: CODE_SYSTEM_PROMPT,
   }).run({
     sessionId,
