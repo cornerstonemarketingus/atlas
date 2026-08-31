@@ -138,22 +138,31 @@ if (metadata.mode === "inspect") {
     process.cwd(),
   );
 
+  // 'atlas code' exits 1 for every non-'completed' agent outcome (failed,
+  // blocked, cancelled, approval-required), not just crashes — those still
+  // print a fully valid, informative JSON result to stdout (stderr is
+  // empty). Parsing must happen before looking at the exit code at all, or
+  // a real agent-level failure message gets silently dropped in favor of an
+  // empty stderr string.
   let parsed = null;
   try {
     parsed = JSON.parse(result.stdout);
   } catch {
-    // leave parsed null; handled below as a failure
+    // leave parsed null; handled below as a genuine crash
   }
-  writeJson("code.json", parsed ?? { schema_version: 1, task_id: metadata.task_id, status: "failed", edits: [], stderr: result.stderr.slice(0, 8192) });
 
-  if (!result.ok || parsed === null) {
-    writeStatus("failed", `Coder run failed: ${result.timedOut ? "timed out" : `exit code ${result.exitCode ?? "unknown"}`}.`);
-    console.error(result.stderr.slice(0, 8192));
+  if (parsed === null) {
+    writeJson("code.json", { schema_version: 1, task_id: metadata.task_id, status: "failed", edits: [], stderr: result.stderr.slice(0, 8192) });
+    writeStatus("failed", `Coder run produced no parseable output: ${result.timedOut ? "timed out" : `exit code ${result.exitCode ?? "unknown"}`}.`);
+    console.error(result.stderr || result.stdout.slice(0, 8192) || "(no output captured)");
     process.exit(1);
   }
+  writeJson("code.json", parsed);
+
   if (parsed.status !== "completed") {
     writeStatus(parsed.status === "approval-required" ? "blocked" : parsed.status, parsed.message ?? `Coder agent stopped with status '${parsed.status}'.`);
-    console.log(`Atlas coder run stopped with status '${parsed.status}'.`);
+    console.error(`Atlas coder run stopped with status '${parsed.status}': ${parsed.message ?? "(no message)"}`);
+    process.exit(1);
   } else if (parsed.edits.length === 0) {
     writeStatus("completed", "Coder agent finished without proposing any file changes.");
     console.log("Atlas coder run completed with no file changes.");
