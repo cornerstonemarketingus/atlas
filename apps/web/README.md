@@ -233,9 +233,24 @@ above) stores one `mergePolicy` per `owner/name` in D1:
 
 The dashboard exposes this as a dropdown once you've entered a repository.
 The coder agent (below) always opens a pull request rather than pushing
-straight to a branch, but currently ignores this setting and never merges
-its own PR regardless of what's selected — that enforcement is the next
-piece of work, deliberately shipped after the open-a-PR path is proven.
+straight to a branch, and `/api/tasks` looks this setting up and passes it
+into `atlas-coder.yml` as the `merge_policy` dispatch input, which
+`create-coder-pull-request.mjs` (`scripts/runner/`) enforces after opening
+the PR:
+
+- `manual` — opens the PR and stops there.
+- `none` — merges (squash) immediately after opening it.
+- `ci-gated` — polls the head commit's check-runs (GitHub's Checks API;
+  classic commit statuses from non-Actions CI aren't read) for up to 8
+  minutes. Merges only once every reported check completed successfully.
+  A check that fails, or a repository with no CI configured at all so
+  nothing ever reports, both leave the PR open for a human — the absence
+  of a signal is never treated as a passing one. The merge-vs-wait-vs-hold
+  decision itself is a pure function (`scripts/runner/merge-decision.mjs`)
+  with its own unit tests, independent of the GitHub API calls around it.
+
+An immediate auto-merge failing (branch protection, a real conflict) is
+never a crash — the PR stays open and `status.json`'s message says why.
 
 ## GitHub Actions task runner
 
@@ -251,16 +266,18 @@ token never carries write scope it doesn't need:
 
 - `inspect` and `debug` → `atlas-runner.yml` (override with
   `ATLAS_GITHUB_WORKFLOW`), `contents: read` only.
-- `coder` → `atlas-coder.yml` (override with `ATLAS_CODER_WORKFLOW`),
-  `contents: write` + `pull-requests: write` — it pushes a new branch and
-  opens a pull request, but never merges it.
+- `coder` → `atlas-coder.yml` (override with `ATLAS_CODER_WORKFLOW`). Its
+  job-level `permissions` are also `contents: read` — the push and PR steps
+  authenticate with `ATLAS_GITHUB_TOKEN` instead of the default token (see
+  "Coder mode" below), not because they need less access than before.
 
 ### Coder mode
 
 Reads the repository with the same tools `inspect` uses, proposes file edits
 through a digest-bound safe editor (`packages/atlas-cli`'s
 `SafeRepositoryFileEditor`), and opens a pull request summarizing what
-changed — it stops there. Needs one more repository secret:
+changed. Whether it goes on to merge that PR itself is entirely the
+repository's merge-policy setting above. Needs one more repository secret:
 
 - `GROQ_API_KEY` — an API key from [console.groq.com](https://console.groq.com/keys).
   Without it, coder tasks fail immediately with a clear message rather than

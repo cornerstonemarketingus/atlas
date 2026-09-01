@@ -30,7 +30,7 @@ export function workflowForMode(mode, overrides = {}) {
   return overrides.defaultWorkflow || "atlas-runner.yml";
 }
 
-export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", workflowRef = "main", task, taskId }) {
+export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", workflowRef = "main", task, taskId, mergePolicy = "manual" }) {
   if (!workflowPattern.test(workflow)) throw new Error("ATLAS_GITHUB_WORKFLOW is invalid.");
   if (workflowRef !== "main") throw new Error("ATLAS_RUNNER_WORKFLOW_REF must be 'main'.");
   const [owner, repo] = task.repository.split("/");
@@ -55,6 +55,11 @@ export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", wo
           mode: task.mode,
           objective: task.objective,
           task_id: taskId,
+          // atlas-runner.yml (inspect/debug) doesn't declare this input, and
+          // it's untested whether GitHub's dispatch API tolerates an
+          // undeclared input key rather than rejecting the whole call — only
+          // send it for coder, the one workflow that declares and uses it.
+          ...(task.mode === "coder" ? { merge_policy: mergePolicy } : {}),
         },
       }),
     },
