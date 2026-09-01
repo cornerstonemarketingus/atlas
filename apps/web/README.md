@@ -218,6 +218,15 @@ ship in `drizzle/0001_square_mandroid.sql` — apply it the same way as the
 initial schema (see "Provisioning the D1 database" above): `wrangler d1
 execute <name> --remote --file drizzle/0001_square_mandroid.sql`.
 
+### Checking what's actually configured
+
+`GET /api/setup/status` (same operator/session auth as everything else)
+reports which of the above are wired up — booleans only, never secret
+values: `sessionSecretConfigured`, `githubOAuthConfigured`,
+`stripeConfigured`, `githubDispatchConfigured`, `operatorTokenConfigured`.
+Useful right after setting new secrets and redeploying, to confirm they
+took effect before walking the full sign-in/checkout flow by hand.
+
 ## Repository settings
 
 `GET`/`PUT /api/settings/repositories` (same operator auth as the routes
