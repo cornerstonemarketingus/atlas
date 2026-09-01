@@ -8,6 +8,13 @@
       "when": 1788053462570,
       "tag": "0000_brown_firelord",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788263275416,
+      "tag": "0001_square_mandroid",
+      "breakpoints": true
     }
   ]
 }

@@ -2,7 +2,7 @@ import { githubAppConfiguration, githubAppInstallUrl } from "../../tasks/github-
 import { authenticatedUserId } from "../../tasks/operator-auth.mjs";
 
 export async function GET(request: Request) {
-  if (!authenticatedUserId(request)) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  if (!(await authenticatedUserId(request))) return Response.json({ message: "Sign in is required." }, { status: 401 });
   try {
     const configuration = githubAppConfiguration();
     return Response.json({ connected: configuration.configured, method: configuration.configured ? "github-app" : process.env.ATLAS_GITHUB_TOKEN ? "operator-token" : "none", installUrl: githubAppInstallUrl(configuration.slug) });
