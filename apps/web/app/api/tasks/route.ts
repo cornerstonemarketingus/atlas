@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { eq, and } from "drizzle-orm";
 import { getDb } from "../../../db";
+import { repositories } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
@@ -26,6 +28,18 @@ export async function POST(request: Request) {
     }
   }
 
+  let mergePolicy = "manual";
+  if (task.mode === "coder") {
+    try {
+      const [owner, name] = task.repository.split("/");
+      const [row] = await getDb().select().from(repositories).where(and(eq(repositories.owner, owner), eq(repositories.name, name)));
+      if (row) mergePolicy = row.mergePolicy;
+    } catch {
+      // Falls back to the safe "manual" default — a settings-lookup failure
+      // should never accidentally widen how a PR gets merged.
+    }
+  }
+
   const taskId = randomUUID();
   let githubToken = process.env.ATLAS_GITHUB_TOKEN;
   try {
@@ -37,7 +51,7 @@ export async function POST(request: Request) {
   if (githubToken) {
     try {
       const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
-      const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId });
+      const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy });
       if (!response.ok) return Response.json({ message: "GitHub Actions rejected the task dispatch." }, { status: 502 });
       return Response.json({ taskId, status: "dispatched", runner: "github-actions" }, { status: 202 });
     } catch {

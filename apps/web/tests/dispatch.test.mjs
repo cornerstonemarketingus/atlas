@@ -50,6 +50,16 @@ test("builds a GitHub workflow dispatch without putting the token in its URL or 
   assert.throws(() => githubDispatchRequest({ token: "super-secret", workflowRef: "feature/unsafe", task, taskId: "task-123" }));
 });
 
+test("includes merge_policy only for coder-mode dispatches", () => {
+  const coderTask = validateTask({ ...valid, mode: "coder" }, allowedRepositories()).task;
+  const coderRequest = githubDispatchRequest({ token: "t", workflow: "atlas-coder.yml", task: coderTask, taskId: "task-123", mergePolicy: "ci-gated" });
+  assert.equal(JSON.parse(coderRequest.init.body).inputs.merge_policy, "ci-gated");
+
+  const inspectTask = validateTask(valid, allowedRepositories()).task;
+  const inspectRequest = githubDispatchRequest({ token: "t", workflow: "atlas-runner.yml", task: inspectTask, taskId: "task-123", mergePolicy: "ci-gated" });
+  assert.equal("merge_policy" in JSON.parse(inspectRequest.init.body).inputs, false);
+});
+
 test("dispatch helper accepts an injected fetch implementation", async () => {
   const task = validateTask(valid, allowedRepositories()).task;
   let called = false;

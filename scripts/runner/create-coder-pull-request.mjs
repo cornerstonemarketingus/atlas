@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { decideMergeAction } from "./merge-decision.mjs";
 
 const outputDirectory = process.env.ATLAS_OUTPUT_DIR;
 if (!outputDirectory) throw new Error("ATLAS_OUTPUT_DIR is required");
@@ -13,6 +14,13 @@ const githubToken = process.env.GITHUB_TOKEN;
 if (!repository || !baseBranch || !taskId || !githubToken) {
   throw new Error("ATLAS_REPOSITORY, ATLAS_BRANCH, ATLAS_TASK_ID, and GITHUB_TOKEN are all required");
 }
+const mergePolicy = process.env.ATLAS_MERGE_POLICY ?? "manual";
+
+// How long ci-gated polls the head commit's check-runs before giving up and
+// leaving the PR open. Comfortably inside the job's own 25-minute timeout,
+// so this always exits cleanly instead of being force-killed mid-attempt.
+const CI_POLL_INTERVAL_MS = 15_000;
+const CI_POLL_TIMEOUT_MS = 8 * 60 * 1000;
 
 function readJson(filename) {
   try {
@@ -68,24 +76,94 @@ const [owner, repo] = repository.split("/");
 const remoteUrl = `https://x-access-token:${githubToken}@github.com/${owner}/${repo}.git`;
 run("git push", "git", ["push", remoteUrl, `HEAD:${branchName}`]);
 
-const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`, {
+const githubApiHeaders = {
+  accept: "application/vnd.github+json",
+  authorization: `Bearer ${githubToken}`,
+  "user-agent": "atlas-control-plane",
+  "x-github-api-version": "2022-11-28",
+};
+
+const createResponse = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`, {
   method: "POST",
-  headers: {
-    accept: "application/vnd.github+json",
-    authorization: `Bearer ${githubToken}`,
-    "content-type": "application/json",
-    "user-agent": "atlas-control-plane",
-    "x-github-api-version": "2022-11-28",
-  },
+  headers: { ...githubApiHeaders, "content-type": "application/json" },
   body: JSON.stringify({ title, head: branchName, base: baseBranch, body }),
 });
 
-if (!response.ok) {
-  const detail = await response.text().catch(() => "");
-  writeStatus("failed", `Pushed branch ${branchName} but pull request creation failed: HTTP ${response.status}.`);
-  throw new Error(`Pull request creation failed: HTTP ${response.status} ${detail.slice(0, 500)}`);
+if (!createResponse.ok) {
+  const detail = await createResponse.text().catch(() => "");
+  writeStatus("failed", `Pushed branch ${branchName} but pull request creation failed: HTTP ${createResponse.status}.`);
+  throw new Error(`Pull request creation failed: HTTP ${createResponse.status} ${detail.slice(0, 500)}`);
 }
 
-const pullRequest = await response.json();
-writeStatus("completed", "Opened a pull request for review. Nothing has been merged.", { pull_request_url: pullRequest.html_url ?? null });
+const pullRequest = await createResponse.json();
 console.log(`Opened pull request: ${pullRequest.html_url ?? "(no URL returned)"}`);
+
+async function fetchCheckRuns(ref) {
+  const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${ref}/check-runs`, {
+    headers: githubApiHeaders,
+  });
+  if (!response.ok) throw new Error(`Fetching check runs failed: HTTP ${response.status}`);
+  const value = await response.json();
+  return Array.isArray(value.check_runs) ? value.check_runs.map((run_) => ({ status: run_.status, conclusion: run_.conclusion })) : [];
+}
+
+async function mergePullRequest(pullNumber) {
+  const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${pullNumber}/merge`, {
+    method: "PUT",
+    headers: { ...githubApiHeaders, "content-type": "application/json" },
+    body: JSON.stringify({ merge_method: "squash" }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    return { merged: false, detail: detail.slice(0, 500) };
+  }
+  const value = await response.json();
+  return { merged: value.merged === true, detail: value.message ?? "" };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Polls the head commit's check-runs until decideMergeAction returns
+ * something other than "wait", or the timeout elapses — at which point a
+ * repository with slow CI and one with no CI configured at all are treated
+ * identically: neither gets an unreviewed merge into main.
+ */
+async function waitForCiOutcome(headSha) {
+  const deadline = Date.now() + CI_POLL_TIMEOUT_MS;
+  for (;;) {
+    const checkRuns = await fetchCheckRuns(headSha);
+    const action = decideMergeAction("ci-gated", checkRuns);
+    if (action !== "wait") return action;
+    if (Date.now() >= deadline) return "hold";
+    await sleep(CI_POLL_INTERVAL_MS);
+  }
+}
+
+if (mergePolicy === "none") {
+  const result = await mergePullRequest(pullRequest.number);
+  const message = result.merged
+    ? "Opened and auto-merged the pull request (merge policy: none)."
+    : `Opened the pull request, but the immediate auto-merge failed: ${result.detail || "no reason given"}. Left open for review.`;
+  writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: result.merged });
+  console.log(message);
+} else if (mergePolicy === "ci-gated") {
+  console.log("Merge policy is ci-gated — waiting for checks on the pull request's head commit...");
+  const action = await waitForCiOutcome(pullRequest.head.sha);
+  if (action === "merge-now") {
+    const result = await mergePullRequest(pullRequest.number);
+    const message = result.merged
+      ? "Opened and auto-merged the pull request once CI passed (merge policy: ci-gated)."
+      : `CI passed, but auto-merge failed: ${result.detail || "no reason given"}. Left open for review.`;
+    writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: result.merged });
+    console.log(message);
+  } else {
+    const message = "Opened a pull request for review. Left it open — CI either failed or didn't finish within the wait window (merge policy: ci-gated); a repository with no CI configured is held the same way, deliberately.";
+    writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: false });
+    console.log(message);
+  }
+} else {
+  writeStatus("completed", "Opened a pull request for review. Nothing has been merged.", { pull_request_url: pullRequest.html_url ?? null, merged: false });
+}

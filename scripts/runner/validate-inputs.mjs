@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 
 const ALLOWED_REPOSITORY = "cornerstonemarketingus/atlas";
 const allowedModes = new Set(["inspect", "debug", "coder"]);
+const allowedMergePolicies = new Set(["manual", "ci-gated", "none"]);
 const outputDirectory = process.env.ATLAS_OUTPUT_DIR;
 
 if (!outputDirectory) {
@@ -43,5 +44,10 @@ const branchCheck = spawnSync("git", ["check-ref-format", "--branch", branch], {
 });
 if (branchCheck.error || branchCheck.status !== 0) reject("invalid branch name");
 if (!objective.trim() || Buffer.byteLength(objective, "utf8") > 4096) reject("objective must be 1-4096 UTF-8 bytes");
+
+// Only atlas-coder.yml's workflow_dispatch declares merge_policy; other
+// modes never see a meaningful value here, so only coder enforces it.
+const mergePolicy = process.env.ATLAS_MERGE_POLICY ?? "manual";
+if (mode === "coder" && !allowedMergePolicies.has(mergePolicy)) reject("invalid merge_policy");
 
 console.log(`Validated Atlas task ${taskId} for ${ALLOWED_REPOSITORY} (${mode}).`);

@@ -28,6 +28,15 @@ on:
         description: Human-readable task objective
         required: true
         type: string
+      merge_policy:
+        description: What to do with the opened PR
+        required: true
+        default: manual
+        type: choice
+        options:
+          - manual
+          - ci-gated
+          - none
 
 permissions:
   contents: read
@@ -39,11 +48,15 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 15 minutes for the model run itself, plus headroom for ci-gated's own
+    # bounded poll loop (create-coder-pull-request.mjs times out that loop
+    # well before this does, so it always exits cleanly instead of being
+    # force-killed mid-merge-attempt).
+    timeout-minutes: 25
     # Every checkout uses persist-credentials: false, and the push + pull
     # request step authenticates with ATLAS_GITHUB_TOKEN (see below), not
     # the default GITHUB_TOKEN — so the built-in token needs no write scope
-    # here at all. It never merges — see create-coder-pull-request.mjs.
+    # here at all.
     permissions:
       contents: read
     env:
@@ -52,6 +65,7 @@ jobs:
       ATLAS_BRANCH: ${{ github.event.inputs.branch }}
       ATLAS_MODE: ${{ github.event.inputs.mode }}
       ATLAS_OBJECTIVE: ${{ github.event.inputs.objective }}
+      ATLAS_MERGE_POLICY: ${{ github.event.inputs.merge_policy }}
       ATLAS_OUTPUT_DIR: ${{ github.workspace }}/atlas-output
       ATLAS_REPOSITORY_ROOT: ${{ github.workspace }}/target
     steps:
