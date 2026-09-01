@@ -233,12 +233,22 @@ measurable quality, and transparent cost control.
 - [x] Add an authenticated GitHub connection-status and installation surface.
 - [x] Add Sites and Vercel deployment manifests.
 - [x] Add a bounded read-only GitHub Actions inspect runner and dispatch adapter.
-- [ ] Deploy and configure the production task-runner endpoint and secret.
+- [x] Deploy and configure the production task-runner endpoint and secret.
+      Live on Cloudflare Workers via GitHub Actions dispatch
+      (atlas-runner.yml, atlas-coder.yml); apps/web/README.md documents
+      every required secret.
 - [ ] Add approval UI bound to exact change-set digests, base commit, policy,
       immutable artifact manifest, expiry, and authenticated approver identity.
+      Coder-opened PRs are reviewed on GitHub itself, not through a
+      digest-bound Atlas approval UI — this item is about the latter,
+      still undone.
 - [ ] Persist atomic approval decision/consume state and immutable execution
       receipts with replay detection and artifact provenance verification.
-- [ ] Add GitHub write/commit adapter behind approval and repository policy.
+- [x] Add GitHub write/commit adapter behind approval and repository policy.
+      create-coder-pull-request.mjs pushes a branch and opens a PR, then
+      enforces the repository's mergePolicy (manual/ci-gated/none) via
+      scripts/runner/merge-decision.mjs — tested, documented in
+      apps/web/README.md's "Repository settings" section.
 
 - [x] Add guarded `atlas chat <repository-path> <objective>` for explicitly
       configured local compatible model endpoints.
@@ -269,10 +279,20 @@ measurable quality, and transparent cost control.
 - [ ] Detect secrets, generated directories, and oversized files before staging.
 - [ ] Generate commit messages from the approved diff.
 - [ ] Commit only with explicit authorization.
-- [ ] Never force-push or rewrite history by default.
+- [x] Never force-push or rewrite history by default.
+      create-coder-pull-request.mjs always pushes a fresh atlas/task-<id>
+      branch with a plain `git push`, never `--force`, and never touches
+      an existing branch's history.
 - [ ] Push only with explicit authorization and remote verification.
-- [ ] Connect GitHub repositories and installations.
+- [x] Connect GitHub repositories and installations.
+      GitHub App installation tokens (github-app.mjs,
+      createInstallationToken) with a fine-grained-PAT fallback
+      (ATLAS_GITHUB_TOKEN); connection status surfaced at
+      /api/github/status.
 - [ ] Read issues, pull requests, reviews, checks, and Actions logs.
+      create-coder-pull-request.mjs now reads check-runs on a PR's head
+      commit to enforce ci-gated merge policy — issues, PR reviews, and
+      Actions logs still aren't read.
 - [ ] Create draft pull requests with summaries and validation evidence.
 - [ ] Address review comments and track thread resolution.
 - [ ] Diagnose CI failures and separate infrastructure from code failures.
