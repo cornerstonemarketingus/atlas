@@ -1,3 +1,4 @@
+import type { SecretRedactionSummary, SecretRedactor } from "./secret-redaction.js";
 import type {
   ToolCapability,
   ToolPolicy,
@@ -33,6 +34,8 @@ export type ReadOnlyToolExecutionResult =
       readonly status: "completed";
       readonly output: unknown;
       readonly policy: ToolPolicyEvaluation;
+      /** Present only when a redactor is configured, so callers can report what was removed. */
+      readonly redaction?: SecretRedactionSummary;
     }
   | {
       readonly status: "approval-required";
@@ -77,4 +80,11 @@ export interface ReadOnlyToolRegistry {
 
 export interface ReadOnlyToolRegistryOptions {
   readonly policy: ToolPolicy;
+  /**
+   * Optional: when supplied, tool output is scrubbed of credentials before it
+   * is returned. This is the last boundary before repository content becomes
+   * model context, so it is the one place redaction cannot be skipped by a
+   * caller that forgets to ask for it.
+   */
+  readonly redactor?: SecretRedactor;
 }

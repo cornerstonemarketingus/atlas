@@ -18,6 +18,7 @@ import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-opena
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
+import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
 import { createRepositoryReadOnlyTools, registerRepositoryReadOnlyTools } from "./infrastructure/repository-read-only-tools.js";
 import { createRepositoryWriteTools } from "./infrastructure/repository-write-tools.js";
 import { SafeRepositoryFileEditor } from "./infrastructure/safe-repository-file-editor.js";
@@ -209,6 +210,10 @@ async function runChat(args: readonly string[], format: "json" | "text"): Promis
   const summary = await inspector.inspect(args[1] ?? "");
   const repositoryId = summary.root;
   const registry = new PolicyEnforcedReadOnlyToolRegistry({
+    // Repository content becomes model context here, and the model is a
+    // third party. Redaction is attached at construction rather than left to
+    // each caller, so forgetting it is not an option a future caller has.
+    redactor: new PatternSecretRedactor(),
     policy: {
       defaultDecision: "deny",
       rules: [
@@ -309,6 +314,10 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const summary = await inspector.inspect(args[1] ?? "");
   const repositoryId = summary.root;
   const registry = new PolicyEnforcedReadOnlyToolRegistry({
+    // Repository content becomes model context here, and the model is a
+    // third party. Redaction is attached at construction rather than left to
+    // each caller, so forgetting it is not an option a future caller has.
+    redactor: new PatternSecretRedactor(),
     policy: {
       defaultDecision: "deny",
       rules: [
