@@ -7,7 +7,7 @@ test("server-renders the Atlas control plane", async () => {
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /Autonomous engineering control plane/);
-  assert.match(html, /Enter your/);
+  assert.match(html, /Sign in with GitHub/);
   assert.match(html, /access code/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
   assert.doesNotMatch(html, /From intent to/);

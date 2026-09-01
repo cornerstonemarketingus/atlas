@@ -148,9 +148,75 @@ on every deploy (each step is skipped, not failed, if its secret is unset):
   `/api/github/status` normally require the `oai-authenticated-user-id` header
   that only the OpenAI Sites platform injects; outside that platform (e.g. this
   Cloudflare deployment) they instead accept `Authorization: Bearer
-  <ATLAS_OPERATOR_TOKEN>`. The dashboard prompts for this value once and
-  remembers it in the browser's `localStorage`. Without it configured, the
-  dashboard's access-code screen has nothing correct to accept.
+  <ATLAS_OPERATOR_TOKEN>`. This is a shared admin/dev bypass, not a real
+  per-user account — it carries no billing plan and is exempt from the usage
+  caps below. The dashboard's "Use an access code instead" fallback prompts
+  for this value and remembers it in the browser's `localStorage`. Real
+  visitors sign in with GitHub instead — see the next section.
+
+## Membership and billing
+
+Real visitors sign in with GitHub (not the operator token above), and each
+GitHub account is a billed customer with its own plan:
+
+| Tier | Price | Modes | Tasks / month |
+| --- | --- | --- | --- |
+| Free | — | `inspect`, `debug` | 20 |
+| Pro | $29/mo | + `coder` (opens PRs) | 200 |
+| Team | $99/mo | + `coder` | 1000 |
+
+`db/schema.ts` defines the exact numbers (`TIER_LIMITS`) if you want to
+change them — they're a starting point, not something the code assumes is
+fixed. `/api/tasks` checks the signed-in user's tier and monthly usage
+before every dispatch and returns HTTP 402 with an explanation if either is
+exceeded; the operator-token and OpenAI-Sites-platform paths skip this
+check entirely (see above).
+
+### GitHub sign-in
+
+1. Create a GitHub OAuth App: your GitHub account → Settings → Developer
+   settings → OAuth Apps → New OAuth App. Homepage URL is your deployed
+   Worker's URL; **Authorization callback URL** must be exactly
+   `<your-worker-url>/api/auth/github/callback`.
+2. Set two repository secrets from that app's page: `ATLAS_GITHUB_OAUTH_CLIENT_ID`
+   and `ATLAS_GITHUB_OAUTH_CLIENT_SECRET` (click "Generate a new client
+   secret" for the latter).
+3. Set `ATLAS_SESSION_SECRET` to a long random string you generate yourself
+   (e.g. `openssl rand -hex 32`) — it signs the session cookie. Nothing
+   reads this value back from you; treat it like a password and don't paste
+   it anywhere it could be logged.
+
+Without these three, `/api/auth/github/start` responds 503 and the
+dashboard's sign-in button does nothing useful. Session cookies are
+`HttpOnly; Secure; SameSite=Lax` and last 30 days; sign-out clears the
+cookie immediately (`/api/auth/logout`, wired to the dashboard's "Sign out"
+link).
+
+### Stripe billing
+
+1. In your [Stripe dashboard](https://dashboard.stripe.com), create two
+   recurring Products/Prices — "Atlas Pro" and "Atlas Team" — matching
+   whatever amounts you actually want to charge. Copy each Price's id
+   (`price_...`).
+2. Set `ATLAS_STRIPE_SECRET_KEY` (Developers → API keys — start with a
+   `sk_test_...` key until you're ready to charge real cards),
+   `ATLAS_STRIPE_PRICE_PRO`, and `ATLAS_STRIPE_PRICE_TEAM`.
+3. Register a webhook endpoint: Developers → Webhooks → Add endpoint → URL
+   `<your-worker-url>/api/billing/webhook`, events `checkout.session.completed`,
+   `customer.subscription.created`, `customer.subscription.updated`,
+   `customer.subscription.deleted`. Copy the endpoint's signing secret into
+   `ATLAS_STRIPE_WEBHOOK_SECRET`.
+
+Without all four, `/api/billing/checkout` and `/api/billing/portal` respond
+503 and the dashboard's upgrade buttons surface that message instead of a
+redirect. The webhook handler verifies Stripe's signature itself
+(`Stripe-Signature` header, HMAC-SHA256, 5-minute timestamp tolerance) — it
+doesn't trust the request otherwise.
+
+The `users`, `subscriptions`, and `task_usage` tables this all relies on
+ship in `drizzle/0001_square_mandroid.sql` — apply it the same way as the
+initial schema (see "Provisioning the D1 database" above): `wrangler d1
+execute <name> --remote --file drizzle/0001_square_mandroid.sql`.
 
 ## Repository settings
 

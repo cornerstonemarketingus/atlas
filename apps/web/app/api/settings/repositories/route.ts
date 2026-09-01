@@ -5,7 +5,7 @@ import { authenticatedUserId } from "../../tasks/operator-auth.mjs";
 import { validateRepositorySetting } from "./validation.mjs";
 
 export async function GET(request: Request) {
-  if (!authenticatedUserId(request)) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  if (!(await authenticatedUserId(request))) return Response.json({ message: "Sign in is required." }, { status: 401 });
   try {
     const db = getDb();
     const rows = await db.select().from(repositories).orderBy(desc(repositories.updatedAt));
@@ -16,7 +16,7 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
-  if (!authenticatedUserId(request)) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  if (!(await authenticatedUserId(request))) return Response.json({ message: "Sign in is required." }, { status: 401 });
   let body: unknown;
   try {
     body = await request.json();
