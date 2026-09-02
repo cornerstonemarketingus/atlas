@@ -180,7 +180,11 @@ export async function GET(request: Request) {
   for (const row of rows) {
     if (row.githubRunId !== null) continue;
     const workflow = workflowOf(row);
-    groups.set(`${row.repository} ${workflow}`, { repository: row.repository, workflow });
+    // JSON rather than a delimiter string: a repository is "owner/name" and a
+    // workflow is a filename, so no single separator character is obviously
+    // safe, and the NUL that would be is enough to make git treat this whole
+    // file as binary and every future diff of it unreviewable.
+    groups.set(JSON.stringify([row.repository, workflow]), { repository: row.repository, workflow });
   }
 
   await Promise.all(

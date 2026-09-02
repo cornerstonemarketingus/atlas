@@ -69,10 +69,15 @@ export const RUN_MATCH_CLOCK_SKEW_MS = 90 * 1000;
  *
  * Consequence of (1) and (2): a run/PR link can point at the wrong run. It
  * cannot leak across tenants — the caller only ever matches a user's own task
- * rows — but it can mis-attribute two runs inside one repository. The exact fix
- * is a `run-name:` expression in the workflow file carrying the task id, which
- * lives outside this app; until then this stays a documented approximation, and
- * once a task has a run id the id is persisted and never re-derived.
+ * rows — but it can mis-attribute two runs inside one repository.
+ *
+ * THE HEURISTIC IS NOW THE FALLBACK, NOT THE PRIMARY PATH. Both workflows set
+ * `run-name:` to carry the dispatched task id, so a run created since that
+ * change is matched exactly by name in pass 1 below — no time window, no
+ * ordering assumption, and neither (1) nor (2) applies to it. The time-based
+ * pass 2 exists for runs dispatched before that change and for runs whose name
+ * carries no task id, and it will never claim a run that names a different
+ * task. Once a task has a run id the id is persisted and never re-derived.
  *
  * @param {Array<{taskId: string, createdAt: string, workflow?: string|null, githubRunId?: number|null}>} taskRows
  * @param {Array<{id: number, createdAt: string, event?: string, workflow?: string|null}>} runs
@@ -90,7 +95,12 @@ export function assignRunsToTasks(taskRows, runs, options = {}) {
     .filter((run) => run && typeof run.id === "number" && Number.isFinite(run.id) && !alreadyClaimed.has(run.id))
     // Runs from push/pull_request/schedule can never be an Atlas dispatch.
     .filter((run) => run.event === undefined || run.event === null || run.event === "workflow_dispatch")
-    .map((run) => ({ id: run.id, workflow: run.workflow ?? null, createdAt: parseTimestamp(run.createdAt) }))
+    .map((run) => ({
+      id: run.id,
+      workflow: run.workflow ?? null,
+      taskId: taskIdFromRunName(run.name),
+      createdAt: parseTimestamp(run.createdAt),
+    }))
     .filter((run) => run.createdAt !== null)
     .sort((left, right) => left.createdAt - right.createdAt || left.id - right.id);
 
@@ -103,10 +113,30 @@ export function assignRunsToTasks(taskRows, runs, options = {}) {
 
   const used = new Set();
   const assignments = [];
+
+  // Pass 1: exact. A run whose name carries this task's id IS this task's run,
+  // with no time window and no ordering assumption — which is what makes the
+  // concurrent-dispatch and manual-trigger cases above stop being a risk for
+  // any run dispatched since the workflows started setting `run-name`.
+  const claimedTaskIds = new Set();
   for (const task of pending) {
+    const match = candidates.find((run) => !used.has(run.id) && run.taskId === task.taskId);
+    if (!match) continue;
+    used.add(match.id);
+    claimedTaskIds.add(task.taskId);
+    assignments.push({ taskId: task.taskId, runId: match.id });
+  }
+
+  // Pass 2: the time heuristic, for runs predating `run-name` and for runs
+  // whose name we could not read. A run that names a DIFFERENT task is never
+  // a fallback candidate — naming one task and being matched to another is a
+  // mis-attribution the exact signal already ruled out.
+  for (const task of pending) {
+    if (claimedTaskIds.has(task.taskId)) continue;
     const match = candidates.find(
       (run) =>
         !used.has(run.id) &&
+        run.taskId === null &&
         (task.workflow === null || run.workflow === null || run.workflow === task.workflow) &&
         run.createdAt >= task.createdAt - skewMs &&
         run.createdAt <= task.createdAt + windowMs,
@@ -116,6 +146,24 @@ export function assignRunsToTasks(taskRows, runs, options = {}) {
     assignments.push({ taskId: task.taskId, runId: match.id });
   }
   return assignments;
+}
+
+/**
+ * Reads the task id out of a run name shaped by the workflows' `run-name:`
+ * ("Atlas Coder \u00b7 task <id>"). Returns null for a run that predates
+ * `run-name`, or one triggered from the GitHub UI, so it falls through to the
+ * time heuristic rather than being excluded outright.
+ *
+ * Task ids are the `randomUUID()` the dispatch route mints, so the pattern is
+ * anchored on that shape: a run name is attacker-influenced only to the extent
+ * that someone who can already dispatch the workflow chooses `task_id`, and
+ * validate-inputs.mjs constrains that — but matching a loose "task <anything>"
+ * would let a hand-triggered run claim a task by naming it.
+ */
+export function taskIdFromRunName(name) {
+  if (typeof name !== "string") return null;
+  const matched = /\btask\s+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*$/u.exec(name.trim());
+  return matched ? matched[1].toLowerCase() : null;
 }
 
 /**

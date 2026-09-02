@@ -7,6 +7,7 @@ import {
   parseTimestamp,
   runUrl,
   taskOwnerKey,
+  taskIdFromRunName,
   taskStatusFromRun,
   visibleTasks,
 } from "../app/api/tasks/run-status.mjs";
@@ -172,4 +173,83 @@ test("shows nothing at all to an unresolvable caller", () => {
   assert.deepEqual(visibleTasks(rows, { userId: "", dbUserId: null }), []);
   assert.equal(taskOwnerKey(null), null);
   assert.equal(taskOwnerKey({ userId: 7 }), null);
+});
+
+const UUID_A = "11111111-2222-4333-8444-555555555555";
+const UUID_B = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+
+test("reads the task id out of a run name the workflows produce", () => {
+  assert.equal(taskIdFromRunName(`Atlas Coder \u00b7 task ${UUID_A}`), UUID_A);
+  assert.equal(taskIdFromRunName(`Atlas Runner \u00b7 task ${UUID_A.toUpperCase()}`), UUID_A);
+  assert.equal(taskIdFromRunName(`  Atlas Coder \u00b7 task ${UUID_A}  `), UUID_A);
+});
+
+test("reads no task id from a run name that predates run-name or was hand-triggered", () => {
+  // These must return null rather than throw: such a run is still a valid
+  // candidate for the time-based fallback.
+  for (const name of ["Atlas Coder", "", null, undefined, 42, "task not-a-uuid", `task ${UUID_A} trailing`]) {
+    assert.equal(taskIdFromRunName(name), null, String(name));
+  }
+});
+
+test("matches a named run to its task exactly, ignoring order and the time window", () => {
+  // The run is created BEFORE the task row's timestamp by more than the clock
+  // skew allowance, and the two tasks' runs are in the opposite order — both
+  // of which defeat the time heuristic. The name settles it.
+  const rows = [
+    { taskId: UUID_A, createdAt: "2026-01-01T12:00:00.000Z", workflow: "atlas-coder.yml" },
+    { taskId: UUID_B, createdAt: "2026-01-01T12:00:10.000Z", workflow: "atlas-coder.yml" },
+  ];
+  const runs = [
+    { id: 200, createdAt: "2026-01-01T11:00:00.000Z", event: "workflow_dispatch", workflow: "atlas-coder.yml", name: `Atlas Coder \u00b7 task ${UUID_B}` },
+    { id: 100, createdAt: "2026-01-01T11:00:05.000Z", event: "workflow_dispatch", workflow: "atlas-coder.yml", name: `Atlas Coder \u00b7 task ${UUID_A}` },
+  ];
+  assert.deepEqual(
+    assignRunsToTasks(rows, runs).sort((left, right) => left.runId - right.runId),
+    [{ taskId: UUID_A, runId: 100 }, { taskId: UUID_B, runId: 200 }],
+  );
+});
+
+test("never falls back to a run that names a different task", () => {
+  // Without the name, the time heuristic would happily hand run 900 to this
+  // task. Naming another task is positive evidence that it is not ours.
+  const rows = [{ taskId: UUID_A, createdAt: "2026-01-01T12:00:00.000Z", workflow: "atlas-coder.yml" }];
+  const runs = [
+    { id: 900, createdAt: "2026-01-01T12:00:03.000Z", event: "workflow_dispatch", workflow: "atlas-coder.yml", name: `Atlas Coder \u00b7 task ${UUID_B}` },
+  ];
+  assert.deepEqual(assignRunsToTasks(rows, runs), []);
+});
+
+test("still matches an unnamed run by time, so runs predating run-name keep working", () => {
+  const rows = [{ taskId: UUID_A, createdAt: "2026-01-01T12:00:00.000Z", workflow: "atlas-coder.yml" }];
+  const runs = [
+    { id: 901, createdAt: "2026-01-01T12:00:03.000Z", event: "workflow_dispatch", workflow: "atlas-coder.yml", name: "Atlas Coder" },
+  ];
+  assert.deepEqual(assignRunsToTasks(rows, runs), [{ taskId: UUID_A, runId: 901 }]);
+});
+
+test("an exactly matched run is not also available to the time fallback", () => {
+  // Task A owns run 300 by name. Task B, dispatched a moment later with no
+  // named run of its own, must not then claim A's run on time alone.
+  const rows = [
+    { taskId: UUID_A, createdAt: "2026-01-01T12:00:00.000Z", workflow: "atlas-coder.yml" },
+    { taskId: UUID_B, createdAt: "2026-01-01T12:00:01.000Z", workflow: "atlas-coder.yml" },
+  ];
+  const runs = [
+    { id: 300, createdAt: "2026-01-01T12:00:02.000Z", event: "workflow_dispatch", workflow: "atlas-coder.yml", name: `Atlas Coder \u00b7 task ${UUID_A}` },
+  ];
+  assert.deepEqual(assignRunsToTasks(rows, runs), [{ taskId: UUID_A, runId: 300 }]);
+});
+
+test("a run already claimed by another task row is never re-assigned by name", () => {
+  const rows = [
+    { taskId: UUID_A, createdAt: "2026-01-01T12:00:00.000Z", workflow: "atlas-coder.yml", githubRunId: 400 },
+    { taskId: UUID_B, createdAt: "2026-01-01T12:00:01.000Z", workflow: "atlas-coder.yml" },
+  ];
+  const runs = [
+    { id: 400, createdAt: "2026-01-01T12:00:02.000Z", event: "workflow_dispatch", workflow: "atlas-coder.yml", name: `Atlas Coder \u00b7 task ${UUID_B}` },
+  ];
+  // Run 400 is already persisted against task A, so it is out of the pool
+  // entirely — a stale name must not be able to steal a resolved run.
+  assert.deepEqual(assignRunsToTasks(rows, runs), []);
 });

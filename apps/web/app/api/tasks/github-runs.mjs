@@ -87,6 +87,10 @@ export function normalizeRun(value) {
   if (!value || typeof value !== "object" || typeof value.id !== "number") return null;
   return {
     id: value.id,
+    // The workflow sets `run-name` to carry the dispatched task id; this is
+    // what makes run matching exact rather than time-based. Older runs, and
+    // runs triggered from the GitHub UI, carry the plain workflow name.
+    name: typeof value.name === "string" ? value.name : null,
     createdAt: typeof value.created_at === "string" ? value.created_at : null,
     event: typeof value.event === "string" ? value.event : null,
     status: typeof value.status === "string" ? value.status : null,

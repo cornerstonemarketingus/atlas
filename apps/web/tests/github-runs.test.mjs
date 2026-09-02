@@ -42,12 +42,15 @@ test("looks a pull request up by the coder task's deterministic head branch", ()
 
 test("keeps only the run fields the dashboard needs", () => {
   assert.deepEqual(
-    normalizeRun({ id: 9, created_at: "2026-09-01T12:00:00Z", event: "workflow_dispatch", status: "completed", conclusion: "success", html_url: "https://github.com/o/r/actions/runs/9", secrets: "nope" }),
-    { id: 9, createdAt: "2026-09-01T12:00:00Z", event: "workflow_dispatch", status: "completed", conclusion: "success", htmlUrl: "https://github.com/o/r/actions/runs/9" },
+    normalizeRun({ id: 9, name: "Atlas Coder \u00b7 task abc", created_at: "2026-09-01T12:00:00Z", event: "workflow_dispatch", status: "completed", conclusion: "success", html_url: "https://github.com/o/r/actions/runs/9", secrets: "nope" }),
+    { id: 9, name: "Atlas Coder \u00b7 task abc", createdAt: "2026-09-01T12:00:00Z", event: "workflow_dispatch", status: "completed", conclusion: "success", htmlUrl: "https://github.com/o/r/actions/runs/9" },
   );
   assert.equal(normalizeRun(null), null);
   assert.equal(normalizeRun({ id: "9" }), null);
-  assert.deepEqual(normalizeRun({ id: 9 }), { id: 9, createdAt: null, event: null, status: null, conclusion: null, htmlUrl: null });
+  // `name` carries the task id and is what makes run matching exact, so a
+  // non-string must become null rather than reach the matcher as junk.
+  assert.deepEqual(normalizeRun({ id: 9, name: 42 }), { id: 9, name: null, createdAt: null, event: null, status: null, conclusion: null, htmlUrl: null });
+  assert.deepEqual(normalizeRun({ id: 9 }), { id: 9, name: null, createdAt: null, event: null, status: null, conclusion: null, htmlUrl: null });
 });
 
 test("reports a pull request's merge state from merged_at", () => {

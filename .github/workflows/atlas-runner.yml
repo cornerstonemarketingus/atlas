@@ -1,4 +1,10 @@
 name: Atlas Runner
+# Carries the dispatched task id into the run's own name. The dispatch API
+# returns 204 with no body, and the runs list API exposes neither a run's
+# inputs nor a task id — so without this the web app can only guess which
+# run belongs to which task, by workflow and creation time. This turns that
+# guess into an exact match (see apps/web/app/api/tasks/run-status.mjs).
+run-name: ${{ github.workflow }} · task ${{ inputs.task_id }}
 
 on:
   workflow_dispatch:
