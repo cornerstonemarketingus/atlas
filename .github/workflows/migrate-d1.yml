@@ -1,0 +1,106 @@
+name: Apply Atlas D1 migrations
+
+# Schema changes are NOT applied by the deploy workflow, deliberately. A
+# migration that fails half-way would take the whole deploy pipeline down with
+# it, and a schema change is the one operation where "run it again and see" is
+# the wrong instinct. This is dispatched explicitly instead.
+#
+# provision-d1.yml applies only the initial schema (0000). Every later
+# migration is applied here, which is why `from_migration` defaults to 0001.
+
+on:
+  workflow_dispatch:
+    inputs:
+      database_name:
+        description: D1 database name (must match ATLAS_D1_DATABASE_NAME)
+        required: true
+        default: atlas-db
+        type: string
+      from_migration:
+        description: Apply every migration whose filename sorts at or after this prefix
+        required: true
+        default: "0001"
+        type: string
+      dry_run:
+        description: List what would be applied without applying it
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-d1-migrate-${{ github.event.inputs.database_name }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Select migrations
+        id: select
+        env:
+          FROM_MIGRATION: ${{ github.event.inputs.from_migration }}
+        run: |
+          set -euo pipefail
+          # The name is compared, not interpolated into a glob, so an input like
+          # "*" selects nothing rather than everything.
+          case "$FROM_MIGRATION" in
+            [0-9][0-9][0-9][0-9]) ;;
+            *) echo "from_migration must be a four-digit prefix, e.g. 0001." >&2; exit 1 ;;
+          esac
+          selected=""
+          for file in $(ls drizzle/*.sql | sort); do
+            name=$(basename "$file")
+            if [ "${name%%_*}" \> "$FROM_MIGRATION" ] || [ "${name%%_*}" = "$FROM_MIGRATION" ]; then
+              selected="$selected $file"
+            fi
+          done
+          if [ -z "$selected" ]; then
+            echo "No migrations at or after $FROM_MIGRATION." >&2
+            exit 1
+          fi
+          echo "Will apply:$selected"
+          echo "files=$selected" >> "$GITHUB_OUTPUT"
+
+      - name: Show migration contents
+        run: |
+          set -euo pipefail
+          for file in ${{ steps.select.outputs.files }}; do
+            echo "===== $file ====="
+            cat "$file"
+          done
+
+      - name: Apply migrations
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DATABASE_NAME: ${{ github.event.inputs.database_name }}
+        run: |
+          set -euo pipefail
+          # Applied in filename order, stopping at the first failure so a later
+          # migration never lands on a schema an earlier one failed to create.
+          for file in ${{ steps.select.outputs.files }}; do
+            echo "Applying $file"
+            npx wrangler d1 execute "$DATABASE_NAME" --remote --yes --file "$file"
+          done
+          echo "All selected migrations applied."
+
+      - name: Dry run notice
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: echo "Dry run only. Re-dispatch with dry_run=false to apply."

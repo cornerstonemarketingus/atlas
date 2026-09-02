@@ -38,18 +38,76 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler deploy --config dist/server/wrangler.json
 
-      - name: Set ATLAS_GITHUB_TOKEN Worker secret
-        if: ${{ env.HAS_GITHUB_TOKEN == 'true' }}
+      # Every secret the Worker needs at runtime, uploaded in one pass.
+      #
+      # This previously uploaded only ATLAS_GITHUB_TOKEN and
+      # ATLAS_OPERATOR_TOKEN, which meant sign-in and billing could not work in
+      # production no matter what was configured: the session secret, the OAuth
+      # client credentials and the Stripe keys were set as *repository* secrets
+      # and never reached the Worker. A repository secret is invisible to
+      # running code; only `wrangler secret put` makes it readable at runtime.
+      #
+      # Unset secrets are skipped, not failed: a deployment with Stripe not yet
+      # configured should still deploy and simply report billing as
+      # unconfigured via /api/setup/status.
+      - name: Upload Worker runtime secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Dispatch + operator access
           ATLAS_GITHUB_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
-        run: printf '%s' "$ATLAS_GITHUB_TOKEN" | npx wrangler secret put ATLAS_GITHUB_TOKEN --config dist/server/wrangler.json
-
-      - name: Set ATLAS_OPERATOR_TOKEN Worker secret
-        if: ${{ env.HAS_OPERATOR_TOKEN == 'true' }}
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ATLAS_OPERATOR_TOKEN: ${{ secrets.ATLAS_OPERATOR_TOKEN }}
-        run: printf '%s' "$ATLAS_OPERATOR_TOKEN" | npx wrangler secret put ATLAS_OPERATOR_TOKEN --config dist/server/wrangler.json
+          # Sign-in. Without ATLAS_SESSION_SECRET no session can be issued at
+          # all, so GitHub sign-in fails even with valid OAuth credentials.
+          ATLAS_SESSION_SECRET: ${{ secrets.ATLAS_SESSION_SECRET }}
+          ATLAS_GITHUB_OAUTH_CLIENT_ID: ${{ secrets.ATLAS_GITHUB_OAUTH_CLIENT_ID }}
+          ATLAS_GITHUB_OAUTH_CLIENT_SECRET: ${{ secrets.ATLAS_GITHUB_OAUTH_CLIENT_SECRET }}
+          # Billing
+          ATLAS_STRIPE_SECRET_KEY: ${{ secrets.ATLAS_STRIPE_SECRET_KEY }}
+          ATLAS_STRIPE_WEBHOOK_SECRET: ${{ secrets.ATLAS_STRIPE_WEBHOOK_SECRET }}
+          ATLAS_STRIPE_PRICE_PRO: ${{ secrets.ATLAS_STRIPE_PRICE_PRO }}
+          ATLAS_STRIPE_PRICE_TEAM: ${{ secrets.ATLAS_STRIPE_PRICE_TEAM }}
+          # Optional: per-customer GitHub App instead of a single PAT
+          ATLAS_GITHUB_APP_ID: ${{ secrets.ATLAS_GITHUB_APP_ID }}
+          ATLAS_GITHUB_INSTALLATION_ID: ${{ secrets.ATLAS_GITHUB_INSTALLATION_ID }}
+          ATLAS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.ATLAS_GITHUB_APP_PRIVATE_KEY }}
+          ATLAS_GITHUB_APP_SLUG: ${{ secrets.ATLAS_GITHUB_APP_SLUG }}
+        run: |
+          set -euo pipefail
+          uploaded=0
+          skipped=""
+          for name in \
+            ATLAS_GITHUB_TOKEN \
+            ATLAS_OPERATOR_TOKEN \
+            ATLAS_SESSION_SECRET \
+            ATLAS_GITHUB_OAUTH_CLIENT_ID \
+            ATLAS_GITHUB_OAUTH_CLIENT_SECRET \
+            ATLAS_STRIPE_SECRET_KEY \
+            ATLAS_STRIPE_WEBHOOK_SECRET \
+            ATLAS_STRIPE_PRICE_PRO \
+            ATLAS_STRIPE_PRICE_TEAM \
+            ATLAS_GITHUB_APP_ID \
+            ATLAS_GITHUB_INSTALLATION_ID \
+            ATLAS_GITHUB_APP_PRIVATE_KEY \
+            ATLAS_GITHUB_APP_SLUG
+          do
+            # Indirect expansion, so the value is never interpolated into the
+            # command line where it could reach a process listing or a log.
+            value="${!name-}"
+            if [ -z "$value" ]; then
+              skipped="$skipped $name"
+              continue
+            fi
+            printf '%s' "$value" | npx wrangler secret put "$name" --config dist/server/wrangler.json
+            uploaded=$((uploaded + 1))
+          done
+          echo "Uploaded $uploaded Worker secret(s)."
+          if [ -n "$skipped" ]; then
+            echo "Not configured (skipped):$skipped"
+          fi
+
+      - name: Report what still needs configuring
+        run: |
+          echo "Sign-in needs: ATLAS_SESSION_SECRET, ATLAS_GITHUB_OAUTH_CLIENT_ID, ATLAS_GITHUB_OAUTH_CLIENT_SECRET"
+          echo "Billing needs: ATLAS_STRIPE_SECRET_KEY, ATLAS_STRIPE_WEBHOOK_SECRET, ATLAS_STRIPE_PRICE_PRO, ATLAS_STRIPE_PRICE_TEAM"
+          echo "Verify live with: GET /api/setup/status (send your operator token as a Bearer credential)"

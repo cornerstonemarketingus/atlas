@@ -1,0 +1,106 @@
+name: Atlas self-improvement
+
+# Atlas improving Atlas, once a day.
+#
+# SAFETY POSTURE — read before changing anything here.
+#
+# This is an autonomous agent with write access to its own source. Three rules
+# make that safe rather than reckless, and none of them is optional:
+#
+#  1. merge_policy is fixed at "manual" in build-dispatch.py and is
+#     deliberately NOT a dispatch input, because an input is a thing someone
+#     flips "just this once". A self-modifying loop that can merge its own
+#     changes can disable its own safety rails and then keep running with them
+#     disabled. Every change it proposes waits for a human.
+#  2. It stops when review work is already queued. Without this a daily job
+#     quietly becomes a pull-request firehose, and unreviewed PRs from an
+#     autonomous agent are worse than no agent at all.
+#  3. The coder agent's own self-verification still applies: it runs the
+#     repository's checks before and after its edit, and a change that
+#     introduces a failure is reported as regressed rather than proposed as if
+#     it were fine.
+#
+# The objective lives in .github/atlas/self-improve-objective.md, so tuning
+# what the agent works on is an ordinary reviewable diff, not a workflow edit.
+
+on:
+  schedule:
+    # 09:00 UTC = 04:00 America/New_York while EDT is in effect (05:00 EST in
+    # winter). GitHub cron is UTC and has no DST awareness, so a year-round
+    # 4am local time is not expressible here. Change this to "0 10 * * *" to
+    # hold 4am through the winter instead of through the summer.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      objective:
+        description: Override the objective for this run (blank = use the committed objective)
+        required: false
+        type: string
+      max_open_pull_requests:
+        description: Skip the run when at least this many pull requests are already open
+        required: false
+        default: "3"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-self-improve
+  cancel-in-progress: false
+
+jobs:
+  improve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Stop if review work is already queued
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
+          # Low on purpose. The bottleneck on self-improvement is human review,
+          # not generation, so the queue depth that matters is how many pull
+          # requests a person will actually look at.
+          MAX_OPEN: ${{ github.event.inputs.max_open_pull_requests || '3' }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "$MAX_OPEN" in
+            ''|*[!0-9]*) echo "max_open_pull_requests must be a whole number." >&2; exit 1 ;;
+          esac
+          open_count=$(curl -sS --fail \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/pulls?state=open&per_page=100" \
+            | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+          echo "Open pull requests: $open_count (limit $MAX_OPEN)"
+          if [ "$open_count" -ge "$MAX_OPEN" ]; then
+            echo "Skipping: $open_count pull request(s) already awaiting review."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch the coder agent at this repository
+        if: ${{ steps.guard.outputs.should_run == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
+          OBJECTIVE_OVERRIDE: ${{ github.event.inputs.objective }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 .github/atlas/build-dispatch.py > payload.json
+          curl -sS --fail -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/actions/workflows/atlas-coder.yml/dispatches" \
+            -d @payload.json
+          echo "Dispatched. The agent opens a pull request for review; nothing merges on its own."
+
+      - name: Report a skipped run
+        if: ${{ steps.guard.outputs.should_run != 'true' }}
+        run: |
+          echo "No dispatch: the review queue is already at its limit."
