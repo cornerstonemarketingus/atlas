@@ -104,6 +104,11 @@ jobs:
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
+          # Self-verification: which directory declares the scripts to run
+          # (a monorepo usually declares none at its root), and how many
+          # repair passes the agent gets when it breaks something.
+          ATLAS_VERIFY_DIR: ${{ vars.ATLAS_VERIFY_DIR }}
+          ATLAS_MAX_REPAIR_ATTEMPTS: ${{ vars.ATLAS_MAX_REPAIR_ATTEMPTS }}
         run: node scripts/runner/run-task.mjs
 
       - name: Open pull request for coder changes

@@ -302,6 +302,46 @@ or server error up to twice, honoring Groq's suggested wait when it names
 one — a free-tier tokens-per-minute limit surfaces as a normal, self-healing
 retry rather than an immediate task failure.
 
+### Self-verification
+
+Coder mode does not just write code and hope. It runs the repository's own
+checks, and every pull request it opens says plainly whether the change was
+verified:
+
+1. Before touching anything it captures a **baseline** by running the
+   build/test/typecheck/lint scripts declared in the target's `package.json`.
+2. The agent makes its edits.
+3. It re-runs the same checks and **diffs the two snapshots**, which
+   separates failures the change actually introduced from failures that were
+   already there. A repository whose suite is already red is neither blamed
+   on the agent nor silently "fixed" beyond the objective.
+4. If the change introduced failures, only those are fed back to the model
+   for a bounded **repair pass** (2 by default), then the checks run again.
+5. The verdict — `verified`, `regressed`, `inconclusive`, `unverified`, or
+   `not-applicable` — is written into the PR body and `status.json`.
+
+Two safety properties are deliberate. Atlas only ever executes the package
+manager with a validated script *name* (`npm run test`); a detected script's
+*body* is never parsed or handed to a shell by Atlas, so a hostile
+`package.json` cannot turn verification into arbitrary command execution.
+And the validation subprocess inherits an explicit environment allowlist —
+never `GROQ_API_KEY`, `ATLAS_GITHUB_TOKEN`, or the operator token — so "run
+the tests" cannot become credential exfiltration.
+
+A `regressed` verdict **blocks auto-merge even under the `none` policy**:
+"don't wait for CI" is not the same as "merge a change Atlas already measured
+as broken". Weaker verdicts (`unverified`, `inconclusive`) do not override
+the policy, because absence of evidence is the bar the operator already chose.
+
+Two optional repository **variables** tune this:
+
+- `ATLAS_VERIFY_DIR` — a relative path to the directory whose `package.json`
+  declares the checks. Needed for a monorepo: this repository declares no
+  scripts at its root, so verification correctly reports `unverified` unless
+  pointed at, for example, `packages/atlas-cli`.
+- `ATLAS_MAX_REPAIR_ATTEMPTS` — `0`–`5`, default `2`. `0` disables repair
+  while still reporting the verdict.
+
 When no GitHub token is configured, Atlas falls back to the existing
 `ATLAS_AGENT_DISPATCH_URL` and `ATLAS_AGENT_DISPATCH_TOKEN` runner settings.
 

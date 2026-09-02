@@ -29,19 +29,19 @@ const metadata = {
 };
 fs.writeFileSync(path.join(outputDirectory, "task.json"), `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
 
-function writeStatus(status, message) {
+function writeStatus(status, message, extra = {}) {
   fs.writeFileSync(
     path.join(outputDirectory, "status.json"),
-    `${JSON.stringify({ schema_version: 1, status, message, task_id: metadata.task_id }, null, 2)}\n`,
+    `${JSON.stringify({ schema_version: 1, status, message, task_id: metadata.task_id, ...extra }, null, 2)}\n`,
     { mode: 0o600 },
   );
 }
 
-function runCommand(label, command, args, cwd) {
+function runCommand(label, command, args, cwd, timeoutMs = 180_000) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
-    timeout: 180_000,
+    timeout: timeoutMs,
     maxBuffer: MAX_FILE_BYTES,
     windowsHide: true,
   });
@@ -131,12 +131,21 @@ if (metadata.mode === "inspect") {
   }
   const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
   const model = process.env.ATLAS_CODER_MODEL || "openai/gpt-oss-120b";
-  const result = runCommand(
-    "code",
-    process.execPath,
-    [cli, "code", repositoryRoot, metadata.objective, "--api-key-env", "GROQ_API_KEY", "--model", model, "--format", "json"],
-    process.cwd(),
-  );
+  // Verification runs the target repository's own build/test scripts, before
+  // and after the edit, plus any repair passes — so this needs far more than
+  // the flat 3 minutes a single model round trip needed.
+  const coderTimeoutMs = Number(process.env.ATLAS_CODER_TIMEOUT_MS) || 900_000;
+  const verifyDir = (process.env.ATLAS_VERIFY_DIR || "").trim();
+  const repairAttempts = (process.env.ATLAS_MAX_REPAIR_ATTEMPTS || "").trim();
+  const codeArgs = [
+    cli, "code", repositoryRoot, metadata.objective,
+    "--api-key-env", "GROQ_API_KEY",
+    "--model", model,
+    "--format", "json",
+  ];
+  if (verifyDir) codeArgs.push("--verify-dir", verifyDir);
+  if (/^[0-5]$/.test(repairAttempts)) codeArgs.push("--max-repair-attempts", repairAttempts);
+  const result = runCommand("code", process.execPath, codeArgs, process.cwd(), coderTimeoutMs);
 
   // 'atlas code' exits 1 for every non-'completed' agent outcome (failed,
   // blocked, cancelled, approval-required), not just crashes — those still
@@ -167,8 +176,15 @@ if (metadata.mode === "inspect") {
     writeStatus("completed", "Coder agent finished without proposing any file changes.");
     console.log("Atlas coder run completed with no file changes.");
   } else {
-    writeStatus("completed", `Coder agent proposed ${parsed.edits.length} file change(s); opening a pull request next.`);
+    const verification = parsed.verification ?? null;
+    const verdict = verification ? ` Verification: ${verification.status} — ${verification.message}` : "";
+    writeStatus(
+      "completed",
+      `Coder agent proposed ${parsed.edits.length} file change(s); opening a pull request next.${verdict}`,
+      verification ? { verification } : {},
+    );
     console.log(`Atlas coder run completed: ${parsed.edits.length} file(s) changed.`);
+    if (verification) console.log(`Verification: ${verification.status} — ${verification.message}`);
   }
 } else {
   writeStatus("unsupported", `Mode '${metadata.mode}' is not enabled; no repository mutation was attempted.`);

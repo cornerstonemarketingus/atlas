@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { isAbsolute, join } from "node:path";
 import { ProviderReadOnlyToolAgent } from "./agent/provider-read-only-tool-agent.js";
+import { VerifiedCoderSession } from "./agent/verified-coder-session.js";
+import { planVerification } from "./agent/verification-planning.js";
+import { RepositoryCommandDetector } from "./infrastructure/repository-command-detector.js";
+import { SafeValidationProfileRunner } from "./infrastructure/validation-profile-runner.js";
 import { FilesystemRepositoryInspector } from "./infrastructure/filesystem-repository-inspector.js";
 import { RepositoryTextSearch } from "./infrastructure/repository-text-search.js";
 import { RepositorySymbolIndexer } from "./infrastructure/repository-symbol-indexer.js";
@@ -23,7 +28,7 @@ import { renderSourceJson, renderSourceText } from "./presentation/source-render
 import { renderSymbolReferenceJson, renderSymbolReferenceText } from "./presentation/symbol-reference-renderers.js";
 import { renderJson, renderText } from "./presentation/summary-renderers.js";
 import { renderChatJson, renderChatText, toChatOutput } from "./presentation/chat-renderers.js";
-import { type CodeEditSummary, renderCodeJson, renderCodeText, toCodeOutput } from "./presentation/code-renderers.js";
+import { type CodeEditSummary, renderCodeJson, renderCodeText, toVerifiedCodeOutput } from "./presentation/code-renderers.js";
 import { REPOSITORY_READ_ONLY_MODEL_TOOLS, REPOSITORY_WRITE_MODEL_TOOLS } from "./model/repository-tool-model-definitions.js";
 import { RepositoryTreeBuilder } from "./infrastructure/repository-tree-builder.js";
 import { renderTreeJson, renderTreeText } from "./presentation/tree-renderers.js";
@@ -43,7 +48,9 @@ const USAGE = `Usage:
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
-  atlas code <repository-path> <objective> --api-key-env <ENV_VAR> --model <name> [--token-budget N] [--max-turns N] [--format text|json]`;
+  atlas code <repository-path> <objective> --api-key-env <ENV_VAR> --model <name> [--token-budget N] [--max-turns N]
+       [--no-verify] [--verify-dir <relative-path>] [--max-repair-attempts N]
+       [--verify-timeout-ms N] [--verify-package-manager <name>] [--format text|json]`;
 
 export async function main(args: readonly string[]): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
@@ -286,9 +293,17 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   }
   const tokenBudgetOption = readOptionalInteger(args, "--token-budget", 1, 1_000_000);
   const maximumTurnsOption = readOptionalInteger(args, "--max-turns", 1, 32);
-  if (tokenBudgetOption === null || maximumTurnsOption === null) return 2;
+  const repairAttemptsOption = readOptionalInteger(args, "--max-repair-attempts", 0, 5);
+  const verifyTimeoutOption = readOptionalInteger(args, "--verify-timeout-ms", 1_000, 1_800_000);
+  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null) return 2;
   const tokenBudget = tokenBudgetOption ?? 16_384;
   const maximumTurns = maximumTurnsOption ?? 12;
+  const maxRepairAttempts = repairAttemptsOption ?? 2;
+  const verifyTimeoutMs = verifyTimeoutOption ?? 600_000;
+  const packageManager = args.includes("--verify-package-manager")
+    ? readRequiredOption(args, "--verify-package-manager")
+    : "npm";
+  if (packageManager === null) return 2;
 
   const inspector = new FilesystemRepositoryInspector();
   const summary = await inspector.inspect(args[1] ?? "");
@@ -347,8 +362,43 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     new RetryingModelProvider(groqProvider),
     new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget }),
   );
+  // A monorepo often declares no scripts at its root, so allow verification to
+  // be pointed at the package that owns them. The path stays relative and
+  // contained: BoundedCommandRunner rejects an absolute or escaping cwd, and
+  // this check just fails earlier with a clearer message.
+  const verifyDir = args.includes("--verify-dir") ? readRequiredOption(args, "--verify-dir") : "";
+  if (verifyDir === null) return 2;
+  if (verifyDir.length > 0 && (isAbsolute(verifyDir) || verifyDir.split(/[\\/]/u).includes(".."))) {
+    console.error("--verify-dir must be a relative path inside the repository.");
+    return 2;
+  }
+
+  // Plan verification from the repository's OWN declared scripts. Only the
+  // package manager is ever executed; a detected script's body is never
+  // parsed, interpolated, or handed to a shell by Atlas. See planVerification.
+  const plan = args.includes("--no-verify")
+    ? { profiles: [], skipped: true, skipReason: "Verification was disabled with --no-verify." }
+    : planVerification(
+        await new RepositoryCommandDetector().detect(verifyDir.length === 0 ? summary.root : join(summary.root, verifyDir)),
+        { packageManager, ...(verifyDir.length === 0 ? {} : { cwd: verifyDir }) },
+      );
+
+  // The validation subprocess deliberately does NOT inherit Atlas's own
+  // environment. A repository's test script is repository-controlled code;
+  // handing it GROQ_API_KEY, ATLAS_GITHUB_TOKEN or the operator token would
+  // turn "run the tests" into credential exfiltration. Only what a build
+  // genuinely needs is passed through.
+  const validationRunner = new SafeValidationProfileRunner(
+    new BoundedCommandRunner({
+      repositoryRoot: summary.root,
+      allowedExecutables: [packageManager],
+      inheritedEnvironmentVariables: ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "SystemRoot", "APPDATA", "ProgramFiles", "COMSPEC"],
+      timeoutMs: verifyTimeoutMs,
+    }),
+  );
+
   const sessionId = randomUUID();
-  const result = await new ProviderReadOnlyToolAgent({
+  const agent = new ProviderReadOnlyToolAgent({
     provider,
     model,
     registry,
@@ -357,14 +407,44 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     maximumTurns,
     maximumOutputTokensPerTurn: maxOutputTokensPerTurn,
     systemPrompt: CODE_SYSTEM_PROMPT,
-  }).run({
-    sessionId,
-    objective,
-    evidence: [{ label: "Deterministic repository summary", content: renderJson(summary) }],
-    scope: { kind: "repository", repositoryId },
-    context: { repositoryId },
   });
-  const output = toCodeOutput(sessionId, result, edits);
+
+  let usage = { turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0 };
+  const result = await new VerifiedCoderSession({
+    plan,
+    maxRepairAttempts,
+    baseEvidence: [{ label: "Deterministic repository summary", content: renderJson(summary) }],
+    runAgent: async (evidence) => {
+      // Each pass appends to the shared `edits` array; the delta is what this
+      // pass changed. The token ledger is deliberately shared across passes,
+      // so a repair loop spends from the same budget rather than a fresh one.
+      const before = edits.length;
+      const pass = await agent.run({
+        sessionId,
+        objective,
+        evidence: evidence.map((item) => ({ label: item.label, content: item.content })),
+        scope: { kind: "repository", repositoryId },
+        context: { repositoryId },
+      });
+      usage = {
+        turns: usage.turns + pass.trace.turns,
+        toolCalls: usage.toolCalls + pass.trace.toolCalls,
+        inputTokens: usage.inputTokens + pass.trace.usage.inputTokens,
+        outputTokens: usage.outputTokens + pass.trace.usage.outputTokens,
+      };
+      return {
+        status: pass.status,
+        response: pass.status === "completed" ? pass.response : "",
+        message: pass.status === "approval-required"
+          ? `Stopped waiting on approval for ${pass.toolName}.`
+          : "message" in pass ? pass.message : null,
+        edits: edits.slice(before),
+      };
+    },
+    runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),
+  }).run();
+
+  const output = toVerifiedCodeOutput(sessionId, result, usage);
   console.log(format === "json" ? renderCodeJson(output) : renderCodeText(output));
   return result.status === "completed" ? 0 : 1;
 }
