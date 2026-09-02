@@ -94,6 +94,12 @@ export function AtlasDashboard() {
   const [billingBusy, setBillingBusy] = useState(false);
   const [taskList, setTaskList] = useState<TaskList | null>(null);
 
+  // Seeded in an effect, not a lazy useState initializer, because
+  // localStorage does not exist during the server render: initializing from
+  // it would make the client's first render disagree with the server's HTML
+  // and trip a hydration mismatch. Reading a client-only value after mount is
+  // the intended pattern, and the one cascading render it costs happens once.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe read of a client-only value
   useEffect(() => { setToken(storedToken()); }, []);
   function authHeaders(): Record<string, string> {
     return token ? { authorization: `Bearer ${token}` } : {};
