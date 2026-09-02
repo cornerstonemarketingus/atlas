@@ -286,21 +286,52 @@ Reads the repository with the same tools `inspect` uses, proposes file edits
 through a digest-bound safe editor (`packages/atlas-cli`'s
 `SafeRepositoryFileEditor`), and opens a pull request summarizing what
 changed. Whether it goes on to merge that PR itself is entirely the
-repository's merge-policy setting above. Needs one more repository secret:
+repository's merge-policy setting above.
+
+#### Choosing a model provider
+
+Two vendors are supported, and you only need a key for the one you use:
 
 - `GROQ_API_KEY` — an API key from [console.groq.com](https://console.groq.com/keys).
-  Without it, coder tasks fail immediately with a clear message rather than
-  silently doing nothing.
+- `ANTHROPIC_API_KEY` — an API key from
+  [console.anthropic.com](https://console.anthropic.com/settings/keys).
 
-Optionally set the `ATLAS_CODER_MODEL` repository **variable** (Settings →
-Secrets and variables → Actions → Variables tab, not Secrets) to pick a
-different Groq-hosted model; defaults to `openai/gpt-oss-120b`.
+Without the key the selected provider needs, coder tasks fail immediately with
+a message naming the missing variable, rather than silently doing nothing. A
+key for the *other* vendor being unset is not an error.
 
-Requests to Groq are capped at 4,096 output tokens per model turn (not the
-whole session budget at once) and automatically retry a transient rate limit
-or server error up to twice, honoring Groq's suggested wait when it names
-one — a free-tier tokens-per-minute limit surfaces as a normal, self-healing
+Set the `ATLAS_CODER_MODEL` repository **variable** (Settings → Secrets and
+variables → Actions → Variables tab, not Secrets) to pick the model; it
+defaults to `openai/gpt-oss-120b` on Groq. The provider is inferred from the
+model name — a `claude-*` model routes to Anthropic, anything else to Groq —
+so `claude-sonnet-5` is all you need to change to switch vendors. Set
+`ATLAS_CODER_PROVIDER` to `anthropic` or `groq` to override that inference;
+an unrecognised value fails the task with a clear message instead of guessing.
+
+Per-turn output is capped independently of the whole session budget: 4,096
+tokens on Groq, 8,192 on Anthropic. The Groq figure is deliberately low
+because Groq rejects a request outright (HTTP 413) once prompt tokens plus
+`max_tokens` exceed its tokens-per-minute limit, which can be as low as
+~10,000 on shared tiers. Either provider automatically retries a transient
+rate limit or server error up to twice, honoring a suggested wait when the
+vendor names one — a free-tier rate limit surfaces as a normal, self-healing
 retry rather than an immediate task failure.
+
+#### Secret redaction
+
+Everything a repository read tool returns is scrubbed before it becomes model
+context: AWS keys, GitHub tokens, Groq/OpenAI/Anthropic/Stripe/Slack/Google
+keys, PEM private keys, JWTs, URL-inline credentials, and env-style credential
+assignments. Each hit is replaced with a stable, non-reversible placeholder
+(`[redacted:github-token:a1b2c3d4]`) derived from a salted SHA-256 prefix, so
+the model can still tell that two files hold the same value without being able
+to recover it. Tool *failure* messages are redacted on the same path, since a
+failure string routinely quotes the content that caused it. Detection is
+anchored on vendor prefixes and credential-shaped assignment keys rather than
+entropy — an entropy heuristic redacts git SHAs, UUIDs and lockfile integrity
+hashes, and destroys the model's ability to reason about the repository. It is
+a strong last line of defence, not a substitute for keeping credentials out of
+the repository in the first place.
 
 ### Self-verification
 

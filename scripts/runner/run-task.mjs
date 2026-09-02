@@ -124,13 +124,30 @@ if (metadata.mode === "inspect") {
   writeStatus("completed", "Build and test succeeded on the requested branch.");
   console.log("Atlas debug run completed: build and test passed.");
 } else if (metadata.mode === "coder") {
-  if (!process.env.GROQ_API_KEY) {
-    writeStatus("failed", "GROQ_API_KEY is not configured; coder tasks cannot run.");
-    console.error("Atlas coder mode requires GROQ_API_KEY.");
+  // The vendor is an operator choice, not a hardcoded one. ATLAS_CODER_PROVIDER
+  // is validated here rather than passed through blindly so a typo fails with a
+  // clear status instead of a CLI usage error buried in a log, and so this
+  // never becomes a way to name an arbitrary environment variable to read.
+  const providerInput = (process.env.ATLAS_CODER_PROVIDER || "").trim().toLowerCase();
+  const PROVIDER_KEY_VARIABLES = { anthropic: "ANTHROPIC_API_KEY", groq: "GROQ_API_KEY" };
+  if (providerInput && !Object.hasOwn(PROVIDER_KEY_VARIABLES, providerInput)) {
+    const known = Object.keys(PROVIDER_KEY_VARIABLES).join(", ");
+    writeStatus("failed", `ATLAS_CODER_PROVIDER '${providerInput}' is not recognised; expected one of: ${known}.`);
+    console.error(`Atlas coder mode: unknown provider '${providerInput}'.`);
+    process.exit(2);
+  }
+  const model = process.env.ATLAS_CODER_MODEL || "openai/gpt-oss-120b";
+  // Match the CLI's own inference so the runner asks for the key the CLI will
+  // actually look up; naming the provider explicitly below keeps the two from
+  // drifting apart later.
+  const provider = providerInput || (/^(anthropic\/)?claude[-.]/i.test(model) ? "anthropic" : "groq");
+  const apiKeyVariable = PROVIDER_KEY_VARIABLES[provider];
+  if (!process.env[apiKeyVariable]) {
+    writeStatus("failed", `${apiKeyVariable} is not configured; coder tasks cannot run with provider '${provider}'.`);
+    console.error(`Atlas coder mode requires ${apiKeyVariable}.`);
     process.exit(2);
   }
   const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
-  const model = process.env.ATLAS_CODER_MODEL || "openai/gpt-oss-120b";
   // Verification runs the target repository's own build/test scripts, before
   // and after the edit, plus any repair passes — so this needs far more than
   // the flat 3 minutes a single model round trip needed.
@@ -139,7 +156,8 @@ if (metadata.mode === "inspect") {
   const repairAttempts = (process.env.ATLAS_MAX_REPAIR_ATTEMPTS || "").trim();
   const codeArgs = [
     cli, "code", repositoryRoot, metadata.objective,
-    "--api-key-env", "GROQ_API_KEY",
+    "--provider", provider,
+    "--api-key-env", apiKeyVariable,
     "--model", model,
     "--format", "json",
   ];

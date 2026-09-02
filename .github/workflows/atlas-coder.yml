@@ -102,7 +102,13 @@ jobs:
 
       - name: Run Atlas task
         env:
+          # Both vendor keys are exposed; the runner reads only the one the
+          # selected provider needs, and an unset key for the *other* vendor is
+          # not an error. Set ATLAS_CODER_PROVIDER to pick explicitly, or leave
+          # it empty and let a claude-* ATLAS_CODER_MODEL select Anthropic.
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ATLAS_CODER_PROVIDER: ${{ vars.ATLAS_CODER_PROVIDER }}
           ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
           # Self-verification: which directory declares the scripts to run
           # (a monorepo usually declares none at its root), and how many

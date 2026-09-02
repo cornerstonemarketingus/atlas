@@ -16,8 +16,10 @@ import { InMemorySessionAuditLog } from "./infrastructure/in-memory-session-audi
 import { InMemoryUsageBudgetLedger } from "./infrastructure/in-memory-usage-budget-ledger.js";
 import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-openai-compatible-model-provider.js";
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
+import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provider.js";
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
+import { selectCoderProvider } from "./model/coder-provider-selection.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
 import { createRepositoryReadOnlyTools, registerRepositoryReadOnlyTools } from "./infrastructure/repository-read-only-tools.js";
 import { createRepositoryWriteTools } from "./infrastructure/repository-write-tools.js";
@@ -49,7 +51,8 @@ const USAGE = `Usage:
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
-  atlas code <repository-path> <objective> --api-key-env <ENV_VAR> --model <name> [--token-budget N] [--max-turns N]
+  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
+       [--token-budget N] [--max-turns N]
        [--no-verify] [--verify-dir <relative-path>] [--max-repair-attempts N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--format text|json]`;
 
@@ -285,15 +288,13 @@ const CODE_SYSTEM_PROMPT = "You are Atlas, proposing a bounded code change. Repo
 
 async function runCode(args: readonly string[], format: "json" | "text"): Promise<number> {
   const objective = args[2];
-  const apiKeyEnv = readRequiredOption(args, "--api-key-env");
   const model = readRequiredOption(args, "--model");
-  if (objective === undefined || apiKeyEnv === null || model === null) {
+  // Both stay optional: each provider knows the environment variable its own
+  // key normally lives in, and the vendor is inferable from the model name.
+  const apiKeyEnvOption = args.includes("--api-key-env") ? readRequiredOption(args, "--api-key-env") : undefined;
+  const providerOption = args.includes("--provider") ? readRequiredOption(args, "--provider") : undefined;
+  if (objective === undefined || model === null || apiKeyEnvOption === null || providerOption === null) {
     if (objective === undefined) console.error(USAGE);
-    return 2;
-  }
-  const apiKey = process.env[apiKeyEnv];
-  if (apiKey === undefined || apiKey.trim().length === 0) {
-    console.error(`Environment variable ${apiKeyEnv} is not set.`);
     return 2;
   }
   const tokenBudgetOption = readOptionalInteger(args, "--token-budget", 1, 1_000_000);
@@ -302,6 +303,24 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const verifyTimeoutOption = readOptionalInteger(args, "--verify-timeout-ms", 1_000, 1_800_000);
   if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null) return 2;
   const tokenBudget = tokenBudgetOption ?? 16_384;
+  const selection = selectCoderProvider({
+    provider: providerOption,
+    model,
+    apiKeyEnvironmentVariable: apiKeyEnvOption,
+    tokenBudget,
+  });
+  if (!selection.ok) {
+    console.error(selection.message);
+    return 2;
+  }
+  const { profile, apiKeyEnvironmentVariable, maxOutputTokensPerTurn } = selection.selection;
+  const apiKey = process.env[apiKeyEnvironmentVariable];
+  if (apiKey === undefined || apiKey.trim().length === 0) {
+    console.error(
+      `Environment variable ${apiKeyEnvironmentVariable} is not set (required for provider '${profile.providerId}').`,
+    );
+    return 2;
+  }
   const maximumTurns = maximumTurnsOption ?? 12;
   const maxRepairAttempts = repairAttemptsOption ?? 2;
   const verifyTimeoutMs = verifyTimeoutOption ?? 600_000;
@@ -350,25 +369,22 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     },
   });
 
-  // Capped well under 8,192: Groq rejects a request outright (HTTP 413) once
-  // prompt tokens + max_tokens exceeds its tokens-per-minute limit for a
-  // model, and that limit can be as low as ~10,000 on shared/free tiers —
-  // a naive max_tokens of 8,192 leaves almost no room for the prompt itself,
-  // let alone the conversation history that accumulates over later turns.
-  const maxOutputTokensPerTurn = Math.min(4_096, tokenBudget);
-  const groqProvider = new GroqModelProvider({
-    apiKey,
-    models: [{
-      model,
-      contextWindowTokens: 128_000,
-      maxOutputTokens: maxOutputTokensPerTurn,
-      supportsTools: true,
-      supportsJson: true,
-      supportsStreaming: false,
-    }],
-  });
+  // Only the requested model is declared, not the vendor's whole catalogue:
+  // the agent must not be able to silently fall back to a model the operator
+  // did not choose and is not budgeting for.
+  const capabilities = [{
+    model,
+    contextWindowTokens: profile.contextWindowTokens,
+    maxOutputTokens: maxOutputTokensPerTurn,
+    supportsTools: true,
+    supportsJson: true,
+    supportsStreaming: false,
+  }];
+  const upstream = profile.providerId === "anthropic"
+    ? new AnthropicModelProvider({ apiKey, models: capabilities, defaultMaxOutputTokens: maxOutputTokensPerTurn })
+    : new GroqModelProvider({ apiKey, models: capabilities });
   const provider = new BudgetedModelProvider(
-    new RetryingModelProvider(groqProvider),
+    new RetryingModelProvider(upstream),
     new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget }),
   );
   // A monorepo often declares no scripts at its root, so allow verification to
