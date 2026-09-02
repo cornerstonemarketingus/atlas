@@ -79,4 +79,66 @@ export const REPOSITORY_WRITE_MODEL_TOOLS: readonly ModelToolDefinition[] = [
       ...noAdditionalProperties,
     },
   },
+  {
+    name: "repository.propose_change_set",
+    description: [
+      "Apply several file edits as one atomic change set: every edit lands, or none does.",
+      "Use this whenever a change touches more than one file, and for every rename, move, or deletion — repository.propose_file_edit cannot delete or move anything.",
+      "Each edit object names one operation and the fields that operation requires:",
+      "create — path + content, and the file must not already exist;",
+      "update — path + content, replacing the whole file, which must already exist;",
+      "delete — path only, and the file must already exist;",
+      "rename — path (the existing source) + toPath (the destination, which must not already exist) and no content; the file's bytes are moved unchanged.",
+      "Never send content on a delete or rename, and never send toPath on anything but a rename.",
+      "Every path is repository-relative, and no path may be named twice in one change set.",
+      "Each edit is checked against the repository as it is before the change set runs, so do not edit a path that another edit in the same set creates or renames — use a second change set for that.",
+    ].join(" "),
+    inputSchema: {
+      type: "object",
+      properties: {
+        edits: {
+          type: "array",
+          minItems: 1,
+          maxItems: 25,
+          description: "Ordered edits applied as one transaction.",
+          items: {
+            type: "object",
+            properties: {
+              operation: {
+                type: "string",
+                enum: ["create", "update", "delete", "rename"],
+                description: "Which edit this is. Determines which other fields are required.",
+              },
+              path: {
+                type: "string",
+                minLength: 1,
+                maxLength: 4096,
+                description: "Repository-relative path of the file to create, update, delete, or move from.",
+              },
+              content: {
+                type: "string",
+                description: "Exact full new file contents. Required for create and update; must be omitted for delete and rename.",
+              },
+              toPath: {
+                type: "string",
+                minLength: 1,
+                maxLength: 4096,
+                description: "Repository-relative destination path. Required for rename; must be omitted for every other operation.",
+              },
+            },
+            required: ["operation", "path"],
+            oneOf: [
+              { properties: { operation: { const: "create" } }, required: ["operation", "path", "content"] },
+              { properties: { operation: { const: "update" } }, required: ["operation", "path", "content"] },
+              { properties: { operation: { const: "delete" } }, required: ["operation", "path"] },
+              { properties: { operation: { const: "rename" } }, required: ["operation", "path", "toPath"] },
+            ],
+            ...noAdditionalProperties,
+          },
+        },
+      },
+      required: ["edits"],
+      ...noAdditionalProperties,
+    },
+  },
 ];
