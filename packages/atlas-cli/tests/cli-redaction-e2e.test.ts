@@ -16,7 +16,7 @@ const SECRET = "ghp_0123456789abcdefghijABCDEFGHIJ0123";
  * A loopback stand-in for an OpenAI-compatible server that records the exact
  * bodies it is sent.
  */
-async function recordingServer(): Promise<{ url: string; bodies: string[]; close: () => Promise<void> }> {
+async function recordingServer(reply = "done"): Promise<{ url: string; bodies: string[]; close: () => Promise<void> }> {
   const bodies: string[] = [];
   const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
     const chunks: Buffer[] = [];
@@ -27,7 +27,7 @@ async function recordingServer(): Promise<{ url: string; bodies: string[]; close
       response.end(JSON.stringify({
         id: "chatcmpl-1",
         model: "test-model",
-        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "done" } }],
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: reply } }],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
       }));
     });
@@ -72,4 +72,32 @@ test("the real chat command never sends a credential to the model endpoint", asy
   }
   // Not merely absent — replaced, so the model still knows a token was there.
   assert.match(server.bodies.join(""), /\[redacted:github-token:[0-9a-f]+\]/u);
+});
+
+test("never prints a credential the model put in its summary", async (t) => {
+  // The agent's closing summary becomes the pull request body and the Actions
+  // log, both readable by people who never had access to the repository. A
+  // model quoting the code it changed is the ordinary case, not a contrived
+  // one, so this is the leak path that matters for stdout — the objective
+  // itself is never echoed there.
+  const root = await mkdtemp(join(tmpdir(), "atlas-e2e-stdout-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "README.md"), "# fixture\n", "utf8");
+
+  const server = await recordingServer(`I replaced the hardcoded ${SECRET} in config.ts.`);
+  t.after(() => server.close());
+
+  const { stdout } = await run(process.execPath, [
+    CLI, "chat", root, "Describe the repository.",
+    "--endpoint", server.url,
+    "--model", "test-model",
+    "--max-turns", "1",
+    "--format", "json",
+  ]);
+
+  assert.equal(stdout.includes(SECRET), false, "the credential was printed to stdout");
+  assert.match(stdout, /\[redacted:github-token:[0-9a-f]+\]/u);
+  // Still valid JSON: the runner parses this, so a placeholder must not break it.
+  const parsed = JSON.parse(stdout) as { sessionId?: string };
+  assert.equal(typeof parsed.sessionId, "string");
 });

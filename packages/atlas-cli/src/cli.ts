@@ -22,6 +22,7 @@ import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enfo
 import { selectCoderProvider } from "./model/coder-provider-selection.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
 import { RedactingModelProvider } from "./infrastructure/redacting-model-provider.js";
+import { redactRenderedOutput } from "./presentation/redacted-output.js";
 import { createRepositoryReadOnlyTools, registerRepositoryReadOnlyTools } from "./infrastructure/repository-read-only-tools.js";
 import { createRepositoryWriteTools, registerRepositoryWriteTools } from "./infrastructure/repository-write-tools.js";
 import { SafeRepositoryFileEditor } from "./infrastructure/safe-repository-file-editor.js";
@@ -285,7 +286,10 @@ async function runChat(args: readonly string[], format: "json" | "text"): Promis
     context: { repositoryId },
   });
   const output = toChatOutput(sessionId, result);
-  console.log(format === "json" ? renderChatJson(output) : renderChatText(output));
+  console.log(await redactRenderedOutput(
+    format === "json" ? renderChatJson(output) : renderChatText(output),
+    new PatternSecretRedactor(),
+  ));
   return result.status === "completed" ? 0 : 1;
 }
 
@@ -498,7 +502,14 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   }).run();
 
   const output = toVerifiedCodeOutput(sessionId, result, usage);
-  console.log(format === "json" ? renderCodeJson(output) : renderCodeText(output));
+  // What this prints becomes result.json, then the pull request body and
+  // the Actions log — both readable by people with no access to the
+  // repository the agent worked in. Validation diagnostics carry real
+  // command output, so this is a genuine leak path, not belt-and-braces.
+  console.log(await redactRenderedOutput(
+    format === "json" ? renderCodeJson(output) : renderCodeText(output),
+    new PatternSecretRedactor(),
+  ));
   return result.status === "completed" ? 0 : 1;
 }
 
