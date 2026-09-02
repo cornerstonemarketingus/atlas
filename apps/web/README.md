@@ -340,19 +340,49 @@ retry rather than an immediate task failure.
 
 #### Secret redaction
 
-Everything a repository read tool returns is scrubbed before it becomes model
-context: AWS keys, GitHub tokens, Groq/OpenAI/Anthropic/Stripe/Slack/Google
+Atlas detects AWS keys, GitHub tokens, Groq/OpenAI/Anthropic/Stripe/Slack/Google
 keys, PEM private keys, JWTs, URL-inline credentials, and env-style credential
-assignments. Each hit is replaced with a stable, non-reversible placeholder
+assignments. Each hit becomes a stable, non-reversible placeholder
 (`[redacted:github-token:a1b2c3d4]`) derived from a salted SHA-256 prefix, so
 the model can still tell that two files hold the same value without being able
-to recover it. Tool *failure* messages are redacted on the same path, since a
-failure string routinely quotes the content that caused it. Detection is
-anchored on vendor prefixes and credential-shaped assignment keys rather than
-entropy — an entropy heuristic redacts git SHAs, UUIDs and lockfile integrity
-hashes, and destroys the model's ability to reason about the repository. It is
-a strong last line of defence, not a substitute for keeping credentials out of
-the repository in the first place.
+to recover it.
+
+Scrubbing happens at four boundaries, because no single one sees everything:
+
+| Boundary | What it catches |
+|---|---|
+| Read-only tool registry | Repository content and diffs on the way to the model — and tool *failure* messages, which routinely quote what caused them (`unexpected token in AKIA…`) |
+| Outbound model request | The system prompt, the objective, repository evidence, tool results, and validation output fed back as repair feedback |
+| Printed CLI result | `result.json`, and therefore the pull request body and the Actions log |
+| Persisted audit trace | The free-text fields of a session event — a summary, an error, a policy or approval reason |
+
+The model-request boundary is the one that matters most and is easiest to
+overlook: when a test fails, the agent is shown what the test compared
+(`expected "sk-live-…" to equal …`). That output never passes through the tool
+registry, so a tool-only defence would miss it entirely.
+
+Every boundary **fails closed** — if redaction cannot be performed, the
+operation stops rather than falling back to raw text, so an internal fault
+never becomes a silent disclosure.
+
+One deliberate exemption: the arguments of a tool call the model makes are
+never rewritten. Those carry the file content the agent asked to write, and a
+placeholder substituted there would be written into your repository verbatim,
+or read back on a later turn and "restored" over the real content — data
+corruption rather than leak prevention. Nothing is lost by it: repository
+content is already scrubbed on the way in, so anything the model copies from a
+file is a placeholder before it can reach an argument.
+
+Detection is anchored on vendor prefixes and credential-shaped assignment keys
+rather than entropy. An entropy heuristic redacts git SHAs, UUIDs, and lockfile
+integrity hashes, destroying the model's ability to reason about the
+repository. The trade-off is real: **a credential in an unrecognised format
+passes through.** This is a strong last line of defence, not a substitute for
+keeping credentials out of the repository.
+
+Not yet covered: `atlas debug` writes raw build and test output to
+`debug.json`, which is uploaded as a workflow artifact (7-day retention,
+visible to repository collaborators). The model never sees it.
 
 ### Self-verification
 
