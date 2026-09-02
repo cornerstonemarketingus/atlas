@@ -21,6 +21,7 @@ import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
 import { selectCoderProvider } from "./model/coder-provider-selection.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
+import { RedactingModelProvider } from "./infrastructure/redacting-model-provider.js";
 import { createRepositoryReadOnlyTools, registerRepositoryReadOnlyTools } from "./infrastructure/repository-read-only-tools.js";
 import { createRepositoryWriteTools, registerRepositoryWriteTools } from "./infrastructure/repository-write-tools.js";
 import { SafeRepositoryFileEditor } from "./infrastructure/safe-repository-file-editor.js";
@@ -259,8 +260,12 @@ async function runChat(args: readonly string[], format: "json" | "text"): Promis
       supportsStreaming: false,
     }],
   });
+  // Redaction wraps the transport directly, so it sees the final request after
+  // every other decorator has shaped it — the last point before bytes leave
+  // this process. The budget ledger stays outermost so it still records usage
+  // once, on the call that actually happened.
   const provider = new BudgetedModelProvider(
-    localProvider,
+    new RedactingModelProvider(localProvider, new PatternSecretRedactor()),
     new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget }),
   );
   const sessionId = randomUUID();
@@ -404,8 +409,10 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const upstream = profile.providerId === "anthropic"
     ? new AnthropicModelProvider({ apiKey, models: capabilities, defaultMaxOutputTokens: maxOutputTokensPerTurn })
     : new GroqModelProvider({ apiKey, models: capabilities });
+  // Inside the retry decorator on purpose: a retried request is the same
+  // already-scrubbed request, so it is not re-scanned on every attempt.
   const provider = new BudgetedModelProvider(
-    new RetryingModelProvider(upstream),
+    new RetryingModelProvider(new RedactingModelProvider(upstream, new PatternSecretRedactor())),
     new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget }),
   );
   // A monorepo often declares no scripts at its root, so allow verification to
