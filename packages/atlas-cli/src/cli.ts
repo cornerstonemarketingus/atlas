@@ -22,7 +22,7 @@ import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enfo
 import { selectCoderProvider } from "./model/coder-provider-selection.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
 import { createRepositoryReadOnlyTools, registerRepositoryReadOnlyTools } from "./infrastructure/repository-read-only-tools.js";
-import { createRepositoryWriteTools } from "./infrastructure/repository-write-tools.js";
+import { createRepositoryWriteTools, registerRepositoryWriteTools } from "./infrastructure/repository-write-tools.js";
 import { SafeRepositoryFileEditor } from "./infrastructure/safe-repository-file-editor.js";
 import type { SearchScope } from "./domain/repository-search.js";
 import { renderSearchJson, renderSearchText } from "./presentation/search-renderers.js";
@@ -360,12 +360,33 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     { repositoryId, repositoryRoot: summary.root },
     { editor: new SafeRepositoryFileEditor() },
   );
-  registry.register({
-    ...writeTools.proposeFileEdit,
-    execute: async (input, context) => {
-      const result = await writeTools.proposeFileEdit.execute(input, context);
-      edits.push({ path: result.path, operation: result.operation });
-      return result;
+  // Registered through registerRepositoryWriteTools rather than one call per
+  // tool. The model-facing list (REPOSITORY_WRITE_MODEL_TOOLS) and the registry
+  // must agree — an advertised tool that is not registered ends the session the
+  // first time the model calls it — and going through the shared function means
+  // a write tool added later is wired here automatically instead of silently
+  // being left out.
+  registerRepositoryWriteTools(registry, {
+    proposeFileEdit: {
+      ...writeTools.proposeFileEdit,
+      execute: async (input, context) => {
+        const result = await writeTools.proposeFileEdit.execute(input, context);
+        edits.push({ path: result.path, operation: result.operation });
+        return result;
+      },
+    },
+    proposeChangeSet: {
+      ...writeTools.proposeChangeSet,
+      execute: async (input, context) => {
+        const result = await writeTools.proposeChangeSet.execute(input, context);
+        // A rename moves a file, so the destination is what the pull request
+        // has to describe; recording only the source would leave the new path
+        // out of the change summary entirely.
+        for (const edit of result.applied) {
+          edits.push({ path: edit.toPath ?? edit.path, operation: edit.operation });
+        }
+        return result;
+      },
     },
   });
 
