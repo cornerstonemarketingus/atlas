@@ -288,6 +288,27 @@ through a digest-bound safe editor (`packages/atlas-cli`'s
 changed. Whether it goes on to merge that PR itself is entirely the
 repository's merge-policy setting above.
 
+#### Multi-file and atomic changes
+
+The agent has two write tools. `repository.propose_file_edit` replaces one
+file's entire contents. `repository.propose_change_set` applies a batch of
+creates, updates, deletes, and renames as a single transaction — every edit
+lands, or none does — and is the only way the agent can delete or move a file.
+
+That matters for changes that are only correct as a whole: extracting a module,
+renaming a symbol across its call sites, splitting a file. A half-applied
+refactor leaves the repository broken in a way the agent then has to notice and
+undo, so the batch compensates in reverse order from checkpoints captured
+before anything is written. Deletes are restored byte-for-byte rather than
+replayed as creates, because a create normalizes line endings and would
+silently rewrite every line of a CRLF file.
+
+Both tools go through the same containment, symlink, and digest checks; the
+change set adds bounds of its own (at most 25 edits per call, and no path
+touched twice in one batch, a rename's destination included). Directories are
+never created or removed — implicit directory removal is where a transactional
+editor starts destroying things outside its own change set.
+
 #### Choosing a model provider
 
 Two vendors are supported, and you only need a key for the one you use:
