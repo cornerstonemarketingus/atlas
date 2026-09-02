@@ -1,0 +1,145 @@
+name: CI
+
+# The repository had no CI that ran its own tests. The only check on a pull
+# request was a Vercel deployment status, so 428 tests could go red without
+# anything saying so — and the "ci-gated" merge policy had almost nothing to
+# gate on.
+#
+# That matters most for the daily self-improvement run: an autonomous agent
+# proposing changes into a repository with no independent test gate is trusting
+# its own self-verification twice over. This is the second opinion.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Per ref, so a new push supersedes an in-flight run for the same branch but
+  # never cancels main's.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  cli:
+    name: atlas-cli
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/atlas-cli
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/atlas-cli/package-lock.json
+
+      # --ignore-scripts: dependency install must not run arbitrary lifecycle
+      # scripts, matching how atlas-coder.yml already installs this package.
+      - run: npm ci --ignore-scripts
+
+      - name: Typecheck and build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+  web:
+    name: apps/web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # `npm test` builds first, so this covers the production build too — the
+      # same build the Cloudflare deploy runs.
+      - name: Build and test
+        run: npm test
+
+  workflows:
+    name: workflow syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Every workflow here is YAML that GitHub parses before it will run
+      # anything. A malformed one fails with zero jobs and no useful message,
+      # which has already cost this repository two silent deploy failures — so
+      # it is worth one cheap check.
+      - name: Parse every workflow
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          import sys
+          import yaml
+
+          failures = []
+          for path in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+              try:
+                  yaml.safe_load(path.read_text(encoding="utf-8"))
+              except yaml.YAMLError as error:
+                  failures.append(f"{path}: {error}")
+              else:
+                  print(f"ok  {path}")
+          if failures:
+              print("\n".join(failures), file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Check shell steps parse
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          import subprocess
+          import sys
+          import yaml
+
+          failures = []
+          for path in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+              document = yaml.safe_load(path.read_text(encoding="utf-8"))
+              for job_name, job in (document.get("jobs") or {}).items():
+                  for index, step in enumerate(job.get("steps") or []):
+                      script = step.get("run")
+                      if not script:
+                          continue
+                      # ${{ }} is substituted by Actions before bash sees it; a
+                      # placeholder keeps the shape without pretending to know
+                      # the value.
+                      probe = script.replace("${{", "${__ACTIONS__").replace("}}", "}")
+                      result = subprocess.run(
+                          ["bash", "-n"], input=probe, text=True, capture_output=True
+                      )
+                      if result.returncode != 0:
+                          label = step.get("name") or f"step {index + 1}"
+                          failures.append(f"{path} :: {job_name} :: {label}\n{result.stderr}")
+          if failures:
+              print("\n\n".join(failures), file=sys.stderr)
+              sys.exit(1)
+          print("All shell steps parse.")
+          PY
