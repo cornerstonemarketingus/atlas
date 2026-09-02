@@ -86,60 +86,10 @@ jobs:
         with:
           persist-credentials: false
 
-      # Every workflow here is YAML that GitHub parses before it will run
-      # anything. A malformed one fails with zero jobs and no useful message,
-      # which has already cost this repository two silent deploy failures — so
-      # it is worth one cheap check.
-      - name: Parse every workflow
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import pathlib
-          import sys
-          import yaml
-
-          failures = []
-          for path in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
-              try:
-                  yaml.safe_load(path.read_text(encoding="utf-8"))
-              except yaml.YAMLError as error:
-                  failures.append(f"{path}: {error}")
-              else:
-                  print(f"ok  {path}")
-          if failures:
-              print("\n".join(failures), file=sys.stderr)
-              sys.exit(1)
-          PY
-
-      - name: Check shell steps parse
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import pathlib
-          import subprocess
-          import sys
-          import yaml
-
-          failures = []
-          for path in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
-              document = yaml.safe_load(path.read_text(encoding="utf-8"))
-              for job_name, job in (document.get("jobs") or {}).items():
-                  for index, step in enumerate(job.get("steps") or []):
-                      script = step.get("run")
-                      if not script:
-                          continue
-                      # ${{ }} is substituted by Actions before bash sees it; a
-                      # placeholder keeps the shape without pretending to know
-                      # the value.
-                      probe = script.replace("${{", "${__ACTIONS__").replace("}}", "}")
-                      result = subprocess.run(
-                          ["bash", "-n"], input=probe, text=True, capture_output=True
-                      )
-                      if result.returncode != 0:
-                          label = step.get("name") or f"step {index + 1}"
-                          failures.append(f"{path} :: {job_name} :: {label}\n{result.stderr}")
-          if failures:
-              print("\n\n".join(failures), file=sys.stderr)
-              sys.exit(1)
-          print("All shell steps parse.")
-          PY
+      # GitHub parses a workflow before it will run anything, and a file it
+      # rejects fails with zero jobs and no useful message. That has cost this
+      # repository three silent failures, including this very job's first
+      # version — so the checks live in a script that can also be run by hand
+      # before pushing, and the workflow only calls it.
+      - name: Check every workflow
+        run: python3 .github/atlas/check-workflows.py
