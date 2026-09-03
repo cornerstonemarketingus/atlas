@@ -380,9 +380,11 @@ repository. The trade-off is real: **a credential in an unrecognised format
 passes through.** This is a strong last line of defence, not a substitute for
 keeping credentials out of the repository.
 
-Not yet covered: `atlas debug` writes raw build and test output to
-`debug.json`, which is uploaded as a workflow artifact (7-day retention,
-visible to repository collaborators). The model never sees it.
+Debug artifacts are covered as well. `atlas debug` captures raw build and test
+output, which is uploaded as a workflow artifact — so the runner pipes it
+through `atlas redact`, the same redactor exposed as a subcommand, before
+writing `debug.json`. If redaction cannot run, the artifact is withheld rather
+than written unredacted, and the task status says why.
 
 ### Self-verification
 

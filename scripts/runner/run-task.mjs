@@ -65,6 +65,51 @@ function writeJson(filename, value) {
   });
 }
 
+/**
+ * Writes an artifact after scrubbing credentials out of it.
+ *
+ * Debug artifacts carry raw build and test output, and a failing test prints
+ * whatever it compared. These files are uploaded to the workflow run, so an
+ * unredacted one moves a credential out of a private repository and into an
+ * artifact with a different audience.
+ *
+ * Redaction runs through `atlas redact` rather than a detector written here.
+ * A second implementation in this file would drift from the one the agent
+ * uses and give two different answers to "is this safe to publish"; delegating
+ * means there is exactly one set of rules.
+ *
+ * Fails closed: if the CLI cannot redact, the artifact is NOT written. An
+ * unredacted debug artifact is worse than a missing one, and the step's own
+ * status already records what happened.
+ */
+function writeRedactedJson(filename, value) {
+  const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
+  const serialized = `${JSON.stringify(value, null, 2)}\n`;
+  const result = spawnSync(process.execPath, [cli, "redact", "--summary"], {
+    input: serialized,
+    encoding: "utf8",
+    timeout: 120_000,
+    maxBuffer: MAX_FILE_BYTES,
+    windowsHide: true,
+  });
+
+  if (result.error || result.status !== 0) {
+    console.error(`Refusing to write ${filename}: redaction failed (${result.stderr?.trim() || result.error?.message || `exit ${result.status}`}).`);
+    return false;
+  }
+  // Placeholders are plain text, so redacted JSON stays parseable — but this is
+  // an artifact other tools read, so it is verified rather than assumed.
+  try {
+    JSON.parse(result.stdout);
+  } catch (error) {
+    console.error(`Refusing to write ${filename}: redaction produced unparseable JSON (${error.message}).`);
+    return false;
+  }
+  if (result.stderr) console.error(`${filename} redaction: ${result.stderr.trim()}`);
+  fs.writeFileSync(path.join(outputDirectory, filename), result.stdout, { encoding: "utf8", mode: 0o600 });
+  return true;
+}
+
 if (metadata.mode === "inspect") {
   const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
   const commands = [
@@ -114,10 +159,12 @@ if (metadata.mode === "inspect") {
       break;
     }
   }
-  writeJson("debug.json", { schema_version: 1, task_id: metadata.task_id, steps: results });
+  const debugWritten = writeRedactedJson("debug.json", { schema_version: 1, task_id: metadata.task_id, steps: results });
 
   if (failedAt) {
-    writeStatus("failed", `Debug run stopped at '${failedAt}'; see debug.json for captured output.`);
+    writeStatus("failed", debugWritten
+      ? `Debug run stopped at '${failedAt}'; see debug.json for captured output.`
+      : `Debug run stopped at '${failedAt}'. debug.json was withheld because its output could not be redacted.`);
     console.error(`Atlas debug run failed at step '${failedAt}'.`);
     process.exit(1);
   }

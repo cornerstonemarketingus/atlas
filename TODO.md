@@ -44,11 +44,13 @@ measurable quality, and transparent cost control.
       deliberately exempt — redacting them would write placeholders into the
       customer's repository, and repository content is already scrubbed before
       the model can copy it.
-      NOT yet covered: `atlas debug` writes raw build and test output to
-      debug.json, which is uploaded as a workflow artifact. That runs in the
-      plain-JS runner, which has no access to this redactor; wiring it needs
-      the redactor exposed as a CLI subcommand rather than a second
-      implementation that would drift.
+      The debug artifact is covered too: `atlas redact` exposes the same
+      redactor as a subcommand, and scripts/runner/run-task.mjs pipes
+      debug.json through it before writing. That keeps one set of detection
+      rules rather than a second implementation in the runner that would drift.
+      It fails closed — if redaction cannot run, the artifact is withheld and
+      the task status says so, because an unredacted debug artifact is worse
+      than a missing one.
 - [ ] Maintain complete audit records for externally visible actions.
 - [ ] Validate every increment and distinguish pre-existing failures.
 - [ ] Never silently exceed user-defined token, money, time, or compute budgets.

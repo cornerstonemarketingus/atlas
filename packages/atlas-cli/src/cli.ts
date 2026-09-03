@@ -40,6 +40,7 @@ import { renderTreeJson, renderTreeText } from "./presentation/tree-renderers.js
 import { BoundedCommandRunner } from "./infrastructure/bounded-command-runner.js";
 import { GhCliRepositoryHost } from "./infrastructure/gh-cli-repository-host.js";
 import { executeGitHubCommand } from "./cli-github.js";
+import { executeRedactCommand, readStandardInput } from "./cli-redact.js";
 import { renderGitHubJson, renderGitHubText } from "./presentation/github-renderers.js";
 
 const USAGE = `Usage:
@@ -49,6 +50,7 @@ const USAGE = `Usage:
   atlas references <repository-path> <symbol-name> [--max-results N] [--format text|json]
   atlas read <repository-path> <relative-file-path> [--start-line N] [--end-line N] [--max-lines N] [--max-bytes N] [--format text|json]
   atlas tree <repository-path> [--max-depth N] [--max-entries N] [--format text|json]
+  atlas redact [--max-characters N] [--summary]   (reads stdin, writes redacted text to stdout)
   atlas github repo <owner>/<repository> [--format text|json]
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
@@ -62,6 +64,13 @@ export async function main(args: readonly string[]): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
     console.log(USAGE);
     return 0;
+  }
+  if (args[0] === "redact") {
+    return await executeRedactCommand(args, {
+      readInput: readStandardInput,
+      write: (text) => process.stdout.write(text),
+      writeError: (text) => process.stderr.write(text),
+    });
   }
   if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
     console.error(USAGE);
