@@ -13,6 +13,8 @@ import { BoundedRepositorySourceReader } from "./infrastructure/bounded-reposito
 import { RepositorySymbolReferenceFinder } from "./infrastructure/repository-symbol-reference-finder.js";
 import { BudgetedModelProvider } from "./infrastructure/budgeted-model-provider.js";
 import { InMemorySessionAuditLog } from "./infrastructure/in-memory-session-audit-log.js";
+import { JsonLinesSessionAuditStore } from "./infrastructure/json-lines-session-audit-store.js";
+import { persistSessionAudit } from "./infrastructure/persist-session-audit.js";
 import { InMemoryUsageBudgetLedger } from "./infrastructure/in-memory-usage-budget-ledger.js";
 import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-openai-compatible-model-provider.js";
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
@@ -58,7 +60,7 @@ const USAGE = `Usage:
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
        [--token-budget N] [--max-turns N]
        [--no-verify] [--verify-dir <relative-path>] [--max-repair-attempts N]
-       [--verify-timeout-ms N] [--verify-package-manager <name>] [--format text|json]`;
+       [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]`;
 
 export async function main(args: readonly string[]): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
@@ -346,6 +348,8 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     ? readRequiredOption(args, "--verify-package-manager")
     : "npm";
   if (packageManager === null) return 2;
+  const auditLogPath = args.includes("--audit-log") ? readRequiredOption(args, "--audit-log") : undefined;
+  if (auditLogPath === null) return 2;
 
   const inspector = new FilesystemRepositoryInspector();
   const summary = await inspector.inspect(args[1] ?? "");
@@ -464,12 +468,13 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   );
 
   const sessionId = randomUUID();
+  const audit = new InMemorySessionAuditLog();
   const agent = new ProviderReadOnlyToolAgent({
     provider,
     model,
     registry,
     tools: [...REPOSITORY_READ_ONLY_MODEL_TOOLS, ...REPOSITORY_WRITE_MODEL_TOOLS],
-    audit: new InMemorySessionAuditLog(),
+    audit,
     maximumTurns,
     maximumOutputTokensPerTurn: maxOutputTokensPerTurn,
     systemPrompt: CODE_SYSTEM_PROMPT,
@@ -509,6 +514,21 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     },
     runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),
   }).run();
+
+  // Flushed after the run, not during it: the agent records events
+  // synchronously mid-turn, and putting a disk write on that path to persist a
+  // record nobody reads until the run ends would be the wrong trade.
+  if (auditLogPath !== undefined) {
+    const persistence = await persistSessionAudit(
+      new JsonLinesSessionAuditStore({ filePath: auditLogPath, redactor: new PatternSecretRedactor() }),
+      audit,
+    );
+    // Reported on stderr, never stdout: stdout is the machine-readable result
+    // the runner parses into a pull request.
+    if (persistence.error !== undefined) {
+      console.error(`Audit log incomplete: wrote ${persistence.persisted} event(s) to ${auditLogPath} (${persistence.error}).`);
+    }
+  }
 
   const output = toVerifiedCodeOutput(sessionId, result, usage);
   // What this prints becomes result.json, then the pull request body and

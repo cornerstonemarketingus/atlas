@@ -208,6 +208,10 @@ if (metadata.mode === "inspect") {
     "--model", model,
     "--format", "json",
   ];
+  // A durable, redacted record of what the agent did, uploaded with the run's
+  // other artifacts. Written by the CLI, so it goes through the same redactor
+  // as everything else the agent emits.
+  codeArgs.push("--audit-log", path.join(outputDirectory, "audit.jsonl"));
   if (verifyDir) codeArgs.push("--verify-dir", verifyDir);
   if (/^[0-5]$/.test(repairAttempts)) codeArgs.push("--max-repair-attempts", repairAttempts);
   const result = runCommand("code", process.execPath, codeArgs, process.cwd(), coderTimeoutMs);

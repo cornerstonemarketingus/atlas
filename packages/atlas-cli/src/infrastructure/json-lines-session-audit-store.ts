@@ -85,9 +85,23 @@ export class JsonLinesSessionAuditStore {
     return this.#serialize(async () => Object.freeze([...(await this.#loadUnlocked())]));
   }
 
+  /**
+   * Appends one event.
+   *
+   * `occurredAt` exists for persisting an event that has ALREADY happened —
+   * flushing a completed session's in-memory log to disk. Without it the store
+   * would stamp every event with the moment it was written, collapsing a whole
+   * session into one instant and destroying the ordering and durations that
+   * make a trace worth keeping. Live callers omit it and get the clock.
+   *
+   * The sequence number is always the store's own: the file is the authority
+   * for its own ordering, so events flushed into an existing log continue that
+   * log's numbering rather than replaying a foreign one.
+   */
   public async append<T extends SessionEventType>(
     type: T,
     payload: SessionEventPayloadMap[T],
+    occurredAt?: string,
   ): Promise<SessionEvent<T>> {
     return this.#serialize(async () => {
       const events = await this.#loadUnlocked();
@@ -100,7 +114,7 @@ export class JsonLinesSessionAuditStore {
       const event = {
         schemaVersion: SESSION_EVENT_SCHEMA_VERSION,
         sequence: events.length + 1,
-        occurredAt: this.#clock().toISOString(),
+        occurredAt: resolveOccurredAt(occurredAt, this.#clock),
         type,
         payload: structuredClone(payload),
       } as SessionEvent<T>;
@@ -215,6 +229,20 @@ const payloadKeys: Record<SessionEventType, readonly string[]> = {
   "approval.recorded": ["approvalId", "toolCallId", "decision", "actorId", "reason"],
   "error.recorded": ["code", "summary", "recoverable", "relatedId"],
 };
+
+/**
+ * A supplied timestamp must be a real, parseable instant. A malformed one is
+ * rejected here rather than written, because validateEvent would reject it on
+ * the next read and make the whole file unloadable — one bad flush should not
+ * cost the entire audit trail.
+ */
+function resolveOccurredAt(supplied: string | undefined, clock: () => Date): string {
+  if (supplied === undefined) return clock().toISOString();
+  if (!Number.isFinite(Date.parse(supplied))) {
+    throw new SessionAuditStorageError("AUDIT_INVALID_EVENT", `Invalid occurredAt: ${supplied}`);
+  }
+  return supplied;
+}
 
 function validateEvent(value: unknown, expectedSequence: number, line?: number): asserts value is SessionEvent {
   if (!isRecord(value) || !hasExactKeys(value, ["schemaVersion", "sequence", "occurredAt", "type", "payload"]) || value["schemaVersion"] !== SESSION_EVENT_SCHEMA_VERSION || value["sequence"] !== expectedSequence || typeof value["occurredAt"] !== "string" || !Number.isFinite(Date.parse(value["occurredAt"])) || typeof value["type"] !== "string" || !(value["type"] in payloadKeys) || !isRecord(value["payload"])) {

@@ -470,12 +470,15 @@ measurable quality, and transparent cost control.
       latency, cost, user intervention, and rollback rate.
 - [ ] Add model/provider/prompt/tool regression gates.
 - [ ] Add replayable traces with privacy-aware redaction.
-      The redaction half is done: `JsonLinesSessionAuditStore` takes a redactor
-      and scrubs each event before it is written, keeping the returned event
-      and the line on disk identical. Replay itself — reconstructing a session
-      from a trace — is not built, and nothing in the shipped CLI wires the
-      store yet (`cli.ts` uses the in-memory log, whose contents never leave
-      the process).
+      Traces are now persisted and redacted: `atlas code --audit-log <path>`
+      flushes the session's events to a JSON-lines store, scrubbed by the same
+      redactor, with each event keeping its original timestamp so ordering and
+      durations survive. The coder workflow passes it, so every task uploads
+      one. Persistence never fails a run — a correct change is not undone by a
+      log that could not be written — and reports how many events landed.
+      STILL MISSING: replay itself. Reconstructing or re-executing a session
+      from its trace is not built; today the file is an audit record to read,
+      not something to replay.
 - [ ] Add structured logs, metrics, traces, alerts, and service-level objectives.
 - [ ] Add canary releases, feature flags, experiments, and automatic rollback.
 - [ ] Add user feedback tied to precise run artifacts.

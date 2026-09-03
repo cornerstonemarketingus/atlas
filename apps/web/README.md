@@ -380,6 +380,14 @@ repository. The trade-off is real: **a credential in an unrecognised format
 passes through.** This is a strong last line of defence, not a substitute for
 keeping credentials out of the repository.
 
+Every coder task also uploads `audit.jsonl` — a redacted, append-only record of
+what the agent did: which model it called, which tools it ran, what the policy
+decided, and how the session ended. Each event keeps its real timestamp, so
+ordering and durations survive. It records counts and digests rather than
+content, and the same redactor scrubs the few free-text fields that quote
+anything. Writing it never fails a task: a correct change is not undone by a log
+that could not be written.
+
 Debug artifacts are covered as well. `atlas debug` captures raw build and test
 output, which is uploaded as a workflow artifact — so the runner pipes it
 through `atlas redact`, the same redactor exposed as a subcommand, before
