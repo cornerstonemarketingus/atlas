@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
-import { lstat, readFile, realpath, rm, stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { lstat, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
   RepositoryChangeSetError,
@@ -17,17 +17,25 @@ import {
   type RepositoryFileEditor,
 } from "../domain/repository-file-edit.js";
 
+const DEFAULT_MAX_EDITS = 50;
+const DEFAULT_MAX_CHANGE_SET_BYTES = 4 * 1024 * 1024;
+
 export interface TransactionalRepositoryChangeSetEditorOptions {
   readonly maxPendingChangeSets?: number;
+  readonly maxEdits?: number;
+  readonly maxChangeSetBytes?: number;
 }
 
 /**
  * Coordinates already-safe single-file edits into an ordered, compensating transaction.
- * This is intentionally not a general filesystem transaction: only create/update plans are
- * accepted, and a failed application is compensated from pre-edit checkpoints.
+ * This is intentionally not a general filesystem transaction: create, update, delete, and
+ * rename plans are accepted, and a failed application is compensated in reverse order from
+ * pre-edit checkpoints. Directories are never created or removed.
  */
 export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeSetEditor {
   private readonly maxPendingChangeSets: number;
+  private readonly maxEdits: number;
+  private readonly maxChangeSetBytes: number;
   private readonly pending = new Map<string, readonly RepositoryFileEditPlan[]>();
   private readonly checkpoints = new Map<string, ReadonlyMap<string, string>>();
 
@@ -36,15 +44,29 @@ export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeS
     options: TransactionalRepositoryChangeSetEditorOptions = {},
   ) {
     this.maxPendingChangeSets = positiveLimit(options.maxPendingChangeSets ?? 20);
+    this.maxEdits = positiveLimit(options.maxEdits ?? DEFAULT_MAX_EDITS);
+    this.maxChangeSetBytes = positiveLimit(options.maxChangeSetBytes ?? DEFAULT_MAX_CHANGE_SET_BYTES);
   }
 
   public async preview(repositoryPath: string, requests: readonly RepositoryFileEditRequest[]): Promise<RepositoryChangeSetPlan> {
     if (requests.length === 0) throw changeSetError("EMPTY_CHANGE_SET", "A change set must include at least one edit.");
-    const paths = new Set<string>();
+    if (requests.length > this.maxEdits) throw changeSetError("CHANGE_SET_TOO_LARGE", `A change set cannot exceed ${this.maxEdits} edits.`);
+    let bytes = 0;
     for (const request of requests) {
-      const key = request.path.replaceAll("\\", "/").toLocaleLowerCase();
-      if (paths.has(key)) throw changeSetError("DUPLICATE_PATH", "A change set cannot edit the same path twice.");
-      paths.add(key);
+      if (request.operation === "create" || request.operation === "update") bytes += Buffer.byteLength(request.content);
+    }
+    if (bytes > this.maxChangeSetBytes) throw changeSetError("CHANGE_SET_TOO_LARGE", `A change set cannot exceed ${this.maxChangeSetBytes} content bytes.`);
+
+    // Every path a change set touches — a rename's destination included — must be claimed
+    // once, so two edits can never race for the same file inside one transaction.
+    const claimed = new Set<string>();
+    for (const request of requests) {
+      const paths = request.operation === "rename" ? [request.path, request.toPath] : [request.path];
+      for (const path of paths) {
+        const key = path.replaceAll("\\", "/").toLocaleLowerCase();
+        if (claimed.has(key)) throw changeSetError("DUPLICATE_PATH", "A change set cannot touch the same path twice.");
+        claimed.add(key);
+      }
     }
 
     const edits: RepositoryFileEditPlan[] = [];
@@ -53,7 +75,10 @@ export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeS
       for (const request of requests) {
         const plan = await this.fileEditor.preview(repositoryPath, request);
         edits.push(plan);
-        if (plan.operation === "update") captured.set(plan.planDigest, await readCheckpoint(plan.root, plan.path, plan.beforeSha256));
+        // Updates and deletes destroy bytes, so rollback needs them captured up front.
+        if (plan.operation === "update" || plan.operation === "delete") {
+          captured.set(plan.planDigest, await readCheckpoint(plan.root, plan.path, plan.beforeSha256));
+        }
       }
     } catch (error) {
       for (const plan of edits) this.fileEditor.discard(plan.planDigest);
@@ -122,16 +147,7 @@ export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeS
     const failed: string[] = [];
     for (const edit of edits) {
       try {
-        if (edit.operation === "update") {
-          // Re-previewing forces the same containment, symlink, text, and current-hash checks as a forward edit.
-          const content = checkpointFor(edit, checkpoints);
-          const checkpoint = await this.fileEditor.preview(root, {
-            operation: "update", path: edit.path, content, expectedSha256: edit.afterSha256,
-          });
-          await this.fileEditor.apply(checkpoint, { approved: true, planDigest: checkpoint.planDigest });
-        } else {
-          await removeCreatedFile(root, edit);
-        }
+        await this.compensate(root, edit, checkpoints);
         succeeded.push(edit.path);
       } catch {
         failed.push(edit.path);
@@ -139,43 +155,89 @@ export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeS
     }
     return { succeeded, failed };
   }
+
+  private async compensate(root: string, edit: RepositoryFileEditPlan, checkpoints: ReadonlyMap<string, string>): Promise<void> {
+    if (edit.operation === "update") {
+      // Re-previewing forces the same containment, symlink, text, and current-hash checks as a forward edit.
+      const content = checkpointFor(edit, checkpoints);
+      const checkpoint = await this.fileEditor.preview(root, {
+        operation: "update", path: edit.path, content, expectedSha256: nonNull(edit.afterSha256),
+      });
+      await this.fileEditor.apply(checkpoint, { approved: true, planDigest: checkpoint.planDigest });
+      return;
+    }
+    if (edit.operation === "create") {
+      await removeCreatedFile(root, edit);
+      return;
+    }
+    if (edit.operation === "rename") {
+      // The inverse move runs through the editor, so the original path is re-validated
+      // and a file that reappeared there blocks the restore instead of being clobbered.
+      const back = await this.fileEditor.preview(root, {
+        operation: "rename", path: nonNull(edit.toPath), toPath: edit.path, expectedSha256: nonNull(edit.afterSha256),
+      });
+      await this.fileEditor.apply(back, { approved: true, planDigest: back.planDigest });
+      return;
+    }
+    // A delete is restored byte-for-byte rather than replayed as a create: a create
+    // normalizes newlines to the repository default, which would corrupt a CRLF file.
+    await restoreDeletedFile(root, edit, checkpointFor(edit, checkpoints));
+  }
 }
 
 function checkpointFor(edit: RepositoryFileEditPlan, checkpoints: ReadonlyMap<string, string>): string {
   const expectedHash = edit.beforeSha256;
-  if (expectedHash === null) throw changeSetError("ROLLBACK_FAILED", "An update checkpoint is unavailable.");
+  if (expectedHash === null) throw changeSetError("ROLLBACK_FAILED", "An edit checkpoint is unavailable.");
   const content = checkpoints.get(edit.planDigest);
-  if (content === undefined || hash(content) !== expectedHash) throw changeSetError("ROLLBACK_FAILED", "An update checkpoint is unavailable.");
+  if (content === undefined || hash(content) !== expectedHash) throw changeSetError("ROLLBACK_FAILED", "An edit checkpoint is unavailable.");
   return content;
 }
 
+function nonNull(value: string | null): string {
+  if (value === null) throw changeSetError("ROLLBACK_FAILED", "A rollback hash or path is missing from the plan.");
+  return value;
+}
+
 async function readCheckpoint(root: string, path: string, expectedHash: string | null): Promise<string> {
-  if (expectedHash === null) throw changeSetError("ROLLBACK_FAILED", "An update checkpoint is unavailable.");
-  const target = await containedRegularFile(root, path);
+  if (expectedHash === null) throw changeSetError("ROLLBACK_FAILED", "An edit checkpoint is unavailable.");
+  const target = await containedPath(root, path, "file");
   const bytes = await readFile(target);
-  if (bytes.includes(0)) throw changeSetError("ROLLBACK_FAILED", "Update checkpoint is not text.");
+  if (bytes.includes(0)) throw changeSetError("ROLLBACK_FAILED", "Edit checkpoint is not text.");
   let content: string;
   try { content = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
-  catch (error) { throw changeSetError("ROLLBACK_FAILED", "Update checkpoint is not valid UTF-8.", error); }
-  if (hash(content) !== expectedHash) throw changeSetError("ROLLBACK_FAILED", "Update checkpoint changed during preview.");
+  catch (error) { throw changeSetError("ROLLBACK_FAILED", "Edit checkpoint is not valid UTF-8.", error); }
+  if (hash(content) !== expectedHash) throw changeSetError("ROLLBACK_FAILED", "Edit checkpoint changed during preview.");
   return content;
 }
 
 async function removeCreatedFile(root: string, edit: RepositoryFileEditPlan): Promise<void> {
-  const canonicalRoot = await realpath(root);
-  if (canonicalRoot !== root || !(await stat(root)).isDirectory()) throw changeSetError("ROLLBACK_FAILED", "Repository root changed before rollback.");
+  await assertStableRoot(root);
   if (isAbsolute(edit.path)) throw changeSetError("ROLLBACK_FAILED", "Rollback path is invalid.");
-  const target = await containedRegularFile(root, edit.path);
-  const rel = relative(root, target);
-  if (rel === "") throw changeSetError("ROLLBACK_FAILED", "Rollback path is invalid.");
-  const info = await lstat(target);
-  if (info.isSymbolicLink() || !info.isFile()) throw changeSetError("ROLLBACK_FAILED", "Rollback target is unsafe.");
+  const target = await containedPath(root, edit.path, "file");
   const bytes = await readFile(target);
   if (hash(bytes) !== edit.afterSha256) throw changeSetError("ROLLBACK_FAILED", "Created file changed before rollback.");
   await rm(target, { force: false });
 }
 
-async function containedRegularFile(root: string, path: string): Promise<string> {
+async function restoreDeletedFile(root: string, edit: RepositoryFileEditPlan, content: string): Promise<void> {
+  await assertStableRoot(root);
+  const target = await containedPath(root, edit.path, "absent");
+  const temporary = resolve(dirname(target), `.atlas-rollback-${randomBytes(12).toString("hex")}.tmp`);
+  try {
+    await writeFile(temporary, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    await rename(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw changeSetError("ROLLBACK_FAILED", "Could not restore a deleted file.", error);
+  }
+}
+
+async function assertStableRoot(root: string): Promise<void> {
+  const canonical = await realpath(root);
+  if (canonical !== root || !(await stat(root)).isDirectory()) throw changeSetError("ROLLBACK_FAILED", "Repository root changed before rollback.");
+}
+
+async function containedPath(root: string, path: string, expect: "file" | "absent"): Promise<string> {
   if (isAbsolute(path)) throw changeSetError("ROLLBACK_FAILED", "Rollback path is invalid.");
   const target = resolve(root, path);
   const rel = relative(root, target);
@@ -185,6 +247,13 @@ async function containedRegularFile(root: string, path: string): Promise<string>
     cursor = resolve(cursor, segment);
     const info = await lstat(cursor);
     if (info.isSymbolicLink() || !info.isDirectory()) throw changeSetError("ROLLBACK_FAILED", "Rollback path is unsafe.");
+  }
+  if (expect === "absent") {
+    try { await lstat(target); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return target;
+      throw changeSetError("ROLLBACK_FAILED", "Could not inspect the rollback target.", error);
+    }
+    throw changeSetError("ROLLBACK_FAILED", "The rollback target reappeared.");
   }
   const info = await lstat(target);
   if (info.isSymbolicLink() || !info.isFile()) throw changeSetError("ROLLBACK_FAILED", "Rollback target is unsafe.");

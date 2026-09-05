@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const MERGE_POLICIES = ["manual", "ci-gated", "none"] as const;
 export type MergePolicy = (typeof MERGE_POLICIES)[number];
@@ -73,4 +73,40 @@ export const repositories = sqliteTable("repositories", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
   ownerNameIndex: uniqueIndex("repositories_owner_name_idx").on(table.owner, table.name),
+}));
+
+/**
+ * One row per task dispatched to GitHub Actions, written at dispatch time so
+ * the user can see what they started instead of having to dig through the
+ * Actions UI.
+ *
+ * Two identity columns, deliberately:
+ *   - `userId` is the D1 `users.id`, and is null for the operator-token and
+ *     platform-header auth paths, which have no user row at all.
+ *   - `requestedBy` is the stable principal string from `authenticatedAccount()`
+ *     ("github:<login>", "operator", or the platform user id). It is what task
+ *     listing filters on, because filtering on a nullable `userId` would put
+ *     every operator-token and every distinct ChatGPT-platform user into one
+ *     shared "null" bucket — and those are different customers, whose
+ *     objectives describe their source-code intent.
+ *
+ * `githubRunId` is nullable because `POST /actions/workflows/{id}/dispatches`
+ * returns 204 with no body: the run id does not exist yet at dispatch time and
+ * is resolved later, heuristically (see app/api/tasks/run-status.mjs).
+ */
+export const tasks = sqliteTable("tasks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  taskId: text("task_id").notNull(),
+  userId: integer("user_id").references(() => users.id),
+  requestedBy: text("requested_by").notNull(),
+  repository: text("repository").notNull(),
+  branch: text("branch").notNull(),
+  mode: text("mode").notNull(),
+  objective: text("objective").notNull(),
+  mergePolicy: text("merge_policy").notNull().default("manual"),
+  githubRunId: integer("github_run_id"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  taskIdIndex: uniqueIndex("tasks_task_id_idx").on(table.taskId),
+  requestedByIndex: index("tasks_requested_by_created_at_idx").on(table.requestedBy, table.createdAt),
 }));

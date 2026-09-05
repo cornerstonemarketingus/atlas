@@ -29,19 +29,19 @@ const metadata = {
 };
 fs.writeFileSync(path.join(outputDirectory, "task.json"), `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
 
-function writeStatus(status, message) {
+function writeStatus(status, message, extra = {}) {
   fs.writeFileSync(
     path.join(outputDirectory, "status.json"),
-    `${JSON.stringify({ schema_version: 1, status, message, task_id: metadata.task_id }, null, 2)}\n`,
+    `${JSON.stringify({ schema_version: 1, status, message, task_id: metadata.task_id, ...extra }, null, 2)}\n`,
     { mode: 0o600 },
   );
 }
 
-function runCommand(label, command, args, cwd) {
+function runCommand(label, command, args, cwd, timeoutMs = 180_000) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
-    timeout: 180_000,
+    timeout: timeoutMs,
     maxBuffer: MAX_FILE_BYTES,
     windowsHide: true,
   });
@@ -63,6 +63,51 @@ function writeJson(filename, value) {
     encoding: "utf8",
     mode: 0o600,
   });
+}
+
+/**
+ * Writes an artifact after scrubbing credentials out of it.
+ *
+ * Debug artifacts carry raw build and test output, and a failing test prints
+ * whatever it compared. These files are uploaded to the workflow run, so an
+ * unredacted one moves a credential out of a private repository and into an
+ * artifact with a different audience.
+ *
+ * Redaction runs through `atlas redact` rather than a detector written here.
+ * A second implementation in this file would drift from the one the agent
+ * uses and give two different answers to "is this safe to publish"; delegating
+ * means there is exactly one set of rules.
+ *
+ * Fails closed: if the CLI cannot redact, the artifact is NOT written. An
+ * unredacted debug artifact is worse than a missing one, and the step's own
+ * status already records what happened.
+ */
+function writeRedactedJson(filename, value) {
+  const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
+  const serialized = `${JSON.stringify(value, null, 2)}\n`;
+  const result = spawnSync(process.execPath, [cli, "redact", "--summary"], {
+    input: serialized,
+    encoding: "utf8",
+    timeout: 120_000,
+    maxBuffer: MAX_FILE_BYTES,
+    windowsHide: true,
+  });
+
+  if (result.error || result.status !== 0) {
+    console.error(`Refusing to write ${filename}: redaction failed (${result.stderr?.trim() || result.error?.message || `exit ${result.status}`}).`);
+    return false;
+  }
+  // Placeholders are plain text, so redacted JSON stays parseable — but this is
+  // an artifact other tools read, so it is verified rather than assumed.
+  try {
+    JSON.parse(result.stdout);
+  } catch (error) {
+    console.error(`Refusing to write ${filename}: redaction produced unparseable JSON (${error.message}).`);
+    return false;
+  }
+  if (result.stderr) console.error(`${filename} redaction: ${result.stderr.trim()}`);
+  fs.writeFileSync(path.join(outputDirectory, filename), result.stdout, { encoding: "utf8", mode: 0o600 });
+  return true;
 }
 
 if (metadata.mode === "inspect") {
@@ -114,29 +159,62 @@ if (metadata.mode === "inspect") {
       break;
     }
   }
-  writeJson("debug.json", { schema_version: 1, task_id: metadata.task_id, steps: results });
+  const debugWritten = writeRedactedJson("debug.json", { schema_version: 1, task_id: metadata.task_id, steps: results });
 
   if (failedAt) {
-    writeStatus("failed", `Debug run stopped at '${failedAt}'; see debug.json for captured output.`);
+    writeStatus("failed", debugWritten
+      ? `Debug run stopped at '${failedAt}'; see debug.json for captured output.`
+      : `Debug run stopped at '${failedAt}'. debug.json was withheld because its output could not be redacted.`);
     console.error(`Atlas debug run failed at step '${failedAt}'.`);
     process.exit(1);
   }
   writeStatus("completed", "Build and test succeeded on the requested branch.");
   console.log("Atlas debug run completed: build and test passed.");
 } else if (metadata.mode === "coder") {
-  if (!process.env.GROQ_API_KEY) {
-    writeStatus("failed", "GROQ_API_KEY is not configured; coder tasks cannot run.");
-    console.error("Atlas coder mode requires GROQ_API_KEY.");
+  // The vendor is an operator choice, not a hardcoded one. ATLAS_CODER_PROVIDER
+  // is validated here rather than passed through blindly so a typo fails with a
+  // clear status instead of a CLI usage error buried in a log, and so this
+  // never becomes a way to name an arbitrary environment variable to read.
+  const providerInput = (process.env.ATLAS_CODER_PROVIDER || "").trim().toLowerCase();
+  const PROVIDER_KEY_VARIABLES = { anthropic: "ANTHROPIC_API_KEY", groq: "GROQ_API_KEY" };
+  if (providerInput && !Object.hasOwn(PROVIDER_KEY_VARIABLES, providerInput)) {
+    const known = Object.keys(PROVIDER_KEY_VARIABLES).join(", ");
+    writeStatus("failed", `ATLAS_CODER_PROVIDER '${providerInput}' is not recognised; expected one of: ${known}.`);
+    console.error(`Atlas coder mode: unknown provider '${providerInput}'.`);
+    process.exit(2);
+  }
+  const model = process.env.ATLAS_CODER_MODEL || "openai/gpt-oss-120b";
+  // Match the CLI's own inference so the runner asks for the key the CLI will
+  // actually look up; naming the provider explicitly below keeps the two from
+  // drifting apart later.
+  const provider = providerInput || (/^(anthropic\/)?claude[-.]/i.test(model) ? "anthropic" : "groq");
+  const apiKeyVariable = PROVIDER_KEY_VARIABLES[provider];
+  if (!process.env[apiKeyVariable]) {
+    writeStatus("failed", `${apiKeyVariable} is not configured; coder tasks cannot run with provider '${provider}'.`);
+    console.error(`Atlas coder mode requires ${apiKeyVariable}.`);
     process.exit(2);
   }
   const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
-  const model = process.env.ATLAS_CODER_MODEL || "openai/gpt-oss-120b";
-  const result = runCommand(
-    "code",
-    process.execPath,
-    [cli, "code", repositoryRoot, metadata.objective, "--api-key-env", "GROQ_API_KEY", "--model", model, "--format", "json"],
-    process.cwd(),
-  );
+  // Verification runs the target repository's own build/test scripts, before
+  // and after the edit, plus any repair passes — so this needs far more than
+  // the flat 3 minutes a single model round trip needed.
+  const coderTimeoutMs = Number(process.env.ATLAS_CODER_TIMEOUT_MS) || 900_000;
+  const verifyDir = (process.env.ATLAS_VERIFY_DIR || "").trim();
+  const repairAttempts = (process.env.ATLAS_MAX_REPAIR_ATTEMPTS || "").trim();
+  const codeArgs = [
+    cli, "code", repositoryRoot, metadata.objective,
+    "--provider", provider,
+    "--api-key-env", apiKeyVariable,
+    "--model", model,
+    "--format", "json",
+  ];
+  // A durable, redacted record of what the agent did, uploaded with the run's
+  // other artifacts. Written by the CLI, so it goes through the same redactor
+  // as everything else the agent emits.
+  codeArgs.push("--audit-log", path.join(outputDirectory, "audit.jsonl"));
+  if (verifyDir) codeArgs.push("--verify-dir", verifyDir);
+  if (/^[0-5]$/.test(repairAttempts)) codeArgs.push("--max-repair-attempts", repairAttempts);
+  const result = runCommand("code", process.execPath, codeArgs, process.cwd(), coderTimeoutMs);
 
   // 'atlas code' exits 1 for every non-'completed' agent outcome (failed,
   // blocked, cancelled, approval-required), not just crashes — those still
@@ -167,8 +245,15 @@ if (metadata.mode === "inspect") {
     writeStatus("completed", "Coder agent finished without proposing any file changes.");
     console.log("Atlas coder run completed with no file changes.");
   } else {
-    writeStatus("completed", `Coder agent proposed ${parsed.edits.length} file change(s); opening a pull request next.`);
+    const verification = parsed.verification ?? null;
+    const verdict = verification ? ` Verification: ${verification.status} — ${verification.message}` : "";
+    writeStatus(
+      "completed",
+      `Coder agent proposed ${parsed.edits.length} file change(s); opening a pull request next.${verdict}`,
+      verification ? { verification } : {},
+    );
     console.log(`Atlas coder run completed: ${parsed.edits.length} file(s) changed.`);
+    if (verification) console.log(`Verification: ${verification.status} — ${verification.message}`);
   }
 } else {
   writeStatus("unsupported", `Mode '${metadata.mode}' is not enabled; no repository mutation was attempted.`);

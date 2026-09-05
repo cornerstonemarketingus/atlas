@@ -6,6 +6,7 @@ import {
   type SessionEventPayloadMap,
   type SessionEventType,
 } from "../domain/session-audit.js";
+import type { SecretRedactor } from "../domain/secret-redaction.js";
 
 const DEFAULT_MAX_EVENTS = 10_000;
 const DEFAULT_MAX_LINE_BYTES = 64 * 1024;
@@ -21,6 +22,18 @@ export interface JsonLinesSessionAuditStoreOptions {
   readonly createParentDirectories?: boolean;
   readonly truncatedTailPolicy?: TruncatedTailPolicy;
   readonly clock?: () => Date;
+  /**
+   * Optional: scrubs credentials from each event before it is written.
+   *
+   * Session events are metadata by design — counts, digests, durations — but
+   * four payload fields carry free text that quotes real content: the terminal
+   * `summary` (the model's own closing words), `ErrorRecordedPayload.summary`
+   * (an error message routinely quotes what caused it), and the `reason` on a
+   * policy decision or an approval. An audit trail is written precisely so it
+   * can be read later, by someone reconstructing a session, so a credential
+   * landing in one is durable and widely readable.
+   */
+  readonly redactor?: SecretRedactor;
 }
 
 export class SessionAuditStorageError extends Error {
@@ -51,6 +64,7 @@ export class JsonLinesSessionAuditStore {
   readonly #createParents: boolean;
   readonly #tailPolicy: TruncatedTailPolicy;
   readonly #clock: () => Date;
+  readonly #redactor: SecretRedactor | undefined;
   #events: SessionEvent[] | undefined;
   #ignoredTruncatedTail = false;
   #operation: Promise<void> = Promise.resolve();
@@ -64,15 +78,30 @@ export class JsonLinesSessionAuditStore {
     this.#createParents = options.createParentDirectories ?? true;
     this.#tailPolicy = options.truncatedTailPolicy ?? "reject";
     this.#clock = options.clock ?? (() => new Date());
+    this.#redactor = options.redactor;
   }
 
   public async load(): Promise<readonly SessionEvent[]> {
     return this.#serialize(async () => Object.freeze([...(await this.#loadUnlocked())]));
   }
 
+  /**
+   * Appends one event.
+   *
+   * `occurredAt` exists for persisting an event that has ALREADY happened —
+   * flushing a completed session's in-memory log to disk. Without it the store
+   * would stamp every event with the moment it was written, collapsing a whole
+   * session into one instant and destroying the ordering and durations that
+   * make a trace worth keeping. Live callers omit it and get the clock.
+   *
+   * The sequence number is always the store's own: the file is the authority
+   * for its own ordering, so events flushed into an existing log continue that
+   * log's numbering rather than replaying a foreign one.
+   */
   public async append<T extends SessionEventType>(
     type: T,
     payload: SessionEventPayloadMap[T],
+    occurredAt?: string,
   ): Promise<SessionEvent<T>> {
     return this.#serialize(async () => {
       const events = await this.#loadUnlocked();
@@ -85,12 +114,17 @@ export class JsonLinesSessionAuditStore {
       const event = {
         schemaVersion: SESSION_EVENT_SCHEMA_VERSION,
         sequence: events.length + 1,
-        occurredAt: this.#clock().toISOString(),
+        occurredAt: resolveOccurredAt(occurredAt, this.#clock),
         type,
         payload: structuredClone(payload),
       } as SessionEvent<T>;
       validateEvent(event, event.sequence);
-      const line = `${JSON.stringify(event)}\n`;
+      // Redacted after validation and before anything is written or cached, so
+      // the line on disk and the event handed back are the same bytes. The
+      // whole serialized event is scrubbed rather than a list of fields, so a
+      // payload field added later is covered without anyone remembering.
+      const stored = await this.#redact(event);
+      const line = `${JSON.stringify(stored)}\n`;
       const lineBytes = Buffer.byteLength(line);
       if (lineBytes > this.#maxLineBytes) {
         throw new SessionAuditStorageError("AUDIT_LINE_TOO_LARGE", `Serialized audit event exceeds ${this.#maxLineBytes} bytes.`);
@@ -102,10 +136,28 @@ export class JsonLinesSessionAuditStore {
       if (this.#createParents) await mkdir(dirname(this.filePath), { recursive: true });
       await this.#assertSafeTarget();
       await appendFile(this.filePath, line, { encoding: "utf8", flag: "a" });
-      const frozen = deepFreeze(event) as SessionEvent<T>;
+      const frozen = deepFreeze(stored) as SessionEvent<T>;
       events.push(frozen);
       return frozen;
     });
+  }
+
+  async #redact<T extends SessionEventType>(event: SessionEvent<T>): Promise<SessionEvent<T>> {
+    if (this.#redactor === undefined) return event;
+    const result = await this.#redactor.redact(JSON.stringify(event));
+    if (result.redactionCount === 0 && !result.truncated) return event;
+    try {
+      return JSON.parse(result.text) as SessionEvent<T>;
+    } catch (error) {
+      // An audit record is written to be read back and reasoned about. If a
+      // bounded scan dropped the tail and left the JSON unparseable, storing
+      // the fragment as an opaque string would quietly corrupt the trail;
+      // refusing to append says so instead.
+      throw new SessionAuditStorageError(
+        "AUDIT_INVALID_EVENT",
+        `Redaction produced an unparseable audit event: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
+    }
   }
 
   async #loadUnlocked(): Promise<SessionEvent[]> {
@@ -177,6 +229,20 @@ const payloadKeys: Record<SessionEventType, readonly string[]> = {
   "approval.recorded": ["approvalId", "toolCallId", "decision", "actorId", "reason"],
   "error.recorded": ["code", "summary", "recoverable", "relatedId"],
 };
+
+/**
+ * A supplied timestamp must be a real, parseable instant. A malformed one is
+ * rejected here rather than written, because validateEvent would reject it on
+ * the next read and make the whole file unloadable — one bad flush should not
+ * cost the entire audit trail.
+ */
+function resolveOccurredAt(supplied: string | undefined, clock: () => Date): string {
+  if (supplied === undefined) return clock().toISOString();
+  if (!Number.isFinite(Date.parse(supplied))) {
+    throw new SessionAuditStorageError("AUDIT_INVALID_EVENT", `Invalid occurredAt: ${supplied}`);
+  }
+  return supplied;
+}
 
 function validateEvent(value: unknown, expectedSequence: number, line?: number): asserts value is SessionEvent {
   if (!isRecord(value) || !hasExactKeys(value, ["schemaVersion", "sequence", "occurredAt", "type", "payload"]) || value["schemaVersion"] !== SESSION_EVENT_SCHEMA_VERSION || value["sequence"] !== expectedSequence || typeof value["occurredAt"] !== "string" || !Number.isFinite(Date.parse(value["occurredAt"])) || typeof value["type"] !== "string" || !(value["type"] in payloadKeys) || !isRecord(value["payload"])) {

@@ -29,7 +29,28 @@ measurable quality, and transparent cost control.
       `docs/hosted-approval-state-design.md`; persistence and enforcement remain
       to be implemented.
 - [ ] Isolate command execution from the Atlas control plane.
-- [ ] Redact secrets from prompts, logs, traces, diffs, and model requests.
+- [x] Redact secrets from prompts, logs, traces, diffs, and model requests.
+      Detection is pattern-based (`PatternSecretRedactor`), anchored on vendor
+      prefixes and credential-shaped assignment keys rather than entropy, and
+      applied at four boundaries: the read-only tool registry (repository
+      content and tool failure messages, which quote what caused them),
+      `RedactingModelProvider` (every outbound request — the system prompt, the
+      objective, repository evidence, tool results, and the validation output
+      fed back as repair feedback), the CLI's printed result (which becomes
+      result.json, the pull request body, and the Actions log), and
+      `JsonLinesSessionAuditStore` (the free-text fields of a persisted trace).
+      Every boundary fails closed: a redactor fault stops the operation rather
+      than falling back to raw text. Assistant tool-call arguments are
+      deliberately exempt — redacting them would write placeholders into the
+      customer's repository, and repository content is already scrubbed before
+      the model can copy it.
+      The debug artifact is covered too: `atlas redact` exposes the same
+      redactor as a subcommand, and scripts/runner/run-task.mjs pipes
+      debug.json through it before writing. That keeps one set of detection
+      rules rather than a second implementation in the runner that would drift.
+      It fails closed — if redaction cannot run, the artifact is withheld and
+      the task status says so, because an unredacted debug artifact is worse
+      than a missing one.
 - [ ] Maintain complete audit records for externally visible actions.
 - [ ] Validate every increment and distinguish pre-existing failures.
 - [ ] Never silently exceed user-defined token, money, time, or compute budgets.
@@ -151,7 +172,11 @@ measurable quality, and transparent cost control.
 - [ ] Detect interactive commands and request explicit handling.
 - [ ] Add sandbox adapters for local, container, VM, and hosted execution.
 - [ ] Add network-disabled and domain-allowlisted execution modes.
-- [ ] Detect secrets before command output enters model context.
+- [x] Detect secrets before command output enters model context.
+      Command output reaches the model as repair feedback (a failing test
+      prints what it compared), which never passes through the tool registry.
+      `RedactingModelProvider` covers it because it sits at the outbound
+      request boundary, where every path converges.
 - [ ] Classify destructive commands and require elevated approval.
 
 ### Validation tools
@@ -445,6 +470,15 @@ measurable quality, and transparent cost control.
       latency, cost, user intervention, and rollback rate.
 - [ ] Add model/provider/prompt/tool regression gates.
 - [ ] Add replayable traces with privacy-aware redaction.
+      Traces are now persisted and redacted: `atlas code --audit-log <path>`
+      flushes the session's events to a JSON-lines store, scrubbed by the same
+      redactor, with each event keeping its original timestamp so ordering and
+      durations survive. The coder workflow passes it, so every task uploads
+      one. Persistence never fails a run — a correct change is not undone by a
+      log that could not be written — and reports how many events landed.
+      STILL MISSING: replay itself. Reconstructing or re-executing a session
+      from its trace is not built; today the file is an audit record to read,
+      not something to replay.
 - [ ] Add structured logs, metrics, traces, alerts, and service-level objectives.
 - [ ] Add canary releases, feature flags, experiments, and automatic rollback.
 - [ ] Add user feedback tied to precise run artifacts.

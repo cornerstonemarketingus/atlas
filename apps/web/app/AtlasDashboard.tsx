@@ -9,6 +9,56 @@ const activity = [
 
 const TOKEN_STORAGE_KEY = "atlas-operator-token";
 const TIER_LABELS: Record<string, string> = { free: "Free", pro: "Pro", team: "Team" };
+const TASK_POLL_MS = 12_000;
+
+const STATUS_LABELS: Record<string, string> = {
+  dispatched: "Dispatched",
+  queued: "Queued",
+  running: "Running",
+  succeeded: "Succeeded",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  timed_out: "Timed out",
+  skipped: "Skipped",
+  action_required: "Action required",
+};
+// Borrowed from the .activity marks in globals.css so the palette stays one system.
+const STATUS_COLORS: Record<string, string> = {
+  succeeded: "#56670a",
+  failed: "#8f2f21",
+  timed_out: "#8f2f21",
+  cancelled: "#686b63",
+  skipped: "#686b63",
+  action_required: "#8d5b00",
+  running: "#8d5b00",
+  queued: "#8d5b00",
+  dispatched: "#686b63",
+};
+
+type TaskRecord = {
+  taskId: string;
+  repository: string;
+  branch: string;
+  mode: string;
+  objective: string;
+  mergePolicy: string;
+  createdAt: string;
+  status: string;
+  run: { id: number; url: string | null; status: string | null; conclusion: string | null } | null;
+  pullRequest: { number: number; url: string | null; state: string | null; merged: boolean } | null;
+};
+
+type TaskList = { tasks: TaskRecord[]; historyAvailable: boolean; liveStatus: boolean };
+
+function relativeTime(value: string): string {
+  const parsed = Date.parse(/^\d{4}-\d{2}-\d{2} /.test(value) ? `${value.replace(" ", "T")}Z` : value);
+  if (Number.isNaN(parsed)) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - parsed) / 1000));
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
 
 type AccountInfo = {
   signedIn: boolean;
@@ -42,7 +92,14 @@ export function AtlasDashboard() {
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [billingNotice, setBillingNotice] = useState("");
   const [billingBusy, setBillingBusy] = useState(false);
+  const [taskList, setTaskList] = useState<TaskList | null>(null);
 
+  // Seeded in an effect, not a lazy useState initializer, because
+  // localStorage does not exist during the server render: initializing from
+  // it would make the client's first render disagree with the server's HTML
+  // and trip a hydration mismatch. Reading a client-only value after mount is
+  // the intended pattern, and the one cascading render it costs happens once.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe read of a client-only value
   useEffect(() => { setToken(storedToken()); }, []);
   function authHeaders(): Record<string, string> {
     return token ? { authorization: `Bearer ${token}` } : {};
@@ -100,6 +157,21 @@ export function AtlasDashboard() {
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signedIn, repository]);
+  function refreshTasks() {
+    return fetch("/api/tasks", { headers: authHeaders() })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((value) => { if (value) setTaskList(value as TaskList); })
+      .catch(() => undefined);
+  }
+  // Status is pulled from GitHub rather than pushed by the runner (see
+  // app/api/tasks/github-runs.mjs), so the list is only as fresh as this poll.
+  useEffect(() => {
+    if (!signedIn) return;
+    void refreshTasks();
+    const timer = setInterval(() => { void refreshTasks(); }, TASK_POLL_MS);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedIn, token]);
   async function saveMergePolicy(nextPolicy: string) {
     const [owner, name] = repository.split("/");
     if (!owner || !name) { setMergePolicyNotice("Enter a repository as owner/name first."); return; }
@@ -146,7 +218,7 @@ export function AtlasDashboard() {
       const response = await fetch("/api/tasks", { method: "POST", headers: { "content-type": "application/json", ...authHeaders() }, body: JSON.stringify({ repository, branch, mode, objective }) });
       const result = (await response.json()) as { message?: string; taskId?: string };
       setNotice(response.ok ? `Task ${result.taskId ?? "queued"} was sent to GitHub Actions.` : result.message ?? "Task dispatch is not configured yet.");
-      if (response.ok) { setObjective(""); void refreshAccount(); }
+      if (response.ok) { setObjective(""); void refreshAccount(); void refreshTasks(); }
     } catch { setNotice("The task dispatcher is temporarily unavailable."); }
     finally { setSubmitting(false); }
   }
@@ -246,6 +318,44 @@ export function AtlasDashboard() {
           {billingNotice && <p className="notice basis-full">{billingNotice}</p>}
         </div>
       )}
+      <div className="mt-10 max-w-[880px]">
+        <div className="flex items-baseline justify-between gap-4 border-b border-[var(--line)] pb-3">
+          <h2 className="m-0 text-lg font-bold tracking-tight">Recent tasks</h2>
+          <span className="font-mono text-[10px] uppercase tracking-[.09em] text-[var(--muted)]">
+            {taskList && !taskList.liveStatus ? "GitHub status unavailable" : "Live from GitHub Actions"}
+          </span>
+        </div>
+        {taskList === null && <p className="notice">Checking your tasks…</p>}
+        {taskList !== null && !taskList.historyAvailable && (
+          <p className="notice">Task history is unavailable — tasks still dispatch, but nothing is being recorded. Run the D1 migration to turn it on.</p>
+        )}
+        {taskList !== null && taskList.historyAvailable && taskList.tasks.length === 0 && (
+          <p className="notice">No tasks yet. Start one above and it will show up here with its run status.</p>
+        )}
+        <ul className="m-0 list-none p-0">
+          {(taskList?.tasks ?? []).map((item) => (
+            <li key={item.taskId} className="flex flex-col gap-2 border-b border-[var(--line)] py-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="border border-[var(--line)] px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[.09em]">{item.mode}</span>
+                <span className="border px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[.09em]" style={{ color: STATUS_COLORS[item.status] ?? "var(--muted)", borderColor: "currentColor" }}>
+                  {STATUS_LABELS[item.status] ?? item.status}
+                </span>
+                <span className="ml-auto font-mono text-[10px] uppercase tracking-[.09em] text-[var(--muted)]">{relativeTime(item.createdAt)}</span>
+              </div>
+              <p className="m-0 text-base leading-snug">{item.objective}</p>
+              <div className="flex flex-wrap items-center gap-4 font-mono text-[11px] text-[var(--muted)]">
+                <span>{item.repository} · {item.branch}</span>
+                {item.run?.url && <a href={item.run.url} target="_blank" rel="noreferrer" className="text-[var(--ink)] underline underline-offset-4">Actions run ↗</a>}
+                {item.pullRequest?.url && (
+                  <a href={item.pullRequest.url} target="_blank" rel="noreferrer" className="text-[var(--ink)] underline underline-offset-4">
+                    {item.pullRequest.merged ? `Pull request #${item.pullRequest.number} · merged` : `Pull request #${item.pullRequest.number}`} ↗
+                  </a>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
     </section>
     <section className="metrics"><article><strong>149</strong><span>VALIDATION CHECKS</span></article><article><strong>05</strong><span>READ-ONLY TOOLS</span></article><article><strong>00</strong><span>UNREVIEWED COMMITS</span></article><article><strong>LOCAL</strong><span>DEFAULT MODEL ROUTE</span></article></section>
     <section className="split" id="mission"><div><div className="eyebrow"><span>02</span> Operating model</div><h2>Autonomy with<br />hard boundaries.</h2></div><div className="principles"><article><b>01</b><div><h3>Understand first</h3><p>Deterministic repository maps, symbols, references, manifests, and source evidence.</p></div></article><article><b>02</b><div><h3>Preview every mutation</h3><p>Exact diffs, scoped capabilities, expiring approvals, and optimistic concurrency.</p></div></article><article><b>03</b><div><h3>Prove the result</h3><p>Baseline-aware builds and tests distinguish new failures from existing conditions.</p></div></article></div></section>

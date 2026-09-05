@@ -1,11 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { repositories } from "../../../db/schema";
+import { repositories, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
+import {
+  fetchGitHubJson,
+  normalizePullRequest,
+  normalizeRun,
+  pullRequestForBranchRequest,
+  workflowRunRequest,
+  workflowRunsRequest,
+} from "./github-runs.mjs";
 import { authenticatedAccount } from "./operator-auth.mjs";
+import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun, visibleTasks } from "./run-status.mjs";
 
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
@@ -53,7 +62,8 @@ export async function POST(request: Request) {
       const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
       const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy });
       if (!response.ok) return Response.json({ message: "GitHub Actions rejected the task dispatch." }, { status: 502 });
-      return Response.json({ taskId, status: "dispatched", runner: "github-actions" }, { status: 202 });
+      const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy);
+      return Response.json({ taskId, status: "dispatched", runner: "github-actions", recorded }, { status: 202 });
     } catch {
       return Response.json({ message: "GitHub Actions is temporarily unavailable." }, { status: 502 });
     }
@@ -64,8 +74,216 @@ export async function POST(request: Request) {
   try {
     const response = await fetch(endpoint, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ taskId, ...task, requestedBy: account.userId, commitMode: "approval-required" }) });
     if (!response.ok) return Response.json({ message: "The autonomous task dispatcher rejected the task." }, { status: 502 });
+    // Not recorded on purpose: the custom dispatcher produces no GitHub Actions
+    // run, so a row for it could only ever be matched against — and could steal
+    // the run id of — a real Actions dispatch of the same workflow. Custom-runner
+    // deployments get no task history until they report runs of their own.
     return Response.json({ taskId, status: "dispatched", runner: "custom" }, { status: 202 });
   } catch {
     return Response.json({ message: "The autonomous task dispatcher is temporarily unavailable." }, { status: 502 });
   }
+}
+
+/**
+ * Best-effort by design. GitHub has already accepted the dispatch and the user
+ * has already been charged a task against their plan by this point, so a D1
+ * problem must degrade to "dispatched, but not recorded" rather than reporting
+ * failure for a task that is genuinely running. Same posture as the
+ * merge-policy lookup above.
+ */
+async function recordDispatchedTask(
+  account: { userId: string; dbUserId: number | null },
+  task: { repository: string; branch: string; mode: string; objective: string },
+  taskId: string,
+  mergePolicy: string,
+): Promise<boolean> {
+  try {
+    await getDb().insert(tasks).values({
+      taskId,
+      userId: account.dbUserId,
+      requestedBy: account.userId,
+      repository: task.repository,
+      branch: task.branch,
+      mode: task.mode,
+      objective: task.objective,
+      mergePolicy,
+      // Written explicitly rather than left to CURRENT_TIMESTAMP so the run-id
+      // heuristic has an unambiguous, zone-marked dispatch time to match on.
+      createdAt: new Date().toISOString(),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const TASK_PAGE_SIZE = 10;
+const MAX_RUN_LISTINGS = 4;
+const MAX_RUN_LOOKUPS = 10;
+const MAX_PULL_REQUEST_LOOKUPS = 5;
+
+type TaskRow = typeof tasks.$inferSelect;
+type Run = NonNullable<ReturnType<typeof normalizeRun>>;
+type PullRequest = NonNullable<ReturnType<typeof normalizePullRequest>>;
+
+/**
+ * Lists the caller's recent tasks and enriches them with live GitHub Actions
+ * state.
+ *
+ * TENANT ISOLATION. Rows are filtered on `tasks.requested_by`, which is the
+ * principal string `authenticatedAccount()` returns, NOT on the nullable
+ * `users.id`. That matters specifically for the two auth paths where
+ * `dbUserId === null`:
+ *   - the platform header (`oai-authenticated-user-id`) identifies a distinct
+ *     ChatGPT user per request — these are separate customers, and bucketing
+ *     them by a null `userId` would show each of them all the others' task
+ *     objectives, which describe their source-code intent;
+ *   - the operator token is a single deployment-wide credential, so every
+ *     holder of it is the same principal ("operator") and sees only tasks
+ *     dispatched with that token.
+ * A GitHub-session user is "github:<login>". No principal string can collide
+ * across the three paths (the platform id would have to literally equal
+ * "operator" or start with "github:"), so a user only ever sees their own rows.
+ */
+export async function GET(request: Request) {
+  const account = await authenticatedAccount(request);
+  if (!account) return Response.json({ message: "Sign in is required to view your tasks." }, { status: 401 });
+
+  let rows: TaskRow[];
+  try {
+    const selected: TaskRow[] = await getDb()
+      .select()
+      .from(tasks)
+      .where(eq(tasks.requestedBy, account.userId))
+      .orderBy(desc(tasks.createdAt), desc(tasks.id))
+      .limit(TASK_PAGE_SIZE);
+    rows = visibleTasks(selected, account);
+  } catch {
+    // Mirrors the dispatch path: a D1 problem degrades the feature instead of
+    // erroring the page. The task list is informational; nothing depends on it.
+    return Response.json({ tasks: [], historyAvailable: false, liveStatus: false });
+  }
+  if (rows.length === 0) return Response.json({ tasks: [], historyAvailable: true, liveStatus: true });
+
+  const token = await readToken();
+  if (!token) return Response.json({ tasks: rows.map((row) => taskView(row, null, null, null)), historyAvailable: true, liveStatus: false });
+
+  const workflowOf = (row: TaskRow) =>
+    workflowForMode(row.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
+
+  const runsById = new Map<number, Run>();
+  const resolvedRunIds = new Map<string, number>();
+
+  // Only tasks that still have no run id need the (fuzzy) listing pass; once a
+  // task owns a run id it is never re-derived.
+  const groups = new Map<string, { repository: string; workflow: string }>();
+  for (const row of rows) {
+    if (row.githubRunId !== null) continue;
+    const workflow = workflowOf(row);
+    // JSON rather than a delimiter string: a repository is "owner/name" and a
+    // workflow is a filename, so no single separator character is obviously
+    // safe, and the NUL that would be is enough to make git treat this whole
+    // file as binary and every future diff of it unreviewable.
+    groups.set(JSON.stringify([row.repository, workflow]), { repository: row.repository, workflow });
+  }
+
+  await Promise.all(
+    [...groups.values()].slice(0, MAX_RUN_LISTINGS).map(async (group) => {
+      let payload: unknown = null;
+      try {
+        payload = await fetchGitHubJson(workflowRunsRequest({ token, repository: group.repository, workflow: group.workflow }));
+      } catch { return; }
+      const listed = (payload as { workflow_runs?: unknown[] } | null)?.workflow_runs;
+      const runs = (Array.isArray(listed) ? listed.map(normalizeRun) : []).filter((run): run is Run => run !== null);
+      for (const run of runs) runsById.set(run.id, run);
+
+      const groupRows = rows.filter((row) => row.repository === group.repository && workflowOf(row) === group.workflow);
+      const assignments = assignRunsToTasks(
+        // Resolved rows are included so their run ids are excluded from the
+        // candidate pool — two tasks must never claim the same run.
+        groupRows.map((row) => ({ taskId: row.taskId, createdAt: row.createdAt, workflow: group.workflow, githubRunId: row.githubRunId })),
+        runs.map((run) => ({ ...run, workflow: group.workflow })),
+      );
+      for (const assignment of assignments) resolvedRunIds.set(assignment.taskId, assignment.runId);
+    }),
+  );
+
+  if (resolvedRunIds.size > 0) {
+    try {
+      const db = getDb();
+      await Promise.all(
+        [...resolvedRunIds].map(([taskId, runId]) =>
+          db.update(tasks).set({ githubRunId: runId }).where(and(eq(tasks.taskId, taskId), eq(tasks.requestedBy, account.userId))),
+        ),
+      );
+    } catch {
+      // Best effort: the id will simply be re-derived on the next poll.
+    }
+  }
+
+  const runIdFor = (row: TaskRow) => row.githubRunId ?? resolvedRunIds.get(row.taskId) ?? null;
+
+  // Tasks older than the listing window still need their final status.
+  const missing = rows
+    .map((row) => ({ repository: row.repository, runId: runIdFor(row) }))
+    .filter((entry): entry is { repository: string; runId: number } => entry.runId !== null && !runsById.has(entry.runId))
+    .slice(0, MAX_RUN_LOOKUPS);
+  await Promise.all(
+    missing.map(async (entry) => {
+      try {
+        const run = normalizeRun(await fetchGitHubJson(workflowRunRequest({ token, repository: entry.repository, runId: entry.runId })));
+        if (run) runsById.set(run.id, run);
+      } catch { /* leaves the task at its last known status */ }
+    }),
+  );
+
+  const pullRequests = new Map<string, PullRequest>();
+  await Promise.all(
+    rows
+      .filter((row) => row.mode === "coder" && runIdFor(row) !== null)
+      .slice(0, MAX_PULL_REQUEST_LOOKUPS)
+      .map(async (row) => {
+        try {
+          const payload = await fetchGitHubJson(
+            pullRequestForBranchRequest({ token, repository: row.repository, branch: coderBranchForTask(row.taskId) }),
+          );
+          const pullRequest = Array.isArray(payload) ? normalizePullRequest(payload[0]) : null;
+          if (pullRequest) pullRequests.set(row.taskId, pullRequest);
+        } catch { /* degrades to no pull-request link */ }
+      }),
+  );
+
+  return Response.json({
+    tasks: rows.map((row) => {
+      const runId = runIdFor(row);
+      return taskView(row, runId, runId === null ? null : runsById.get(runId) ?? null, pullRequests.get(row.taskId) ?? null);
+    }),
+    historyAvailable: true,
+    liveStatus: true,
+  });
+}
+
+async function readToken(): Promise<string | undefined> {
+  try {
+    const githubApp = githubAppConfiguration();
+    if (githubApp.configured) return await createInstallationToken(githubApp);
+  } catch {
+    // Falls through to the personal token, then to no live status at all.
+  }
+  return process.env.ATLAS_GITHUB_TOKEN;
+}
+
+function taskView(row: TaskRow, runId: number | null, run: Run | null, pullRequest: PullRequest | null) {
+  return {
+    taskId: row.taskId,
+    repository: row.repository,
+    branch: row.branch,
+    mode: row.mode,
+    objective: row.objective,
+    mergePolicy: row.mergePolicy,
+    createdAt: row.createdAt,
+    status: taskStatusFromRun(run),
+    run: runId === null ? null : { id: runId, url: run?.htmlUrl ?? runUrl(row.repository, runId), status: run?.status ?? null, conclusion: run?.conclusion ?? null },
+    pullRequest,
+  };
 }

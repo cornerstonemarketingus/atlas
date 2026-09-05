@@ -1,4 +1,10 @@
 name: Atlas Coder
+# Carries the dispatched task id into the run's own name. The dispatch API
+# returns 204 with no body, and the runs list API exposes neither a run's
+# inputs nor a task id — so without this the web app can only guess which
+# run belongs to which task, by workflow and creation time. This turns that
+# guess into an exact match (see apps/web/app/api/tasks/run-status.mjs).
+run-name: ${{ github.workflow }} · task ${{ inputs.task_id }}
 
 on:
   workflow_dispatch:
@@ -102,8 +108,19 @@ jobs:
 
       - name: Run Atlas task
         env:
+          # Both vendor keys are exposed; the runner reads only the one the
+          # selected provider needs, and an unset key for the *other* vendor is
+          # not an error. Set ATLAS_CODER_PROVIDER to pick explicitly, or leave
+          # it empty and let a claude-* ATLAS_CODER_MODEL select Anthropic.
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ATLAS_CODER_PROVIDER: ${{ vars.ATLAS_CODER_PROVIDER }}
           ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
+          # Self-verification: which directory declares the scripts to run
+          # (a monorepo usually declares none at its root), and how many
+          # repair passes the agent gets when it breaks something.
+          ATLAS_VERIFY_DIR: ${{ vars.ATLAS_VERIFY_DIR }}
+          ATLAS_MAX_REPAIR_ATTEMPTS: ${{ vars.ATLAS_MAX_REPAIR_ATTEMPTS }}
         run: node scripts/runner/run-task.mjs
 
       - name: Open pull request for coder changes

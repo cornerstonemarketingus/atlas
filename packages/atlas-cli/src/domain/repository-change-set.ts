@@ -5,7 +5,15 @@ import type {
   RepositoryFileEditResult,
 } from "./repository-file-edit.js";
 
-/** A deliberately small transaction: only create and update edits are supported. */
+/**
+ * An ordered, compensating transaction over single-file edits. It now spans all
+ * four edit operations — create, update, delete, and rename — because a real
+ * refactor moves and removes files, and splitting that across independent
+ * single-file writes leaves the working tree half-edited when one write fails.
+ * It is still not a general filesystem transaction: directories are never
+ * created or removed, and compensation is best-effort replay of the inverse
+ * edit rather than a journalled rollback.
+ */
 export interface RepositoryChangeSetPlan {
   readonly schemaVersion: 1;
   readonly root: string;
@@ -40,6 +48,7 @@ export interface RepositoryChangeSetEditor {
 export type RepositoryChangeSetErrorCode =
   | "EMPTY_CHANGE_SET"
   | "DUPLICATE_PATH"
+  | "CHANGE_SET_TOO_LARGE"
   | "ROOT_MISMATCH"
   | "APPROVAL_MISMATCH"
   | "INVALID_PLAN"

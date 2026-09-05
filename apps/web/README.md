@@ -286,21 +286,153 @@ Reads the repository with the same tools `inspect` uses, proposes file edits
 through a digest-bound safe editor (`packages/atlas-cli`'s
 `SafeRepositoryFileEditor`), and opens a pull request summarizing what
 changed. Whether it goes on to merge that PR itself is entirely the
-repository's merge-policy setting above. Needs one more repository secret:
+repository's merge-policy setting above.
+
+#### Multi-file and atomic changes
+
+The agent has two write tools. `repository.propose_file_edit` replaces one
+file's entire contents. `repository.propose_change_set` applies a batch of
+creates, updates, deletes, and renames as a single transaction — every edit
+lands, or none does — and is the only way the agent can delete or move a file.
+
+That matters for changes that are only correct as a whole: extracting a module,
+renaming a symbol across its call sites, splitting a file. A half-applied
+refactor leaves the repository broken in a way the agent then has to notice and
+undo, so the batch compensates in reverse order from checkpoints captured
+before anything is written. Deletes are restored byte-for-byte rather than
+replayed as creates, because a create normalizes line endings and would
+silently rewrite every line of a CRLF file.
+
+Both tools go through the same containment, symlink, and digest checks; the
+change set adds bounds of its own (at most 25 edits per call, and no path
+touched twice in one batch, a rename's destination included). Directories are
+never created or removed — implicit directory removal is where a transactional
+editor starts destroying things outside its own change set.
+
+#### Choosing a model provider
+
+Two vendors are supported, and you only need a key for the one you use:
 
 - `GROQ_API_KEY` — an API key from [console.groq.com](https://console.groq.com/keys).
-  Without it, coder tasks fail immediately with a clear message rather than
-  silently doing nothing.
+- `ANTHROPIC_API_KEY` — an API key from
+  [console.anthropic.com](https://console.anthropic.com/settings/keys).
 
-Optionally set the `ATLAS_CODER_MODEL` repository **variable** (Settings →
-Secrets and variables → Actions → Variables tab, not Secrets) to pick a
-different Groq-hosted model; defaults to `openai/gpt-oss-120b`.
+Without the key the selected provider needs, coder tasks fail immediately with
+a message naming the missing variable, rather than silently doing nothing. A
+key for the *other* vendor being unset is not an error.
 
-Requests to Groq are capped at 4,096 output tokens per model turn (not the
-whole session budget at once) and automatically retry a transient rate limit
-or server error up to twice, honoring Groq's suggested wait when it names
-one — a free-tier tokens-per-minute limit surfaces as a normal, self-healing
+Set the `ATLAS_CODER_MODEL` repository **variable** (Settings → Secrets and
+variables → Actions → Variables tab, not Secrets) to pick the model; it
+defaults to `openai/gpt-oss-120b` on Groq. The provider is inferred from the
+model name — a `claude-*` model routes to Anthropic, anything else to Groq —
+so `claude-sonnet-5` is all you need to change to switch vendors. Set
+`ATLAS_CODER_PROVIDER` to `anthropic` or `groq` to override that inference;
+an unrecognised value fails the task with a clear message instead of guessing.
+
+Per-turn output is capped independently of the whole session budget: 4,096
+tokens on Groq, 8,192 on Anthropic. The Groq figure is deliberately low
+because Groq rejects a request outright (HTTP 413) once prompt tokens plus
+`max_tokens` exceed its tokens-per-minute limit, which can be as low as
+~10,000 on shared tiers. Either provider automatically retries a transient
+rate limit or server error up to twice, honoring a suggested wait when the
+vendor names one — a free-tier rate limit surfaces as a normal, self-healing
 retry rather than an immediate task failure.
+
+#### Secret redaction
+
+Atlas detects AWS keys, GitHub tokens, Groq/OpenAI/Anthropic/Stripe/Slack/Google
+keys, PEM private keys, JWTs, URL-inline credentials, and env-style credential
+assignments. Each hit becomes a stable, non-reversible placeholder
+(`[redacted:github-token:a1b2c3d4]`) derived from a salted SHA-256 prefix, so
+the model can still tell that two files hold the same value without being able
+to recover it.
+
+Scrubbing happens at four boundaries, because no single one sees everything:
+
+| Boundary | What it catches |
+|---|---|
+| Read-only tool registry | Repository content and diffs on the way to the model — and tool *failure* messages, which routinely quote what caused them (`unexpected token in AKIA…`) |
+| Outbound model request | The system prompt, the objective, repository evidence, tool results, and validation output fed back as repair feedback |
+| Printed CLI result | `result.json`, and therefore the pull request body and the Actions log |
+| Persisted audit trace | The free-text fields of a session event — a summary, an error, a policy or approval reason |
+
+The model-request boundary is the one that matters most and is easiest to
+overlook: when a test fails, the agent is shown what the test compared
+(`expected "sk-live-…" to equal …`). That output never passes through the tool
+registry, so a tool-only defence would miss it entirely.
+
+Every boundary **fails closed** — if redaction cannot be performed, the
+operation stops rather than falling back to raw text, so an internal fault
+never becomes a silent disclosure.
+
+One deliberate exemption: the arguments of a tool call the model makes are
+never rewritten. Those carry the file content the agent asked to write, and a
+placeholder substituted there would be written into your repository verbatim,
+or read back on a later turn and "restored" over the real content — data
+corruption rather than leak prevention. Nothing is lost by it: repository
+content is already scrubbed on the way in, so anything the model copies from a
+file is a placeholder before it can reach an argument.
+
+Detection is anchored on vendor prefixes and credential-shaped assignment keys
+rather than entropy. An entropy heuristic redacts git SHAs, UUIDs, and lockfile
+integrity hashes, destroying the model's ability to reason about the
+repository. The trade-off is real: **a credential in an unrecognised format
+passes through.** This is a strong last line of defence, not a substitute for
+keeping credentials out of the repository.
+
+Every coder task also uploads `audit.jsonl` — a redacted, append-only record of
+what the agent did: which model it called, which tools it ran, what the policy
+decided, and how the session ended. Each event keeps its real timestamp, so
+ordering and durations survive. It records counts and digests rather than
+content, and the same redactor scrubs the few free-text fields that quote
+anything. Writing it never fails a task: a correct change is not undone by a log
+that could not be written.
+
+Debug artifacts are covered as well. `atlas debug` captures raw build and test
+output, which is uploaded as a workflow artifact — so the runner pipes it
+through `atlas redact`, the same redactor exposed as a subcommand, before
+writing `debug.json`. If redaction cannot run, the artifact is withheld rather
+than written unredacted, and the task status says why.
+
+### Self-verification
+
+Coder mode does not just write code and hope. It runs the repository's own
+checks, and every pull request it opens says plainly whether the change was
+verified:
+
+1. Before touching anything it captures a **baseline** by running the
+   build/test/typecheck/lint scripts declared in the target's `package.json`.
+2. The agent makes its edits.
+3. It re-runs the same checks and **diffs the two snapshots**, which
+   separates failures the change actually introduced from failures that were
+   already there. A repository whose suite is already red is neither blamed
+   on the agent nor silently "fixed" beyond the objective.
+4. If the change introduced failures, only those are fed back to the model
+   for a bounded **repair pass** (2 by default), then the checks run again.
+5. The verdict — `verified`, `regressed`, `inconclusive`, `unverified`, or
+   `not-applicable` — is written into the PR body and `status.json`.
+
+Two safety properties are deliberate. Atlas only ever executes the package
+manager with a validated script *name* (`npm run test`); a detected script's
+*body* is never parsed or handed to a shell by Atlas, so a hostile
+`package.json` cannot turn verification into arbitrary command execution.
+And the validation subprocess inherits an explicit environment allowlist —
+never `GROQ_API_KEY`, `ATLAS_GITHUB_TOKEN`, or the operator token — so "run
+the tests" cannot become credential exfiltration.
+
+A `regressed` verdict **blocks auto-merge even under the `none` policy**:
+"don't wait for CI" is not the same as "merge a change Atlas already measured
+as broken". Weaker verdicts (`unverified`, `inconclusive`) do not override
+the policy, because absence of evidence is the bar the operator already chose.
+
+Two optional repository **variables** tune this:
+
+- `ATLAS_VERIFY_DIR` — a relative path to the directory whose `package.json`
+  declares the checks. Needed for a monorepo: this repository declares no
+  scripts at its root, so verification correctly reports `unverified` unless
+  pointed at, for example, `packages/atlas-cli`.
+- `ATLAS_MAX_REPAIR_ATTEMPTS` — `0`–`5`, default `2`. `0` disables repair
+  while still reporting the verdict.
 
 When no GitHub token is configured, Atlas falls back to the existing
 `ATLAS_AGENT_DISPATCH_URL` and `ATLAS_AGENT_DISPATCH_TOKEN` runner settings.

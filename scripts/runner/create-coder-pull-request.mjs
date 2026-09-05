@@ -68,7 +68,42 @@ run("git add", "git", ["add", "-A"]);
 const summary = (code.summary ?? "Atlas coder task").trim();
 const title = `Atlas: ${summary.split("\n")[0].slice(0, 72)}`;
 const editList = code.edits.map((edit) => `- ${edit.operation} \`${edit.path}\``).join("\n");
-const body = [summary, "", "## Files changed", editList, "", "_Opened automatically by Atlas. Nothing here has been merged — review before merging._"].join("\n");
+
+// Every Atlas pull request states plainly whether the change was actually
+// checked against the repository's own build/test commands, and says
+// "not verified" rather than staying silent when it wasn't.
+const verification = code.verification ?? null;
+const VERDICT_HEADLINE = {
+  verified: "✅ Verified — the repository's own checks pass, and this change introduced no new failures.",
+  regressed: "❌ Regressed — this change introduced validation failures that Atlas could not repair.",
+  inconclusive: "⚠️ Inconclusive — the checks could not be compared reliably.",
+  unverified: "⚠️ Not verified — Atlas could not run this repository's checks.",
+  "not-applicable": "ℹ️ Not applicable — there was nothing to verify.",
+};
+const verificationSection = verification
+  ? [
+      "",
+      "## Validation",
+      VERDICT_HEADLINE[verification.status] ?? `Verification status: ${verification.status}`,
+      "",
+      verification.message,
+      ...(verification.checks?.length ? ["", `Checks run: ${verification.checks.map((check) => `\`${check}\``).join(", ")}`] : []),
+      ...(verification.attempts > 1 ? [`Repair passes: ${verification.attempts - 1}`] : []),
+      ...(verification.newFailures?.length
+        ? ["", "Failures introduced by this change:", ...verification.newFailures.slice(0, 10).map((failure) => `- ${failure}`)]
+        : []),
+    ]
+  : ["", "## Validation", "⚠️ Not verified — this run predates validation reporting."];
+
+const body = [
+  summary,
+  "",
+  "## Files changed",
+  editList,
+  ...verificationSection,
+  "",
+  "_Opened automatically by Atlas._",
+].join("\n");
 
 run("git commit", "git", ["commit", "-m", title, "-m", summary]);
 
@@ -142,12 +177,23 @@ async function waitForCiOutcome(headSha) {
   }
 }
 
-if (mergePolicy === "none") {
+// A regressed verification means Atlas *knows* this change broke checks that
+// passed before it. "none" means "don't wait for CI" — it does not mean
+// "merge code we already measured as broken", so a regression overrides the
+// policy in the safe direction. Weaker signals (unverified, inconclusive) do
+// NOT override it: absence of evidence is the bar the operator already chose
+// when they selected their policy, and silently overriding that would make
+// the setting untrustworthy.
+if (verification?.status === "regressed" && mergePolicy !== "manual") {
+  const message = `Opened a pull request but did NOT auto-merge it despite the '${mergePolicy}' policy: verification found ${verification.newFailures?.length ?? 0} failure(s) this change introduced. ${verification.message}`;
+  writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: false, verification });
+  console.log(message);
+} else if (mergePolicy === "none") {
   const result = await mergePullRequest(pullRequest.number);
   const message = result.merged
     ? "Opened and auto-merged the pull request (merge policy: none)."
     : `Opened the pull request, but the immediate auto-merge failed: ${result.detail || "no reason given"}. Left open for review.`;
-  writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: result.merged });
+  writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: result.merged, ...(verification ? { verification } : {}) });
   console.log(message);
 } else if (mergePolicy === "ci-gated") {
   console.log("Merge policy is ci-gated — waiting for checks on the pull request's head commit...");
@@ -165,5 +211,5 @@ if (mergePolicy === "none") {
     console.log(message);
   }
 } else {
-  writeStatus("completed", "Opened a pull request for review. Nothing has been merged.", { pull_request_url: pullRequest.html_url ?? null, merged: false });
+  writeStatus("completed", "Opened a pull request for review. Nothing has been merged.", { pull_request_url: pullRequest.html_url ?? null, merged: false, ...(verification ? { verification } : {}) });
 }
