@@ -25,10 +25,16 @@ name: Atlas self-improvement
 
 on:
   schedule:
-    # 09:00 UTC = 04:00 America/New_York while EDT is in effect (05:00 EST in
-    # winter). GitHub cron is UTC and has no DST awareness, so a year-round
-    # 4am local time is not expressible here. Change this to "0 10 * * *" to
-    # hold 4am through the winter instead of through the summer.
+    # The owner is in Minnesota (America/Chicago). GitHub cron is UTC and has
+    # no daylight-saving awareness, so no single expression holds 4am local
+    # all year:
+    #
+    #   "0 9  * * *"  ->  04:00 CDT (summer, in effect now) / 03:00 CST (winter)
+    #   "0 10 * * *"  ->  05:00 CDT (summer)                / 04:00 CST (winter)
+    #
+    # Summer is the longer stretch, so 09:00 UTC is the setting that is correct
+    # for more of the year. Swap to "0 10 * * *" around the November change if
+    # a 3am run is unwelcome, and back again in March.
     - cron: "0 9 * * *"
   workflow_dispatch:
     inputs:

@@ -155,10 +155,18 @@ For reference, the tiers that apply to everyone else:
 
 ## Daily self-improvement
 
-`atlas-self-improve.yml` runs at **09:00 UTC** — 4am America/New_York while EDT
-is in effect, 5am once EST starts. GitHub's scheduler is UTC-only with no
-daylight-saving awareness, so a year-round 4am local is not expressible; change
-the cron to `0 10 * * *` if you would rather it hold at 4am through the winter.
+`atlas-self-improve.yml` runs at **09:00 UTC**, which is **4:00am in Minnesota
+right now** (CDT). GitHub's scheduler is UTC-only with no daylight-saving
+awareness, so no single cron holds 4am local all year:
+
+| Cron | Summer (CDT) | Winter (CST) |
+|---|---|---|
+| `0 9 * * *` *(current)* | **4:00am** | 3:00am |
+| `0 10 * * *` | 5:00am | **4:00am** |
+
+09:00 UTC is right for the longer stretch of the year. If a 3:00am run bothers
+you once CST starts in November, change one line to `0 10 * * *`, and back in
+March.
 
 Each run picks one unchecked item from `TODO.md`, implements it, verifies it
 against the repository's own tests, and opens a pull request.
