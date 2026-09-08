@@ -34,7 +34,8 @@ subscriptions, usage counts and task history were added later and have never
 been applied, so a sign-in attempt today would write to tables that do not
 exist.
 
-1. Actions → **Apply Atlas D1 migrations** → Run workflow
+1. Open https://github.com/cornerstonemarketingus/atlas/actions/workflows/migrate-d1.yml
+   and click **Run workflow**
 2. `database_name`: whatever `ATLAS_D1_DATABASE_NAME` is set to (default `atlas-db`)
 3. `from_migration`: `0001`
 4. `dry_run`: **true** — read the SQL it prints
@@ -45,35 +46,32 @@ you at a known point rather than a mixed schema.
 
 ---
 
-## Shortcut: run the setup script
+## Two ways to do this
 
-Steps 2 and 3 below are mechanical. `scripts/setup.mjs` does them for you:
+**Browser only — no terminal required.** Every step below is a web form. Direct
+links are given at each step; nothing here needs a shell.
+
+**Or, if you have a terminal**, `scripts/setup.mjs` does the mechanical parts:
 
 ```
 node scripts/setup.mjs            # interactive
 node scripts/setup.mjs --dry-run  # show the plan, change nothing
 ```
 
-It shows which secrets are already set, generates `ATLAS_SESSION_SECRET`,
-prompts for the rest with the input hidden, writes them, and checks whether your
-Cloudflare token has D1 access. It needs the GitHub CLI (`gh auth login`), which
-it uses so secret encryption is handled by GitHub's own tooling rather than
-re-implemented.
+It shows which secrets are set, generates `ATLAS_SESSION_SECRET`, prompts for
+the rest with input hidden, writes them, and checks Cloudflare D1 access. It
+needs the GitHub CLI (`gh auth login`).
 
-It runs on **your** machine on purpose. Writing repository secrets needs a token
-with admin scope, and giving that to an agent that runs unattended every night
-and edits its own source would hand it a way to escalate its own privileges. The
-credentials live in your shell for the length of the run and never reach the
-agent, a secret, or a log.
-
-Two things it will not do: create your GitHub OAuth App (GitHub has no API for
-that, so it prints the exact form values instead), and edit a Cloudflare token
-(replacing a policy set incorrectly would break the working deploy, so it only
-reads and tells you what to add).
+Either way the credentials stay with you. Writing repository secrets needs a
+token with admin scope, and giving that to an agent that runs unattended every
+night and edits its own source would hand it a way to escalate its own
+privileges. That is why this is a setup step and not an Atlas feature.
 
 ## 2. Set the repository secrets
 
-Settings → Secrets and variables → Actions → **Secrets**.
+**Direct link:** https://github.com/cornerstonemarketingus/atlas/settings/secrets/actions/new
+
+That form is all you need — name, value, "Add secret", repeat. No terminal.
 
 The deploy workflow uploads each of these to the Worker. Anything you leave
 unset is skipped, not an error — so you can do sign-in now and billing later.
@@ -86,7 +84,9 @@ unset is skipped, not an error — so you can do sign-in now and billing later.
 | `ATLAS_GITHUB_OAUTH_CLIENT_ID` | GitHub → Settings → Developer settings → OAuth Apps → New OAuth App |
 | `ATLAS_GITHUB_OAUTH_CLIENT_SECRET` | Same OAuth App, "Generate a new client secret" |
 
-When creating the OAuth App:
+**Create the OAuth App here:** https://github.com/settings/applications/new
+
+When creating it:
 - **Homepage URL:** `https://atlas-web.cornerstonemarketingus.workers.dev`
 - **Authorization callback URL:** `https://atlas-web.cornerstonemarketingus.workers.dev/api/auth/github/callback`
 
@@ -128,7 +128,8 @@ routes to Anthropic; anything else routes to Groq.
 
 ## 3. Redeploy so the secrets reach the Worker
 
-Actions → **Deploy Atlas web to Cloudflare Workers** → Run workflow.
+**Direct link:** https://github.com/cornerstonemarketingus/atlas/actions/workflows/deploy-cloudflare.yml
+→ "Run workflow" → Run.
 
 The "Upload Worker runtime secrets" step prints how many it uploaded and names
 the ones it skipped. Read that output — it is the ground truth for what the
