@@ -45,6 +45,32 @@ you at a known point rather than a mixed schema.
 
 ---
 
+## Shortcut: run the setup script
+
+Steps 2 and 3 below are mechanical. `scripts/setup.mjs` does them for you:
+
+```
+node scripts/setup.mjs            # interactive
+node scripts/setup.mjs --dry-run  # show the plan, change nothing
+```
+
+It shows which secrets are already set, generates `ATLAS_SESSION_SECRET`,
+prompts for the rest with the input hidden, writes them, and checks whether your
+Cloudflare token has D1 access. It needs the GitHub CLI (`gh auth login`), which
+it uses so secret encryption is handled by GitHub's own tooling rather than
+re-implemented.
+
+It runs on **your** machine on purpose. Writing repository secrets needs a token
+with admin scope, and giving that to an agent that runs unattended every night
+and edits its own source would hand it a way to escalate its own privileges. The
+credentials live in your shell for the length of the run and never reach the
+agent, a secret, or a log.
+
+Two things it will not do: create your GitHub OAuth App (GitHub has no API for
+that, so it prints the exact form values instead), and edit a Cloudflare token
+(replacing a policy set incorrectly would break the working deploy, so it only
+reads and tells you what to add).
+
 ## 2. Set the repository secrets
 
 Settings → Secrets and variables → Actions → **Secrets**.
