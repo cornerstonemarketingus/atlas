@@ -99,11 +99,31 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/atlas/build-dispatch.py > payload.json
-          curl -sS --fail -X POST \
+          # --fail-with-body, not --fail: a bare "curl: (22)" says a request
+          # failed and nothing about why, which is how four consecutive
+          # scheduled runs died without ever naming the missing permission.
+          status=0
+          body=$(curl -sS --fail-with-body -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$REPOSITORY/actions/workflows/atlas-coder.yml/dispatches" \
-            -d @payload.json
+            -d @payload.json) || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "Dispatch failed (curl exit $status). GitHub said:" >&2
+            echo "${body:-<empty response body>}" >&2
+            case "$body" in
+              *"Resource not accessible"*|*"Bad credentials"*|*"Must have admin"*|*"Not Found"*)
+                echo "" >&2
+                echo "ATLAS_GITHUB_TOKEN cannot dispatch workflows in $REPOSITORY." >&2
+                echo "Grant it 'Actions: Read and write' (fine-grained PAT:" >&2
+                echo "https://github.com/settings/tokens?type=beta). Reading pull" >&2
+                echo "requests, which the guard step above does, needs a weaker" >&2
+                echo "permission than dispatching, so a token can pass the guard" >&2
+                echo "and still fail here." >&2
+                ;;
+            esac
+            exit "$status"
+          fi
           echo "Dispatched. The agent opens a pull request for review; nothing merges on its own."
 
       - name: Report a skipped run
