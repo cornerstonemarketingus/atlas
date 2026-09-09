@@ -103,13 +103,17 @@ opening paid sign-ups.
       docs-only change to `LAUNCH.md` (plus these two handoff files). No PR is
       open for it.
 
-- [ ] **3.2 — Decide what to do about Vercel.**
-      Vercel is building this repo and its deployment is **broken by design**:
-      `vercel.json` publishes only `apps/web/dist/client` (static assets, no
-      server) and `apps/web/db/index.ts` imports `cloudflare:workers`, which
-      cannot run outside Workers. The preview looks like the product and fails
-      on sign-in. Either disconnect the Vercel project or add a banner. Do not
-      share those URLs meanwhile.
+- [x] **3.2 — Vercel no longer serves a broken copy of the product.**
+      `vercel.json` used to publish `apps/web/dist/client` — static assets with
+      no server — while every database route imports `cloudflare:workers`, which
+      cannot run outside Workers. The preview looked like Atlas and failed on
+      sign-in. It is now a catch-all **307 redirect** to the Worker, with a
+      meta-refresh page behind it for anything that bypasses the redirect.
+      307 rather than 301 on purpose: a permanent redirect is cached by browsers
+      more or less forever and would be painful to undo if the project is ever
+      pointed somewhere real.
+      Still optional: disconnecting the Vercel project entirely, which is an
+      account action and no longer urgent now that the URL lands on Atlas.
 
 - [ ] **3.3 — Confirm the cron is still 4am local after the November DST
       change.** `atlas-self-improve.yml` runs at `0 9 * * *` UTC = 04:00 CDT but

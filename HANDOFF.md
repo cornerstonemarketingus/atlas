@@ -221,12 +221,13 @@ exactly this reason.
 
 ## 7. Gotchas that cost real time
 
-**Vercel is deploying this repo and its deployment is broken by design.**
-`vercel.json` sets `outputDirectory: apps/web/dist/client` — static assets only,
-no server. And `apps/web/db/index.ts` does `import { env } from "cloudflare:workers"`,
-a Workers-only API that cannot run on Vercel. Every route touching the database
-imports it. **The Vercel preview looks like the product and fails on sign-in.**
-Don't share those URLs; consider disconnecting the project.
+**Vercel cannot host this app, and used to publish a broken copy anyway.**
+`apps/web/db/index.ts` does `import { env } from "cloudflare:workers"`, a
+Workers-only API, and every route touching the database imports it. `vercel.json`
+published `apps/web/dist/client` — static assets, no server — so the preview
+looked like the product and failed on sign-in. `vercel.json` now redirects
+everything to the Worker (307, not 301, so it stays reversible). If you ever
+point Vercel at something real, that file is where to start.
 
 **A malformed workflow fails with zero jobs and no message.** GitHub parses
 workflows before running anything. This has cost this repository three silent

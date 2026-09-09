@@ -1,7 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "cd apps/web && npm ci",
-  "buildCommand": "cd apps/web && npm run build",
-  "outputDirectory": "apps/web/dist/client"
+  "installCommand": "echo 'Nothing to install: this project only redirects to the Cloudflare Worker.'",
+  "buildCommand": "mkdir -p .vercel-redirect && cp vercel-redirect.html .vercel-redirect/index.html",
+  "outputDirectory": ".vercel-redirect",
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "destination": "https://atlas-web.cornerstonemarketingus.workers.dev/$1",
+      "permanent": false
+    }
+  ]
 }
