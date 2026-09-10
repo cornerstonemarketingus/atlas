@@ -116,6 +116,11 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ATLAS_CODER_PROVIDER: ${{ vars.ATLAS_CODER_PROVIDER }}
           ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
+          # Points the OpenAI-compatible client at a self-hosted model server
+          # (vLLM, Ollama, llama.cpp, TGI, a rented GPU) instead of Groq. Set
+          # it to the base URL ending in /v1. Must be https unless loopback:
+          # the prompt carries repository content.
+          ATLAS_CODER_BASE_URL: ${{ vars.ATLAS_CODER_BASE_URL }}
           # Self-verification: which directory declares the scripts to run
           # (a monorepo usually declares none at its root), and how many
           # repair passes the agent gets when it breaks something.

@@ -22,6 +22,7 @@ import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provide
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
 import { selectCoderProvider } from "./model/coder-provider-selection.js";
+import { resolveCoderEndpoint } from "./model/coder-endpoint.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
 import { RedactingModelProvider } from "./infrastructure/redacting-model-provider.js";
 import { redactRenderedOutput } from "./presentation/redacted-output.js";
@@ -58,7 +59,7 @@ const USAGE = `Usage:
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
-       [--token-budget N] [--max-turns N]
+       [--base-url <openai-compatible-base-url>] [--token-budget N] [--max-turns N]
        [--no-verify] [--verify-dir <relative-path>] [--max-repair-attempts N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]`;
 
@@ -313,7 +314,13 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   // key normally lives in, and the vendor is inferable from the model name.
   const apiKeyEnvOption = args.includes("--api-key-env") ? readRequiredOption(args, "--api-key-env") : undefined;
   const providerOption = args.includes("--provider") ? readRequiredOption(args, "--provider") : undefined;
-  if (objective === undefined || model === null || apiKeyEnvOption === null || providerOption === null) {
+  // Points the OpenAI-compatible client at a self-hosted server instead of the
+  // vendor default. Falls back to the environment so CI can set it as a
+  // variable without every workflow growing another flag.
+  const baseUrlOption = args.includes("--base-url")
+    ? readRequiredOption(args, "--base-url")
+    : process.env["ATLAS_CODER_BASE_URL"];
+  if (objective === undefined || model === null || apiKeyEnvOption === null || providerOption === null || baseUrlOption === null) {
     if (objective === undefined) console.error(USAGE);
     return 2;
   }
@@ -331,6 +338,19 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   });
   if (!selection.ok) {
     console.error(selection.message);
+    return 2;
+  }
+  const resolvedEndpoint = resolveCoderEndpoint(baseUrlOption);
+  if (!resolvedEndpoint.ok) {
+    console.error(resolvedEndpoint.message);
+    return 2;
+  }
+  const endpoint = resolvedEndpoint.endpoint;
+  // Refused rather than ignored. A custom endpoint that silently did nothing
+  // would send the repository to the vendor the operator was trying to avoid,
+  // and they would have no way to tell from the output.
+  if (endpoint !== undefined && selection.selection.profile.providerId === "anthropic") {
+    console.error("--base-url applies to the OpenAI-compatible provider only; it cannot redirect the Anthropic client.");
     return 2;
   }
   const { profile, apiKeyEnvironmentVariable, maxOutputTokensPerTurn } = selection.selection;
@@ -425,7 +445,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   }];
   const upstream = profile.providerId === "anthropic"
     ? new AnthropicModelProvider({ apiKey, models: capabilities, defaultMaxOutputTokens: maxOutputTokensPerTurn })
-    : new GroqModelProvider({ apiKey, models: capabilities });
+    : new GroqModelProvider({ apiKey, models: capabilities, ...(endpoint === undefined ? {} : { endpoint }) });
   // Inside the retry decorator on purpose: a retried request is the same
   // already-scrubbed request, so it is not re-scanned on every attempt.
   const provider = new BudgetedModelProvider(
