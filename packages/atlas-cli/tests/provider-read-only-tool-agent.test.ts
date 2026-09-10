@@ -98,17 +98,103 @@ test("stops before execution when policy requires approval", async () => {
   assert.equal(result.status === "approval-required" ? result.toolCallId : null, "call-1");
 });
 
-test("fails safely when an unregistered tool is requested", async () => {
+test("never executes an unregistered tool, however dangerous the name", async () => {
+  // This used to assert the session FAILED here. It no longer does — see
+  // "recovers from an invented tool name" below — but the property that
+  // actually matters is unchanged and is now asserted directly: a tool that
+  // was never registered is never executed, whatever the model calls it.
+  let executed = false;
+  const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
+  target.register({
+    name: tool.name, description: "Inspect.", risk: "low",
+    validateInput: (input) => input,
+    execute: async () => {
+      executed = true;
+      return { repositoryName: "atlas" };
+    },
+  });
+
   const provider = new MockModelProvider({ metadata, responses: [
     response("one", [{ type: "tool-call", id: "bad", name: "repository.delete", arguments: {} }], "tool-calls"),
+    response("two", [{ type: "text", text: "There is no such tool, so I did nothing." }], "stop"),
   ] });
   const agent = new ProviderReadOnlyToolAgent({
-    provider, model: "test", registry: registry("allow"), tools: [tool], audit: new InMemorySessionAuditLog(),
+    provider, model: "test", registry: target, tools: [tool], audit: new InMemorySessionAuditLog(),
   });
   const result = await agent.run({
     sessionId: "session", objective: "Inspect", evidence: [],
     scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" },
   });
+
+  assert.equal(executed, false, "an unregistered name must not reach any registered tool");
+  assert.equal(result.status, "completed");
+  const correction = provider.requests[1]?.messages.at(-1);
+  assert.equal(correction?.role, "tool");
+  assert.match(
+    correction?.content[0]?.type === "text" ? correction.content[0].text : "",
+    /TOOL_NOT_FOUND/u,
+  );
+});
+
+test("recovers from an invented tool name by naming the real tools", async () => {
+  // On 2026-09-10 the nightly agent called "repo.search" instead of
+  // "repository.search". The registry threw TOOL_NOT_FOUND, the throw reached
+  // the session-level catch, and an entire unattended run was lost to a name
+  // the model would have corrected if anything had told it the truth.
+  const provider = new MockModelProvider({ metadata, responses: [
+    response("one", [{ type: "tool-call", id: "call-1", name: "repo.inspect", arguments: {} }], "tool-calls"),
+    response("two", [{ type: "tool-call", id: "call-2", name: tool.name, arguments: {} }], "tool-calls"),
+    response("three", [{ type: "text", text: "Atlas is a TypeScript repository." }], "stop"),
+  ] });
+  const audit = new InMemorySessionAuditLog();
+  const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: registry("allow"), tools: [tool], audit });
+
+  const result = await agent.run({
+    sessionId: "session", objective: "Explain Atlas", evidence: [],
+    scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" },
+  });
+
+  assert.equal(result.status, "completed", "an invented tool name must not end the session");
+
+  // The correction has to carry the real names, or the model is left guessing
+  // a second time.
+  const correction = provider.requests[1]?.messages.at(-1);
+  assert.equal(correction?.role, "tool");
+  const payload = JSON.parse(correction?.content[0]?.type === "text" ? correction.content[0].text : "{}") as {
+    code?: string;
+    availableTools?: string[];
+  };
+  assert.equal(payload.code, "TOOL_NOT_FOUND");
+  assert.deepEqual(payload.availableTools, ["repository.inspect"]);
+
+  const completions = audit.snapshot().filter((event) => event.type === "tool.completed");
+  assert.ok(
+    completions.some((event) => (event.payload as { errorCode?: string }).errorCode === "TOOL_NOT_FOUND"),
+    "the miss should still be audited, not silently swallowed",
+  );
+});
+
+test("still ends the session when policy denies a tool", async () => {
+  // TOOL_NOT_FOUND is recoverable because it is the model's mistake. A policy
+  // denial is a security decision, and "try again with something else" is the
+  // wrong thing to invite after one.
+  const denying = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "deny", rules: [] } });
+  denying.register({
+    name: tool.name, description: "Inspect.", risk: "low",
+    validateInput: (input) => input,
+    execute: async () => ({ repositoryName: "atlas" }),
+  });
+  const provider = new MockModelProvider({ metadata, responses: [
+    response("one", [{ type: "tool-call", id: "call-1", name: tool.name, arguments: {} }], "tool-calls"),
+    response("two", [{ type: "text", text: "should never be reached" }], "stop"),
+  ] });
+  const agent = new ProviderReadOnlyToolAgent({
+    provider, model: "test", registry: denying, tools: [tool], audit: new InMemorySessionAuditLog(),
+  });
+
+  const result = await agent.run({
+    sessionId: "session", objective: "Explain Atlas", evidence: [],
+    scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" },
+  });
   assert.equal(result.status, "failed");
-  assert.match(result.status === "failed" ? result.message : "", /Unknown read-only tool/u);
 });
