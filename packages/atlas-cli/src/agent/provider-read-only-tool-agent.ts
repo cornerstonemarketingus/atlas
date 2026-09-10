@@ -119,12 +119,49 @@ export class ProviderReadOnlyToolAgent {
             toolId: call.name,
             argumentCount: Object.keys(call.arguments).length,
           });
-          const result = await this.options.registry.execute({
-            name: call.name,
-            input: call.arguments,
-            scope: request.scope,
-            context: { ...request.context, ...(request.signal === undefined ? {} : { signal: request.signal }) },
-          });
+          let result: Awaited<ReturnType<typeof this.options.registry.execute>>;
+          try {
+            result = await this.options.registry.execute({
+              name: call.name,
+              input: call.arguments,
+              scope: request.scope,
+              context: { ...request.context, ...(request.signal === undefined ? {} : { signal: request.signal }) },
+            });
+          } catch (error: unknown) {
+            // A model that invents a tool name has made a recoverable mistake,
+            // not a fatal one. Ending the session here cost a full unattended
+            // run: the nightly agent called "repo.search" instead of
+            // "repository.search" and the whole night's work was lost to a
+            // typo the model would have corrected if anyone had told it.
+            //
+            // Only TOOL_NOT_FOUND is recovered. POLICY_DENIED and
+            // SCOPE_MISMATCH stay fatal on purpose — those are security
+            // decisions, and "try again with something else" is exactly the
+            // wrong thing to invite after one.
+            if (!(error instanceof ReadOnlyToolRegistryError) || error.code !== "TOOL_NOT_FOUND") throw error;
+            const availableTools = this.options.registry.list().map((tool) => tool.name);
+            this.options.audit.append("tool.completed", {
+              toolCallId: call.id,
+              outcome: "failed",
+              durationMs: 0,
+              resultCharacters: 0,
+              errorCode: "TOOL_NOT_FOUND",
+            });
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              isError: true,
+              content: [{
+                type: "text",
+                text: JSON.stringify({
+                  error: `No tool named '${call.name}' exists. Call one of the available tools exactly as named.`,
+                  code: "TOOL_NOT_FOUND",
+                  availableTools,
+                }),
+              }],
+            });
+            continue;
+          }
           this.options.audit.append("tool.policy_decided", {
             toolCallId: call.id,
             decision: result.policy.decision,

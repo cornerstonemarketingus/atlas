@@ -97,3 +97,77 @@ test("propagates cancellation distinctly from network failure", async () => {
   await assert.rejects(provider.complete(request, { signal: controller.signal }), (error: unknown) =>
     error instanceof ModelProviderError && error.code === "cancelled" && !error.retryable);
 });
+
+// The payload below is the real body Groq returned on 2026-09-10, when the
+// nightly self-improvement agent called "repo.search" instead of
+// "repository.search" and lost the entire run to a 400.
+function toolUseFailed(failedGeneration: string): Response {
+  return new Response(JSON.stringify({
+    error: {
+      message: `Tool call validation failed: attempted to call tool 'repo.search' which was not in request.tools`,
+      type: "invalid_request_error",
+      code: "tool_use_failed",
+      failed_generation: failedGeneration,
+    },
+  }), { status: 400, headers: { "content-type": "application/json" } });
+}
+
+function providerReturning(response: Response): GroqModelProvider {
+  return new GroqModelProvider({ apiKey: "test-key", models: [model], fetchImplementation: fakeFetch(() => response) });
+}
+
+test("returns a tool call Groq rejected instead of failing the session", async () => {
+  // Groq validates tool calls server-side and answers an unadvertised name
+  // with a 400 rather than returning the call. Raising here ends the run over
+  // a mistake the agent recovers from on every other provider.
+  const provider = providerReturning(toolUseFailed(
+    JSON.stringify({ name: "repo.search", arguments: { path: "src", query: "safe file read", maxResults: 20 } }),
+  ));
+
+  const result = await provider.complete(request);
+  assert.equal(result.finishReason, "tool-calls");
+  const [call] = result.message.content;
+  assert.equal(call?.type, "tool-call");
+  assert.equal(call?.type === "tool-call" ? call.name : undefined, "repo.search");
+  // Validated arguments come back null-prototype; spread to compare by value.
+  assert.deepEqual(
+    { ...(call?.type === "tool-call" ? call.arguments : undefined) },
+    { path: "src", query: "safe file read", maxResults: 20 },
+  );
+});
+
+test("reports zero usage for a rejected generation rather than inventing one", async () => {
+  // Groq bills nothing for a generation it refused and reports no usage with
+  // it. A fabricated number would corrupt the session's token accounting.
+  const provider = providerReturning(toolUseFailed(JSON.stringify({ name: "repo.search", arguments: {} })));
+  const result = await provider.complete(request);
+  assert.deepEqual(result.usage, { inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+});
+
+test("treats a rejected call with no arguments as a call with no arguments", async () => {
+  const provider = providerReturning(toolUseFailed(JSON.stringify({ name: "repository.symbols" })));
+  const result = await provider.complete(request);
+  const [call] = result.message.content;
+  assert.deepEqual({ ...(call?.type === "tool-call" ? call.arguments : undefined) }, {});
+});
+
+test("still raises a 400 that is not a rejected tool call", async () => {
+  const provider = providerReturning(new Response(
+    JSON.stringify({ error: { message: "model does not exist", code: "model_not_found" } }),
+    { status: 400 },
+  ));
+  await assert.rejects(provider.complete(request), (error: unknown) => {
+    assert.ok(error instanceof ModelProviderError);
+    assert.match(error.message, /model does not exist/u);
+    return true;
+  });
+});
+
+test("still raises when the rejected generation cannot be read as a tool call", async () => {
+  // Recovery reconstructs a real call; it must never guess. Anything
+  // unparseable has to surface as the error it is.
+  for (const generation of ["not json at all", JSON.stringify({ arguments: {} }), JSON.stringify({ name: "" })]) {
+    const provider = providerReturning(toolUseFailed(generation));
+    await assert.rejects(provider.complete(request), ModelProviderError, generation);
+  }
+});

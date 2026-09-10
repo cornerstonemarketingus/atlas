@@ -1,6 +1,6 @@
 import type { ModelCapabilities, ModelProvider, ModelProviderMetadata, ModelRequest, ModelResponse } from "../model/model-provider.js";
 import { ModelProviderError } from "../model/model-provider.js";
-import { validateModelRequest } from "../model/model-contract-validation.js";
+import { validateModelRequest, validateModelResponse } from "../model/model-contract-validation.js";
 import { buildOpenAiChatPayload, parseOpenAiChatResponse } from "./openai-compatible-chat-format.js";
 
 const DEFAULT_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
@@ -75,6 +75,17 @@ export class GroqModelProvider implements ModelProvider {
       });
     }
     if (!response.ok) {
+      // Groq validates the model's tool calls server-side and answers a call
+      // to an unadvertised tool with HTTP 400 instead of returning it. The
+      // rejected call comes back verbatim in `failed_generation`, so rather
+      // than lose the whole session to one invented name, hand it to the
+      // agent as the tool call it is and let the registry answer "no such
+      // tool" the way it does for every other provider.
+      const recovered = response.status === 400
+        ? recoverRejectedToolCall(text, validated.model, this.metadata.id)
+        : undefined;
+      if (recovered !== undefined) return recovered;
+
       const authFailure = response.status === 401 || response.status === 403;
       // Groq's error responses (rate limits, oversized requests, invalid
       // models) carry the actual reason in the body; without it every
@@ -103,4 +114,55 @@ export class GroqModelProvider implements ModelProvider {
     }
     return parseOpenAiChatResponse(parsed, this.metadata.id);
   }
+}
+
+/**
+ * Rebuilds the tool call Groq refused to return.
+ *
+ * This reconstructs, it does not invent: the model really did emit this call,
+ * and Groq echoes it back in `failed_generation` while declining to deliver it
+ * in the normal shape. Anything that is not recognisably a rejected tool call
+ * returns undefined so the caller raises the error unchanged.
+ */
+function recoverRejectedToolCall(body: string, model: string, providerId: string): ModelResponse | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  const error = asRecord(asRecord(parsed)?.["error"]);
+  if (error?.["code"] !== "tool_use_failed") return undefined;
+  const generation = error["failed_generation"];
+  if (typeof generation !== "string") return undefined;
+
+  let call: unknown;
+  try {
+    call = JSON.parse(generation);
+  } catch {
+    return undefined;
+  }
+  const record = asRecord(call);
+  if (record === undefined) return undefined;
+  const name = record["name"];
+  if (typeof name !== "string" || name.length === 0) return undefined;
+  const args = asRecord(record["arguments"]) ?? {};
+
+  return validateModelResponse({
+    id: `groq-rejected-tool-call:${name}`,
+    providerId,
+    model,
+    message: { role: "assistant", content: [{ type: "tool-call", id: "groq-rejected-tool-call", name, arguments: args }] },
+    finishReason: "tool-calls",
+    // Groq bills nothing for a rejected generation and reports no usage with
+    // it. Reporting zero is accurate; inventing a number would corrupt the
+    // session's token accounting.
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+  });
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
