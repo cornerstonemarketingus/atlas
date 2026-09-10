@@ -189,10 +189,21 @@ if (metadata.mode === "inspect") {
   // drifting apart later.
   const provider = providerInput || (/^(anthropic\/)?claude[-.]/i.test(model) ? "anthropic" : "groq");
   const apiKeyVariable = PROVIDER_KEY_VARIABLES[provider];
+  // A self-hosted OpenAI-compatible server (vLLM, Ollama, llama.cpp) usually
+  // has no API key at all, so requiring one would make it impossible to run
+  // your own model. The placeholder is applied ONLY when a custom endpoint is
+  // set: against a real vendor a missing key must still fail loudly rather
+  // than turn into a confusing 401 later.
+  const baseUrl = (process.env.ATLAS_CODER_BASE_URL || "").trim();
   if (!process.env[apiKeyVariable]) {
-    writeStatus("failed", `${apiKeyVariable} is not configured; coder tasks cannot run with provider '${provider}'.`);
-    console.error(`Atlas coder mode requires ${apiKeyVariable}.`);
-    process.exit(2);
+    if (baseUrl && provider === "groq") {
+      process.env[apiKeyVariable] = "self-hosted-no-key";
+      console.log(`No ${apiKeyVariable} set; using a placeholder because ATLAS_CODER_BASE_URL names a self-hosted endpoint.`);
+    } else {
+      writeStatus("failed", `${apiKeyVariable} is not configured; coder tasks cannot run with provider '${provider}'.`);
+      console.error(`Atlas coder mode requires ${apiKeyVariable}.`);
+      process.exit(2);
+    }
   }
   const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
   // Verification runs the target repository's own build/test scripts, before
@@ -212,6 +223,7 @@ if (metadata.mode === "inspect") {
   // other artifacts. Written by the CLI, so it goes through the same redactor
   // as everything else the agent emits.
   codeArgs.push("--audit-log", path.join(outputDirectory, "audit.jsonl"));
+  if (baseUrl) codeArgs.push("--base-url", baseUrl);
   if (verifyDir) codeArgs.push("--verify-dir", verifyDir);
   if (/^[0-5]$/.test(repairAttempts)) codeArgs.push("--max-repair-attempts", repairAttempts);
   const result = runCommand("code", process.execPath, codeArgs, process.cwd(), coderTimeoutMs);
