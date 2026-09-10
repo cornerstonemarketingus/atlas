@@ -58,7 +58,10 @@ jobs:
     # bounded poll loop (create-coder-pull-request.mjs times out that loop
     # well before this does, so it always exits cleanly instead of being
     # force-killed mid-merge-attempt).
-    timeout-minutes: 25
+    # A self-hosted model runs on the runner's CPU and is far slower than any
+    # hosted API, so the ceiling moves when one is configured. 330 leaves a
+    # margin under the 360-minute hard limit for a job.
+    timeout-minutes: ${{ vars.ATLAS_SELF_HOSTED_MODEL != '' && 330 || 25 }}
     # Every checkout uses persist-credentials: false, and the push + pull
     # request step authenticates with ATLAS_GITHUB_TOKEN (see below), not
     # the default GITHUB_TOKEN — so the built-in token needs no write scope
@@ -106,6 +109,69 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
+      # Runs a model on the runner itself instead of calling a vendor. Opt-in:
+      # with ATLAS_SELF_HOSTED_MODEL unset this step is skipped entirely and
+      # nothing about the job changes. See LOCAL-MODEL.md for the trade-offs —
+      # it is much slower than a hosted API and, on a private repository,
+      # consumes Actions minutes that are not free.
+      - name: Start a self-hosted model server
+        if: ${{ vars.ATLAS_SELF_HOSTED_MODEL != '' }}
+        env:
+          SELF_HOSTED_MODEL: ${{ vars.ATLAS_SELF_HOSTED_MODEL }}
+          OLLAMA_VERSION: ${{ vars.ATLAS_OLLAMA_VERSION }}
+          OLLAMA_SHA256: ${{ vars.ATLAS_OLLAMA_SHA256 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OLLAMA_VERSION:-}" ]; then
+            echo "ATLAS_SELF_HOSTED_MODEL is set, so ATLAS_OLLAMA_VERSION must be too." >&2
+            echo "Pick a tag from https://github.com/ollama/ollama/releases (e.g. v0.12.3)" >&2
+            echo "and set it as a repository variable. Pinning a version is deliberate:" >&2
+            echo "this job has access to the repository, and piping an unpinned remote" >&2
+            echo "installer into a shell would undo the action pinning used everywhere else." >&2
+            exit 1
+          fi
+
+          archive=ollama-linux-amd64.tgz
+          url="https://github.com/ollama/ollama/releases/download/${OLLAMA_VERSION}/${archive}"
+          echo "Downloading $url"
+          curl -fsSL --retry 3 -o "$archive" "$url"
+
+          actual=$(sha256sum "$archive" | cut -d" " -f1)
+          echo "sha256=$actual"
+          if [ -n "${OLLAMA_SHA256:-}" ]; then
+            if [ "$actual" != "$OLLAMA_SHA256" ]; then
+              echo "Checksum mismatch: expected $OLLAMA_SHA256" >&2
+              exit 1
+            fi
+            echo "Checksum verified against ATLAS_OLLAMA_SHA256."
+          else
+            echo "No ATLAS_OLLAMA_SHA256 set. Set it to the value above to pin this build."
+          fi
+
+          sudo tar -C /usr -xzf "$archive"
+          rm -f "$archive"
+
+          ollama serve > "${RUNNER_TEMP}/ollama.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:11434/api/tags > /dev/null; then break; fi
+            sleep 2
+          done
+          if ! curl -sf http://127.0.0.1:11434/api/tags > /dev/null; then
+            echo "Model server did not become ready." >&2
+            tail -50 "${RUNNER_TEMP}/ollama.log" >&2 || true
+            exit 1
+          fi
+
+          echo "Pulling $SELF_HOSTED_MODEL (this is several GB and is not cached between runs)."
+          ollama pull "$SELF_HOSTED_MODEL"
+
+          # Loopback, so the endpoint validator permits plain http: a request
+          # that never leaves the machine has no network to be intercepted on.
+          {
+            echo "SELF_HOSTED_BASE_URL=http://127.0.0.1:11434/v1"
+            echo "SELF_HOSTED_MODEL=${SELF_HOSTED_MODEL}"
+          } >> "$GITHUB_ENV"
+
       - name: Run Atlas task
         env:
           # Both vendor keys are exposed; the runner reads only the one the
@@ -126,7 +192,20 @@ jobs:
           # repair passes the agent gets when it breaks something.
           ATLAS_VERIFY_DIR: ${{ vars.ATLAS_VERIFY_DIR }}
           ATLAS_MAX_REPAIR_ATTEMPTS: ${{ vars.ATLAS_MAX_REPAIR_ATTEMPTS }}
-        run: node scripts/runner/run-task.mjs
+        run: |
+          set -euo pipefail
+          # Resolved in the shell rather than in step env so precedence is
+          # explicit: an operator-set variable always wins, and the self-hosted
+          # server is only used when nothing else was configured.
+          export ATLAS_CODER_BASE_URL="${ATLAS_CODER_BASE_URL:-${SELF_HOSTED_BASE_URL:-}}"
+          export ATLAS_CODER_MODEL="${ATLAS_CODER_MODEL:-${SELF_HOSTED_MODEL:-}}"
+          if [ -n "$ATLAS_CODER_BASE_URL" ]; then
+            echo "Model endpoint: $ATLAS_CODER_BASE_URL (model: $ATLAS_CODER_MODEL)"
+            # CPU generation is an order of magnitude slower than a hosted API,
+            # so the per-run ceiling has to move with it.
+            export ATLAS_CODER_TIMEOUT_MS="${ATLAS_CODER_TIMEOUT_MS:-18000000}"
+          fi
+          node scripts/runner/run-task.mjs
 
       - name: Open pull request for coder changes
         env:
