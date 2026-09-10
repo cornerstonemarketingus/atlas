@@ -35,6 +35,34 @@ def check_yaml(path: pathlib.Path) -> tuple[dict | None, list[str]]:
         return None, [f"{path.name}: not valid YAML\n{error}"]
 
 
+def substitute_expressions(script: str) -> str:
+    """Replace whole Actions expressions with a placeholder, and nothing else.
+
+    Substituting the delimiters independently is what a first version did, and
+    it corrupts valid shell: a closing delimiter is two closing braces, which is
+    also how a nested parameter expansion ends. `${A:-${B:-}}` became `${A:-${B:-}`
+    and every such step was reported as a syntax error it did not have — a
+    checker crying wolf about correct code is worse than no checker, because the
+    fix is to mangle working shell until the tool stops complaining.
+
+    Spans are matched from an opening delimiter to its first closing one, the
+    same way check_expressions reads them.
+    """
+    parts = []
+    cursor = 0
+    while (start := script.find(OPEN, cursor)) != -1:
+        end = script.find(CLOSE, start + len(OPEN))
+        if end == -1:
+            # Unclosed. check_expressions reports it with a better message;
+            # here the rest is passed through untouched.
+            break
+        parts.append(script[cursor:start])
+        parts.append("${__ACTIONS_EXPR__}")
+        cursor = end + len(CLOSE)
+    parts.append(script[cursor:])
+    return "".join(parts)
+
+
 def check_shell(path: pathlib.Path, document: dict) -> list[str]:
     failures = []
     for job_name, job in (document.get("jobs") or {}).items():
@@ -44,7 +72,7 @@ def check_shell(path: pathlib.Path, document: dict) -> list[str]:
                 continue
             # Actions substitutes expressions before bash ever sees them, so a
             # placeholder keeps the script's shape without inventing a value.
-            probe = script.replace(OPEN, "${__ACTIONS_EXPR__").replace(CLOSE, "}")
+            probe = substitute_expressions(script)
             result = subprocess.run(["bash", "-n"], input=probe, text=True, capture_output=True)
             if result.returncode != 0:
                 label = step.get("name") or f"step {index + 1}"
