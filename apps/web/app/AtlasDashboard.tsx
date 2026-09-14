@@ -1,5 +1,6 @@
 "use client";
 import { FormEvent, useEffect, useState } from "react";
+import { AtlasMark } from "./AtlasMark.js";
 
 const activity = [
   { title: "Repository intelligence foundation", detail: "149 checks passed", status: "Shipped" },
@@ -236,6 +237,7 @@ export function AtlasDashboard() {
   // loading stub.
   if (!signedIn) {
     return <main className="hero" id="top">
+      <div className="signinbrand"><span className="brandmark"><AtlasMark /></span>ATLAS</div>
       <div className="eyebrow"><span>01</span> Autonomous engineering, under control</div>
       <h1>Sign in to<br /><em>start building.</em></h1>
       <p className="lede">Atlas reads your repository, proposes a bounded change, validates it, and opens a pull request for review.</p>
@@ -262,10 +264,26 @@ export function AtlasDashboard() {
   }
   return <main>
     <header className="topbar">
-      <a className="brand" href="#top"><span className="brandmark">A</span>ATLAS</a>
+      <a className="brand" href="#top"><span className="brandmark"><AtlasMark /></span>ATLAS</a>
       <nav><a href="#mission">Mission</a><a href="#activity">Activity</a><a href="#runtime">Runtime</a></nav>
       <div className="flex items-center gap-4">
-        {account?.githubLogin && <span className="text-xs font-semibold uppercase tracking-wide">{account.githubLogin}</span>}
+        {account?.githubLogin && (
+          // An avatar rather than the login text: the account still has to be
+          // identifiable, but a GitHub org name set in the header reads as part
+          // of the product's name, which it is not.
+          // next/image wants remotePatterns config and an optimizer the
+          // Worker runtime does not provide, for a 28px avatar served
+          // straight from GitHub.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={`https://github.com/${encodeURIComponent(account.githubLogin)}.png?size=64`}
+            alt={`Signed in as ${account.githubLogin}`}
+            title={account.githubLogin}
+            width={28}
+            height={28}
+            className="rounded-full border border-[var(--line)]"
+          />
+        )}
         <span className="online"><i /> Control plane online</span>
         <button type="button" onClick={() => void signOut()} className="text-xs uppercase tracking-wide underline underline-offset-4">Sign out</button>
       </div>
