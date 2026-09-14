@@ -132,7 +132,6 @@ export function AtlasDashboard() {
       return response.ok ? response.json() : null;
     }).then((value) => { if (active && value) setGitHub(value as { connected: boolean; method: string; installUrl: string | null }); }).catch(() => undefined);
     return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signedIn]);
   useEffect(() => {
     if (!signedIn) return;
@@ -149,7 +148,6 @@ export function AtlasDashboard() {
       })
       .catch(() => undefined);
     return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signedIn, repository]);
   useEffect(() => {
     if (!signedIn) return;
@@ -181,7 +179,6 @@ export function AtlasDashboard() {
     void refreshTasks();
     const timer = setInterval(() => { void refreshTasks(); }, TASK_POLL_MS);
     return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signedIn]);
   async function saveMergePolicy(nextPolicy: string) {
     const [owner, name] = repository.split("/");

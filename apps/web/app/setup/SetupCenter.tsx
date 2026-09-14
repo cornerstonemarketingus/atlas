@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { AtlasMark } from "../AtlasMark.js";
 
 type SetupStep = { id: string; label: string; state: "complete" | "action-required" | "failed"; detail: string; action?: string };
@@ -20,7 +21,7 @@ export function SetupCenter() {
   useEffect(() => { void refresh(); }, []);
 
   return <main className="setup-shell">
-    <header className="setup-header"><a className="brand" href="/"><span className="brandmark"><AtlasMark /></span>ATLAS</a><a href="/">Back to tasks</a></header>
+    <header className="setup-header"><Link className="brand" href="/"><span className="brandmark"><AtlasMark /></span>ATLAS</Link><Link href="/">Back to tasks</Link></header>
     <section className="setup-intro">
       <div className="eyebrow"><span>SETUP</span> Remote control center</div>
       <h1>Bring Atlas online<br /><em>from anywhere.</em></h1>
