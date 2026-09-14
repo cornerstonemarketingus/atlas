@@ -50,6 +50,7 @@ type TaskRecord = {
 };
 
 type TaskList = { tasks: TaskRecord[]; historyAvailable: boolean; liveStatus: boolean };
+type GitHubOptions = { repositories: string[]; branches: string[]; defaultBranch: string };
 
 function relativeTime(value: string): string {
   const parsed = Date.parse(/^\d{4}-\d{2}-\d{2} /.test(value) ? `${value.replace(" ", "T")}Z` : value);
@@ -94,6 +95,9 @@ export function AtlasDashboard() {
   const [billingNotice, setBillingNotice] = useState("");
   const [billingBusy, setBillingBusy] = useState(false);
   const [taskList, setTaskList] = useState<TaskList | null>(null);
+  const [repositoryOptions, setRepositoryOptions] = useState(["cornerstonemarketingus/atlas"]);
+  const [branchOptions, setBranchOptions] = useState(["main"]);
+  const [defaultBranch, setDefaultBranch] = useState("main");
 
   // Seeded in an effect, not a lazy useState initializer, because
   // localStorage does not exist during the server render: initializing from
@@ -141,6 +145,23 @@ export function AtlasDashboard() {
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signedIn]);
+  useEffect(() => {
+    if (!signedIn) return;
+    let active = true;
+    void fetch(`/api/github/options?repository=${encodeURIComponent(repository)}`, { headers: authHeaders() })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((value) => {
+        if (!active || !value) return;
+        const options = value as GitHubOptions;
+        if (options.repositories.length) setRepositoryOptions(options.repositories);
+        if (options.branches.length) setBranchOptions(options.branches);
+        setDefaultBranch(options.defaultBranch);
+        if (!options.branches.includes(branch)) setBranch(options.defaultBranch);
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedIn, repository]);
   useEffect(() => {
     if (!signedIn) return;
     const [owner, name] = repository.split("/");
@@ -291,8 +312,12 @@ export function AtlasDashboard() {
     <section className="hero" id="top"><div className="eyebrow"><span>01</span> Autonomous engineering, under control</div><h1>From intent to<br /><em>verified change.</em></h1><p className="lede">Atlas understands your repository, proposes a bounded change, validates it, and commits only after policy and approval gates pass.</p>
       <form className="command" onSubmit={submit}>
         <div className="taskmeta">
-          <label>Repository<input aria-label="Repository" value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="owner/repository" autoComplete="off" /></label>
-          <label>Branch<input aria-label="Branch" value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" autoComplete="off" /></label>
+          <label>Repository<select aria-label="Repository" value={repository} onChange={(event) => setRepository(event.target.value)}>
+            {repositoryOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select></label>
+          <label>Branch<select aria-label="Branch" value={branch} onChange={(event) => setBranch(event.target.value)}>
+            {branchOptions.map((name) => <option key={name} value={name}>{name}{name === defaultBranch ? " (default)" : ""}</option>)}
+          </select></label>
           <label>Mode<select aria-label="Task mode" value={mode} onChange={(event) => setMode(event.target.value)}>
             <option value="inspect">Inspect</option>
             <option value="debug">Debug (build + test)</option>
