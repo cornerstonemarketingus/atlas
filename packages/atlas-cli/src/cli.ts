@@ -20,6 +20,7 @@ import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-opena
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
 import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provider.js";
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
+import { FallbackModelProvider } from "./infrastructure/fallback-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
 import { selectCoderProvider } from "./model/coder-provider-selection.js";
 import { resolveCoderEndpoint } from "./model/coder-endpoint.js";
@@ -59,7 +60,8 @@ const USAGE = `Usage:
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
-       [--base-url <openai-compatible-base-url>] [--token-budget N] [--max-turns N]
+       [--base-url <openai-compatible-base-url>] [--fallback <provider:model:API_KEY_ENV>] [--token-budget N] [--max-turns N]
+       [--retry-attempts N] [--retry-max-delay-ms N]
        [--no-verify] [--verify-dir <relative-path>] [--max-repair-attempts N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]`;
 
@@ -328,7 +330,9 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const maximumTurnsOption = readOptionalInteger(args, "--max-turns", 1, 32);
   const repairAttemptsOption = readOptionalInteger(args, "--max-repair-attempts", 0, 5);
   const verifyTimeoutOption = readOptionalInteger(args, "--verify-timeout-ms", 1_000, 1_800_000);
-  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null) return 2;
+  const retryAttemptsOption = readOptionalInteger(args, "--retry-attempts", 1, 5);
+  const retryMaxDelayOption = readOptionalInteger(args, "--retry-max-delay-ms", 0, 120_000);
+  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null || retryAttemptsOption === null || retryMaxDelayOption === null) return 2;
   const tokenBudget = tokenBudgetOption ?? 16_384;
   const selection = selectCoderProvider({
     provider: providerOption,
@@ -432,24 +436,45 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     },
   });
 
-  // Only the requested model is declared, not the vendor's whole catalogue:
-  // the agent must not be able to silently fall back to a model the operator
-  // did not choose and is not budgeting for.
-  const capabilities = [{
-    model,
-    contextWindowTokens: profile.contextWindowTokens,
-    maxOutputTokens: maxOutputTokensPerTurn,
-    supportsTools: true,
-    supportsJson: true,
-    supportsStreaming: false,
-  }];
-  const upstream = profile.providerId === "anthropic"
-    ? new AnthropicModelProvider({ apiKey, models: capabilities, defaultMaxOutputTokens: maxOutputTokensPerTurn })
-    : new GroqModelProvider({ apiKey, models: capabilities, ...(endpoint === undefined ? {} : { endpoint }) });
-  // Inside the retry decorator on purpose: a retried request is the same
-  // already-scrubbed request, so it is not re-scanned on every attempt.
+  const retryOptions = { maximumAttempts: retryAttemptsOption ?? 3, maximumDelayMs: retryMaxDelayOption ?? 30_000 };
+  const makeRoute = (routeModel: string, routeSelection: typeof selection.selection, routeApiKey: string, routeEndpoint?: URL) => {
+    const routeCapabilities = [{
+      model: routeModel,
+      contextWindowTokens: routeSelection.profile.contextWindowTokens,
+      maxOutputTokens: routeSelection.maxOutputTokensPerTurn,
+      supportsTools: true,
+      supportsJson: true,
+      supportsStreaming: false,
+    }];
+    const upstream = routeSelection.profile.providerId === "anthropic"
+      ? new AnthropicModelProvider({ apiKey: routeApiKey, models: routeCapabilities, defaultMaxOutputTokens: routeSelection.maxOutputTokensPerTurn })
+      : new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
+    return new RetryingModelProvider(new RedactingModelProvider(upstream, new PatternSecretRedactor()), retryOptions);
+  };
+  const routes = [{ provider: makeRoute(model, selection.selection, apiKey, endpoint), model }];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--fallback") continue;
+    const specification = args[index + 1];
+    const parts = specification?.split(":") ?? [];
+    if (parts.length !== 3 || parts.some((part) => part.trim().length === 0)) {
+      console.error("--fallback must use provider:model:API_KEY_ENV.");
+      return 2;
+    }
+    const [fallbackProvider, fallbackModel, fallbackKeyEnvironment] = parts as [string, string, string];
+    const fallbackSelection = selectCoderProvider({ provider: fallbackProvider, model: fallbackModel, apiKeyEnvironmentVariable: fallbackKeyEnvironment, tokenBudget });
+    if (!fallbackSelection.ok) { console.error(fallbackSelection.message); return 2; }
+    const fallbackKey = process.env[fallbackSelection.selection.apiKeyEnvironmentVariable];
+    if (!fallbackKey?.trim()) {
+      console.error(`Environment variable ${fallbackSelection.selection.apiKeyEnvironmentVariable} is not set (required for fallback provider '${fallbackProvider}').`);
+      return 2;
+    }
+    routes.push({ provider: makeRoute(fallbackModel, fallbackSelection.selection, fallbackKey), model: fallbackModel });
+  }
+  const routedProvider = routes.length === 1 ? routes[0]!.provider : new FallbackModelProvider(routes);
+  // Retries and fallbacks share one outer budget ledger, so changing routes
+  // cannot reset the task's hard output-token ceiling.
   const provider = new BudgetedModelProvider(
-    new RetryingModelProvider(new RedactingModelProvider(upstream, new PatternSecretRedactor())),
+    routedProvider,
     new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget }),
   );
   // A monorepo often declares no scripts at its root, so allow verification to

@@ -23,6 +23,9 @@ export async function authenticatedAccount(request, environment = process.env) {
   if (sessionSecret) {
     const cookie = readSessionCookie(request);
     const payload = cookie ? await verifySession(cookie, sessionSecret) : null;
+    if (payload?.role === "operator") {
+      return { userId: "operator", dbUserId: null };
+    }
     if (payload && typeof payload.uid === "number" && typeof payload.gh === "string") {
       return { userId: `github:${payload.gh}`, dbUserId: payload.uid };
     }

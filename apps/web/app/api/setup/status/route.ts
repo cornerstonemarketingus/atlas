@@ -1,15 +1,32 @@
+import { sql } from "drizzle-orm";
+import { getDb } from "../../../../db";
 import { githubOAuthConfiguration } from "../../auth/github-oauth.mjs";
 import { stripeConfiguration } from "../../billing/stripe.mjs";
 import { githubAppConfiguration } from "../../tasks/github-app.mjs";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 
-/**
- * Boolean-only readiness report for the pieces that need external setup
- * (GitHub OAuth App, Stripe) — never returns secret values, just whether
- * each is present. Meant to answer "did the secrets I just set actually
- * take effect after redeploy" without walking the full sign-in/checkout
- * flow by hand.
- */
+type StepState = "complete" | "action-required" | "failed";
+
+async function databaseReadiness() {
+  try {
+    const db = getDb();
+    await db.run(sql`SELECT 1 FROM users LIMIT 1`);
+    await db.run(sql`SELECT 1 FROM subscriptions LIMIT 1`);
+    await db.run(sql`SELECT 1 FROM task_usage LIMIT 1`);
+    await db.run(sql`SELECT 1 FROM tasks LIMIT 1`);
+    return { binding: true, migrations: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Database readiness check failed.";
+    return { binding: !message.includes("binding `DB` is unavailable"), migrations: false };
+  }
+}
+
+function step(id: string, label: string, complete: boolean, detail: string, action?: string, failed = false) {
+  const state: StepState = complete ? "complete" : failed ? "failed" : "action-required";
+  return { id, label, state, detail, ...(complete || !action ? {} : { action }) };
+}
+
+/** Readiness metadata only: secret values and credential names never leave the Worker. */
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
@@ -17,12 +34,28 @@ export async function GET(request: Request) {
   const githubOAuth = githubOAuthConfiguration();
   const stripe = stripeConfiguration();
   const githubApp = githubAppConfiguration();
+  const database = await databaseReadiness();
+  const sessionSecretConfigured = Boolean(process.env.ATLAS_SESSION_SECRET);
+  const githubDispatchConfigured = githubApp.configured || Boolean(process.env.ATLAS_GITHUB_TOKEN);
+  const workerSecretsConfigured = sessionSecretConfigured && githubOAuth.configured && githubDispatchConfigured;
+  const steps = [
+    step("github-actions", "GitHub Actions access", githubDispatchConfigured, githubDispatchConfigured ? "Workflow dispatch credentials are available." : "Connect a GitHub App or configure dispatch access.", "Connect GitHub"),
+    step("d1-permission", "Cloudflare D1 access", database.binding, database.binding ? "The Worker can reach its D1 binding." : "The DB binding is unavailable to the live Worker.", "Configure D1 binding", !database.binding),
+    step("d1-database", "D1 database selected", database.binding, database.binding ? "A database is connected as DB." : "Select or create a D1 database.", "Select database"),
+    step("migrations", "Database migrations", database.migrations, database.migrations ? "Required application tables are readable." : "Apply the pending database migrations.", "Run migrations", database.binding && !database.migrations),
+    step("github-oauth", "GitHub sign-in", githubOAuth.configured, githubOAuth.configured ? "GitHub OAuth credentials are active." : "Create or connect the GitHub application.", "Configure GitHub sign-in"),
+    step("worker-secrets", "Runtime secrets", workerSecretsConfigured, workerSecretsConfigured ? "Required runtime credentials are configured." : "One or more required runtime credentials are missing.", "Upload runtime secrets"),
+    step("deployment", "Live deployment", database.binding && workerSecretsConfigured, database.binding && workerSecretsConfigured ? "The deployed Worker has its required runtime configuration." : "Redeploy after database and secrets are ready.", "Deploy Atlas"),
+    step("verification", "Sign-in verification", database.migrations && githubOAuth.configured && sessionSecretConfigured, database.migrations && githubOAuth.configured && sessionSecretConfigured ? "Atlas is ready for a clean GitHub sign-in test." : "Finish the blocked setup steps before testing sign-in.", "Verify sign-in"),
+  ];
+  const completedSteps = steps.filter((item) => item.state === "complete").length;
 
   return Response.json({
-    sessionSecretConfigured: Boolean(process.env.ATLAS_SESSION_SECRET),
-    githubOAuthConfigured: githubOAuth.configured,
-    stripeConfigured: stripe.configured,
-    githubDispatchConfigured: githubApp.configured || Boolean(process.env.ATLAS_GITHUB_TOKEN),
-    operatorTokenConfigured: Boolean(process.env.ATLAS_OPERATOR_TOKEN),
-  });
+    version: 1,
+    overall: completedSteps === steps.length ? "ready" : steps.some((item) => item.state === "failed") ? "blocked" : "setup-required",
+    completedSteps,
+    totalSteps: steps.length,
+    steps,
+    optional: { stripeConfigured: stripe.configured },
+  }, { headers: { "cache-control": "no-store" } });
 }

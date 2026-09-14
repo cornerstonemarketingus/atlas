@@ -226,6 +226,32 @@ if (metadata.mode === "inspect") {
   if (baseUrl) codeArgs.push("--base-url", baseUrl);
   if (verifyDir) codeArgs.push("--verify-dir", verifyDir);
   if (/^[0-5]$/.test(repairAttempts)) codeArgs.push("--max-repair-attempts", repairAttempts);
+  const fallbacks = (process.env.ATLAS_CODER_FALLBACKS || "").split(",").map((item) => item.trim()).filter(Boolean);
+  for (const fallback of fallbacks) {
+    if (!/^(?:anthropic|groq):[A-Za-z0-9._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY)$/.test(fallback)) {
+      writeStatus("failed", "ATLAS_CODER_FALLBACKS contains an invalid route. Expected provider:model:API_KEY_ENV.");
+      console.error("Atlas coder mode: invalid fallback route.");
+      process.exit(2);
+    }
+    codeArgs.push("--fallback", fallback);
+  }
+  const boundedOptions = [
+    ["ATLAS_CODER_RETRY_ATTEMPTS", "--retry-attempts", 1, 5],
+    ["ATLAS_CODER_RETRY_MAX_DELAY_MS", "--retry-max-delay-ms", 0, 120_000],
+    ["ATLAS_TOKEN_BUDGET", "--token-budget", 1, 1_000_000],
+    ["ATLAS_MAX_TURNS", "--max-turns", 1, 32],
+  ];
+  for (const [environmentName, flag, minimum, maximum] of boundedOptions) {
+    const value = (process.env[environmentName] || "").trim();
+    if (!value) continue;
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || number < minimum || number > maximum) {
+      writeStatus("failed", `${environmentName} is outside its allowed range.`);
+      console.error(`Atlas coder mode: invalid ${environmentName}.`);
+      process.exit(2);
+    }
+    codeArgs.push(flag, value);
+  }
   const result = runCommand("code", process.execPath, codeArgs, process.cwd(), coderTimeoutMs);
 
   // 'atlas code' exits 1 for every non-'completed' agent outcome (failed,

@@ -32,10 +32,10 @@ on:
     #   "0 9  * * *"  ->  04:00 CDT (summer, in effect now) / 03:00 CST (winter)
     #   "0 10 * * *"  ->  05:00 CDT (summer)                / 04:00 CST (winter)
     #
-    # Summer is the longer stretch, so 09:00 UTC is the setting that is correct
-    # for more of the year. Swap to "0 10 * * *" around the November change if
-    # a 3am run is unwelcome, and back again in March.
+    # Run at both possible UTC offsets, then gate on 04:00 America/Chicago.
+    # This follows daylight saving time without a manual March/November edit.
     - cron: "0 9 * * *"
+    - cron: "0 10 * * *"
   workflow_dispatch:
     inputs:
       objective:
@@ -63,8 +63,23 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Select the 4am Chicago schedule
+        id: schedule
+        if: ${{ github.event_name == 'schedule' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from datetime import datetime, timezone
+          from zoneinfo import ZoneInfo
+          local = datetime.now(timezone.utc).astimezone(ZoneInfo("America/Chicago"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"should_run={'true' if local.hour == 4 else 'false'}\n")
+          print(f"Chicago local time: {local.isoformat()}")
+          PY
+
       - name: Stop if review work is already queued
         id: guard
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.schedule.outputs.should_run == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
           # Low on purpose. The bottleneck on self-improvement is human review,
@@ -77,12 +92,14 @@ jobs:
           case "$MAX_OPEN" in
             ''|*[!0-9]*) echo "max_open_pull_requests must be a whole number." >&2; exit 1 ;;
           esac
-          open_count=$(curl -sS --fail \
+          curl -sS --fail \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$REPOSITORY/pulls?state=open&per_page=100" \
-            | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
-          echo "Open pull requests: $open_count (limit $MAX_OPEN)"
+            -o open-pulls.json
+          open_count=$(python3 -c 'import json; print(sum(1 for pr in json.load(open("open-pulls.json", encoding="utf-8")) if pr.get("head", {}).get("ref", "").startswith("atlas/task-")))')
+          echo "Atlas review pull requests: $open_count (limit $MAX_OPEN)"
+          python3 -c 'import json; [print("- #{}: {} ({})".format(pr["number"], pr["html_url"], pr["head"]["ref"])) for pr in json.load(open("open-pulls.json", encoding="utf-8")) if pr.get("head", {}).get("ref", "").startswith("atlas/task-")]' >> "$GITHUB_STEP_SUMMARY"
           if [ "$open_count" -ge "$MAX_OPEN" ]; then
             echo "Skipping: $open_count pull request(s) already awaiting review."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -127,6 +144,11 @@ jobs:
           echo "Dispatched. The agent opens a pull request for review; nothing merges on its own."
 
       - name: Report a skipped run
-        if: ${{ steps.guard.outputs.should_run != 'true' }}
+        if: ${{ always() && steps.guard.outputs.should_run == 'false' }}
         run: |
           echo "No dispatch: the review queue is already at its limit."
+
+      - name: Report the daylight-saving gate
+        if: ${{ github.event_name == 'schedule' && steps.schedule.outputs.should_run != 'true' }}
+        run: |
+          echo "No dispatch: this UTC slot is not 4am in America/Chicago today."

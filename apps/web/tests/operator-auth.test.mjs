@@ -44,6 +44,13 @@ test("accepts a valid signed session cookie and resolves its dbUserId", async ()
   assert.deepEqual(account, { userId: "github:octocat", dbUserId: 42 });
 });
 
+test("accepts an operator session without persisting the operator credential in browser storage", async () => {
+  const environment = { ATLAS_SESSION_SECRET: "session-secret" };
+  const token = await signSession({ role: "operator" }, environment.ATLAS_SESSION_SECRET);
+  const account = await authenticatedAccount(request({ cookie: sessionCookieHeader(token).split(";")[0] }), environment);
+  assert.deepEqual(account, { userId: "operator", dbUserId: null });
+});
+
 test("rejects a session cookie signed with the wrong secret", async () => {
   const token = await signSession({ uid: 42, gh: "octocat" }, "wrong-secret");
   const account = await authenticatedAccount(request({ cookie: sessionCookieHeader(token).split(";")[0] }), { ATLAS_SESSION_SECRET: "session-secret" });

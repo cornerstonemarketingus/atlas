@@ -182,6 +182,11 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ATLAS_CODER_PROVIDER: ${{ vars.ATLAS_CODER_PROVIDER }}
           ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
+          ATLAS_CODER_FALLBACKS: ${{ vars.ATLAS_CODER_FALLBACKS }}
+          ATLAS_CODER_RETRY_ATTEMPTS: ${{ vars.ATLAS_CODER_RETRY_ATTEMPTS }}
+          ATLAS_CODER_RETRY_MAX_DELAY_MS: ${{ vars.ATLAS_CODER_RETRY_MAX_DELAY_MS }}
+          ATLAS_TOKEN_BUDGET: ${{ vars.ATLAS_TOKEN_BUDGET }}
+          ATLAS_MAX_TURNS: ${{ vars.ATLAS_MAX_TURNS }}
           # Points the OpenAI-compatible client at a self-hosted model server
           # (vLLM, Ollama, llama.cpp, TGI, a rented GPU) instead of Groq. Set
           # it to the base URL ending in /v1. Must be https unless loopback:

@@ -8,7 +8,6 @@ const activity = [
   { title: "Hosted control plane", detail: "Deployment candidate", status: "Building" },
 ];
 
-const TOKEN_STORAGE_KEY = "atlas-operator-token";
 const TIER_LABELS: Record<string, string> = { free: "Free", pro: "Pro", team: "Team" };
 const TASK_POLL_MS = 12_000;
 
@@ -74,10 +73,6 @@ type AccountInfo = {
   modes?: string[];
 };
 
-function storedToken(): string {
-  try { return localStorage.getItem(TOKEN_STORAGE_KEY) ?? ""; } catch { return ""; }
-}
-
 export function AtlasDashboard() {
   const [repository, setRepository] = useState("cornerstonemarketingus/atlas");
   const [branch, setBranch] = useState("main");
@@ -88,7 +83,6 @@ export function AtlasDashboard() {
   const [github, setGitHub] = useState<{ connected: boolean; method: string; installUrl: string | null } | null>(null);
   const [mergePolicy, setMergePolicy] = useState("manual");
   const [mergePolicyNotice, setMergePolicyNotice] = useState("");
-  const [token, setToken] = useState("");
   const [tokenInput, setTokenInput] = useState("");
   const [showAccessCode, setShowAccessCode] = useState(false);
   const [account, setAccount] = useState<AccountInfo | null>(null);
@@ -99,30 +93,25 @@ export function AtlasDashboard() {
   const [branchOptions, setBranchOptions] = useState(["main"]);
   const [defaultBranch, setDefaultBranch] = useState("main");
 
-  // Seeded in an effect, not a lazy useState initializer, because
-  // localStorage does not exist during the server render: initializing from
-  // it would make the client's first render disagree with the server's HTML
-  // and trip a hydration mismatch. Reading a client-only value after mount is
-  // the intended pattern, and the one cascading render it costs happens once.
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe read of a client-only value
-  useEffect(() => { setToken(storedToken()); }, []);
-  function authHeaders(): Record<string, string> {
-    return token ? { authorization: `Bearer ${token}` } : {};
-  }
-  function forgetToken() {
-    try { localStorage.removeItem(TOKEN_STORAGE_KEY); } catch { /* ignore */ }
-    setToken("");
-  }
-  function unlock(event: FormEvent) {
+  function authHeaders(): Record<string, string> { return {}; }
+  async function unlock(event: FormEvent) {
     event.preventDefault();
     if (!tokenInput.trim()) return;
-    try { localStorage.setItem(TOKEN_STORAGE_KEY, tokenInput.trim()); } catch { /* ignore */ }
-    setToken(tokenInput.trim());
-    setTokenInput("");
+    const response = await fetch("/api/auth/operator", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accessCode: tokenInput.trim() }),
+    });
+    if (response.ok) {
+      setTokenInput("");
+      window.location.reload();
+      return;
+    }
+    const result = await response.json().catch(() => ({})) as { message?: string };
+    setNotice(result.message ?? "That access code could not be verified.");
   }
   async function signOut() {
     try { await fetch("/api/auth/logout", { method: "POST" }); } catch { /* ignore */ }
-    forgetToken();
     setAccount(null);
   }
   useEffect(() => {
@@ -133,7 +122,7 @@ export function AtlasDashboard() {
       .then((value) => { if (active) setAccount(value as AccountInfo); });
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, []);
   const signedIn = account?.signedIn === true;
   useEffect(() => {
     if (!signedIn) return;
@@ -193,7 +182,7 @@ export function AtlasDashboard() {
     const timer = setInterval(() => { void refreshTasks(); }, TASK_POLL_MS);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signedIn, token]);
+  }, [signedIn]);
   async function saveMergePolicy(nextPolicy: string) {
     const [owner, name] = repository.split("/");
     if (!owner || !name) { setMergePolicyNotice("Enter a repository as owner/name first."); return; }
@@ -275,18 +264,19 @@ export function AtlasDashboard() {
           </button>
         )}
         {showAccessCode && (
-          <form onSubmit={unlock} className="mt-4">
+          <form onSubmit={(event) => void unlock(event)} className="mt-4">
             <label htmlFor="operator-token">Access code</label>
             <div className="objective"><span className="prompt">›</span><input id="operator-token" type="password" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="Paste the code you were given" autoComplete="off" /><button>UNLOCK</button></div>
           </form>
         )}
+        {notice && <p className="notice" role="status">{notice}</p>}
       </div>
     </main>;
   }
   return <main>
     <header className="topbar">
       <a className="brand" href="#top"><span className="brandmark"><AtlasMark /></span>ATLAS</a>
-      <nav><a href="#mission">Mission</a><a href="#activity">Activity</a><a href="#runtime">Runtime</a></nav>
+      <nav><a href="/setup">Setup</a><a href="#mission">Mission</a><a href="#activity">Activity</a><a href="#runtime">Runtime</a></nav>
       <div className="flex items-center gap-4">
         {account?.githubLogin && (
           // An avatar rather than the login text: the account still has to be

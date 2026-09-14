@@ -23,11 +23,14 @@ async function hmacKey(secret) {
  * Not a full JWT implementation — just enough of the shape to stay debuggable, with only the one
  * algorithm this code ever produces or accepts.
  */
-export async function signSession(payload, secret, now = Date.now()) {
+export async function signSession(payload, secret, now = Date.now(), ttlSeconds = SESSION_TTL_SECONDS) {
   if (!secret) throw new Error("A session secret is required to sign a session.");
+  if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > SESSION_TTL_SECONDS) {
+    throw new RangeError("Session lifetime is outside the allowed range.");
+  }
   const issuedAt = Math.floor(now / 1000);
   const header = base64Url(JSON.stringify({ alg: "HS256", typ: "ATLAS-SESSION" }));
-  const body = base64Url(JSON.stringify({ ...payload, iat: issuedAt, exp: issuedAt + SESSION_TTL_SECONDS }));
+  const body = base64Url(JSON.stringify({ ...payload, iat: issuedAt, exp: issuedAt + ttlSeconds }));
   const unsigned = `${header}.${body}`;
   const key = await hmacKey(secret);
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(unsigned));
@@ -52,8 +55,8 @@ export async function verifySession(token, secret, now = Date.now()) {
   }
 }
 
-export function sessionCookieHeader(token) {
-  return `${SESSION_COOKIE_NAME}=${token}; Max-Age=${SESSION_TTL_SECONDS}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+export function sessionCookieHeader(token, ttlSeconds = SESSION_TTL_SECONDS) {
+  return `${SESSION_COOKIE_NAME}=${token}; Max-Age=${ttlSeconds}; Path=/; HttpOnly; Secure; SameSite=Lax`;
 }
 
 export function clearSessionCookieHeader() {

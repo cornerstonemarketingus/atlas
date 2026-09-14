@@ -1,6 +1,6 @@
 # Atlas — pending work
 
-Companion to `HANDOFF.md`. Written 2026-09-09.
+Companion to `HANDOFF.md`. Updated 2026-09-14 after the production setup completed.
 
 > **Naming:** this file is *not* `todo.md`. The repository already has `TODO.md`
 > — a 353-item long-range roadmap (280 unchecked). On a case-insensitive
@@ -13,13 +13,14 @@ Ordering matters. Items in §1 gate everything below them.
 
 ---
 
-## 1. Blockers — nothing works end-to-end until these land
+## 1. Production setup — completed
 
-These all require a human logged into a browser. No agent can do them: GitHub
-has no API for creating OAuth Apps, and secret *values* live in accounts an
-agent cannot sign into. `LAUNCH.md` has the click-by-click path.
+The initial Atlas instance is configured and live. The new `/setup` control
+center now reports these checks from the running Worker without returning
+secret values. A brand-new instance still needs one trusted bootstrap path;
+the coding agent never receives account-administration credentials.
 
-- [ ] **1.1 — Grant `ATLAS_GITHUB_TOKEN` the `Actions: Read and write`
+- [x] **1.1 — Grant `ATLAS_GITHUB_TOKEN` the `Actions: Read and write`
       permission.**
       Fixes the live bug in `HANDOFF.md` §4.1: every scheduled self-improvement
       run since Sep 6 has died with `curl: (22) ... error: 403` at the dispatch
@@ -30,21 +31,21 @@ agent cannot sign into. `LAUNCH.md` has the click-by-click path.
       Verify: run `atlas-self-improve.yml` manually from the Actions tab; the
       "Dispatch the coder agent" step should print `Dispatched.`
 
-- [ ] **1.2 — Add `D1: Edit` and `Account Settings: Read` to
+- [x] **1.2 — Add `D1: Edit` and `Account Settings: Read` to
       `CLOUDFLARE_API_TOKEN`.**
       The token deploys Workers but cannot touch D1, so migrations cannot run
       (`HANDOFF.md` §4.2). The dry run picked the right files; the real run died
       on `Unable to get membership roles`.
       Where: https://dash.cloudflare.com/profile/api-tokens
 
-- [ ] **1.3 — Confirm the D1 database name.**
+- [x] **1.3 — Confirm the D1 database name.**
       `migrate-d1.yml` was last exercised with `database_name=atlas-db`, the
       documented default. The real name lives in the `ATLAS_D1_DATABASE_NAME`
       secret and **has never been confirmed** — the run failed on permissions
       before it got far enough to tell us. Check the name in the Cloudflare
       dashboard (Workers & Pages → D1) against `wrangler.jsonc` before 1.4.
 
-- [ ] **1.4 — Apply migrations `0001_square_mandroid.sql` and
+- [x] **1.4 — Apply migrations `0001_square_mandroid.sql` and
       `0002_short_prowler.sql`.**
       Run `migrate-d1.yml` with the dry run **first**, read the file list, then
       re-run for real. Both are purely additive (`CREATE TABLE` /
@@ -52,7 +53,7 @@ agent cannot sign into. `LAUNCH.md` has the click-by-click path.
       Until this lands the `users`, `subscriptions`, `task_usage` and `tasks`
       tables **do not exist** and any sign-up writes to missing tables.
 
-- [ ] **1.5 — Create the GitHub OAuth App.**
+- [x] **1.5 — Create the GitHub OAuth App.**
       https://github.com/settings/applications/new
       Homepage: `https://atlas-web.cornerstonemarketingus.workers.dev`
       Callback, character for character:
@@ -60,14 +61,14 @@ agent cannot sign into. `LAUNCH.md` has the click-by-click path.
       A mismatched callback fails at GitHub's end with an error the app never
       sees, so this is worth pasting rather than typing.
 
-- [ ] **1.6 — Set three repository secrets.**
+- [x] **1.6 — Set three repository secrets.**
       https://github.com/cornerstonemarketingus/atlas/settings/secrets/actions/new
       - `ATLAS_SESSION_SECRET` — 32+ random bytes. Rotating it logs everyone out.
       - `ATLAS_GITHUB_OAUTH_CLIENT_ID` — from 1.5
       - `ATLAS_GITHUB_OAUTH_CLIENT_SECRET` — from 1.5 ("Generate a new client
         secret"; it is shown once)
 
-- [ ] **1.7 — Re-run `deploy-cloudflare.yml`.**
+- [x] **1.7 — Re-run `deploy-cloudflare.yml`.**
       Worker runtime secrets are uploaded by the deploy, so secrets added in 1.6
       do not reach the running Worker until a deploy runs.
       **Read the "Upload Worker runtime secrets" step output.** It prints what
@@ -75,7 +76,7 @@ agent cannot sign into. `LAUNCH.md` has the click-by-click path.
       what the live Worker can see. Expect `Uploaded 5 Worker secret(s).` and no
       `ATLAS_SESSION_SECRET` / `ATLAS_GITHUB_OAUTH_*` in the skipped list.
 
-- [ ] **1.8 — Verify sign-in actually works.**
+- [x] **1.8 — Verify sign-in actually works.**
       Open the live URL in a private window and sign in with GitHub. This is the
       first end-to-end exercise of the auth path against real GitHub; it has
       only ever run against a stub.
@@ -98,10 +99,10 @@ opening paid sign-ups.
 
 ## 3. Repository housekeeping
 
-- [ ] **3.1 — Land commit `bf2a430`.**
-      Branch `claude/atlas-state-live-deploy-dcxay7` is ahead of `main` by a
-      docs-only change to `LAUNCH.md` (plus these two handoff files). No PR is
-      open for it.
+- [ ] **3.1 — Review and close stale PR #16 if it has nothing to preserve.**
+      Atlas now counts only `atlas/task-*` pull requests toward its autonomous
+      review limit, so unrelated human work no longer blocks the nightly queue.
+      Closing a stale Atlas PR remains a human review decision.
 
 - [x] **3.2 — Vercel no longer serves a broken copy of the product.**
       `vercel.json` used to publish `apps/web/dist/client` — static assets with
@@ -115,21 +116,30 @@ opening paid sign-ups.
       Still optional: disconnecting the Vercel project entirely, which is an
       account action and no longer urgent now that the URL lands on Atlas.
 
-- [ ] **3.3 — Confirm the cron is still 4am local after the November DST
-      change.** `atlas-self-improve.yml` runs at `0 9 * * *` UTC = 04:00 CDT but
-      03:00 CST. Swap to `0 10 * * *` in November, back in March. The reasoning
-      is in a comment at the top of that file.
+- [x] **3.3 — Keep the nightly run at 4am Chicago time across DST.** The
+      workflow schedules both possible UTC hours and proceeds only when the
+      timezone-aware gate resolves to 04:00 in `America/Chicago`.
 
 ---
 
 ## 4. Improvements worth doing, none of them blocking
 
-- [ ] **4.1 — Replace the OAuth App (1.5) with a GitHub App manifest flow.**
+- [ ] **4.1 — Complete the GitHub App manifest bootstrap flow.**
       A manifest flow creates the app *and* returns its credentials in one
       redirect, which removes three of the manual steps above and the
       copy-paste errors that come with them. Bigger change than it sounds: the
       token model differs (installation tokens, not user tokens), so the auth
       path in `apps/web/app/api/auth/` needs rework.
+
+- [x] **4.5 — Add a mobile setup status center and protected operator session.**
+      `/setup` presents the eight production checks at phone width. The access
+      code is exchanged for an HttpOnly signed session and is no longer kept in
+      browser `localStorage`.
+
+- [x] **4.6 — Add explicit model fallback and bounded retry controls.** Coder
+      jobs can use an operator-configured provider/model route list. All routes
+      share the same output-token budget, and authentication or invalid-input
+      failures never fall through to another vendor.
 
 - [ ] **4.2 — Build replay.** Traces are written and readable, but nothing
       reconstructs or re-executes a session from one. This is the single
