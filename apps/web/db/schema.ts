@@ -163,3 +163,14 @@ export const computerApprovals = sqliteTable("computer_approvals", {
   taskIndex: index("computer_approvals_task_created_at_idx").on(table.taskId, table.createdAt),
   ownerStatusIndex: index("computer_approvals_owner_status_idx").on(table.requestedBy, table.status),
 }));
+
+export const accountDeletionRequests = sqliteTable("account_deletion_requests", {
+  id: text("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id),
+  requestedBy: text("requested_by").notNull(),
+  status: text("status").notNull().default("pending"),
+  requestedAt: text("requested_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  completedAt: text("completed_at"),
+}, (table) => ({
+  ownerStatusIndex: index("account_deletion_owner_status_idx").on(table.requestedBy, table.status),
+}));

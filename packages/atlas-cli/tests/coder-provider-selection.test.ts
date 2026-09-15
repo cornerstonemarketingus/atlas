@@ -62,7 +62,7 @@ describe("selectCoderProvider", () => {
     assert.equal(selection.apiKeyEnvironmentVariable, "GROQ_API_KEY");
     // The pre-existing Groq turn cap must not have changed: raising it
     // reintroduces the HTTP 413 that the cap exists to avoid.
-    assert.equal(selection.maxOutputTokensPerTurn, 4_096);
+    assert.equal(selection.maxOutputTokensPerTurn, 1_024);
     assert.equal(selection.profile.contextWindowTokens, 128_000);
   });
 
@@ -103,7 +103,7 @@ describe("selectCoderProvider", () => {
     const anthropic = expectOk(selectCoderProvider({ model: "claude-opus-5", tokenBudget: 1_000_000 }));
     const groq = expectOk(selectCoderProvider({ model: "llama-3.3-70b-versatile", tokenBudget: 1_000_000 }));
     assert.equal(anthropic.maxOutputTokensPerTurn, 8_192);
-    assert.equal(groq.maxOutputTokensPerTurn, 4_096);
+    assert.equal(groq.maxOutputTokensPerTurn, 1_024);
   });
 
   it("rejects an unknown provider by name instead of silently falling back", () => {

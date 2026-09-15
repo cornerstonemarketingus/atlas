@@ -36,6 +36,13 @@
       "when": 1789490820940,
       "tag": "0004_chilly_the_liberteens",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1789494229802,
+      "tag": "0005_parallel_peter_parker",
+      "breakpoints": true
     }
   ]
 }

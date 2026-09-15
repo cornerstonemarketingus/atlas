@@ -23,6 +23,7 @@ import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.
 import { FallbackModelProvider } from "./infrastructure/fallback-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
 import { selectCoderProvider } from "./model/coder-provider-selection.js";
+import { compactRepositorySummary } from "./model/compact-repository-summary.js";
 import { resolveCoderEndpoint, resolveSelfHostedLimits } from "./model/coder-endpoint.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
 import { RedactingModelProvider } from "./infrastructure/redacting-model-provider.js";
@@ -556,7 +557,10 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const result = await new VerifiedCoderSession({
     plan,
     maxRepairAttempts,
-    baseEvidence: [{ label: "Deterministic repository summary", content: renderJson(summary) }],
+    // Full repository detail remains available through bounded read tools. The
+    // first request carries only a compact map so entry-level hosted-model TPM
+    // limits cannot reject the run before the agent gets its first turn.
+    baseEvidence: [{ label: "Deterministic repository summary", content: renderJson(compactRepositorySummary(summary)) }],
     runAgent: async (evidence) => {
       // Each pass appends to the shared `edits` array; the delta is what this
       // pass changed. The token ledger is deliberately shared across passes,

@@ -1,0 +1,19 @@
+{
+  "name": "Atlas — Autonomous Engineering",
+  "short_name": "Atlas",
+  "description": "Plan, approve, and monitor autonomous repository and browser work.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f1efe7",
+  "theme_color": "#171a17",
+  "orientation": "portrait-primary",
+  "categories": ["developer", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

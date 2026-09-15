@@ -124,6 +124,13 @@ opening paid sign-ups.
 
 ## 4. Improvements worth doing, none of them blocking
 
+- [ ] **4.7 — Complete native mobile release gates.** The web app now has an
+      installable manifest, public legal pages, and an authenticated deletion
+      request path. The remaining Apple/Google gates and native-value plan are
+      tracked in [`MOBILE-RELEASE.md`](MOBILE-RELEASE.md). Do not submit a plain
+      WebView: add push approvals, biometric re-auth, secure storage, and deep
+      links first.
+
 - [ ] **4.1 — Complete the GitHub App manifest bootstrap flow.**
       A manifest flow creates the app *and* returns its credentials in one
       redirect, which removes three of the manual steps above and the

@@ -19,6 +19,11 @@ export const metadata: Metadata = {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
   },
+  manifest: "/manifest.webmanifest",
+  applicationName: "Atlas",
+  themeColor: "#171a17",
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Atlas" },
+  formatDetection: { telephone: false },
 };
 
 export default function RootLayout({

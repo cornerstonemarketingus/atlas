@@ -33,7 +33,7 @@ const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
     // model, and that limit can be as low as ~10,000 on shared/free tiers — a
     // naive 8,192 leaves almost no room for the prompt itself, let alone the
     // conversation history that accumulates over later turns.
-    maxOutputTokensPerTurn: 4_096,
+    maxOutputTokensPerTurn: 1_024,
   },
   anthropic: {
     providerId: "anthropic",

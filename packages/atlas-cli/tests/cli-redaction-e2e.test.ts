@@ -5,11 +5,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
 
-const CLI = new URL("../src/cli.js", import.meta.url).pathname;
+const CLI = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 const SECRET = "ghp_0123456789abcdefghijABCDEFGHIJ0123";
 
 /**
