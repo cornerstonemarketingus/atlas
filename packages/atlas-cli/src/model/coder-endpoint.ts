@@ -84,3 +84,62 @@ function withChatCompletionsPath(url: URL): URL {
   resolved.pathname = `${path}/${CHAT_COMPLETIONS_PATH}`;
   return resolved;
 }
+
+/**
+ * The shape Atlas declares for a self-hosted model.
+ *
+ * This exists because the vendor profile is wrong for a server you run. The
+ * Groq profile declares a 128,000-token window; Ollama serves 4,096 by
+ * default. Point Atlas at Ollama with the vendor numbers and a 12,000-token
+ * prompt is silently truncated to its last 4,096 — the model sees a fragment,
+ * answers from it, and nothing anywhere reports a problem. A wrong answer
+ * delivered confidently is the worst failure this agent can have, so the
+ * window is stated explicitly rather than inherited.
+ *
+ * The same number is handed to the model server (as OLLAMA_CONTEXT_LENGTH),
+ * so the two cannot drift apart.
+ */
+export interface SelfHostedLimits {
+  readonly contextWindowTokens: number;
+  readonly maxOutputTokensPerTurn: number;
+}
+
+/** Large enough for this agent's prompts, small enough for a 16 GB runner. */
+export const SELF_HOSTED_DEFAULT_CONTEXT_WINDOW = 16_384;
+/** Generation is the slow part on a CPU, so the per-turn ceiling is modest. */
+export const SELF_HOSTED_DEFAULT_MAX_OUTPUT_TOKENS = 2_048;
+
+export type SelfHostedLimitsResolution =
+  | { readonly ok: true; readonly limits: SelfHostedLimits }
+  | { readonly ok: false; readonly message: string };
+
+export function resolveSelfHostedLimits(
+  contextWindow: string | undefined,
+  maxOutputTokens: string | undefined,
+): SelfHostedLimitsResolution {
+  const context = positiveInteger(contextWindow, "--context-window", SELF_HOSTED_DEFAULT_CONTEXT_WINDOW);
+  if (typeof context === "string") return { ok: false, message: context };
+  const output = positiveInteger(maxOutputTokens, "--max-output-tokens", SELF_HOSTED_DEFAULT_MAX_OUTPUT_TOKENS);
+  if (typeof output === "string") return { ok: false, message: output };
+
+  // A ceiling that leaves no room for the prompt is not a ceiling, it is a
+  // guaranteed truncation on the very first turn.
+  if (output >= context) {
+    return {
+      ok: false,
+      message: `--max-output-tokens (${output}) must be smaller than --context-window (${context}).`,
+    };
+  }
+  return { ok: true, limits: { contextWindowTokens: context, maxOutputTokensPerTurn: output } };
+}
+
+function positiveInteger(raw: string | undefined, flag: string, fallback: number): number | string {
+  const value = (raw ?? "").trim();
+  if (value.length === 0) return fallback;
+  if (!/^\d+$/u.test(value)) return `${flag} must be a positive integer.`;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 2_000_000) {
+    return `${flag} must be a positive integer no greater than 2000000.`;
+  }
+  return parsed;
+}

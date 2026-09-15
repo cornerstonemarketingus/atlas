@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { main } from "../src/cli.js";
-import { resolveCoderEndpoint } from "../src/model/coder-endpoint.js";
+import {
+  SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+  SELF_HOSTED_DEFAULT_MAX_OUTPUT_TOKENS,
+  resolveCoderEndpoint,
+  resolveSelfHostedLimits,
+} from "../src/model/coder-endpoint.js";
 
 function endpointFor(value: string | undefined): string | undefined {
   const result = resolveCoderEndpoint(value);
@@ -102,6 +107,78 @@ test("the code command refuses --base-url against the Anthropic client", async (
     assert.ok(
       errors.some((line) => /OpenAI-compatible/u.test(line)),
       `expected a provider complaint, got: ${errors.join(" | ")}`,
+    );
+  } finally {
+    console.error = original;
+  }
+});
+
+// --- self-hosted limits ---------------------------------------------------
+
+test("defaults to a window a 16GB runner can actually serve", () => {
+  const result = resolveSelfHostedLimits(undefined, undefined);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.ok ? result.limits : undefined, {
+    contextWindowTokens: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+    maxOutputTokensPerTurn: SELF_HOSTED_DEFAULT_MAX_OUTPUT_TOKENS,
+  });
+});
+
+test("accepts explicit limits", () => {
+  const result = resolveSelfHostedLimits("32768", "4096");
+  assert.deepEqual(
+    result.ok ? result.limits : undefined,
+    { contextWindowTokens: 32_768, maxOutputTokensPerTurn: 4_096 },
+  );
+});
+
+test("refuses an output ceiling that leaves no room for the prompt", () => {
+  // Not a ceiling at all: it guarantees truncation on the first turn.
+  for (const [context, output] of [["4096", "4096"], ["4096", "8192"]]) {
+    const result = resolveSelfHostedLimits(context, output);
+    assert.equal(result.ok, false, `${context}/${output}`);
+    assert.match(result.ok ? "" : result.message, /smaller than/u);
+  }
+});
+
+test("refuses nonsense limits rather than silently defaulting", () => {
+  for (const value of ["0", "-1", "1.5", "abc", "9999999999"]) {
+    assert.equal(resolveSelfHostedLimits(value, undefined).ok, false, value);
+    assert.equal(resolveSelfHostedLimits(undefined, value).ok, false, value);
+  }
+});
+
+test("the code command refuses a window override without --base-url", async () => {
+  // Wiring. Accepting it against a vendor would declare a limit that is not
+  // the one in force, which is the exact class of silent lie this guards.
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => { errors.push(parts.join(" ")); };
+  try {
+    const code = await main(["code", ".", "objective", "--model", "openai/gpt-oss-120b", "--context-window", "8192"]);
+    assert.equal(code, 2);
+    assert.ok(
+      errors.some((line) => /--base-url/u.test(line)),
+      `expected a --base-url complaint, got: ${errors.join(" | ")}`,
+    );
+  } finally {
+    console.error = original;
+  }
+});
+
+test("the code command rejects a bad --context-window instead of ignoring it", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => { errors.push(parts.join(" ")); };
+  try {
+    const code = await main([
+      "code", ".", "objective", "--model", "openai/gpt-oss-120b",
+      "--base-url", "http://localhost:11434/v1", "--context-window", "nope",
+    ]);
+    assert.equal(code, 2);
+    assert.ok(
+      errors.some((line) => /--context-window must be a positive integer/u.test(line)),
+      `got: ${errors.join(" | ")}`,
     );
   } finally {
     console.error = original;
