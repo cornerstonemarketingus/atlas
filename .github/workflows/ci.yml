@@ -78,6 +78,27 @@ jobs:
       - name: Build and test
         run: npm test
 
+  local-control:
+    name: apps/local-control
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/local-control
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # This package deliberately has no third-party dependencies: the local
+      # control plane must remain installable without an npm registry. Its
+      # SQLite, HTTP, crypto, and test support come from the pinned Node runtime.
+      - name: Test sovereign control plane
+        run: npm test
+
   runner-scripts:
     name: runner scripts
     runs-on: ubuntu-latest
