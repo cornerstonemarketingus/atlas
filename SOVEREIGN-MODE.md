@@ -7,6 +7,31 @@ runtime dependencies.
 
 ## Working today
 
+### Local control plane
+
+Start the loopback-only task service:
+
+```text
+cd apps/local-control
+npm start
+```
+
+It creates a local access token on first launch, stores tasks in SQLite under
+the user's `.atlas` directory, restores interrupted runs safely after a restart,
+and invokes the local coder without a hosted queue. Its initial API exposes
+health, task creation, task listing, and task status. It binds to `127.0.0.1`
+by default; remote phone access must be added through an authenticated pairing
+layer rather than exposing this token-bearing HTTP service directly.
+
+Open `http://127.0.0.1:4317` for the responsive local task interface. Paste the
+first-launch token to unlock the current browser tab, then queue and monitor
+isolated coding tasks without visiting an Atlas-hosted site.
+
+Every API-launched task runs in a detached Git worktree under `.atlas/worktrees`
+instead of editing the customer's active checkout. Atlas also writes a portable
+binary patch under `.atlas/patches`; applying or publishing that patch does not
+require GitHub or any particular Git hosting company.
+
 ### Local coding
 
 Install Node.js, Git, and Ollama; start Ollama and pull a model:
@@ -46,13 +71,13 @@ and hosted-browser APIs entirely.
 
 ## Remaining product work
 
-- [ ] Move task queues, approvals, policies, and audit browsing into the local
-      companion so the hosted Worker is unnecessary for day-to-day use.
+- [ ] Complete approvals, policies, and audit browsing in the local companion.
+      The local SQLite task queue and runner API are now implemented.
 - [ ] Add local identity backed by the operating-system account and device
       keychain; GitHub OAuth must be optional.
-- [ ] Add SQLite storage and encrypted export/import for tasks and settings.
-- [ ] Replace GitHub-specific pull-request delivery with a Git host adapter:
-      local branch/patch first, GitHub/GitLab/Forgejo optional.
+- [ ] Add encrypted export/import for the implemented local SQLite task store.
+- [ ] Add GitHub/GitLab/Forgejo publishing adapters on top of the implemented
+      host-independent isolated-worktree and portable-patch delivery path.
 - [ ] Package Ollama/model discovery, health checks, and model downloads in the
       Windows installer instead of requiring terminal setup.
 - [ ] Add LAN and customer-managed HTTPS pairing for phone control without an
