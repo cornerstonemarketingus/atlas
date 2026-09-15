@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { computerDevices } from "../../../../db/schema";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
@@ -8,7 +8,7 @@ import { hashDeviceSecret } from "../companion-auth";
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-  const rows = await getDb().select().from(computerDevices).where(eq(computerDevices.requestedBy, account.userId)).orderBy(desc(computerDevices.createdAt));
+  const rows = await getDb().select().from(computerDevices).where(and(eq(computerDevices.requestedBy, account.userId), eq(computerDevices.platform, "windows"))).orderBy(desc(computerDevices.createdAt));
   return Response.json({ devices: rows.map((device) => ({ id: device.id, name: device.name, platform: device.platform, status: device.status, lastSeenAt: device.lastSeenAt, revokedAt: device.revokedAt, createdAt: device.createdAt })) }, { headers: { "cache-control": "no-store" } });
 }
 

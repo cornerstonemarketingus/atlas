@@ -1,0 +1,1 @@
+ALTER TABLE `computer_tasks` ADD `execution_provider` text DEFAULT 'windows' NOT NULL;
