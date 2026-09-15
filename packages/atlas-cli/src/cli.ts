@@ -23,7 +23,7 @@ import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.
 import { FallbackModelProvider } from "./infrastructure/fallback-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
 import { selectCoderProvider } from "./model/coder-provider-selection.js";
-import { resolveCoderEndpoint } from "./model/coder-endpoint.js";
+import { resolveCoderEndpoint, resolveSelfHostedLimits } from "./model/coder-endpoint.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
 import { RedactingModelProvider } from "./infrastructure/redacting-model-provider.js";
 import { redactRenderedOutput } from "./presentation/redacted-output.js";
@@ -60,7 +60,7 @@ const USAGE = `Usage:
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
-       [--base-url <openai-compatible-base-url>] [--fallback <provider:model:API_KEY_ENV>] [--token-budget N] [--max-turns N]
+       [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--token-budget N] [--max-turns N]
        [--retry-attempts N] [--retry-max-delay-ms N]
        [--no-verify] [--verify-dir <relative-path>] [--max-repair-attempts N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]`;
@@ -319,10 +319,18 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   // Points the OpenAI-compatible client at a self-hosted server instead of the
   // vendor default. Falls back to the environment so CI can set it as a
   // variable without every workflow growing another flag.
+  // Only meaningful alongside --base-url: a server you run has whatever window
+  // it was started with, not the vendor's.
+  const contextWindowOption = args.includes("--context-window")
+    ? readRequiredOption(args, "--context-window")
+    : process.env["ATLAS_CODER_CONTEXT_WINDOW"];
+  const maxOutputOption = args.includes("--max-output-tokens")
+    ? readRequiredOption(args, "--max-output-tokens")
+    : process.env["ATLAS_CODER_MAX_OUTPUT_TOKENS"];
   const baseUrlOption = args.includes("--base-url")
     ? readRequiredOption(args, "--base-url")
     : process.env["ATLAS_CODER_BASE_URL"];
-  if (objective === undefined || model === null || apiKeyEnvOption === null || providerOption === null || baseUrlOption === null) {
+  if (objective === undefined || model === null || apiKeyEnvOption === null || providerOption === null || baseUrlOption === null || contextWindowOption === null || maxOutputOption === null) {
     if (objective === undefined) console.error(USAGE);
     return 2;
   }
@@ -350,6 +358,17 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     return 2;
   }
   const endpoint = resolvedEndpoint.endpoint;
+  const selfHosted = resolveSelfHostedLimits(contextWindowOption ?? undefined, maxOutputOption ?? undefined);
+  if (!selfHosted.ok) {
+    console.error(selfHosted.message);
+    return 2;
+  }
+  // Refused rather than ignored: accepting a window override while talking to
+  // a vendor would state a limit that is not the one actually in force.
+  if (endpoint === undefined && `${contextWindowOption ?? ""}${maxOutputOption ?? ""}`.trim().length > 0) {
+    console.error("--context-window and --max-output-tokens describe a self-hosted server; pass --base-url too.");
+    return 2;
+  }
   // Refused rather than ignored. A custom endpoint that silently did nothing
   // would send the repository to the vendor the operator was trying to avoid,
   // and they would have no way to tell from the output.
@@ -438,10 +457,18 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
 
   const retryOptions = { maximumAttempts: retryAttemptsOption ?? 3, maximumDelayMs: retryMaxDelayOption ?? 30_000 };
   const makeRoute = (routeModel: string, routeSelection: typeof selection.selection, routeApiKey: string, routeEndpoint?: URL) => {
+    // A self-hosted route declares the window its server was actually started
+    // with. Inheriting the vendor's 128,000 while Ollama serves 4,096 gets the
+    // prompt silently truncated to its tail — the model answers from a
+    // fragment and nothing reports a problem.
     const routeCapabilities = [{
       model: routeModel,
-      contextWindowTokens: routeSelection.profile.contextWindowTokens,
-      maxOutputTokens: routeSelection.maxOutputTokensPerTurn,
+      contextWindowTokens: routeEndpoint === undefined
+        ? routeSelection.profile.contextWindowTokens
+        : selfHosted.limits.contextWindowTokens,
+      maxOutputTokens: routeEndpoint === undefined
+        ? routeSelection.maxOutputTokensPerTurn
+        : Math.min(selfHosted.limits.maxOutputTokensPerTurn, routeSelection.maxOutputTokensPerTurn),
       supportsTools: true,
       supportsJson: true,
       supportsStreaming: false,

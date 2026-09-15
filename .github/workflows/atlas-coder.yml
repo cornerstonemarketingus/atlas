@@ -120,6 +120,7 @@ jobs:
           SELF_HOSTED_MODEL: ${{ vars.ATLAS_SELF_HOSTED_MODEL }}
           OLLAMA_VERSION: ${{ vars.ATLAS_OLLAMA_VERSION }}
           OLLAMA_SHA256: ${{ vars.ATLAS_OLLAMA_SHA256 }}
+          CONTEXT_LENGTH: ${{ vars.ATLAS_CODER_CONTEXT_WINDOW }}
         run: |
           set -euo pipefail
           if [ -z "${OLLAMA_VERSION:-}" ]; then
@@ -151,6 +152,13 @@ jobs:
           sudo tar -C /usr -xzf "$archive"
           rm -f "$archive"
 
+          # The server's window and the window Atlas declares must be the same
+          # number. Ollama defaults to 4096; Atlas would otherwise send a
+          # 12,000-token prompt that is silently truncated to its tail, and the
+          # model would answer from a fragment with nothing reporting a fault.
+          # ATLAS_CODER_CONTEXT_WINDOW feeds both, so they cannot drift.
+          export OLLAMA_CONTEXT_LENGTH="${CONTEXT_LENGTH:-16384}"
+          echo "Model server context length: $OLLAMA_CONTEXT_LENGTH"
           ollama serve > "${RUNNER_TEMP}/ollama.log" 2>&1 &
           for _ in $(seq 1 60); do
             if curl -sf http://127.0.0.1:11434/api/tags > /dev/null; then break; fi
@@ -192,6 +200,10 @@ jobs:
           # it to the base URL ending in /v1. Must be https unless loopback:
           # the prompt carries repository content.
           ATLAS_CODER_BASE_URL: ${{ vars.ATLAS_CODER_BASE_URL }}
+          # Both only apply to a self-hosted endpoint; against a vendor the
+          # CLI refuses them rather than stating a limit that is not in force.
+          ATLAS_CODER_CONTEXT_WINDOW: ${{ vars.ATLAS_CODER_CONTEXT_WINDOW }}
+          ATLAS_CODER_MAX_OUTPUT_TOKENS: ${{ vars.ATLAS_CODER_MAX_OUTPUT_TOKENS }}
           # Self-verification: which directory declares the scripts to run
           # (a monorepo usually declares none at its root), and how many
           # repair passes the agent gets when it breaks something.
