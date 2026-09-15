@@ -46,13 +46,17 @@ Opt-in, off by default. Set:
 
 ```
 ATLAS_SELF_HOSTED_MODEL = qwen2.5-coder:7b     (any Ollama model tag)
-ATLAS_OLLAMA_VERSION    = v0.12.3              (a tag from ollama/ollama releases)
+ATLAS_OLLAMA_VERSION    = v0.34.1              (a tag from ollama/ollama releases)
 ATLAS_OLLAMA_SHA256     = <optional, see below>
 ```
 
 The coder job then installs Ollama, starts it, pulls the model, and points
 Atlas at `http://127.0.0.1:11434/v1`. With `ATLAS_SELF_HOSTED_MODEL` unset the
 step is skipped entirely and nothing changes.
+
+Atlas downloads the release's `ollama-linux-amd64.tar.zst` asset directly.
+If Ollama changes its release packaging again, the download fails explicitly;
+Atlas never falls back to piping a remote installer script into a shell.
 
 `ATLAS_OLLAMA_VERSION` is required rather than defaulted. This job has access
 to the repository, and piping an unpinned remote installer into a shell would

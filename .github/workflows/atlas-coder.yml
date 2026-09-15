@@ -132,7 +132,10 @@ jobs:
             exit 1
           fi
 
-          archive=ollama-linux-amd64.tgz
+          # Current Ollama Linux releases use zstd archives. Keeping the exact
+          # asset name here makes a packaging change fail loudly rather than
+          # downloading an installer script and executing it implicitly.
+          archive=ollama-linux-amd64.tar.zst
           url="https://github.com/ollama/ollama/releases/download/${OLLAMA_VERSION}/${archive}"
           echo "Downloading $url"
           curl -fsSL --retry 3 -o "$archive" "$url"
@@ -149,7 +152,7 @@ jobs:
             echo "No ATLAS_OLLAMA_SHA256 set. Set it to the value above to pin this build."
           fi
 
-          sudo tar -C /usr -xzf "$archive"
+          sudo tar -C /usr --zstd -xf "$archive"
           rm -f "$archive"
 
           # The server's window and the window Atlas declares must be the same
