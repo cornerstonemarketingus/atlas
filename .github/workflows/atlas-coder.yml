@@ -237,6 +237,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
         run: node scripts/runner/create-coder-pull-request.mjs
 
+      # always(): a failed run is exactly the one whose verdict is worth
+      # putting on the run's front page. The script never exits non-zero, so
+      # this step cannot turn a green run red.
+      - name: Write run summary
+        if: always()
+        run: node scripts/runner/run-summary.mjs
+
       - name: Upload bounded task artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -78,6 +78,21 @@ jobs:
       - name: Build and test
         run: npm test
 
+  runner-scripts:
+    name: runner scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # scripts/runner carries its own tests and, until now, nothing ran them:
+      # there is no root package.json, and the other jobs are scoped to
+      # packages/atlas-cli and apps/web. A test that never executes asserts a
+      # confidence it has not earned.
+      - name: Test runner scripts
+        run: node --test scripts/runner/*.test.mjs
+
   workflows:
     name: workflow syntax
     runs-on: ubuntu-latest
