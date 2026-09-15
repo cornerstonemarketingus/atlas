@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
   const rows = await getDb().select().from(computerDevices).where(eq(computerDevices.requestedBy, account.userId)).orderBy(desc(computerDevices.createdAt));
-  return Response.json({ devices: rows.map(({ secretHash: _secretHash, ...device }) => device) }, { headers: { "cache-control": "no-store" } });
+  return Response.json({ devices: rows.map((device) => ({ id: device.id, name: device.name, platform: device.platform, status: device.status, lastSeenAt: device.lastSeenAt, revokedAt: device.revokedAt, createdAt: device.createdAt })) }, { headers: { "cache-control": "no-store" } });
 }
 
 export async function POST(request: Request) {
