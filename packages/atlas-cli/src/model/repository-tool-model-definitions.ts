@@ -142,3 +142,16 @@ export const REPOSITORY_WRITE_MODEL_TOOLS: readonly ModelToolDefinition[] = [
     },
   },
 ];
+
+/**
+ * Minimal tool contract for rate-limited hosted coding models. Groq counts the
+ * tool grammar toward TPM, so advertising every convenience tool can reject a
+ * request before the model gets a turn. These three still support discovery,
+ * exact reads, and atomic multi-file edits; the full registry remains behind
+ * the policy boundary.
+ */
+export const COMPACT_CODER_MODEL_TOOLS: readonly ModelToolDefinition[] = [
+  REPOSITORY_READ_ONLY_MODEL_TOOLS[1]!,
+  REPOSITORY_READ_ONLY_MODEL_TOOLS[4]!,
+  REPOSITORY_WRITE_MODEL_TOOLS[1]!,
+];
