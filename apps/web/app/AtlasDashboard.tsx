@@ -273,7 +273,7 @@ export function AtlasDashboard() {
   return <main>
     <header className="topbar">
       <a className="brand" href="#top"><span className="brandmark"><AtlasMark /></span>ATLAS</a>
-      <nav><a href="/setup">Setup</a><a href="#mission">Mission</a><a href="#activity">Activity</a><a href="#runtime">Runtime</a></nav>
+      <nav><a href="/computer">Computer</a><a href="/setup">Setup</a><a href="#mission">Mission</a><a href="#activity">Activity</a></nav>
       <div className="flex items-center gap-4">
         {account?.githubLogin && (
           // An avatar rather than the login text: the account still has to be

@@ -110,3 +110,55 @@ export const tasks = sqliteTable("tasks", {
   taskIdIndex: uniqueIndex("tasks_task_id_idx").on(table.taskId),
   requestedByIndex: index("tasks_requested_by_created_at_idx").on(table.requestedBy, table.createdAt),
 }));
+
+/** A paired executor. Secrets are returned once and only their SHA-256 digest is stored. */
+export const computerDevices = sqliteTable("computer_devices", {
+  id: text("id").primaryKey(),
+  requestedBy: text("requested_by").notNull(),
+  name: text("name").notNull(),
+  platform: text("platform").notNull().default("windows"),
+  secretHash: text("secret_hash").notNull(),
+  status: text("status").notNull().default("offline"),
+  lastSeenAt: text("last_seen_at"),
+  revokedAt: text("revoked_at"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  ownerIndex: index("computer_devices_owner_created_at_idx").on(table.requestedBy, table.createdAt),
+  secretHashIndex: uniqueIndex("computer_devices_secret_hash_idx").on(table.secretHash),
+}));
+
+/** Browser goals queued from the phone and leased by exactly one paired executor. */
+export const computerTasks = sqliteTable("computer_tasks", {
+  id: text("id").primaryKey(),
+  requestedBy: text("requested_by").notNull(),
+  deviceId: text("device_id").notNull().references(() => computerDevices.id),
+  objective: text("objective").notNull(),
+  startUrl: text("start_url"),
+  status: text("status").notNull().default("queued"),
+  result: text("result"),
+  error: text("error"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  startedAt: text("started_at"),
+  completedAt: text("completed_at"),
+}, (table) => ({
+  ownerIndex: index("computer_tasks_owner_created_at_idx").on(table.requestedBy, table.createdAt),
+  deviceQueueIndex: index("computer_tasks_device_status_created_at_idx").on(table.deviceId, table.status, table.createdAt),
+}));
+
+/** Exact, one-time approval requested before a companion performs a consequential action. */
+export const computerApprovals = sqliteTable("computer_approvals", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull().references(() => computerTasks.id),
+  requestedBy: text("requested_by").notNull(),
+  actionHash: text("action_hash").notNull(),
+  summary: text("summary").notNull(),
+  domain: text("domain"),
+  status: text("status").notNull().default("pending"),
+  expiresAt: text("expires_at").notNull(),
+  decidedAt: text("decided_at"),
+  consumedAt: text("consumed_at"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  taskIndex: index("computer_approvals_task_created_at_idx").on(table.taskId, table.createdAt),
+  ownerStatusIndex: index("computer_approvals_owner_status_idx").on(table.requestedBy, table.status),
+}));
