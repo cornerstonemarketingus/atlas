@@ -114,6 +114,23 @@ jobs:
       # nothing about the job changes. See LOCAL-MODEL.md for the trade-offs —
       # it is much slower than a hosted API and, on a private repository,
       # consumes Actions minutes that are not free.
+      # Guards the EXPENSIVE path only. A hosted-API run is one to three
+      # minutes; a CPU run is one to two hours, and on a private repository
+      # those minutes are billed past the free allowance. The failure being
+      # prevented is a surprise invoice, not a broken run.
+      #
+      # Fails open: if the budget cannot be read the run proceeds and says so.
+      # A permissions gap silently blocking every run would get this switched
+      # off, and a guard that is off protects nothing.
+      - name: Check the Actions minutes budget
+        if: ${{ vars.ATLAS_SELF_HOSTED_MODEL != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
+          ATLAS_BILLING_ACCOUNT: ${{ github.repository_owner }}
+          ATLAS_ESTIMATED_RUN_MINUTES: ${{ vars.ATLAS_ESTIMATED_RUN_MINUTES }}
+          ATLAS_ACTIONS_MINUTES_RESERVE: ${{ vars.ATLAS_ACTIONS_MINUTES_RESERVE }}
+        run: node scripts/runner/actions-budget.mjs
+
       - name: Start a self-hosted model server
         if: ${{ vars.ATLAS_SELF_HOSTED_MODEL != '' }}
         env:

@@ -93,6 +93,23 @@ checks before and after every edit, and a change that fails is reported as
 regressed rather than proposed as if it were fine. You get a wasted run, not a
 broken main branch.
 
+### The minutes guard
+
+Because those minutes are real money, a self-hosted run checks the account's
+remaining Actions allowance before it starts and refuses if the run would eat
+into a reserve held back for ordinary CI:
+
+```
+ATLAS_ESTIMATED_RUN_MINUTES   = 120   (what a CPU run costs; default)
+ATLAS_ACTIONS_MINUTES_RESERVE = 300   (kept free for CI; default)
+```
+
+It **fails open**. If the budget cannot be read — the token has no billing
+permission, the API is down — the run proceeds and prints why it could not
+check. A permissions gap that silently blocked every run would get the guard
+switched off, and a guard that is off protects nothing. Hosted-API runs are
+not checked at all: three minutes does not need a guard.
+
 **Try it once by hand before trusting it to the schedule.** Dispatch
 `atlas-coder.yml` manually with the variables set and read the timings in the
 log. Estimates are estimates; the run tells you the truth.
