@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { ProviderReadOnlyToolAgent } from "./agent/provider-read-only-tool-agent.js";
 import { VerifiedCoderSession } from "./agent/verified-coder-session.js";
@@ -46,6 +47,7 @@ import { BoundedCommandRunner } from "./infrastructure/bounded-command-runner.js
 import { GhCliRepositoryHost } from "./infrastructure/gh-cli-repository-host.js";
 import { executeGitHubCommand } from "./cli-github.js";
 import { executeRedactCommand, readStandardInput } from "./cli-redact.js";
+import { executeReplayCommand } from "./cli-replay.js";
 import { renderGitHubJson, renderGitHubText } from "./presentation/github-renderers.js";
 
 const USAGE = `Usage:
@@ -56,6 +58,7 @@ const USAGE = `Usage:
   atlas read <repository-path> <relative-file-path> [--start-line N] [--end-line N] [--max-lines N] [--max-bytes N] [--format text|json]
   atlas tree <repository-path> [--max-depth N] [--max-entries N] [--format text|json]
   atlas redact [--max-characters N] [--summary]   (reads stdin, writes redacted text to stdout)
+  atlas replay <audit-log.jsonl> [--session <id>] [--format text|json]
   atlas github repo <owner>/<repository> [--format text|json]
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
@@ -74,6 +77,13 @@ export async function main(args: readonly string[]): Promise<number> {
   if (args[0] === "redact") {
     return await executeRedactCommand(args, {
       readInput: readStandardInput,
+      write: (text) => process.stdout.write(text),
+      writeError: (text) => process.stderr.write(text),
+    });
+  }
+  if (args[0] === "replay") {
+    return await executeReplayCommand(args, {
+      readTrace: (target) => readFile(target, "utf8"),
       write: (text) => process.stdout.write(text),
       writeError: (text) => process.stderr.write(text),
     });
