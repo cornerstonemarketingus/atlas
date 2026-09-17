@@ -105,11 +105,46 @@ export const tasks = sqliteTable("tasks", {
   objective: text("objective").notNull(),
   mergePolicy: text("merge_policy").notNull().default("manual"),
   githubRunId: integer("github_run_id"),
+  conversationId: text("conversation_id"),
+  executionProvider: text("execution_provider").notNull().default("managed"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
   taskIdIndex: uniqueIndex("tasks_task_id_idx").on(table.taskId),
   requestedByIndex: index("tasks_requested_by_created_at_idx").on(table.requestedBy, table.createdAt),
+  conversationIndex: index("tasks_conversation_idx").on(table.conversationId, table.createdAt),
 }));
+
+export const conversations = sqliteTable("conversations", {
+  id: text("id").primaryKey(),
+  requestedBy: text("requested_by").notNull(),
+  title: text("title").notNull(),
+  repository: text("repository").notNull(),
+  branch: text("branch").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({ ownerIndex: index("conversations_owner_updated_idx").on(table.requestedBy, table.updatedAt) }));
+
+export const conversationMessages = sqliteTable("conversation_messages", {
+  id: text("id").primaryKey(),
+  conversationId: text("conversation_id").notNull().references(() => conversations.id),
+  requestedBy: text("requested_by").notNull(),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  attachmentsJson: text("attachments_json"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({ conversationIndex: index("conversation_messages_conversation_idx").on(table.conversationId, table.createdAt) }));
+
+/** Safe user-facing milestones, not private model chain-of-thought. */
+export const runEvents = sqliteTable("run_events", {
+  id: text("id").primaryKey(),
+  conversationId: text("conversation_id").notNull().references(() => conversations.id),
+  taskId: text("task_id"),
+  requestedBy: text("requested_by").notNull(),
+  kind: text("kind").notNull(),
+  label: text("label").notNull(),
+  detail: text("detail"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({ conversationIndex: index("run_events_conversation_idx").on(table.conversationId, table.createdAt) }));
 
 /** A paired executor. Secrets are returned once and only their SHA-256 digest is stored. */
 export const computerDevices = sqliteTable("computer_devices", {

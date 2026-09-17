@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { eq, and, desc } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { repositories, tasks } from "../../../db/schema";
+import { conversationMessages, conversations, repositories, runEvents, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
@@ -24,6 +24,8 @@ export async function POST(request: Request) {
   const validated = validateTask(body, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES));
   if ("error" in validated) return Response.json({ message: validated.error }, { status: validated.status });
   const task = validated.task;
+  const requestedConversationId = typeof (body as { conversationId?: unknown }).conversationId === "string" ? (body as { conversationId: string }).conversationId : "";
+  const conversationId = /^[0-9a-f-]{36}$/u.test(requestedConversationId) ? requestedConversationId : randomUUID();
 
   // Platform-header and operator-token requests aren't billed GitHub accounts
   // (see operator-auth.mjs) — they bypass plan gating entirely rather than
@@ -62,8 +64,8 @@ export async function POST(request: Request) {
       const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
       const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy });
       if (!response.ok) return Response.json({ message: "GitHub Actions rejected the task dispatch." }, { status: 502 });
-      const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy);
-      return Response.json({ taskId, status: "dispatched", runner: "github-actions", recorded }, { status: 202 });
+      const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "managed");
+      return Response.json({ taskId, conversationId, status: "dispatched", runner: "managed", recorded }, { status: 202 });
     } catch {
       return Response.json({ message: "GitHub Actions is temporarily unavailable." }, { status: 502 });
     }
@@ -78,7 +80,8 @@ export async function POST(request: Request) {
     // run, so a row for it could only ever be matched against — and could steal
     // the run id of — a real Actions dispatch of the same workflow. Custom-runner
     // deployments get no task history until they report runs of their own.
-    return Response.json({ taskId, status: "dispatched", runner: "custom" }, { status: 202 });
+    const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "private");
+    return Response.json({ taskId, conversationId, status: "dispatched", runner: "private", recorded }, { status: 202 });
   } catch {
     return Response.json({ message: "The autonomous task dispatcher is temporarily unavailable." }, { status: 502 });
   }
@@ -96,9 +99,17 @@ async function recordDispatchedTask(
   task: { repository: string; branch: string; mode: string; objective: string },
   taskId: string,
   mergePolicy: string,
+  conversationId: string,
+  executionProvider: string,
 ): Promise<boolean> {
   try {
-    await getDb().insert(tasks).values({
+    const db = getDb();
+    const now = new Date().toISOString();
+    await db.insert(conversations).values({ id: conversationId, requestedBy: account.userId, title: task.objective.slice(0, 72), repository: task.repository, branch: task.branch, createdAt: now, updatedAt: now })
+      .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now, repository: task.repository, branch: task.branch } });
+    await db.insert(conversationMessages).values({ id: randomUUID(), conversationId, requestedBy: account.userId, role: "user", content: task.objective, createdAt: now });
+    await db.insert(runEvents).values({ id: randomUUID(), conversationId, taskId, requestedBy: account.userId, kind: "queued", label: "Request received", detail: "Atlas is preparing a private execution workspace.", createdAt: now });
+    await db.insert(tasks).values({
       taskId,
       userId: account.dbUserId,
       requestedBy: account.userId,
@@ -107,9 +118,11 @@ async function recordDispatchedTask(
       mode: task.mode,
       objective: task.objective,
       mergePolicy,
+      conversationId,
+      executionProvider,
       // Written explicitly rather than left to CURRENT_TIMESTAMP so the run-id
       // heuristic has an unambiguous, zone-marked dispatch time to match on.
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     });
     return true;
   } catch {
@@ -178,7 +191,7 @@ export async function GET(request: Request) {
   // task owns a run id it is never re-derived.
   const groups = new Map<string, { repository: string; workflow: string }>();
   for (const row of rows) {
-    if (row.githubRunId !== null) continue;
+    if (row.executionProvider !== "managed" || row.githubRunId !== null) continue;
     const workflow = workflowOf(row);
     // JSON rather than a delimiter string: a repository is "owner/name" and a
     // workflow is a filename, so no single separator character is obviously
@@ -240,7 +253,7 @@ export async function GET(request: Request) {
   const pullRequests = new Map<string, PullRequest>();
   await Promise.all(
     rows
-      .filter((row) => row.mode === "coder" && runIdFor(row) !== null)
+      .filter((row) => row.executionProvider === "managed" && row.mode === "coder" && runIdFor(row) !== null)
       .slice(0, MAX_PULL_REQUEST_LOOKUPS)
       .map(async (row) => {
         try {
@@ -282,7 +295,8 @@ function taskView(row: TaskRow, runId: number | null, run: Run | null, pullReque
     objective: row.objective,
     mergePolicy: row.mergePolicy,
     createdAt: row.createdAt,
-    status: taskStatusFromRun(run),
+    status: row.executionProvider === "private" && run === null ? "dispatched" : taskStatusFromRun(run),
+    executionProvider: row.executionProvider,
     run: runId === null ? null : { id: runId, url: run?.htmlUrl ?? runUrl(row.repository, runId), status: run?.status ?? null, conclusion: run?.conclusion ?? null },
     pullRequest,
   };

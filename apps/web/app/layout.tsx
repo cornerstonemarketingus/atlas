@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import "./workspace.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Atlas — Autonomous engineering control plane",
-  description: "Plan, approve, validate, and ship repository changes with Atlas.",
+  title: "Atlas — Build what you're imagining",
+  description: "Build, investigate, and operate software with a private AI workspace.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

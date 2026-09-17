@@ -1,6 +1,7 @@
 "use client";
 import { FormEvent, useEffect, useState } from "react";
 import { AtlasMark } from "./AtlasMark.js";
+import { AtlasWorkspace } from "./AtlasWorkspace.js";
 
 const activity = [
   { title: "Repository intelligence foundation", detail: "149 checks passed", status: "Shipped" },
@@ -269,6 +270,15 @@ export function AtlasDashboard() {
         {notice && <p className="notice" role="status">{notice}</p>}
       </div>
     </main>;
+  }
+  if (process.env.NEXT_PUBLIC_ATLAS_WORKSPACE !== "legacy") {
+    return <AtlasWorkspace
+      repository={repository} repositories={repositoryOptions} branch={branch} branches={branchOptions} defaultBranch={defaultBranch}
+      mode={mode} objective={objective} submitting={submitting} notice={notice} tasks={taskList?.tasks ?? []}
+      accountLabel={account?.githubLogin ?? "Owner"} connected={github?.connected ?? null}
+      onRepository={setRepository} onBranch={setBranch} onMode={setMode} onObjective={setObjective}
+      onSubmit={submit} onSignOut={() => void signOut()}
+    />;
   }
   return <main>
     <header className="topbar">
