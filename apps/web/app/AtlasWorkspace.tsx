@@ -1,5 +1,6 @@
 "use client";
 import { FormEvent, useRef, useState } from "react";
+import Link from "next/link";
 import { AtlasMark } from "./AtlasMark.js";
 
 type Task = { taskId:string; objective:string; repository:string; branch:string; mode:string; status:string; createdAt:string; pullRequest?:{url:string|null;number:number;merged:boolean}|null };
@@ -24,7 +25,7 @@ export function AtlasWorkspace(props:Props){
   function submit(event:FormEvent){setFresh(false);setAttachments([]);props.onSubmit(event)}
   return <main className="atlas-workspace">
     <aside className="workspace-sidebar">
-      <a className="workspace-brand" href="/"><span><AtlasMark/></span>ATLAS</a>
+      <Link className="workspace-brand" href="/"><span><AtlasMark/></span>ATLAS</Link>
       <button className="new-thread" onClick={()=>{props.onObjective("");setAttachments([]);setFresh(true)}}><b>＋</b> New conversation</button>
       <p className="sidebar-label">Recent</p>
       <div className="thread-list">{props.tasks.slice(0,8).map((task,index)=><button className={index===0?"active":""} key={task.taskId}><span>{task.objective}</span><small>{task.repository}</small></button>)}</div>
@@ -40,7 +41,7 @@ export function AtlasWorkspace(props:Props){
         </div>}
       </div>
       <form className="chat-composer" onSubmit={submit}>
-        {attachments.length>0&&<div className="attachment-row">{attachments.map((item,index)=><div key={item.url}><img src={item.url} alt=""/><span>{item.name}</span><button type="button" onClick={()=>setAttachments(items=>items.filter((_,i)=>i!==index))}>×</button></div>)}</div>}
+        {attachments.length>0&&<div className="attachment-row">{attachments.map((item,index)=><div key={item.url}><span className="attachment-preview" style={{backgroundImage:`url(${item.url})`}}/><span>{item.name}</span><button type="button" onClick={()=>setAttachments(items=>items.filter((_,i)=>i!==index))}>×</button></div>)}</div>}
         <textarea aria-label="Message Atlas" value={props.objective} onChange={event=>props.onObjective(event.target.value)} placeholder="Ask Atlas to build, change, investigate, or operate something…" rows={3}/>
         <div className="composer-actions"><div><input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={event=>pick(event.target.files)}/><button type="button" title="Add images" onClick={()=>fileRef.current?.click()}>＋</button><button type="button" title="Dictate" className={listening?"listening":""} onClick={dictate}>⌁</button><select aria-label="Build mode" value={props.mode} onChange={event=>props.onMode(event.target.value)}><option value="inspect">Plan</option><option value="debug">Debug</option><option value="coder">Build</option></select></div><button className="send" disabled={props.submitting||!props.objective.trim()||props.connected===false}>{props.submitting?"…":"↑"}</button></div>
         <div className="composer-context"><label>Project<select value={props.repository} onChange={event=>props.onRepository(event.target.value)}>{props.repositories.map(value=><option key={value}>{value}</option>)}</select></label><label>Branch<select value={props.branch} onChange={event=>props.onBranch(event.target.value)}>{props.branches.map(value=><option key={value}>{value}{value===props.defaultBranch?" · default":""}</option>)}</select></label><span>{attachments.length?"Images are staged; private vision runtime connection required":"Atlas can make mistakes. Review consequential actions."}</span></div>

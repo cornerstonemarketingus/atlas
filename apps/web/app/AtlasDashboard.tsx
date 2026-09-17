@@ -244,32 +244,32 @@ export function AtlasDashboard() {
   // is what keeps the server-rendered HTML meaningful instead of a blank
   // loading stub.
   if (!signedIn) {
-    return <main className="hero" id="top">
-      <div className="signinbrand"><span className="brandmark"><AtlasMark /></span>ATLAS</div>
-      <div className="eyebrow"><span>01</span> Autonomous engineering, under control</div>
-      <h1>Sign in to<br /><em>start building.</em></h1>
-      <p className="lede">Atlas reads your repository, proposes a bounded change, validates it, and opens a pull request for review.</p>
-      <div className="command" style={{ maxWidth: 420 }}>
+    return <main className="signin-shell" id="top"><section className="signin-story">
+      <div className="workspace-brand"><span><AtlasMark /></span>ATLAS</div>
+      <div><p className="signin-kicker">PRIVATE AI WORKSPACE</p><h1>Build what you’re<br />imagining.</h1><p>Atlas understands your project, does the work, validates the result, and keeps every consequential decision under your control.</p></div>
+      <div className="signin-proof"><span>Private by design</span><span>Works with local models</span><span>Every change is reviewable</span></div>
+    </section><section className="signin-access"><div>
+      <p className="signin-kicker">WELCOME TO ATLAS</p><h2>Enter your workspace</h2><p>Continue with your connected account or use an owner access code.</p>
+      <div className="signin-actions">
         <a
           href="/api/auth/github/start"
-          className="flex items-center justify-center gap-3 bg-[var(--acid)] text-[var(--ink)] font-extrabold text-sm py-4 px-5 no-underline"
+          className="signin-primary"
         >
-          Sign in with GitHub
+          Continue securely <span>→</span>
         </a>
         {!showAccessCode && (
-          <button type="button" onClick={() => setShowAccessCode(true)} className="mt-4 text-xs uppercase tracking-wide text-[#a9aca4] underline underline-offset-4">
-            Use an access code instead
+          <button type="button" onClick={() => setShowAccessCode(true)} className="signin-secondary">
+            Use an owner access code
           </button>
         )}
         {showAccessCode && (
-          <form onSubmit={(event) => void unlock(event)} className="mt-4">
-            <label htmlFor="operator-token">Access code</label>
-            <div className="objective"><span className="prompt">›</span><input id="operator-token" type="password" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="Paste the code you were given" autoComplete="off" /><button>UNLOCK</button></div>
+          <form onSubmit={(event) => void unlock(event)} className="access-code-form">
+            <label htmlFor="operator-token">Owner access code</label>
+            <div><input id="operator-token" type="password" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="Paste your private code" autoComplete="off" /><button>Unlock</button></div>
           </form>
         )}
         {notice && <p className="notice" role="status">{notice}</p>}
-      </div>
-    </main>;
+      </div><small>By continuing, you agree to the <a href="/legal/terms">Terms</a> and <a href="/legal/privacy">Privacy Policy</a>.</small></div></section></main>;
   }
   if (process.env.NEXT_PUBLIC_ATLAS_WORKSPACE !== "legacy") {
     return <AtlasWorkspace
