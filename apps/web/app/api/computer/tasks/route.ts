@@ -5,6 +5,7 @@ import { computerApprovals, computerDevices, computerTasks } from "../../../../d
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { currentPlan } from "../../billing/plan.mjs";
 import { cloudBrowserAccess } from "../browser-plan.mjs";
+import { computerExecutionPolicy, normalizeComputerWorkflow } from "../computer-policy.mjs";
 
 async function capabilities(account: { userId: string; dbUserId: number | null }) {
   const unrestricted = account.dbUserId === null;
@@ -27,17 +28,18 @@ export async function GET(request: Request) {
     db.select().from(computerTasks).where(eq(computerTasks.requestedBy, account.userId)).orderBy(desc(computerTasks.createdAt)).limit(20),
     db.select().from(computerApprovals).where(and(eq(computerApprovals.requestedBy, account.userId), eq(computerApprovals.status, "pending"), isNull(computerApprovals.decidedAt))).orderBy(desc(computerApprovals.createdAt)),
   ]);
-  return Response.json({ tasks, approvals, capabilities: await capabilities(account) }, { headers: { "cache-control": "no-store" } });
+  return Response.json({ tasks: tasks.map((task) => ({ ...task, policy: computerExecutionPolicy(task.workflowType) })), approvals, capabilities: await capabilities(account) }, { headers: { "cache-control": "no-store" } });
 }
 
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-  let body: { deviceId?: unknown; objective?: unknown; startUrl?: unknown; executionProvider?: unknown };
+  let body: { deviceId?: unknown; objective?: unknown; startUrl?: unknown; executionProvider?: unknown; workflowType?: unknown };
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
   let deviceId = typeof body.deviceId === "string" ? body.deviceId : "";
   const executionProvider = body.executionProvider === "cloudflare" ? "cloudflare" : "windows";
   const objective = typeof body.objective === "string" ? body.objective.trim().slice(0, 2000) : "";
+  const workflowType = normalizeComputerWorkflow(body.workflowType);
   let startUrl: string | null = null;
   if (typeof body.startUrl === "string" && body.startUrl.trim()) {
     try { const parsed = new URL(body.startUrl.trim()); if (!["http:", "https:"].includes(parsed.protocol)) throw new Error(); startUrl = parsed.toString(); }
@@ -55,6 +57,6 @@ export async function POST(request: Request) {
   const [device] = await db.select().from(computerDevices).where(and(eq(computerDevices.id, deviceId), eq(computerDevices.requestedBy, account.userId), isNull(computerDevices.revokedAt))).limit(1);
   if (!device || device.platform !== executionProvider) return Response.json({ message: "That execution provider is not available." }, { status: 404 });
   const id = randomUUID();
-  await db.insert(computerTasks).values({ id, requestedBy: account.userId, deviceId, executionProvider, objective, startUrl });
-  return Response.json({ task: { id, status: "queued" } }, { status: 201 });
+  await db.insert(computerTasks).values({ id, requestedBy: account.userId, deviceId, executionProvider, workflowType, approvalPolicy: "consequential", objective, startUrl });
+  return Response.json({ task: { id, status: "queued", workflowType, policy: computerExecutionPolicy(workflowType) } }, { status: 201 });
 }

@@ -169,6 +169,8 @@ export const computerTasks = sqliteTable("computer_tasks", {
   requestedBy: text("requested_by").notNull(),
   deviceId: text("device_id").notNull().references(() => computerDevices.id),
   executionProvider: text("execution_provider").notNull().default("windows"),
+  workflowType: text("workflow_type").notNull().default("custom"),
+  approvalPolicy: text("approval_policy").notNull().default("consequential"),
   objective: text("objective").notNull(),
   startUrl: text("start_url"),
   status: text("status").notNull().default("queued"),

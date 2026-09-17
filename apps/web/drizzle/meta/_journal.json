@@ -57,6 +57,13 @@
       "when": 1789663227488,
       "tag": "0007_military_black_knight",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1789675270507,
+      "tag": "0008_workable_moon_knight",
+      "breakpoints": true
     }
   ]
 }

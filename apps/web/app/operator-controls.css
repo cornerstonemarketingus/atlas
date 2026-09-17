@@ -1,0 +1,5 @@
+.device-list li>span small{display:block;color:#7d857f;font-size:.7rem;margin-top:4px}
+.control-card .device-revoke,.history-end button{background:transparent;color:#7d3028;border:1px solid #bda39d;padding:7px 10px}
+.history-end{display:grid;justify-items:end;gap:10px}
+.history-end button{font:700 .65rem var(--font-geist-mono);text-transform:uppercase}
+@media(max-width:800px){.history-end{grid-column:2;justify-items:start}}
