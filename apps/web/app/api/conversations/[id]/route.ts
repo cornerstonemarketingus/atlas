@@ -21,3 +21,17 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     return Response.json({ message: "Conversation history is unavailable." }, { status: 503 });
   }
 }
+
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
+  const account = await authenticatedAccount(request);
+  if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  const { id } = await context.params;
+  try {
+    const rows = await getDb().update(conversations).set({ archivedAt: new Date().toISOString() })
+      .where(and(eq(conversations.id, id), eq(conversations.requestedBy, account.userId))).returning({ id: conversations.id });
+    if (!rows.length) return Response.json({ message: "Conversation not found." }, { status: 404 });
+    return Response.json({ closed: true, id });
+  } catch {
+    return Response.json({ message: "The conversation could not be closed." }, { status: 503 });
+  }
+}

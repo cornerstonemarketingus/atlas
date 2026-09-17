@@ -289,6 +289,7 @@ async function readToken(): Promise<string | undefined> {
 function taskView(row: TaskRow, runId: number | null, run: Run | null, pullRequest: PullRequest | null) {
   return {
     taskId: row.taskId,
+    conversationId: row.conversationId,
     repository: row.repository,
     branch: row.branch,
     mode: row.mode,

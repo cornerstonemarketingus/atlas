@@ -122,6 +122,7 @@ export const conversations = sqliteTable("conversations", {
   branch: text("branch").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  archivedAt: text("archived_at"),
 }, (table) => ({ ownerIndex: index("conversations_owner_updated_idx").on(table.requestedBy, table.updatedAt) }));
 
 export const conversationMessages = sqliteTable("conversation_messages", {

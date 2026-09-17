@@ -38,6 +38,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 type TaskRecord = {
   taskId: string;
+  conversationId?: string | null;
   repository: string;
   branch: string;
   mode: string;
@@ -93,6 +94,7 @@ export function AtlasDashboard() {
   const [repositoryOptions, setRepositoryOptions] = useState(["cornerstonemarketingus/atlas"]);
   const [branchOptions, setBranchOptions] = useState(["main"]);
   const [defaultBranch, setDefaultBranch] = useState("main");
+  const [conversationId, setConversationId] = useState<string | null>(null);
 
   function authHeaders(): Record<string, string> { return {}; }
   async function unlock(event: FormEvent) {
@@ -224,10 +226,10 @@ export function AtlasDashboard() {
     if (!objective.trim()) return;
     setSubmitting(true); setNotice("");
     try {
-      const response = await fetch("/api/tasks", { method: "POST", headers: { "content-type": "application/json", ...authHeaders() }, body: JSON.stringify({ repository, branch, mode, objective }) });
-      const result = (await response.json()) as { message?: string; taskId?: string };
+      const response = await fetch("/api/tasks", { method: "POST", headers: { "content-type": "application/json", ...authHeaders() }, body: JSON.stringify({ repository, branch, mode, objective, conversationId }) });
+      const result = (await response.json()) as { message?: string; taskId?: string; conversationId?: string };
       setNotice(response.ok ? `Task ${result.taskId ?? "queued"} was sent to GitHub Actions.` : result.message ?? "Task dispatch is not configured yet.");
-      if (response.ok) { setObjective(""); void refreshAccount(); void refreshTasks(); }
+      if (response.ok) { setConversationId(result.conversationId ?? conversationId); setObjective(""); void refreshAccount(); void refreshTasks(); }
     } catch { setNotice("The task dispatcher is temporarily unavailable."); }
     finally { setSubmitting(false); }
   }
@@ -276,6 +278,7 @@ export function AtlasDashboard() {
       repository={repository} repositories={repositoryOptions} branch={branch} branches={branchOptions} defaultBranch={defaultBranch}
       mode={mode} objective={objective} submitting={submitting} notice={notice} tasks={taskList?.tasks ?? []}
       accountLabel={account?.githubLogin ?? "Owner"} connected={github?.connected ?? null}
+      conversationId={conversationId} onConversation={setConversationId}
       onRepository={setRepository} onBranch={setBranch} onMode={setMode} onObjective={setObjective}
       onSubmit={submit} onSignOut={() => void signOut()}
     />;

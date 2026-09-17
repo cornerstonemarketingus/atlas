@@ -50,6 +50,13 @@
       "when": 1790000000000,
       "tag": "0006_atlas_conversations",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1789663227488,
+      "tag": "0007_military_black_knight",
+      "breakpoints": true
     }
   ]
 }
