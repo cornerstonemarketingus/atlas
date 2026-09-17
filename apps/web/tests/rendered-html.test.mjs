@@ -6,9 +6,9 @@ test("server-renders the Atlas control plane", async () => {
   const response = await worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /Autonomous engineering control plane/);
-  assert.match(html, /Sign in with GitHub/);
+  assert.match(html, /Build what you/);
+  assert.match(html, /Continue securely/);
   assert.match(html, /access code/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
-  assert.doesNotMatch(html, /From intent to/);
+  assert.doesNotMatch(html, /GitHub Actions runner/);
 });
