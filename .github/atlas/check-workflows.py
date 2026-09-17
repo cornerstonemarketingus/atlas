@@ -70,6 +70,11 @@ def check_shell(path: pathlib.Path, document: dict) -> list[str]:
             script = step.get("run")
             if not script:
                 continue
+            shell = str(step.get("shell") or "bash").lower()
+            if not (shell.startswith("bash") or shell.startswith("sh")):
+                # bash -n reports valid PowerShell as broken. Platform-specific
+                # scripts are parsed in their native CI job instead.
+                continue
             # Actions substitutes expressions before bash ever sees them, so a
             # placeholder keeps the script's shape without inventing a value.
             probe = substitute_expressions(script)

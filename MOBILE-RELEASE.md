@@ -34,7 +34,9 @@ be introduced only when it adds mobile value beyond a wrapped website.
 
 ## P1 — native shell that earns its place
 
-- [ ] Add push notifications for approval requests and completed/failed tasks.
+- [x] Add opt-in browser notifications for local approval requests while the
+      local control page is running.
+- [ ] Add background APNs/FCM push notifications to the native shells.
 - [ ] Add biometric re-authentication before high-risk approvals.
 - [ ] Store device credentials only in Keychain/Android Keystore.
 - [ ] Register universal/app links for OAuth return and task/approval deep links.

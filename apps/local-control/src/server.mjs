@@ -1,12 +1,22 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { LOCAL_UI_CSS, LOCAL_UI_HTML, LOCAL_UI_JS } from "./ui.mjs";
+import { decryptBackup, encryptBackup } from "./encrypted-backup.mjs";
+import { publishChange } from "./publish-adapters.mjs";
+import { discoverLocalModels } from "./model-discovery.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b" }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true } }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
+  const pairAttempts = new Map();
+
+  async function startTask(taskId) {
+    store.markRunning(taskId);
+    try { const result = await runTask(store.get(taskId)); store.finish(taskId, result.ok ? "completed" : "failed", result.message); }
+    catch (error) { store.finish(taskId, "failed", error instanceof Error ? error.message : "Unknown local runner failure."); }
+  }
 
   return createServer(async (request, response) => {
     response.setHeader("cache-control", "no-store");
@@ -15,31 +25,51 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
     if (request.method === "GET" && request.url === "/app.js") return sendText(response, 200, "text/javascript; charset=utf-8", LOCAL_UI_JS);
     response.setHeader("content-type", "application/json; charset=utf-8");
-    if (request.method === "GET" && request.url === "/health") return send(response, 200, { status: "ok", mode: "sovereign", model });
-    if (!authorized(request.headers.authorization, expected)) return send(response, 401, { message: "A valid local Atlas token is required." });
+    if (request.method === "GET" && request.url === "/health") return send(response, 200, { status: "ok", mode: "sovereign", model, license });
+    if (request.method === "POST" && request.url === "/v1/pair/claim") {
+      const client = request.socket.remoteAddress ?? "unknown", nowMs = Date.now();
+      const attempts = (pairAttempts.get(client) ?? []).filter((time) => nowMs - time < 60_000);
+      if (attempts.length >= 5) { response.setHeader("retry-after", "60"); return send(response, 429, { message: "Too many pairing attempts. Try again in one minute." }); }
+      attempts.push(nowMs); pairAttempts.set(client, attempts);
+      const body = await parseBody(request, response); if (!body) return;
+      const codeHash = digest(String(body.code ?? "")); const now = new Date().toISOString();
+      if (!store.consumePairingCode(codeHash, now)) return send(response, 401, { message: "Pairing code is invalid or expired." });
+      const deviceToken = randomBytes(32).toString("base64url");
+      const device = store.addDevice(String(body.name ?? "Phone").slice(0, 80), digest(deviceToken));
+      return send(response, 201, { device, deviceToken });
+    }
+    const identity = authenticate(request.headers.authorization, expected, store);
+    if (!identity) return send(response, 401, { message: "A valid local Atlas or paired-device token is required." });
 
     if (request.method === "GET" && request.url === "/v1/tasks") return send(response, 200, { tasks: store.list() });
+    if (request.method === "GET" && request.url === "/v1/models") { try { return send(response, 200, await discoverModels()); } catch (error) { return send(response, 503, { message: error instanceof Error ? error.message : "Model discovery failed.", models: [] }); } }
     if (request.method === "POST" && request.url === "/v1/tasks") {
-      let body;
-      try { body = JSON.parse(await readBody(request)); }
-      catch (error) { return send(response, error?.code === "BODY_TOO_LARGE" ? 413 : 400, { message: error.message }); }
+      if (identity.role !== "admin") return send(response, 403, { message: "Only the local owner can create coding tasks." });
+      const body = await parseBody(request, response); if (!body) return;
       const repository = typeof body.repository === "string" ? body.repository.trim() : "";
       const objective = typeof body.objective === "string" ? body.objective.trim() : "";
       if (!repository || repository.length > 4096 || !objective || objective.length > 10_000) {
         return send(response, 400, { message: "repository and objective are required and must be within bounds." });
       }
-      const task = store.create({ repository, objective, model: typeof body.model === "string" && body.model.trim() ? body.model.trim() : model });
-      queueMicrotask(async () => {
-        store.markRunning(task.id);
-        try {
-          const result = await runTask(store.get(task.id));
-          store.finish(task.id, result.ok ? "completed" : "failed", result.message);
-        } catch (error) {
-          store.finish(task.id, "failed", error instanceof Error ? error.message : "Unknown local runner failure.");
-        }
-      });
-      return send(response, 202, { task });
+      const policy = store.policy("code.write");
+      if (policy.decision === "deny") return send(response, 403, { message: "Local policy denies code.write." });
+      const task = store.create({ repository, objective, model: typeof body.model === "string" && body.model.trim() ? body.model.trim() : model, status: policy.decision === "ask" ? "awaiting_approval" : "queued" });
+      if (policy.decision === "ask") return send(response, 202, { task, approval: store.createApproval({ taskId: task.id, capability: "code.write", summary: objective }) });
+      queueMicrotask(() => startTask(task.id)); return send(response, 202, { task });
     }
+    if (request.method === "GET" && request.url === "/v1/policies") return send(response, 200, { policies: store.policies() });
+    if (request.method === "PUT" && request.url === "/v1/policies") { if (identity.role !== "admin") return send(response, 403, { message: "Owner access required." }); const body = await parseBody(request,response); if (!body) return; try { return send(response,200,{ policy: store.setPolicy(body.capability,body.decision) }); } catch(error){ return send(response,400,{message:error.message}); } }
+    if (request.method === "GET" && request.url === "/v1/approvals") return send(response, 200, { approvals: store.approvals() });
+    const approvalMatch = request.method === "POST" ? /^\/v1\/approvals\/([0-9a-f-]+)\/decision$/u.exec(request.url ?? "") : null;
+    if (approvalMatch) { const body = await parseBody(request,response); if (!body) return; try { const approval = store.decideApproval(approvalMatch[1], body.decision); if (!approval) return send(response,409,{message:"Approval is missing or already resolved."}); if (approval.taskId) { if (body.decision === "approved") queueMicrotask(()=>startTask(approval.taskId)); else store.finish(approval.taskId,"failed","Denied by local approval."); } return send(response,200,{approval}); } catch(error) { return send(response,400,{message:error.message}); } }
+    if (request.method === "POST" && request.url === "/v1/pair") { if (identity.role !== "admin") return send(response,403,{message:"Owner access required."}); const code=String(randomInt(100000,1000000)); const expiresAt=new Date(Date.now()+5*60_000).toISOString(); store.addPairingCode(digest(code),expiresAt); return send(response,201,{code,expiresAt}); }
+    if (request.method === "GET" && request.url === "/v1/devices") { if (identity.role !== "admin") return send(response,403,{message:"Owner access required."}); return send(response,200,{devices:store.devices()}); }
+    const deviceMatch = request.method === "DELETE" ? /^\/v1\/devices\/([0-9a-f-]+)$/u.exec(request.url ?? "") : null;
+    if (deviceMatch) { if (identity.role !== "admin") return send(response,403,{message:"Owner access required."}); const device=store.revokeDevice(deviceMatch[1]); return device?send(response,200,{device}):send(response,404,{message:"Active device not found."}); }
+    if (request.method === "GET" && request.url === "/v1/audit") return send(response,200,{events:store.auditEvents()});
+    if (request.method === "POST" && request.url === "/v1/export") { if(identity.role!=="admin") return send(response,403,{message:"Owner access required."}); const body=await parseBody(request,response); if(!body)return; try{return send(response,200,{backup:encryptBackup(store.snapshot(),body.passphrase)});}catch(error){return send(response,400,{message:error.message});} }
+    if (request.method === "POST" && request.url === "/v1/import") { if(identity.role!=="admin") return send(response,403,{message:"Owner access required."}); const body=await parseBody(request,response); if(!body)return; try{store.importSnapshot(decryptBackup(body.backup,body.passphrase));return send(response,200,{imported:true});}catch(error){return send(response,400,{message:error.message});} }
+    if (request.method === "POST" && request.url === "/v1/publish") { if(identity.role!=="admin") return send(response,403,{message:"Owner access required."}); if(store.policy("publish.remote").decision!=="allow") return send(response,409,{message:"Local policy must explicitly allow publish.remote for this session."}); const body=await parseBody(request,response); if(!body)return; try{const result=await publishChange(body);store.audit("publish.attempted",`${body.provider}: ${result.ok?result.url:result.message}`);return send(response,result.ok?201:502,result);}catch(error){return send(response,400,{message:error.message});} }
     const match = request.method === "GET" ? /^\/v1\/tasks\/([0-9a-f-]+)$/u.exec(request.url ?? "") : null;
     if (match) {
       const task = store.get(match[1]);
@@ -49,11 +79,15 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   });
 }
 
-function authorized(header, expected) {
-  if (typeof header !== "string" || !header.startsWith("Bearer ")) return false;
-  const actual = createHash("sha256").update(header.slice(7)).digest();
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
+function authenticate(header, expected, store) {
+  if (typeof header !== "string" || !header.startsWith("Bearer ")) return null;
+  const token = header.slice(7), actual = createHash("sha256").update(token).digest();
+  if (actual.length === expected.length && timingSafeEqual(actual, expected)) return { role: "admin" };
+  const device = store.deviceByTokenHash(digest(token)); return device ? { role: "device", device } : null;
 }
+
+function digest(value) { return createHash("sha256").update(value).digest("hex"); }
+async function parseBody(request,response){try{return JSON.parse(await readBody(request));}catch(error){send(response,error?.code==="BODY_TOO_LARGE"?413:400,{message:error.message});return null;}}
 
 async function readBody(request) {
   const chunks = []; let length = 0;

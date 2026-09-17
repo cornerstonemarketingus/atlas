@@ -1,0 +1,63 @@
+name: Sovereign release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["sovereign-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify local control plane
+        working-directory: apps/local-control
+        run: npm test
+      - name: Assemble portable Windows package
+        shell: pwsh
+        run: |
+          $package = Join-Path $PWD "dist\Atlas-Local"
+          New-Item -ItemType Directory -Path $package -Force | Out-Null
+          Copy-Item apps, scripts, SOVEREIGN-MODE.md, MOBILE-RELEASE.md -Destination $package -Recurse -Force
+      - name: Sign Windows scripts when a certificate is configured
+        shell: pwsh
+        env:
+          ATLAS_WINDOWS_CERTIFICATE_BASE64: ${{ secrets.ATLAS_WINDOWS_CERTIFICATE_BASE64 }}
+          ATLAS_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.ATLAS_WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:ATLAS_WINDOWS_CERTIFICATE_BASE64) {
+            if ($env:GITHUB_REF_TYPE -eq "tag") { throw "Tagged releases require an Authenticode certificate." }
+            Write-Host "No signing certificate configured; producing an unsigned development artifact."
+            exit 0
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP "atlas-signing.pfx"
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:ATLAS_WINDOWS_CERTIFICATE_BASE64))
+          $password = ConvertTo-SecureString $env:ATLAS_WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Get-ChildItem dist\Atlas-Local -Recurse -Filter *.ps1 | ForEach-Object {
+            $signature = Set-AuthenticodeSignature -FilePath $_.FullName -Certificate $certificate -HashAlgorithm SHA256
+            if ($signature.Status -ne "Valid") { throw "Failed to sign $($_.FullName): $($signature.StatusMessage)" }
+          }
+          Remove-Item -LiteralPath $certificatePath -Force
+          Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force
+      - name: Create package and checksum
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\Atlas-Local -DestinationPath dist\Atlas-Local-Windows.zip
+          $hash = (Get-FileHash dist\Atlas-Local-Windows.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Atlas-Local-Windows.zip" | Set-Content -Encoding ascii dist\Atlas-Local-Windows.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Atlas-Local-Windows
+          path: |
+            dist/Atlas-Local-Windows.zip
+            dist/Atlas-Local-Windows.zip.sha256
+          if-no-files-found: error
