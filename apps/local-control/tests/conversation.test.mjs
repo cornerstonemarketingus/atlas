@@ -79,6 +79,29 @@ test("authentication and invalid-input model failures are terminal, not retryabl
   }
 });
 
+test("an unreachable model server produces an instruction, not 'fetch failed'", async () => {
+  const client = createModelClient({
+    baseUrl: "http://127.0.0.1:11434/v1",
+    fetchImpl: async () => { throw new TypeError("fetch failed"); },
+  });
+  await assert.rejects(
+    async () => { for await (const _ of client.stream({ model: "m", messages: [] })) { /* drain */ } },
+    (error) => error.code === "MODEL_UNREACHABLE" && /Start Ollama/u.test(error.message) && /127\.0\.0\.1:11434/u.test(error.message),
+  );
+
+  // A cancelled request is the operator's decision and keeps its own error.
+  const controller = new AbortController();
+  controller.abort();
+  const cancellable = createModelClient({
+    baseUrl: "http://127.0.0.1:11434/v1",
+    fetchImpl: async () => { throw new DOMException("aborted", "AbortError"); },
+  });
+  await assert.rejects(
+    async () => { for await (const _ of cancellable.stream({ model: "m", messages: [], signal: controller.signal })) { /* drain */ } },
+    (error) => error.name === "AbortError",
+  );
+});
+
 test("a non-loopback model endpoint must use HTTPS", () => {
   assert.throws(() => createModelClient({ baseUrl: "http://example.invalid/v1" }), /HTTPS unless it is loopback/u);
   assert.doesNotThrow(() => createModelClient({ baseUrl: "https://example.invalid/v1" }));
@@ -100,11 +123,21 @@ test("private reasoning never reaches the client", () => {
   assert.equal(summary.includes("hunter2"), false, "the default summary reveals no reasoning content");
 });
 
-test("provider implementation detail is stripped from errors shown to the operator", () => {
+test("provider implementation detail is stripped, but the operator's own address is not", () => {
   const message = publicErrorMessage(new Error("POST https://api.vendor.example/v1/chat failed with Bearer sk-abc123456789 rejected"));
   assert.equal(message.includes("api.vendor.example"), false);
   assert.equal(message.includes("sk-abc123456789"), false);
   assert.match(message, /\[endpoint\]/u);
+
+  // A loopback address is the one detail that makes "nothing answered"
+  // actionable, and it cannot leak anybody's credential.
+  const local = publicErrorMessage(new Error("No model server answered at http://127.0.0.1:11434 . Start Ollama."));
+  assert.match(local, /http:\/\/127\.0\.0\.1:11434/u);
+  assert.match(publicErrorMessage(new Error("at http://localhost:8080 nothing")), /localhost:8080/u);
+
+  // Unless it carries credentials or a query string, which it should not.
+  assert.match(publicErrorMessage(new Error("at http://user:pw@127.0.0.1:11434 nothing")), /\[endpoint\]/u);
+  assert.match(publicErrorMessage(new Error("at http://127.0.0.1:11434/v1?key=secret nothing")), /\[endpoint\]/u);
 });
 
 test("the registry refuses an incomplete tool declaration", () => {

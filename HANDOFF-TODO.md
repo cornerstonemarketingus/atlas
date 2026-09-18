@@ -186,6 +186,23 @@ The short version, because these have each already cost a day:
 
 ## 6. Interactive AI operator — scope status
 
+**Definition of done, checked against what is now in the repository:**
+
+| Criterion | Status |
+| --- | --- |
+| Install Atlas locally and start a conversation without GitHub | Yes — the daemon registers no GitHub executor unless a token exists |
+| Code, browse, and operate the computer through one persistent runtime | Yes — one runtime, one event contract, executors as adapters |
+| Interrupt, redirect, approve, or resume in real time | Yes — pause, resume, cancel, retry, regenerate, edit-and-resend |
+| GitHub is one optional source-control and publishing adapter | Yes |
+| Core tasks run with local models and local credentials | Yes — needs a local model server running to do real work |
+| Cloud services add convenience, not dependency | Yes — hosted browser and billing are both optional adapters |
+| Every consequential action previewable, approval-bound, auditable, verifiable | Yes — digest-bound one-time approvals, plan-then-apply, post-action evidence |
+
+Two milestones are **partially** done and say so in their sections: the Windows
+MSI has never been built, and the mobile native projects have never been
+generated. Everything else in both is implemented and tested.
+
+
 The goal is that Atlas stops being a GitHub Actions application: a local-first
 conversational operator, with GitHub as one optional publishing adapter.
 

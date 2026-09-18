@@ -10,6 +10,7 @@ import { AgentSessionStore } from "../src/agent/session-store.mjs";
 import { AgentRuntime } from "../src/agent/runtime.mjs";
 import { assistantMessageEvent, statusEvent } from "../src/agent/events.mjs";
 import { createConversationExecutor } from "../src/agent/conversation-executor.mjs";
+import { createRateLimiter, LIMITS } from "../src/rate-limit.mjs";
 import { ToolRegistry } from "../src/agent/tool-registry.mjs";
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
@@ -462,4 +463,64 @@ test("a denied approval stops the session instead of letting it retry", async (t
   assert.equal(runtime.getSession(session.id).status, "cancelled");
   const completion = runtime.getEvents(session.id).at(-1);
   assert.equal(completion.data.status, "denied");
+});
+
+
+test("the rate limiter counts per client and per bucket, and forgives success", () => {
+  let clock = 0;
+  const limiter = createRateLimiter({ now: () => clock });
+
+  for (let attempt = 0; attempt < LIMITS.pairing.limit; attempt += 1) {
+    assert.equal(limiter.check({ bucket: "pairing", client: "10.0.0.1", ...LIMITS.pairing }).allowed, true);
+  }
+  const blocked = limiter.check({ bucket: "pairing", client: "10.0.0.1", ...LIMITS.pairing });
+  assert.equal(blocked.allowed, false);
+  assert.ok(blocked.retryAfterSeconds > 0 && blocked.retryAfterSeconds <= 60);
+
+  // A different client is unaffected, and so is a different endpoint.
+  assert.equal(limiter.check({ bucket: "pairing", client: "10.0.0.2", ...LIMITS.pairing }).allowed, true);
+  assert.equal(limiter.check({ bucket: "approval", client: "10.0.0.1", ...LIMITS.approval }).allowed, true);
+
+  // The window rolls.
+  clock += 60_001;
+  assert.equal(limiter.check({ bucket: "pairing", client: "10.0.0.1", ...LIMITS.pairing }).allowed, true);
+
+  // A success clears the count, so a correct code is not punished.
+  limiter.check({ bucket: "pairing", client: "10.0.0.3", ...LIMITS.pairing });
+  limiter.clear({ bucket: "pairing", client: "10.0.0.3" });
+  for (let attempt = 0; attempt < LIMITS.pairing.limit; attempt += 1) {
+    assert.equal(limiter.check({ bucket: "pairing", client: "10.0.0.3", ...LIMITS.pairing }).allowed, true);
+  }
+});
+
+test("approval decisions are rate limited and cannot be replayed", async (t) => {
+  const { origin, admin, store } = await serve(t, echoExecutor);
+
+  // Well past the approval limit, so the sweep is cut off.
+  let limited = 0;
+  let answered = 0;
+  for (let attempt = 0; attempt < LIMITS.approval.limit + 5; attempt += 1) {
+    const response = await fetch(`${origin}/v1/approvals/00000000-0000-4000-8000-00000000000${attempt % 10}/decision`, {
+      method: "POST",
+      headers: { ...admin, "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approved" }),
+    });
+    if (response.status === 429) {
+      limited += 1;
+      assert.ok(Number(response.headers.get("retry-after")) > 0, "a 429 says when to try again");
+    } else {
+      answered += 1;
+    }
+  }
+  assert.ok(limited > 0, "sweeping for approval identifiers is cut off");
+  assert.equal(answered, LIMITS.approval.limit, "the limit is exactly what it says");
+
+  // Replay protection: an approval can only be decided once.
+  const approval = store.createApproval({ capability: "code.write", summary: "Do the thing", actionDigest: "a".repeat(64) });
+  assert.equal(store.decideApproval(approval.id, "approved").status, "approved");
+  assert.equal(store.decideApproval(approval.id, "denied"), null, "a decided approval cannot be decided again");
+
+  // And the digest it authorizes is spendable exactly once.
+  assert.equal(store.consumeApprovedDigest("a".repeat(64)), true);
+  assert.equal(store.consumeApprovedDigest("a".repeat(64)), false);
 });

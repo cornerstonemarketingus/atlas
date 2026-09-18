@@ -5,13 +5,14 @@ import { decryptBackup, encryptBackup } from "./encrypted-backup.mjs";
 import { publishChange } from "./publish-adapters.mjs";
 import { discoverLocalModels } from "./model-discovery.mjs";
 import { createAgentRoutes } from "./agent/routes.mjs";
+import { createRateLimiter, LIMITS } from "./rate-limit.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
 export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, transcriber = null, modelHealth = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
-  const pairAttempts = new Map();
+  const limiter = createRateLimiter();
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
 
   async function startTask(taskId) {
@@ -29,14 +30,15 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     response.setHeader("content-type", "application/json; charset=utf-8");
     if (request.method === "GET" && request.url === "/health") return send(response, 200, { status: "ok", mode: "sovereign", model, license, runtime: runtime ? { running: true, executors: runtime.executorIds() } : { running: false, executors: [] } });
     if (request.method === "POST" && request.url === "/v1/pair/claim") {
-      const client = request.socket.remoteAddress ?? "unknown", nowMs = Date.now();
-      const attempts = (pairAttempts.get(client) ?? []).filter((time) => nowMs - time < 60_000);
-      if (attempts.length >= 5) { response.setHeader("retry-after", "60"); return send(response, 429, { message: "Too many pairing attempts. Try again in one minute." }); }
-      attempts.push(nowMs); pairAttempts.set(client, attempts);
+      const client = request.socket.remoteAddress ?? "unknown";
+      const pairLimit = limiter.check({ bucket: "pairing", client, ...LIMITS.pairing });
+      if (!pairLimit.allowed) { response.setHeader("retry-after", String(pairLimit.retryAfterSeconds)); return send(response, 429, { message: "Too many pairing attempts. Try again in one minute." }); }
       const body = await parseBody(request, response); if (!body) return;
       const codeHash = digest(String(body.code ?? "")); const now = new Date().toISOString();
       if (!store.consumePairingCode(codeHash, now)) return send(response, 401, { message: "Pairing code is invalid or expired." });
       const deviceToken = randomBytes(32).toString("base64url");
+      // A correct code does not count against the limit.
+      limiter.clear({ bucket: "pairing", client });
       const device = store.addDevice(String(body.name ?? "Phone").slice(0, 80), digest(deviceToken));
       return send(response, 201, { device, deviceToken });
     }
@@ -69,6 +71,13 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (request.method === "GET" && request.url === "/v1/approvals") return send(response, 200, { approvals: store.approvals() });
     const approvalMatch = request.method === "POST" ? /^\/v1\/approvals\/([0-9a-f-]+)\/decision$/u.exec(request.url ?? "") : null;
     if (approvalMatch) {
+      // A stolen device token must not be able to sweep for pending approvals.
+      const client = request.socket.remoteAddress ?? "unknown";
+      const approvalLimit = limiter.check({ bucket: "approval", client, ...LIMITS.approval });
+      if (!approvalLimit.allowed) {
+        response.setHeader("retry-after", String(approvalLimit.retryAfterSeconds));
+        return send(response, 429, { message: "Too many approval decisions in a short time. Try again shortly." });
+      }
       const body = await parseBody(request, response); if (!body) return;
       try {
         const approval = store.decideApproval(approvalMatch[1], body.decision);

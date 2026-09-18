@@ -81,8 +81,23 @@ export class ReasoningAccumulator {
 export function publicErrorMessage(error) {
   const raw = error instanceof Error ? error.message : String(error);
   return raw
-    .replace(/https?:\/\/[^\s"']+/giu, "[endpoint]")
+    // A remote URL can carry a key in its path or query, and naming somebody's
+    // supplier is not the operator's business. A loopback address is neither:
+    // it is the address the operator configured, and it is the one piece of
+    // information that makes "nothing answered" actionable.
+    .replace(/https?:\/\/[^\s"']+/giu, (url) => (isLoopback(url) ? url : "[endpoint]"))
     .replace(/\b(sk|gsk|ghp|github_pat|xox[abps])[-_][A-Za-z0-9_-]{8,}/giu, "[redacted]")
     .replace(/\bBearer\s+[A-Za-z0-9._-]+/giu, "Bearer [redacted]")
     .slice(0, 600);
+}
+
+function isLoopback(candidate) {
+  try {
+    const url = new URL(candidate.replace(/[.,;:]+$/u, ""));
+    // Credentials embedded in the URL are redacted even on loopback.
+    if (url.username || url.password || url.search) return false;
+    return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname);
+  } catch {
+    return false;
+  }
 }

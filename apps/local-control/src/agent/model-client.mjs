@@ -47,15 +47,27 @@ export function createModelClient({ baseUrl = DEFAULT_BASE_URL, apiKey = null, f
         max_tokens: maxOutputTokens,
         ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
       };
-      const response = await fetchImpl(url, {
-        method: "POST",
-        signal,
-        headers: {
-          "content-type": "application/json",
-          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
-        },
-        body: JSON.stringify(body),
-      });
+      let response;
+      try {
+        response = await fetchImpl(url, {
+          method: "POST",
+          signal,
+          headers: {
+            "content-type": "application/json",
+            ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+          },
+          body: JSON.stringify(body),
+        });
+      } catch (error) {
+        // A cancelled request is the operator's decision; anything else here
+        // means nothing answered, and "fetch failed" is not something an
+        // operator can act on.
+        if (signal?.aborted) throw error;
+        throw new ModelRequestError(
+          "MODEL_UNREACHABLE",
+          `No model server answered at ${endpoint.origin}. Start Ollama (or another OpenAI-compatible server) there, or point ATLAS_MODEL_ENDPOINT somewhere else.`,
+        );
+      }
 
       if (!response.ok) {
         const detail = await response.text().catch(() => "");
