@@ -295,7 +295,49 @@ Needs external credentials: a browser session (the Windows companion, M5) and
 a message transport for `communications.send`. Both fail closed with a clear
 message until configured.
 
-### Milestones 4–10 — not started
+### Milestone 4 — infrastructure administration — **done**
+
+Implemented; configured as far as it can be without the owner's tokens.
+
+Adapters for Cloudflare (zones, DNS, Workers, D1, KV, R2, Browser Rendering),
+Vercel (projects, deployments, domains, encrypted environment variables), and
+GitHub/GitLab/Forgejo (settings, variables, secrets, workflows).
+
+The shape that makes this safe:
+
+- **Plan, then apply.** `infrastructure.plan` is a dry run that reads current
+  state and returns the exact target, a redacted preview, and whether the
+  change is reversible. `infrastructure.apply` needs approval bound to that
+  plan's digest — so what is approved is *this record on this zone*, not
+  "permission to change DNS". A plan is spent when applied.
+- **Secret values never pass through the model.** The model names a credential
+  *reference*; the vault resolves it at apply time. There is no `value`
+  argument in any schema, and passing one fails validation.
+- **Write-only secrets.** Vercel will decrypt an environment variable on
+  request and Atlas deliberately does not ask — verification is by metadata.
+  GitHub secrets are sealed against the repository's public key before they
+  leave the process.
+- **Verified after the fact.** Every apply reads the resource back, and
+  reports a failure if it cannot confirm the change. Vercel rollback is
+  supported because Vercel supports it; nothing claims a rollback it cannot do.
+- **Credential vault** — DPAPI on Windows, Keychain on macOS, libsecret on
+  Linux, scrypt+AES-256-GCM file as a fallback. `list()` returns names only.
+  Secrets are written to a process's stdin, never passed as arguments where
+  they would sit in the process table.
+
+Needs external credentials: `ATLAS_CLOUDFLARE_TOKEN`, `ATLAS_VERCEL_TOKEN`,
+`ATLAS_GITHUB_TOKEN` + `ATLAS_GITHUB_REPOSITORY`. Each must be a *scoped*
+token. Without them the tools are registered and answer "not configured on
+this machine", which is a better answer than the capability silently not
+existing.
+
+One caveat, stated because it will bite otherwise: GitHub's secrets API
+documents libsodium sealed boxes. Atlas seals with RSA-OAEP through Node's own
+crypto and refuses loudly if the host returns a non-RSA key, rather than
+falling back to sending a plaintext secret. If GitHub returns a libsodium key
+for your repository, set that secret through GitHub's own interface.
+
+### Milestones 5–10 — not started
 
 These are unbuilt. The runtime is the foundation they attach to, and the
 adapter seams they need (executors, the tool-proposal and approval-request
@@ -303,9 +345,6 @@ event kinds, the capability/risk fields already carried on `tool_proposal`)
 exist — but no code behind them has been written yet. Do not read the event
 contract as evidence the features exist.
 
-- **4 — infrastructure administration.** No Cloudflare, Vercel, or
-  Git-host administration adapters. This one carries the most risk: it must
-  never hold a credential that can mint other credentials.
 - **5 — computer operator.** The Windows companion does approval-gated
   browser work today; it is not a general computer-operation runtime.
 - **6 — local models and routing.** Discovery exists

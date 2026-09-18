@@ -20,6 +20,11 @@ import { registerFilesystemTools } from "./agent/tools/filesystem-tools.mjs";
 import { registerBrowserTools } from "./agent/tools/browser-tools.mjs";
 import { registerCommunicationsTools } from "./agent/tools/communications-tools.mjs";
 import { registerWorkflowTools } from "./agent/tools/workflow-tools.mjs";
+import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.mjs";
+import { createCredentialVault } from "./agent/credential-vault.mjs";
+import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
+import { createVercelAdapter } from "./agent/infrastructure/vercel.mjs";
+import { createGitHostAdapter } from "./agent/infrastructure/git-hosts.mjs";
 
 const dataDirectory = process.env.ATLAS_LOCAL_DATA_DIR || join(homedir(), ".atlas");
 const tokenFile = join(dataDirectory, "local-token");
@@ -36,6 +41,7 @@ if (!token) {
 
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
 const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
+const vault = createCredentialVault({ filePath: join(dataDirectory, "credentials.vault.json") });
 const license = loadLicense();
 const runtime = new AgentRuntime({
   sessions,
@@ -121,7 +127,45 @@ function buildToolRegistry() {
   // its tools then fail closed with "no browser on this machine", which is a
   // better answer than the model never learning the capability exists.
   registerBrowserTools(registry, { session: null, uploadRoot: join(dataDirectory, "workspace") });
+  registerInfrastructureTools(registry, { providers: buildInfrastructureProviders(), vault });
   return registry;
+}
+
+/**
+ * Providers are resolved lazily, so a machine with no infrastructure
+ * credentials still starts and still offers the tools — they simply answer
+ * "not configured on this machine" instead of silently not existing.
+ *
+ * The tokens here are administration credentials. They are deliberately
+ * separate from anything the coding agent holds: nothing Atlas gives the
+ * coder can mint or change a credential, which is the whole point of keeping
+ * these behind the vault and behind approval.
+ */
+function buildInfrastructureProviders() {
+  const lazily = (name, build) => {
+    let cached;
+    return () => {
+      if (cached === undefined) cached = build() ?? null;
+      if (!cached) throw new Error(`No ${name} credentials are configured on this machine.`);
+      return cached;
+    };
+  };
+  const providers = {};
+  if (process.env.ATLAS_CLOUDFLARE_TOKEN) {
+    providers.cloudflare = lazily("Cloudflare", () => createCloudflareAdapter({ token: process.env.ATLAS_CLOUDFLARE_TOKEN }));
+  }
+  if (process.env.ATLAS_VERCEL_TOKEN) {
+    providers.vercel = lazily("Vercel", () => createVercelAdapter({ token: process.env.ATLAS_VERCEL_TOKEN, teamId: process.env.ATLAS_VERCEL_TEAM_ID || null }));
+  }
+  if (process.env.ATLAS_GITHUB_TOKEN && process.env.ATLAS_GITHUB_REPOSITORY) {
+    providers.gitHost = lazily("Git host", () => createGitHostAdapter({
+      host: process.env.ATLAS_GIT_HOST || "github",
+      token: process.env.ATLAS_GITHUB_TOKEN,
+      repository: process.env.ATLAS_GITHUB_REPOSITORY,
+      baseUrl: process.env.ATLAS_GIT_HOST_BASE_URL || null,
+    }));
+  }
+  return providers;
 }
 
 function buildTranscriber() {

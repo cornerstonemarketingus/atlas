@@ -27,15 +27,21 @@ export function safeEnvironment(extra = {}) {
   return { ...base, ...extra };
 }
 
-export function runCommand(command, args, { cwd, timeoutMs = 60_000, signal, maxBytes = 1_000_000, env = {} } = {}) {
+export function runCommand(command, args, { cwd, timeoutMs = 60_000, signal, maxBytes = 1_000_000, env = {}, input = null } = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
       windowsHide: true,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
+      // Secrets are written to stdin rather than passed as arguments, where
+      // they would be visible in the process table to every user on the box.
+      stdio: [input === null ? "ignore" : "pipe", "pipe", "pipe"],
       env: safeEnvironment(env),
     });
+    if (input !== null) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(input);
+    }
     let stdout = "";
     let stderr = "";
     let timedOut = false;
