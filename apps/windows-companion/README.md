@@ -15,6 +15,8 @@ Supported actions are deliberately narrow: navigate, click accessible buttons or
 3. Paste the credential when prompted.
 4. Install the selected Ollama model if the launcher requests it, then open **Atlas Companion** from the Start menu.
 
+The installer can also open a structured local profile for career and business facts. It is encrypted for the current Windows account with DPAPI and supplied only to the loopback Ollama process. Run `Configure-AtlasProfile.ps1` again whenever those facts change.
+
 The pairing credential is protected with Windows DPAPI for the current Windows account. The launcher decrypts it only into the companion process environment and clears it when the process exits.
 
 ## Safety contract

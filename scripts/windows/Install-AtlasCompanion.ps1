@@ -11,6 +11,7 @@ if (-not (Test-Path -LiteralPath $edgePath)) { throw "Microsoft Edge is required
 New-Item -ItemType Directory -Path $InstallDirectory -Force | Out-Null
 Copy-Item -LiteralPath $sourceApp -Destination $InstallDirectory -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Start-AtlasCompanion.ps1") -Destination $InstallDirectory -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Configure-AtlasProfile.ps1") -Destination $InstallDirectory -Force
 $installedApp = Join-Path $InstallDirectory "windows-companion"
 Push-Location $installedApp
 try { & npm ci --omit=dev --ignore-scripts } finally { Pop-Location }
@@ -26,3 +27,4 @@ if (-not $NoShortcut) {
   $shortcut.Save()
 }
 Write-Host "Atlas Companion installed. Launch it from the Start menu." -ForegroundColor Green
+if ((Read-Host "Configure your encrypted local work profile now? (Y/n)") -notmatch '^[Nn]') { & (Join-Path $InstallDirectory "Configure-AtlasProfile.ps1") -InstallDirectory $InstallDirectory }

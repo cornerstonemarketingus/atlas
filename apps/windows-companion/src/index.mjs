@@ -3,11 +3,13 @@ import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { actionRisk, validateAction } from "./policy.mjs";
+import { parseLocalProfile, profileForPrompt } from "./profile.mjs";
 
 const atlasUrl = (process.env.ATLAS_URL ?? "https://atlas-web.cornerstonemarketingus.workers.dev").replace(/\/$/u, "");
 const credential = process.env.ATLAS_DEVICE_CREDENTIAL ?? await readCredential();
 const ollamaUrl = (process.env.ATLAS_OLLAMA_URL ?? "http://127.0.0.1:11434").replace(/\/$/u, "");
 const model = process.env.ATLAS_COMPUTER_MODEL ?? "qwen2.5-coder:7b";
+const localProfile = parseLocalProfile(process.env.ATLAS_PROFILE_JSON ?? "");
 if (!credential) throw new Error("Pair Atlas first with Install-AtlasCompanion.ps1 or set ATLAS_DEVICE_CREDENTIAL.");
 const headers = { authorization: `Bearer ${credential}`, "content-type": "application/json" };
 const profile = join(process.env.LOCALAPPDATA ?? homedir(), "Atlas", "computer-profile");
@@ -33,6 +35,7 @@ async function plan(task, history) {
   const policy = JSON.stringify(task.policy ?? {});
   const prompt = `You control a browser for one bounded task. Return JSON only, with one next action.
 Task: ${task.objective}
+${profileForPrompt(localProfile)}
 Current URL: ${page.url()}
 Server policy: ${policy}
 Recent actions: ${JSON.stringify(history.slice(-8))}

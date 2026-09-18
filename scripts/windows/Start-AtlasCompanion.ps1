@@ -13,4 +13,10 @@ $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureCredenti
 try { $env:ATLAS_DEVICE_CREDENTIAL = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
 $env:ATLAS_COMPUTER_MODEL = $Model
 $env:ATLAS_OLLAMA_URL = $OllamaUrl
-try { Set-Location -LiteralPath $appDirectory; & node "src\index.mjs" } finally { Remove-Item Env:ATLAS_DEVICE_CREDENTIAL -ErrorAction SilentlyContinue }
+$profileFile = Join-Path $installDirectory "profile.dat"
+if (Test-Path -LiteralPath $profileFile) {
+  $secureProfile = Get-Content -Raw -LiteralPath $profileFile | ConvertTo-SecureString
+  $profilePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureProfile)
+  try { $env:ATLAS_PROFILE_JSON = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($profilePointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($profilePointer) }
+}
+try { Set-Location -LiteralPath $appDirectory; & node "src\index.mjs" } finally { Remove-Item Env:ATLAS_DEVICE_CREDENTIAL -ErrorAction SilentlyContinue; Remove-Item Env:ATLAS_PROFILE_JSON -ErrorAction SilentlyContinue }
