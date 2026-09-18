@@ -1,0 +1,111 @@
+import { createQuotaLedger, QuotaError } from "./quota.mjs";
+
+/**
+ * Hosted browser execution, as an optional adapter.
+ *
+ * Nothing in Atlas requires this. It exists for the case where the operator's
+ * machine is asleep, and it is deliberately built so that the honest answer
+ * for most people is "use your own companion, it is free and it is already
+ * running".
+ *
+ * Tenant isolation is the security property that matters. A hosted session is
+ * addressed by an opaque handle that only its owning tenant can resolve;
+ * there is no path from a session id to another tenant's session, and the
+ * lookup does not distinguish "does not exist" from "belongs to someone else"
+ * — that distinction is itself an enumeration oracle.
+ */
+export class HostedBrowserError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "HostedBrowserError";
+    this.code = code;
+  }
+}
+
+export function createHostedBrowserService({ provider, quotas = createQuotaLedger(), now = () => Date.now(), localCompanionAvailable = () => false }) {
+  /** sessionId -> { tenantId, page, expiresAtMs } */
+  const sessions = new Map();
+
+  function resolve(sessionId, tenantId) {
+    const session = sessions.get(sessionId);
+    // One message for both cases, on purpose.
+    if (!session || session.tenantId !== tenantId) {
+      throw new HostedBrowserError("NO_SUCH_SESSION", "No hosted session with that identifier is available to you.");
+    }
+    return session;
+  }
+
+  return {
+    /**
+     * Free users get a clear answer, not a failure — and where the operator's
+     * own companion is available, that is offered instead of an upsell.
+     */
+    async open({ tenantId, plan, sessionId, signal }) {
+      if (!provider) throw new HostedBrowserError("NOT_CONFIGURED", "Hosted browser execution is not configured on this Atlas.");
+      const decision = quotas.check({ tenantId, plan });
+      if (!decision.allowed) {
+        return {
+          opened: false,
+          code: decision.code,
+          message: localCompanionAvailable({ tenantId })
+            ? `${decision.message} Atlas will run this on your paired companion instead.`
+            : decision.message,
+          fallback: localCompanionAvailable({ tenantId }) ? "windows-companion" : null,
+          limits: decision.limits,
+        };
+      }
+
+      const lease = quotas.open({ tenantId, plan, sessionId });
+      // The provider is handed a tenant scope and nothing else. No credential
+      // of the operator's travels in a task payload.
+      const page = await provider.createPage({ tenantScope: scopeFor(tenantId), signal });
+      sessions.set(sessionId, { tenantId, page, expiresAtMs: lease.expiresAtMs });
+      return { opened: true, sessionId, expiresAtMs: lease.expiresAtMs, limits: lease.limits };
+    },
+
+    /** The page, for a caller that already proved it owns the session. */
+    page({ sessionId, tenantId }) {
+      const session = resolve(sessionId, tenantId);
+      if (session.expiresAtMs <= now()) throw new HostedBrowserError("SESSION_EXPIRED", "That hosted session has reached its time limit and was closed.");
+      return session.page;
+    },
+
+    async close({ sessionId, tenantId, reason = "completed" }) {
+      const session = resolve(sessionId, tenantId);
+      sessions.delete(sessionId);
+      await session.page.close?.().catch(() => {});
+      return quotas.close({ tenantId, sessionId, reason });
+    },
+
+    /** Cancellation closes the remote container, not just the local handle. */
+    async cancel({ sessionId, tenantId }) {
+      return this.close({ sessionId, tenantId, reason: "cancelled" });
+    },
+
+    /**
+     * Closes sessions past their window. Run on a timer: a container left
+     * open bills the operator for time nobody is using.
+     */
+    async sweep({ tenantId, plan }) {
+      const closed = [];
+      for (const sessionId of quotas.expired({ tenantId, plan })) {
+        const session = sessions.get(sessionId);
+        if (!session) continue;
+        sessions.delete(sessionId);
+        await session.page.close?.().catch(() => {});
+        closed.push(quotas.close({ tenantId, sessionId, reason: "timed-out" }));
+      }
+      return closed;
+    },
+
+    usage: (tenantId) => quotas.usage(tenantId),
+    receipts: (tenantId) => quotas.receipts(tenantId),
+  };
+}
+
+/** An opaque per-tenant scope; the provider never sees a user identifier. */
+function scopeFor(tenantId) {
+  return `tenant-${Buffer.from(String(tenantId)).toString("base64url").slice(0, 32)}`;
+}
+
+export { QuotaError };

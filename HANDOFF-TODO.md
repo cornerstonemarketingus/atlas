@@ -497,7 +497,44 @@ universal link has been resolved by a real device, and no accessibility,
 rotation, dark-mode or large-text pass has happened. Sign in with Apple remains
 the open P0 gate. The full list is in `MOBILE-RELEASE.md`.
 
-### Milestones 9–10 — not started
+### Milestone 9 — hosted browser execution — **done**
+
+Implemented as an optional adapter, which is the point: nothing in Atlas
+requires it, and the honest answer for most people stays "use your own
+companion — it is free and already running".
+
+- **Provider-neutral interface** with a Cloudflare Browser Rendering
+  implementation behind the same page contract Playwright and the fixture
+  browser use. That shared contract is what gives **approval parity for free**:
+  a hosted page is driven by the same operator session, so it classifies the
+  same actions, asks for the same approvals, and records the same evidence.
+  There is no second, laxer path for hosted execution.
+- **Tenant isolation.** A session is addressed by a handle only its owning
+  tenant can resolve, and the refusal for someone else's session is *identical*
+  to the refusal for one that never existed — a distinguishable error is an
+  enumeration oracle.
+- **Quotas enforced server-side**, where the session is created. Concurrency,
+  monthly minutes, and per-session timeouts. A limit enforced in the client is
+  a suggestion.
+- **Session timeout and cancellation** close the remote container, not just the
+  local handle — a container left open bills for time nobody is using.
+- **Usage receipts** with start, end, minutes, reason and billing period,
+  rounded up to the minute because a nine-second session still consumed a
+  container.
+- **No credential in a task payload.** The provider is handed an opaque
+  per-tenant scope and never a user identifier.
+- **Fallback.** A free user with a paired companion is told Atlas will run it
+  there instead, rather than being shown an upsell and a dead end.
+
+One deliberate refusal: a hosted browser cannot upload a file from the
+operator's machine. Doing so would mean sending their file to a third party
+first, which is a different decision from "let Atlas use a browser".
+
+Needs external credentials: a Cloudflare account id and a scoped Browser
+Rendering token. Without them the service reports "not configured on this
+Atlas" and the local companion path is unaffected.
+
+### Milestone 10 — not started
 
 These are unbuilt. The runtime is the foundation they attach to, and the
 adapter seams they need (executors, the tool-proposal and approval-request
@@ -505,7 +542,5 @@ event kinds, the capability/risk fields already carried on `tool_proposal`)
 exist — but no code behind them has been written yet. Do not read the event
 contract as evidence the features exist.
 
-- **9 — hosted browser execution.** Design notes only
-  (`docs/hosted-approval-state-design.md`).
 - **10 — billing.** See §2 above. Prices stay in configuration until the
   owner supplies final amounts.
