@@ -126,9 +126,45 @@ function buildToolRegistry() {
   // The browser family is registered whether or not a companion is attached:
   // its tools then fail closed with "no browser on this machine", which is a
   // better answer than the model never learning the capability exists.
-  registerBrowserTools(registry, { session: null, uploadRoot: join(dataDirectory, "workspace") });
+  registerBrowserTools(registry, { session: buildBrowserSession, uploadRoot: join(dataDirectory, "workspace") });
   registerInfrastructureTools(registry, { providers: buildInfrastructureProviders(), vault });
   return registry;
+}
+
+/**
+ * Builds the computer-operation session on first use.
+ *
+ * The operator runtime — classification, approval gating, CAPTCHA detection,
+ * evidence — lives with the Windows companion, because that is the component
+ * that ships to a customer's machine. The daemon drives the same runtime over
+ * a Playwright page when one is available here. On a machine with neither, the
+ * browser tools answer "no browser on this machine", which is the honest
+ * answer rather than a missing capability.
+ */
+async function buildBrowserSession() {
+  const [{ createPlaywrightPage, createLocalScreenshotStore }, { createOperatorSession }] = await Promise.all([
+    import("./agent/browser/playwright-page.mjs"),
+    import("../../windows-companion/src/operator/session.mjs"),
+  ]);
+  const page = await createPlaywrightPage({
+    profileDirectory: join(dataDirectory, "browser-profile"),
+    downloadDirectory: join(dataDirectory, "workspace", "downloads"),
+  });
+  return createOperatorSession({
+    page,
+    // Screenshots are written to the operator's disk. Sending one anywhere is
+    // a separate, approval-bound decision.
+    screenshots: createLocalScreenshotStore(join(dataDirectory, "screenshots")),
+    approvals: {
+      request: async ({ digest, summary }) => {
+        // The operator session asks here; the registry's own approval gate has
+        // already run for the tool call, so this covers the page-level action
+        // the model is about to take on a specific element.
+        store.createApproval({ capability: "computer.high_risk", summary, actionDigest: digest });
+        return store.consumeApprovedDigest(digest);
+      },
+    },
+  });
 }
 
 /**

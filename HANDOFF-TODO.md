@@ -337,7 +337,44 @@ crypto and refuses loudly if the host returns a non-RSA key, rather than
 falling back to sending a plaintext secret. If GitHub returns a libsodium key
 for your repository, set that secret through GitHub's own interface.
 
-### Milestones 5–10 — not started
+### Milestone 5 — computer operator — **done**
+
+Implemented in `apps/windows-companion/src/operator/`, and driven by the
+daemon over a Playwright page adapter when one is available locally.
+
+- **Accessibility first, screenshot as fallback.** The model reads named
+  elements and acts on references. A screenshot is taken only when the
+  accessibility tree comes back empty, is stored on the operator's disk, and
+  is never uploaded by being taken.
+- **Deterministic classification.** Every action is classified by a pure
+  function of the action and the element — read, navigate, input,
+  sensitive input, submit, transfer, destructive, unsupported. A reassuring
+  description from the model cannot downgrade the element: "just tidying up"
+  on a button labelled *Delete this project* is still destructive.
+- **Walls only a person can pass** — CAPTCHA, 2FA, re-authentication, identity
+  verification, payment — are detected and hand the machine back, with the
+  evidence quoted. Atlas refuses these even when approval has been granted.
+- **Evidence before claiming.** Every acting method re-reads the page
+  afterwards and records whether anything changed. A click that changed
+  nothing is reported as a click that changed nothing, not as success.
+- **Stale references** after a navigation or a popup are refused with an
+  instruction to take a fresh snapshot, rather than clicking whatever now sits
+  at that reference.
+- **Twelve deterministic demo workflows** run against an in-memory fixture
+  browser implementing the same page contract as Playwright, so they exercise
+  the real classification, approval, evidence and CAPTCHA logic and run
+  anywhere without touching a live site.
+
+Found and fixed while building this: the typed value flowed into the
+classification label, so the approval prompt for "type your password" would
+have displayed the password — and written it to the audit log. Values are now
+inspected to raise the risk class but never echoed.
+
+Needs external credentials: none. Needs Playwright and a browser on the
+machine, or the paired Windows companion; without either, the browser tools
+answer "no browser on this machine".
+
+### Milestones 6–10 — not started
 
 These are unbuilt. The runtime is the foundation they attach to, and the
 adapter seams they need (executors, the tool-proposal and approval-request
@@ -345,8 +382,6 @@ event kinds, the capability/risk fields already carried on `tool_proposal`)
 exist — but no code behind them has been written yet. Do not read the event
 contract as evidence the features exist.
 
-- **5 — computer operator.** The Windows companion does approval-gated
-  browser work today; it is not a general computer-operation runtime.
 - **6 — local models and routing.** Discovery exists
   (`model-discovery.mjs`, `LOCAL-MODEL.md`); hardware detection, context-fit
   verification, and task-aware routing do not.

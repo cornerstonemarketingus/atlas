@@ -15,6 +15,7 @@ import { registerCommunicationsTools, messageDigest } from "../src/agent/tools/c
 import { registerWorkflowTools } from "../src/agent/tools/workflow-tools.mjs";
 import { createZipArchive, sanitizeEntryName } from "../src/agent/tools/archive.mjs";
 import { runCommand, safeEnvironment } from "../src/agent/tools/process.mjs";
+import { createPlaywrightPage, createLocalScreenshotStore, BrowserUnavailableError } from "../src/agent/browser/playwright-page.mjs";
 
 const git = (cwd, ...args) => {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
@@ -346,4 +347,43 @@ test("every registered tool declares a complete, model-safe contract", () => {
   for (const definition of offered) {
     assert.equal(definition.function.parameters.type, "object");
   }
+});
+
+
+test("a lazy browser session is built once and only when a browser tool is used", async () => {
+  let built = 0;
+  const session = { snapshot: async () => "page", click: async () => ({ summary: "clicked" }) };
+  const { registry, approvals } = registryFor();
+  registerBrowserTools(registry, { session: async () => { built += 1; return session; } });
+
+  assert.equal(built, 0, "registering does not launch a browser");
+  const run = call(registry, approvals, {});
+  await run("browser.snapshot", {});
+  await run("browser.snapshot", {});
+  assert.equal(built, 1, "the session is built once and reused");
+});
+
+test("a missing browser is reported as a missing browser, not a crash", async () => {
+  await assert.rejects(
+    () => createPlaywrightPage({ profileDirectory: "/tmp/atlas-none", importPlaywright: () => { throw new Error("Cannot find module"); } }),
+    (error) => error instanceof BrowserUnavailableError && error.code === "NO_BROWSER",
+  );
+
+  const { registry, approvals } = registryFor();
+  registerBrowserTools(registry, { session: async () => { throw new BrowserUnavailableError("Playwright is not installed on this machine."); } });
+  const result = await call(registry, approvals, {})("browser.snapshot", {});
+  assert.equal(result.status, "failed");
+  assert.equal(result.code, "NO_BROWSER");
+  assert.match(result.message, /not installed on this machine/u);
+});
+
+test("screenshots are written to the operator's disk with restrictive permissions", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-shots-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const store = createLocalScreenshotStore(join(directory, "screenshots"));
+  const path = await store.store({ bytes: Buffer.from("png bytes"), url: "https://example.invalid", takenAtMs: Date.parse("2026-01-01T12:00:00Z") });
+
+  assert.match(path, /screenshots/u);
+  assert.equal(await readFile(path, "utf8"), "png bytes");
+  assert.equal(store.uploadsRequireApproval, true, "storing a screenshot never implies permission to send it");
 });

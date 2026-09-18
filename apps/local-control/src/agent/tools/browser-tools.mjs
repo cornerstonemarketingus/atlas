@@ -38,10 +38,24 @@ export function assertNavigableUrl(candidate) {
   return url.toString();
 }
 
+/**
+ * `session` may be a session or a factory returning one. A factory is resolved
+ * on first use and cached, so launching a browser costs nothing until the
+ * model actually asks for one.
+ */
 export function registerBrowserTools(registry, { session, uploadRoot = null }) {
-  const need = () => {
-    if (!session) throw new BrowserToolError("NO_BROWSER", "No browser session is available on this machine.");
-    return session;
+  let resolved = typeof session === "function" ? undefined : session;
+  const need = async () => {
+    if (resolved === undefined) {
+      try {
+        resolved = await session();
+      } catch (error) {
+        resolved = null;
+        throw new BrowserToolError("NO_BROWSER", error?.message ?? "No browser session is available on this machine.");
+      }
+    }
+    if (!resolved) throw new BrowserToolError("NO_BROWSER", "No browser session is available on this machine.");
+    return resolved;
   };
 
   registry.register({
@@ -59,7 +73,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
     },
     async execute({ input, signal }) {
       const url = assertNavigableUrl(input.url);
-      const result = await need().navigate({ url, signal });
+      const result = await (await need()).navigate({ url, signal });
       return `Opened ${result?.url ?? url}${result?.title ? ` — ${result.title}` : ""}.`;
     },
   });
@@ -74,7 +88,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
     requiresApproval: false,
     inputSchema: { type: "object", required: [], properties: {} },
     async execute({ signal }) {
-      const snapshot = await need().snapshot({ signal });
+      const snapshot = await (await need()).snapshot({ signal });
       return typeof snapshot === "string" ? snapshot : JSON.stringify(snapshot);
     },
   });
@@ -96,7 +110,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
       },
     },
     async execute({ input, signal }) {
-      const result = await need().click({ ref: input.ref, signal });
+      const result = await (await need()).click({ ref: input.ref, signal });
       return result?.summary ?? `Clicked ${input.description || input.ref}.`;
     },
   });
@@ -124,7 +138,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
         // so the model must ask for the submitting tool explicitly.
         throw new BrowserToolError("APPROVAL_REQUIRED", "Use browser.submit to send a form; it requires the operator's approval.");
       }
-      const result = await need().type({ ref: input.ref, text: input.text, submit: false, signal });
+      const result = await (await need()).type({ ref: input.ref, text: input.text, submit: false, signal });
       return result?.summary ?? `Typed ${input.text.length} characters into ${input.ref}.`;
     },
   });
@@ -147,7 +161,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
       },
     },
     async execute({ input, signal }) {
-      const result = await need().click({ ref: input.ref, submit: true, signal });
+      const result = await (await need()).click({ ref: input.ref, submit: true, signal });
       return result?.summary ?? `Submitted: ${input.intent}.`;
     },
   });
@@ -177,7 +191,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
           throw new BrowserToolError("PATH_OUTSIDE_WORKSPACE", "An upload must come from the configured workspace.");
         }
       }
-      const result = await need().upload({ ref: input.ref, path: input.path, signal });
+      const result = await (await need()).upload({ ref: input.ref, path: input.path, signal });
       return result?.summary ?? `Attached ${input.path} to ${input.ref}.`;
     },
   });
@@ -199,7 +213,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
       },
     },
     async execute({ input, signal }) {
-      const result = await need().download({ ref: input.ref, toPath: input.toPath || null, signal });
+      const result = await (await need()).download({ ref: input.ref, toPath: input.toPath || null, signal });
       return result?.summary ?? `Downloaded to ${result?.path ?? "the workspace"}.`;
     },
   });
@@ -231,7 +245,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
       },
     },
     async execute({ input, signal }) {
-      const extracted = await need().extract({ fields: input.fields, signal });
+      const extracted = await (await need()).extract({ fields: input.fields, signal });
       // Page content is data, never instructions; it is returned as JSON so
       // it reads as a value rather than as prose the model might obey.
       return JSON.stringify(extracted ?? {});
