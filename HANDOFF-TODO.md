@@ -407,7 +407,63 @@ Implemented and configured. `GET /v1/models/health` reports the lot.
 Needs external credentials: none. Routes are configured through
 `ATLAS_MODEL_ROUTES` (a JSON array of `{task, model, endpoint, contextWindow}`).
 
-### Milestones 7–10 — not started
+### Milestone 7 — Windows productization — **partially done**
+
+Reported honestly, because this is the milestone where "implemented" and
+"verified" genuinely differ: **everything except the MSI build itself is
+implemented and tested. The MSI has never been built, installed, or uninstalled
+on a real Windows machine from this session.**
+
+Implemented and tested (all cross-platform, all covered by `npm test`):
+
+- **Signed update manifests with rollback.** Ed25519 over a canonical form;
+  the signature covers the version, the artifact digests and the rollback
+  target. A validly signed *older* manifest is refused, because replaying last
+  year's release is otherwise a supported way to reintroduce a fixed
+  vulnerability. Downloaded artifacts are checked against the signed digest.
+- **Crash recovery.** Restarts back off, a crash loop gives up rather than
+  pinning the machine, a run that stayed up two minutes clears the history, and
+  the crash report is redacted.
+- **Log rotation.** Bounded, with a fixed history. This is a correctness
+  feature here, not housekeeping: Atlas fails closed when it cannot write its
+  audit trail, so a full disk is an outage.
+- **Dependency discovery that installs nothing.** Node, Git, Edge and Ollama
+  are probed and reported with where to get them. Missing optional pieces do
+  not block installation.
+- **SHA-256 checksums and a CycloneDX SBOM**, generated from the manifests
+  actually present — which is what makes "no third-party runtime dependencies"
+  a checkable claim rather than an assertion.
+- **Windows CI on every change** exercising the release pipeline end to end,
+  including that a tampered manifest is rejected.
+
+Written but **not executed**:
+
+- `installer/windows/Atlas.wxs` — the MSI source. Its UpgradeCode is fixed, it
+  refuses downgrades, it adds Start Menu entries and removes them on uninstall,
+  and the operator's data directory is deliberately *not* a component, so an
+  uninstall or a failed upgrade cannot delete the encrypted profile or the
+  paired devices. Structure is tested; the build is not.
+- `scripts/windows/Build-AtlasInstaller.ps1` — builds, Authenticode-signs,
+  verifies the signature, and writes the release metadata. Requires the WiX
+  toolset and `signtool`.
+
+Still needed, and only a Windows machine can provide it:
+
+- [ ] Build the MSI once and confirm `wix build` accepts the harvested
+      component group.
+- [ ] Install and uninstall on a clean Windows 11 VM.
+- [ ] Upgrade over a previous version and confirm the encrypted profile and
+      device pairing survive.
+- [ ] Force a failed upgrade and confirm the rollback path restores the
+      previous version.
+- [ ] Sign with the real certificate and confirm SmartScreen reputation.
+
+Needs external credentials: `ATLAS_WINDOWS_CERTIFICATE_BASE64` and
+`ATLAS_WINDOWS_CERTIFICATE_PASSWORD` for signing, and an Ed25519 signing key
+for the update manifest. The build refuses to produce an unsigned public
+release without an explicit opt-out.
+
+### Milestones 8–10 — not started
 
 These are unbuilt. The runtime is the foundation they attach to, and the
 adapter seams they need (executors, the tool-proposal and approval-request
@@ -415,8 +471,6 @@ event kinds, the capability/risk fields already carried on `tool_proposal`)
 exist — but no code behind them has been written yet. Do not read the event
 contract as evidence the features exist.
 
-- **7 — Windows productization.** ZIP packaging and optional Authenticode
-  signing exist; there is no MSI/MSIX, update manifest, or rollback.
 - **8 — native mobile companion.** Tracked in
   [`MOBILE-RELEASE.md`](MOBILE-RELEASE.md). Do not submit a plain WebView.
 - **9 — hosted browser execution.** Design notes only

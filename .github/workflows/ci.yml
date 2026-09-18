@@ -124,6 +124,39 @@ jobs:
       - name: Check and test Windows companion
         run: npm run check && npm test
 
+  windows-release:
+    name: Windows release tooling
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The MSI itself needs the WiX toolset and is built on a tag, but
+      # everything that proves what is in a release must be exercised on every
+      # change -- an unverified release pipeline is one that breaks on the day
+      # it is needed.
+      - name: Report prerequisites on a clean runner
+        run: node scripts/windows/report-requirements.mjs
+
+      - name: Generate checksums, SBOM and a signed update manifest
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist/ci-artifacts -Force | Out-Null
+          Set-Content -Path dist/ci-artifacts/Atlas-0.0.0.msi -Value "not a real installer"
+          node -e "const {generateKeyPairSync}=require('node:crypto');const {writeFileSync}=require('node:fs');writeFileSync('dist/ci-key.pem',generateKeyPairSync('ed25519').privateKey.export({type:'pkcs8',format:'pem'}))"
+          node scripts/release/make-release.mjs --version 0.0.0 --artifacts dist/ci-artifacts --out dist/ci-out --rollback-to 0.0.0 --signing-key dist/ci-key.pem
+          if (-not (Test-Path dist/ci-out/SHA256SUMS.txt)) { throw "No checksum file was produced." }
+          if (-not (Test-Path dist/ci-out/update-manifest.json)) { throw "No update manifest was produced." }
+
+      - name: Verify the generated manifest is trusted and refuses a downgrade
+        shell: pwsh
+        run: node scripts/release/verify-release.mjs --manifest dist/ci-out/update-manifest.json --key dist/ci-key.pem --artifacts dist/ci-artifacts
+
   runner-scripts:
     name: runner scripts
     runs-on: ubuntu-latest
