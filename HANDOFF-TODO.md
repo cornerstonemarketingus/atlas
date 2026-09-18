@@ -534,7 +534,45 @@ Needs external credentials: a Cloudflare account id and a scoped Browser
 Rendering token. Without them the service reports "not configured on this
 Atlas" and the local companion path is unaffected.
 
-### Milestone 10 — not started
+### Milestone 10 — billing and commercial release — **done, pending one migration**
+
+Checkout, the billing portal and webhook signature verification already
+existed. This milestone added what made them safe to actually take money with.
+
+- **Idempotent webhooks.** Stripe retries on timeouts, on 500s, and on a deploy
+  that lands mid-request, so duplicate delivery is routine. Events are deduped
+  by id, and a replay is answered `200` — an error would be retried forever
+  until Stripe disabled the endpoint.
+- **Ordering guard.** Stripe does not guarantee delivery order, and an older
+  `customer.subscription.updated` arriving after a newer one would downgrade a
+  customer who had just upgraded. Events older than the last one applied to
+  that subscription are refused.
+- **Failed payment and cancellation states.** A failed payment marks `past_due`
+  and keeps the plan while Stripe retries for days; cutting access on the first
+  failure punishes a customer whose card expired over a weekend.
+  `invoice.payment_succeeded` is handled too, or a customer who pays stays
+  `past_due` forever.
+- **Plan enforcement server-side**, in `checkAndRecordUsage` and
+  `decideHostedSession`. A limit enforced in the client is a suggestion.
+- **Hosted browser limits metered separately** from task counts — a task is a
+  request, a browser minute is a container someone is paying to keep warm.
+- **Mobile billing hidden** until the store-billing strategy is approved,
+  decided server-side rather than by a client flag, and with copy for the app
+  to show instead of a blank screen.
+- **No invented prices.** Display prices come from `ATLAS_PRICE_DISPLAY_*` and
+  the code reports which are missing. A placeholder price is worse than none,
+  because someone will believe it.
+
+**Before this ships:** `drizzle/0011_billing_idempotency.sql` must be applied.
+It is purely additive — two `CREATE TABLE`s and one `ALTER TABLE ADD COLUMN`,
+no `DROP` — and it has been dry-run against a stub schema, but it has not been
+applied to the live D1 database. Per §5, run `migrate-d1.yml` with the dry run
+first and read the file list. The webhook route reads `billing_events` and
+`subscriptions.last_event_at`, so deploying it before the migration would fail
+on every event.
+
+Needs external credentials: the Stripe secret key, webhook secret, and the two
+price IDs (§2 above). Prices themselves are the owner's to set.
 
 These are unbuilt. The runtime is the foundation they attach to, and the
 adapter seams they need (executors, the tool-proposal and approval-request

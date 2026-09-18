@@ -11,10 +11,15 @@ export const SUBSCRIPTION_STATUSES = ["active", "past_due", "canceled"] as const
 export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
 
 /** Modes and monthly task caps per tier. Team differs from Pro only in cap and seat count today. */
-export const TIER_LIMITS: Readonly<Record<PlanTier, { readonly modes: readonly string[]; readonly monthlyTasks: number }>> = {
-  free: { modes: ["inspect", "debug"], monthlyTasks: 20 },
-  pro: { modes: ["inspect", "debug", "coder"], monthlyTasks: 200 },
-  team: { modes: ["inspect", "debug", "coder"], monthlyTasks: 1000 },
+export const TIER_LIMITS: Readonly<Record<PlanTier, {
+  readonly modes: readonly string[];
+  readonly monthlyTasks: number;
+  /** Metered separately from tasks: a browser minute is a container, not a request. */
+  readonly hostedBrowserMinutes: number;
+}>> = {
+  free: { modes: ["inspect", "debug"], monthlyTasks: 20, hostedBrowserMinutes: 0 },
+  pro: { modes: ["inspect", "debug", "coder"], monthlyTasks: 200, hostedBrowserMinutes: 300 },
+  team: { modes: ["inspect", "debug", "coder"], monthlyTasks: 1000, hostedBrowserMinutes: 2000 },
 };
 
 export const users = sqliteTable("users", {
@@ -36,11 +41,41 @@ export const subscriptions = sqliteTable("subscriptions", {
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   currentPeriodEnd: text("current_period_end"),
+  /**
+   * Epoch seconds of the newest Stripe event applied to this row. Stripe does
+   * not guarantee delivery order, and an older `subscription.updated` arriving
+   * after a newer one would downgrade a customer who just upgraded.
+   */
+  lastEventAt: integer("last_event_at"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
   userIdIndex: uniqueIndex("subscriptions_user_id_idx").on(table.userId),
   stripeCustomerIdIndex: uniqueIndex("subscriptions_stripe_customer_id_idx").on(table.stripeCustomerId),
+}));
+
+/**
+ * Every Stripe event id we have already applied. Stripe retries on timeouts,
+ * on 500s, and on a deploy that lands mid-request, so duplicate delivery is
+ * routine rather than exceptional.
+ */
+export const billingEvents = sqliteTable("billing_events", {
+  id: text("id").primaryKey(),
+  type: text("type").notNull(),
+  createdAt: integer("created_at").notNull(),
+  receivedAt: text("received_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+/** One row per user per calendar month; hosted browser minutes only. */
+export const hostedBrowserUsage = sqliteTable("hosted_browser_usage", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  periodStart: text("period_start").notNull(),
+  minutesUsed: integer("minutes_used").notNull().default(0),
+  activeSessions: integer("active_sessions").notNull().default(0),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  userPeriodIndex: uniqueIndex("hosted_browser_usage_user_period_idx").on(table.userId, table.periodStart),
 }));
 
 /** One row per user per calendar month (periodStart = "YYYY-MM-01"), incremented on each dispatched task. */
