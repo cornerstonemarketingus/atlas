@@ -179,6 +179,9 @@ export const computerTasks = sqliteTable("computer_tasks", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   startedAt: text("started_at"),
   completedAt: text("completed_at"),
+  heartbeatAt: text("heartbeat_at"),
+  leaseExpiresAt: text("lease_expires_at"),
+  attemptCount: integer("attempt_count").notNull().default(0),
 }, (table) => ({
   ownerIndex: index("computer_tasks_owner_created_at_idx").on(table.requestedBy, table.createdAt),
   deviceQueueIndex: index("computer_tasks_device_status_created_at_idx").on(table.deviceId, table.status, table.createdAt),
@@ -209,6 +212,22 @@ export const accountDeletionRequests = sqliteTable("account_deletion_requests", 
   status: text("status").notNull().default("pending"),
   requestedAt: text("requested_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   completedAt: text("completed_at"),
+  processedBy: text("processed_by"),
+  processingNote: text("processing_note"),
 }, (table) => ({
   ownerStatusIndex: index("account_deletion_owner_status_idx").on(table.requestedBy, table.status),
+}));
+
+/** Append-only, user-visible receipts for the operator control plane. */
+export const computerTaskEvents = sqliteTable("computer_task_events", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull().references(() => computerTasks.id),
+  requestedBy: text("requested_by").notNull(),
+  kind: text("kind").notNull(),
+  summary: text("summary").notNull(),
+  detail: text("detail"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  taskIndex: index("computer_task_events_task_created_at_idx").on(table.taskId, table.createdAt),
+  ownerIndex: index("computer_task_events_owner_created_at_idx").on(table.requestedBy, table.createdAt),
 }));

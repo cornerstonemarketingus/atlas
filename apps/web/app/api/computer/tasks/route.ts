@@ -1,11 +1,12 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "../../../../db";
-import { computerApprovals, computerDevices, computerTasks } from "../../../../db/schema";
+import { computerApprovals, computerDevices, computerTaskEvents, computerTasks } from "../../../../db/schema";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { currentPlan } from "../../billing/plan.mjs";
 import { cloudBrowserAccess } from "../browser-plan.mjs";
 import { computerExecutionPolicy, normalizeComputerWorkflow } from "../computer-policy.mjs";
+import { taskEvent } from "../task-events";
 
 async function capabilities(account: { userId: string; dbUserId: number | null }) {
   const unrestricted = account.dbUserId === null;
@@ -24,11 +25,12 @@ export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
   const db = getDb();
-  const [tasks, approvals] = await Promise.all([
+  const [tasks, approvals, events] = await Promise.all([
     db.select().from(computerTasks).where(eq(computerTasks.requestedBy, account.userId)).orderBy(desc(computerTasks.createdAt)).limit(20),
     db.select().from(computerApprovals).where(and(eq(computerApprovals.requestedBy, account.userId), eq(computerApprovals.status, "pending"), isNull(computerApprovals.decidedAt))).orderBy(desc(computerApprovals.createdAt)),
+    db.select().from(computerTaskEvents).where(eq(computerTaskEvents.requestedBy, account.userId)).orderBy(desc(computerTaskEvents.createdAt)).limit(100),
   ]);
-  return Response.json({ tasks: tasks.map((task) => ({ ...task, policy: computerExecutionPolicy(task.workflowType) })), approvals, capabilities: await capabilities(account) }, { headers: { "cache-control": "no-store" } });
+  return Response.json({ tasks: tasks.map((task) => ({ ...task, policy: computerExecutionPolicy(task.workflowType), events: events.filter((event) => event.taskId === task.id) })), approvals, capabilities: await capabilities(account) }, { headers: { "cache-control": "no-store" } });
 }
 
 export async function POST(request: Request) {
@@ -58,5 +60,6 @@ export async function POST(request: Request) {
   if (!device || device.platform !== executionProvider) return Response.json({ message: "That execution provider is not available." }, { status: 404 });
   const id = randomUUID();
   await db.insert(computerTasks).values({ id, requestedBy: account.userId, deviceId, executionProvider, workflowType, approvalPolicy: "consequential", objective, startUrl });
+  await db.insert(computerTaskEvents).values(taskEvent(id, account.userId, "queued", "Task queued", `${workflowType} via ${executionProvider}`));
   return Response.json({ task: { id, status: "queued", workflowType, policy: computerExecutionPolicy(workflowType) } }, { status: 201 });
 }

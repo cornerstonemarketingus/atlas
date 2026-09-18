@@ -1,7 +1,8 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
-import { computerApprovals } from "../../../../../db/schema";
+import { computerApprovals, computerTaskEvents } from "../../../../../db/schema";
 import { authenticatedAccount } from "../../../tasks/operator-auth.mjs";
+import { taskEvent } from "../../task-events";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const account = await authenticatedAccount(request);
@@ -11,6 +12,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (body.decision !== "approved" && body.decision !== "rejected") return Response.json({ message: "Decision must be approved or rejected." }, { status: 400 });
   const { id } = await context.params;
   const now = new Date().toISOString();
-  await getDb().update(computerApprovals).set({ status: body.decision, decidedAt: now }).where(and(eq(computerApprovals.id, id), eq(computerApprovals.requestedBy, account.userId), eq(computerApprovals.status, "pending")));
+  const db = getDb();
+  const rows = await db.update(computerApprovals).set({ status: body.decision, decidedAt: now }).where(and(eq(computerApprovals.id, id), eq(computerApprovals.requestedBy, account.userId), eq(computerApprovals.status, "pending")))
+    .returning({ taskId: computerApprovals.taskId, summary: computerApprovals.summary });
+  if (!rows.length) return Response.json({ message: "That approval was already decided or is unavailable." }, { status: 409 });
+  await db.insert(computerTaskEvents).values(taskEvent(rows[0].taskId, account.userId, body.decision, `Action ${body.decision}`, rows[0].summary));
   return Response.json({ decision: body.decision });
 }

@@ -15,6 +15,8 @@ Supported actions are deliberately narrow: navigate, click accessible buttons or
 3. Paste the credential when prompted.
 4. Install the selected Ollama model if the launcher requests it, then open **Atlas Companion** from the Start menu.
 
+Run `Test-AtlasCompanion.ps1` at any time for a JSON preflight report. It reports installed tools, memory, models, and pairing state but never prints the pairing credential or local profile. When no model is specified, the launcher chooses an installed Qwen coder model sized conservatively for system memory (3B below 14 GiB, 7B from 14 GiB, and 14B from 30 GiB).
+
 The installer can also open a structured local profile for career and business facts. It is encrypted for the current Windows account with DPAPI and supplied only to the loopback Ollama process. Run `Configure-AtlasProfile.ps1` again whenever those facts change.
 
 The pairing credential is protected with Windows DPAPI for the current Windows account. The launcher decrypts it only into the companion process environment and clears it when the process exits.
@@ -24,3 +26,9 @@ The pairing credential is protected with Windows DPAPI for the current Windows a
 The control plane supplies the workflow policy with every task. The companion independently classifies each proposed action. It pauses for consequential controls such as submit, send, publish, purchase, campaign launch, deletion, and security changes, and for sensitive fields such as passwords, payment data, or government identifiers. One approval authorizes only the exact serialized action and expires after five minutes.
 
 Closing the companion stops local execution. Atlas can also cancel queued or active work from the Computer Operator history.
+
+## Release and recovery
+
+`scripts\windows\New-AtlasCompanionPackage.ps1` produces a versioned source bundle and adjacent SHA-256 checksum. Pass `-CertificateThumbprint` (or set `ATLAS_WINDOWS_CERTIFICATE_THUMBPRINT`) to Authenticode-sign every included PowerShell entry point before packaging. A public release must be signed by a trusted code-signing certificate; the repository cannot manufacture that identity.
+
+The Start-menu shortcut uses a supervisor with capped exponential restart and a 5 MiB rotating local log at `%LOCALAPPDATA%\Atlas Companion\logs`. Network polling also backs off to avoid a tight retry loop. Persistent startup failures stop after five restarts and preserve the log for diagnosis.

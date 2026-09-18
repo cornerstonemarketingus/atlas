@@ -16,11 +16,11 @@ be introduced only when it adds mobile value beyond a wrapped website.
 
 - [ ] Add Sign in with Apple on iOS, or obtain a documented review exception.
       GitHub is currently the only customer login and is a third-party login.
-- [ ] Build a deletion processor and operator audit view. The current page
+- [x] Build a deletion processor and operator audit view. The current page
       starts a request but does not yet erase or anonymize records.
-- [ ] Add a public web deletion-request URL that works for users who no longer
+- [x] Add a public web deletion-request URL that works for users who no longer
       have the app installed. Google Play requires an external deletion path.
-- [ ] Create a complete data inventory for App Store privacy labels and Google
+- [x] Create a complete data inventory for App Store privacy labels and Google
       Play Data safety, including GitHub identifiers, task metadata, browser
       screenshots, billing records, diagnostics, and retention periods.
 - [ ] Decide the mobile billing path before exposing plan upgrades. Confirm

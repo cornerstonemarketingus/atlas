@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
-import { computerApprovals, computerTasks } from "../../../../../db/schema";
+import { computerApprovals, computerTaskEvents, computerTasks } from "../../../../../db/schema";
 import { authenticatedDevice } from "../../companion-auth";
+import { taskEvent } from "../../task-events";
 
 export async function POST(request: Request) {
   const device = await authenticatedDevice(request);
@@ -21,5 +22,6 @@ export async function POST(request: Request) {
     domain: typeof body.domain === "string" ? body.domain.slice(0, 255) : null,
     actionHash: createHash("sha256").update(action).digest("hex"), expiresAt,
   });
+  await getDb().insert(computerTaskEvents).values(taskEvent(taskId, task.requestedBy, "approval-requested", "Approval requested", summary));
   return Response.json({ approval: { id, status: "pending", expiresAt } }, { status: 201 });
 }

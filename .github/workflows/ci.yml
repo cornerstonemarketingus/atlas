@@ -99,6 +99,31 @@ jobs:
       - name: Test sovereign control plane
         run: npm test
 
+  windows-companion:
+    name: apps/windows-companion
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/windows-companion
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/windows-companion/package-lock.json
+
+      # Browser automation is a security boundary. Exercise the companion on
+      # Windows—the platform customers run—on every pull request, rather than
+      # discovering policy or packaging regressions only during a release.
+      - run: npm ci --ignore-scripts
+
+      - name: Check and test Windows companion
+        run: npm run check && npm test
+
   runner-scripts:
     name: runner scripts
     runs-on: ubuntu-latest

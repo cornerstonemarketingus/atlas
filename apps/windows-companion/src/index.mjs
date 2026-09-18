@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { actionRisk, validateAction } from "./policy.mjs";
 import { parseLocalProfile, profileForPrompt } from "./profile.mjs";
+import { retryDelay } from "./runtime.mjs";
 
 const atlasUrl = (process.env.ATLAS_URL ?? "https://atlas-web.cornerstonemarketingus.workers.dev").replace(/\/$/u, "");
 const credential = process.env.ATLAS_DEVICE_CREDENTIAL ?? await readCredential();
@@ -111,11 +112,17 @@ async function run(task) {
 }
 
 console.log(`Atlas companion online. Model: ${model}. Browser profile: ${profile}`);
+let consecutivePollFailures = 0;
 for (;;) {
   try {
     const { task } = await atlas("/api/computer/companion/poll", { model, version: "0.2.0" });
+    consecutivePollFailures = 0;
     if (!task) { await new Promise((resolve) => setTimeout(resolve, 5000)); continue; }
     try { const result = await run(task); await atlas("/api/computer/companion/report", { taskId: task.id, status: "completed", result }); }
     catch (error) { const message = error instanceof Error ? error.message : "Browser task failed."; if (message !== "Task cancelled by user.") await atlas("/api/computer/companion/report", { taskId: task.id, status: "failed", error: message }); }
-  } catch (error) { console.error(new Date().toISOString(), error instanceof Error ? error.message : error); await new Promise((resolve) => setTimeout(resolve, 10_000)); }
+  } catch (error) {
+    const delay = retryDelay(consecutivePollFailures += 1);
+    console.error(new Date().toISOString(), error instanceof Error ? error.message : error, `Retrying in ${Math.round(delay / 1000)}s.`);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
 }
