@@ -28,6 +28,23 @@ Open `http://127.0.0.1:4317` for the responsive local task interface. Paste the
 first-launch token to unlock the current browser tab, then queue and monitor
 isolated coding tasks without visiting an Atlas-hosted site.
 
+### Persistent agent runtime
+
+The same process runs the agent runtime, which is what makes Atlas a
+conversation rather than a job queue. Sessions persist across restarts, their
+events stream live to whoever is attached, and the transcript resumes from
+where it stopped when the tab is closed and reopened. Work can be paused,
+resumed, cancelled, and retried while it runs, and everything it does lands in
+the local audit timeline.
+
+GitHub Actions is one executor adapter here, registered only when this machine
+has been given a token for it. A coding session completes locally with no
+GitHub credential, no Cloudflare, and no hosted model — only a local
+OpenAI-compatible model server such as Ollama.
+
+See [`docs/agent-runtime.md`](docs/agent-runtime.md) for the event contract,
+the lease and recovery model, and the HTTP surface.
+
 On Windows, run `scripts\windows\Install-AtlasLocal.ps1` from a verified release
 package. It installs a Start menu launcher, checks Node.js and Git, discovers
 installed Ollama models, and does not run a remote installer or upload model

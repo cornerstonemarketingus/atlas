@@ -181,3 +181,82 @@ The short version, because these have each already cost a day:
   is deliberate and documented; redacting them corrupts customer files.
 - Never give the agent credentials that can write secrets or mint tokens. It
   runs unattended and edits its own source.
+
+---
+
+## 6. Interactive AI operator — scope status
+
+The goal is that Atlas stops being a GitHub Actions application: a local-first
+conversational operator, with GitHub as one optional publishing adapter.
+
+Status is reported in three separate columns on purpose — **implemented**
+(code exists and is tested), **configured** (wired into the running product),
+and **needs external credentials** (blocked on something only the owner can
+supply). A feature that is implemented but unconfigured is not working
+software, and the distinction has cost this repository real days.
+
+### Milestone 1 — persistent agent runtime — **done**
+
+Implemented and configured. See [`docs/agent-runtime.md`](docs/agent-runtime.md).
+
+- Long-running local daemon owns agent execution (`apps/local-control`).
+- Sessions, turns, and an append-only event log persist across restarts.
+- Nine normalized event kinds stream over resumable SSE (`?after=` /
+  `Last-Event-ID`).
+- Pause, resume, cancel, retry, reconnect — over HTTP and in the local UI.
+- Work runs in isolated Git worktrees; the operator's checkout is never
+  touched.
+- Leases with heartbeats; boot-time recovery of interrupted sessions.
+- Token, time, tool-call, and cost budgets that survive restarts.
+- GitHub Actions is an executor adapter, registered only when
+  `ATLAS_GITHUB_TOKEN` and `ATLAS_GITHUB_REPOSITORY` are set. The existing
+  workflow path is untouched.
+
+Needs external credentials: nothing for local operation. A local model server
+(Ollama) must be running for a coding session to do real work — without one
+the run fails with a clear message, which is the correct behaviour, not a bug.
+
+Two pre-existing bugs were found and fixed while building this:
+
+- **Created files were missing from every portable patch.** The isolated
+  runner captured `git diff`, which ignores untracked files — so every file
+  the coder *created*, the common case for an agent, was silently dropped. It
+  now stages into the throwaway worktree's own index and captures
+  `git diff --cached`. Regression test:
+  `agent-worktree.test.mjs`.
+- **A cancelled run could report success.** An executor that swallowed its
+  abort signal and returned `completed` was believed. Cancellation is now
+  authoritative.
+
+### Milestones 2–10 — not started
+
+These are unbuilt. The runtime is the foundation they attach to, and the
+adapter seams they need (executors, the tool-proposal and approval-request
+event kinds, the capability/risk fields already carried on `tool_proposal`)
+exist — but no code behind them has been written yet. Do not read the event
+contract as evidence the features exist.
+
+- **2 — conversational agent loop.** The turn queue, streaming, and
+  reconnection are in place; incremental token streaming, attachments,
+  speech-to-text, edit-and-resend, and conversation compaction are not.
+- **3 — tool runtime.** `packages/atlas-cli` already has a policy-enforced
+  read-only tool registry, capability/risk classification, and one-time
+  action-bound approvals. Nothing yet exposes that registry *through* the
+  runtime, and the browser, filesystem, infrastructure, communications, and
+  business-workflow families do not exist.
+- **4 — infrastructure administration.** No Cloudflare, Vercel, or
+  Git-host administration adapters. This one carries the most risk: it must
+  never hold a credential that can mint other credentials.
+- **5 — computer operator.** The Windows companion does approval-gated
+  browser work today; it is not a general computer-operation runtime.
+- **6 — local models and routing.** Discovery exists
+  (`model-discovery.mjs`, `LOCAL-MODEL.md`); hardware detection, context-fit
+  verification, and task-aware routing do not.
+- **7 — Windows productization.** ZIP packaging and optional Authenticode
+  signing exist; there is no MSI/MSIX, update manifest, or rollback.
+- **8 — native mobile companion.** Tracked in
+  [`MOBILE-RELEASE.md`](MOBILE-RELEASE.md). Do not submit a plain WebView.
+- **9 — hosted browser execution.** Design notes only
+  (`docs/hosted-approval-state-design.md`).
+- **10 — billing.** See §2 above. Prices stay in configuration until the
+  owner supplies final amounts.

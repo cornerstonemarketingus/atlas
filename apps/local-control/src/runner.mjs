@@ -9,18 +9,33 @@ export function runLocalCoder(task, options = {}) {
   const script = resolve(atlasRoot, "scripts", "local", "run-coder.mjs");
   const args = [script, "--repository", task.repository, "--objective", task.objective, "--model", task.model];
   if (options.verifyDir) args.push("--verify-dir", options.verifyDir);
+  const { signal } = options;
+  if (signal?.aborted) return Promise.resolve({ ok: false, cancelled: true, message: "Cancelled before the coder started." });
   return new Promise((resolveRun) => {
     const child = spawn(process.execPath, args, { cwd: atlasRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let summary = "";
+    let cancelled = false;
+    // SIGTERM rather than SIGKILL: the coder writes its audit tail on the way
+    // out, and a cancelled run still owes the operator a receipt.
+    const abort = () => { cancelled = true; child.kill("SIGTERM"); };
+    signal?.addEventListener("abort", abort, { once: true });
+    const settle = (value) => { signal?.removeEventListener("abort", abort); resolveRun(value); };
     const collect = (chunk) => { summary = `${summary}${chunk}`.slice(-8_000); };
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
-    child.on("error", (error) => resolveRun({ ok: false, message: error.message }));
-    child.on("close", (code) => resolveRun({ ok: code === 0, message: summary.trim() || `Atlas exited with code ${code}.` }));
+    child.on("error", (error) => settle({ ok: false, message: error.message }));
+    child.on("close", (code) => settle(cancelled
+      ? { ok: false, cancelled: true, message: summary.trim() || "The coder was cancelled." }
+      : { ok: code === 0, message: summary.trim() || `Atlas exited with code ${code}.` }));
   });
 }
 
-export async function runIsolatedLocalCoder(task, { dataDirectory, verifyDir } = {}) {
+/**
+ * `runCoder` is injectable so the isolation itself — worktree creation, patch
+ * capture, leaving the operator's checkout untouched — can be tested without
+ * standing up a model server.
+ */
+export async function runIsolatedLocalCoder(task, { dataDirectory, verifyDir, signal, runCoder = runLocalCoder } = {}) {
   if (!dataDirectory) throw new Error("A local data directory is required for isolated runs.");
   const worktrees = join(dataDirectory, "worktrees");
   const patches = join(dataDirectory, "patches");
@@ -34,12 +49,28 @@ export async function runIsolatedLocalCoder(task, { dataDirectory, verifyDir } =
   const add = await capture("git", ["-C", repository, "worktree", "add", "--detach", worktree, "HEAD"]);
   if (!add.ok) return { ok: false, message: `Could not create an isolated worktree: ${add.stderr.trim()}` };
 
-  const result = await runLocalCoder({ ...task, repository: worktree }, { verifyDir });
-  const diff = await capture("git", ["-C", worktree, "diff", "--binary", "--no-ext-diff"]);
+  const result = await runCoder({ ...task, repository: worktree }, { verifyDir, signal });
+  // The diff is captured even for a cancelled run: partial work in the
+  // worktree is still the operator's, and a patch they can read is the
+  // difference between "Atlas stopped" and "Atlas stopped and lost it".
+  //
+  // Staged, not `git diff`: a plain diff omits untracked files, so every file
+  // the coder *created* — the common case for an agent — was silently missing
+  // from the patch. The index being modified here is the throwaway worktree's
+  // own; the operator's checkout and index are untouched.
+  await capture("git", ["-C", worktree, "add", "-A"]);
+  const diff = await capture("git", ["-C", worktree, "diff", "--cached", "--binary", "--no-ext-diff"]);
   const patch = join(patches, `${task.id}.patch`);
-  if (diff.ok && diff.stdout.length > 0) await writeFile(patch, diff.stdout, { encoding: "utf8", mode: 0o600 });
-  const delivery = `Isolated worktree: ${worktree}${diff.stdout.length > 0 ? `\nPortable patch: ${patch}` : "\nNo patch was produced."}`;
-  return { ...result, message: `${result.message}\n\n${delivery}`.trim() };
+  const wrotePatch = diff.ok && diff.stdout.length > 0;
+  if (wrotePatch) await writeFile(patch, diff.stdout, { encoding: "utf8", mode: 0o600 });
+  const delivery = `Isolated worktree: ${worktree}${wrotePatch ? `\nPortable patch: ${patch}` : "\nNo patch was produced."}`;
+  return {
+    ...result,
+    worktree,
+    patch: wrotePatch ? patch : null,
+    patchBytes: wrotePatch ? Buffer.byteLength(diff.stdout, "utf8") : 0,
+    message: `${result.message}\n\n${delivery}`.trim(),
+  };
 }
 
 function capture(command, args) {

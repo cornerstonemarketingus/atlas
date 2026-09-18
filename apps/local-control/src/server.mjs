@@ -4,13 +4,15 @@ import { LOCAL_UI_CSS, LOCAL_UI_HTML, LOCAL_UI_JS } from "./ui.mjs";
 import { decryptBackup, encryptBackup } from "./encrypted-backup.mjs";
 import { publishChange } from "./publish-adapters.mjs";
 import { discoverLocalModels } from "./model-discovery.mjs";
+import { createAgentRoutes } from "./agent/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true } }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const pairAttempts = new Map();
+  const agentRoutes = runtime ? createAgentRoutes({ runtime }) : null;
 
   async function startTask(taskId) {
     store.markRunning(taskId);
@@ -25,7 +27,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
     if (request.method === "GET" && request.url === "/app.js") return sendText(response, 200, "text/javascript; charset=utf-8", LOCAL_UI_JS);
     response.setHeader("content-type", "application/json; charset=utf-8");
-    if (request.method === "GET" && request.url === "/health") return send(response, 200, { status: "ok", mode: "sovereign", model, license });
+    if (request.method === "GET" && request.url === "/health") return send(response, 200, { status: "ok", mode: "sovereign", model, license, runtime: runtime ? { running: true, executors: runtime.executorIds() } : { running: false, executors: [] } });
     if (request.method === "POST" && request.url === "/v1/pair/claim") {
       const client = request.socket.remoteAddress ?? "unknown", nowMs = Date.now();
       const attempts = (pairAttempts.get(client) ?? []).filter((time) => nowMs - time < 60_000);
@@ -41,6 +43,9 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     const identity = authenticate(request.headers.authorization, expected, store);
     if (!identity) return send(response, 401, { message: "A valid local Atlas or paired-device token is required." });
 
+    if (agentRoutes && (request.url ?? "").startsWith("/v1/sessions")) { if (await agentRoutes.handle(request, response, identity)) return; }
+    if (agentRoutes && request.method === "GET" && request.url === "/v1/executors") { if (await agentRoutes.handle(request, response, identity)) return; }
+    if (!runtime && (request.url ?? "").startsWith("/v1/sessions")) return send(response, 503, { message: "The Atlas agent runtime is not running in this process." });
     if (request.method === "GET" && request.url === "/v1/tasks") return send(response, 200, { tasks: store.list() });
     if (request.method === "GET" && request.url === "/v1/models") { try { return send(response, 200, await discoverModels()); } catch (error) { return send(response, 503, { message: error instanceof Error ? error.message : "Model discovery failed.", models: [] }); } }
     if (request.method === "POST" && request.url === "/v1/tasks") {
