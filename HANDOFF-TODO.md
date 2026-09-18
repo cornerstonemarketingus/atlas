@@ -463,7 +463,41 @@ Needs external credentials: `ATLAS_WINDOWS_CERTIFICATE_BASE64` and
 for the update manifest. The build refuses to produce an unsigned public
 release without an explicit opt-out.
 
-### Milestones 8–10 — not started
+### Milestone 8 — native mobile companion — **partially done**
+
+Implemented and tested; **never built or run on a device.** The split matters,
+so it is stated plainly here and in `MOBILE-RELEASE.md`.
+
+Implemented, in `apps/local-control/src/mobile/` (shared with the daemon, which
+issues the links) and `mobile/src/` (the Capacitor shell):
+
+- **Deep links as signed capabilities.** A link names one resource, is bound to
+  one device, expires, and — for approvals — is one-time. A link that arrives
+  by push is attacker-reachable, so tampering with any field invalidates it,
+  and the comparison is constant-time. Opening an approval is never granting
+  it.
+- **Push that carries nothing useful to an attacker.** The payload has a
+  capability name and a signed link; a guard refuses to send one containing a
+  credential, a secret field, or an action digest. Registrations are revocable,
+  a revoked token drops the registration, and raw tokens are never serialized.
+- **Biometric re-authentication** for high-risk approvals, capped at two
+  minutes of freshness, with no silent downgrade when the hardware is missing.
+- **Credentials in Keychain/Keystore only.** There is deliberately no fallback
+  to web storage, and a startup guard stops the app if a credential is found
+  there.
+- **Offline, expired, revoked and unpaired states** that say what is true. An
+  approval cannot be answered from a cached list, and losing the network does
+  not overwrite "revoked" with "offline".
+- **Crash reporting behind consent**, defaulting to unasked, redacted even in
+  the copy kept locally.
+
+Not done, and needing a Mac with Xcode and a machine with Android Studio: the
+native projects have never been generated, no real push has been delivered, no
+universal link has been resolved by a real device, and no accessibility,
+rotation, dark-mode or large-text pass has happened. Sign in with Apple remains
+the open P0 gate. The full list is in `MOBILE-RELEASE.md`.
+
+### Milestones 9–10 — not started
 
 These are unbuilt. The runtime is the foundation they attach to, and the
 adapter seams they need (executors, the tool-proposal and approval-request
@@ -471,8 +505,6 @@ event kinds, the capability/risk fields already carried on `tool_proposal`)
 exist — but no code behind them has been written yet. Do not read the event
 contract as evidence the features exist.
 
-- **8 — native mobile companion.** Tracked in
-  [`MOBILE-RELEASE.md`](MOBILE-RELEASE.md). Do not submit a plain WebView.
 - **9 — hosted browser execution.** Design notes only
   (`docs/hosted-approval-state-design.md`).
 - **10 — billing.** See §2 above. Prices stay in configuration until the

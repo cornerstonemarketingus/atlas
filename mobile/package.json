@@ -1,0 +1,30 @@
+{
+  "name": "@atlas/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capacitor shell around the Atlas responsive web app.",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check src/secure-storage.mjs && node --check src/bridge.mjs && node --check src/deep-link-handler.mjs",
+    "sync": "cap sync",
+    "open:ios": "cap open ios",
+    "open:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/app": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/device": "^6.0.0",
+    "@capacitor/push-notifications": "^6.0.0",
+    "capacitor-native-biometric": "^4.2.2",
+    "capacitor-secure-storage-plugin": "^0.10.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/ios": "^6.0.0",
+    "@capacitor/android": "^6.0.0"
+  }
+}

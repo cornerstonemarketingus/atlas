@@ -124,6 +124,32 @@ jobs:
       - name: Check and test Windows companion
         run: npm run check && npm test
 
+  mobile-shell:
+    name: mobile shell
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The native projects need Xcode and Android Studio, which CI does not
+      # have. What CI can and must check is the logic that decides where a
+      # credential is stored, whether a deep link is trusted, and what a push
+      # payload may carry -- the parts where a mistake is a security bug
+      # rather than a build failure.
+      - name: Check shell sources
+        run: npm run check
+
+      - name: Test the shell
+        run: npm test
+
   windows-release:
     name: Windows release tooling
     runs-on: windows-latest
