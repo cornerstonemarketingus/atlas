@@ -85,6 +85,17 @@ test("the daemon starts, registers its executors, and serves the session API", a
   // The whole tool surface has to be constructible, not merely importable.
   const policies = await (await fetch(`${origin}/v1/policies`, { headers: admin })).json();
   assert.ok(policies.policies.length > 0);
+
+  // Model health must answer on a machine with no model server running, and
+  // must not leak a credential or a raw endpoint into customer-facing copy.
+  const health2 = await fetch(`${origin}/v1/models/health`, { headers: admin });
+  assert.equal(health2.status, 200);
+  const report = await health2.json();
+  assert.ok(report.hardware.totalMemoryGiB > 0);
+  assert.ok(Array.isArray(report.servers));
+  assert.ok(report.recommendations.coding);
+  const serialized = JSON.stringify(report);
+  assert.equal(/authorization|bearer|api[_-]?key/iu.test(serialized), false, "no credential appears in the health report");
 });
 
 test("the daemon still boots when no credential vault passphrase is set", async (t) => {

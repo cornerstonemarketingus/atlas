@@ -7,7 +7,8 @@ import {
   toolExecutionEvent,
   toolProposalEvent,
 } from "./events.mjs";
-import { compactConversation, measure } from "./compaction.mjs";
+import { measure } from "./compaction.mjs";
+import { describeContextFailure, fitToContext } from "./models/context-fit.mjs";
 import { loadAttachment, normalizeAttachment, toModelContent } from "./attachments.mjs";
 import { ModelRequestError } from "./model-client.mjs";
 import { ReasoningAccumulator, publicErrorMessage, stripInlineReasoning } from "./reasoning.mjs";
@@ -36,7 +37,9 @@ export function createConversationExecutor({
   registry,
   approvals = null,
   maxIterations = 12,
-  contextCharacters = 48_000,
+  // The model's real window, not a character count picked out of the air.
+  contextWindow = 32_768,
+  contextSource = "inferred",
   maxOutputTokens = 2048,
   summarizeReasoning = null,
   attachmentRoot = null,
@@ -54,7 +57,15 @@ export function createConversationExecutor({
       for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
         await checkpoint();
 
-        const fitted = fit(messages, contextCharacters, emit);
+        let fitted;
+        try {
+          fitted = fit(messages, { contextWindow, contextSource, maxOutputTokens, model: session.model }, emit);
+        } catch (error) {
+          // Refused out loud. Sending this would have made the server drop the
+          // start of the conversation without telling anyone.
+          emit(errorEvent({ code: "CONTEXT_TOO_LARGE", summary: error.message, recoverable: false }));
+          return { status: "failed", summary: error.message };
+        }
         const reasoning = new ReasoningAccumulator({ summarize: summarizeReasoning, now });
         const toolCalls = [];
         let answer = "";
@@ -201,10 +212,15 @@ async function buildMessages({ session, history, turn, attachmentRoot, emit }) {
   return messages;
 }
 
-function fit(messages, contextCharacters, emit) {
-  const result = compactConversation(messages, { maxCharacters: contextCharacters });
-  if (result.compacted) emit(statusEvent(`Compacted the conversation: ${result.dropped} earlier messages summarized to fit the context window.`));
-  return result.messages;
+function fit(messages, { contextWindow, contextSource, maxOutputTokens, model }, emit) {
+  try {
+    const result = fitToContext(messages, { contextWindow, maxOutputTokens, contextSource });
+    if (result.compacted) emit(statusEvent(result.note));
+    return result.messages;
+  } catch (error) {
+    if (error.code !== "CONTEXT_TOO_LARGE") throw error;
+    throw Object.assign(new Error(describeContextFailure(error, { model, contextWindow, contextSource })), { code: "CONTEXT_TOO_LARGE" });
+  }
 }
 
 /** Strips Atlas-internal fields so only wire-legal keys reach the endpoint. */

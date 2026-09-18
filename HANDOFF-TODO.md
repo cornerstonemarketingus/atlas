@@ -374,7 +374,40 @@ Needs external credentials: none. Needs Playwright and a browser on the
 machine, or the paired Windows companion; without either, the browser tools
 answer "no browser on this machine".
 
-### Milestones 6–10 — not started
+### Milestone 6 — local models and routing — **done**
+
+Implemented and configured. `GET /v1/models/health` reports the lot.
+
+- **Hardware detection** — CPU, RAM, and GPU (nvidia-smi, then per-platform
+  best effort). The figure that decides model choice is dedicated VRAM when
+  there is a discrete GPU and system memory otherwise.
+- **Discovery** — Ollama's native API and the OpenAI-compatible `/models`
+  list, across the five ports these servers usually sit on. A server that is
+  not running is a normal result, not an error. A plain-HTTP non-loopback
+  endpoint is never contacted.
+- **Recommendations** — the largest model that fits, per task, with what is
+  installed reported separately from what would be better. Erring small is
+  deliberate: a model slightly too large makes the machine unusable.
+- **Context fit, and no silent truncation.** Context windows come from the
+  server where it will say and are otherwise inferred — and an inferred figure
+  is *labelled* inferred, because the difference matters. A prompt that does
+  not fit is compacted with the operator told, or refused with the numbers.
+  Nothing is ever sent for the server to quietly trim.
+- **Task-aware routing** for planning, coding, vision and summarization, with
+  bounded fallback that walks only the routes configured for that task.
+  Authentication and invalid-input failures never fall through — a second
+  identical error is not a diagnosis.
+- **Evaluation fixtures** that answer the question that matters before giving
+  a model tools: can it produce a valid tool call, can it refrain from calling
+  one when none is needed, and can it emit strict JSON.
+- **No vendor in customer-facing copy.** A route reads as "this machine" or a
+  host; raw endpoint URLs and credentials appear nowhere in the health report,
+  which the daemon boot test asserts.
+
+Needs external credentials: none. Routes are configured through
+`ATLAS_MODEL_ROUTES` (a JSON array of `{task, model, endpoint, contextWindow}`).
+
+### Milestones 7–10 — not started
 
 These are unbuilt. The runtime is the foundation they attach to, and the
 adapter seams they need (executors, the tool-proposal and approval-request
@@ -382,9 +415,6 @@ event kinds, the capability/risk fields already carried on `tool_proposal`)
 exist — but no code behind them has been written yet. Do not read the event
 contract as evidence the features exist.
 
-- **6 — local models and routing.** Discovery exists
-  (`model-discovery.mjs`, `LOCAL-MODEL.md`); hardware detection, context-fit
-  verification, and task-aware routing do not.
 - **7 — Windows productization.** ZIP packaging and optional Authenticode
   signing exist; there is no MSI/MSIX, update manifest, or rollback.
 - **8 — native mobile companion.** Tracked in

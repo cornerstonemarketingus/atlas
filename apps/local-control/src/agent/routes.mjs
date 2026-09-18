@@ -12,10 +12,21 @@ const SSE_KEEPALIVE_MS = 15_000;
  * phone can watch a session and answer approvals, which is the split the
  * local control plane already draws for tasks.
  */
-export function createAgentRoutes({ runtime, transcriber = null, keepaliveMs = SSE_KEEPALIVE_MS }) {
+export function createAgentRoutes({ runtime, transcriber = null, modelHealth = null, keepaliveMs = SSE_KEEPALIVE_MS }) {
   async function handle(request, response, identity) {
     const url = new URL(request.url ?? "/", "http://local.atlas");
     const path = url.pathname;
+
+    if (request.method === "GET" && path === "/v1/models/health") {
+      if (!modelHealth) return send(response, 503, { message: "Model health reporting is not available in this process." });
+      try {
+        // Hardware, discovered servers, recommendations and routes — and no
+        // credential, anywhere, for any of them.
+        return send(response, 200, await modelHealth());
+      } catch (error) {
+        return send(response, 503, { message: error.message });
+      }
+    }
 
     if (request.method === "GET" && path === "/v1/executors") {
       return send(response, 200, { executors: runtime.executorIds() });

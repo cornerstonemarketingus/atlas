@@ -13,6 +13,10 @@ import { createGitHubActionsClient } from "./agent/github-actions-client.mjs";
 import { createConversationExecutor } from "./agent/conversation-executor.mjs";
 import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
+import { detectHardware } from "./agent/models/hardware.mjs";
+import { discoverModelServers } from "./agent/models/discovery.mjs";
+import { recommendModels } from "./agent/models/recommend.mjs";
+import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/router.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { registerRepositoryTools } from "./agent/tools/repository-tools.mjs";
 import { registerRepositoryWriteTools } from "./agent/tools/repository-write-tools.mjs";
@@ -61,6 +65,7 @@ const server = createLocalControlServer({
   license,
   runtime,
   transcriber: buildTranscriber(),
+  modelHealth: reportModelHealth,
 });
 const host = process.env.ATLAS_LOCAL_HOST || "127.0.0.1";
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
@@ -202,6 +207,33 @@ function buildInfrastructureProviders() {
     }));
   }
   return providers;
+}
+
+const router = createModelRouter({
+  routes: parseRoutes(process.env.ATLAS_MODEL_ROUTES ?? "[]"),
+  createClient: (route) => createModelClient({ baseUrl: route.endpoint }),
+});
+
+/**
+ * What an operator needs to judge whether their models are healthy: what this
+ * machine can run, what is installed, what Atlas would pick, and how the
+ * routes are configured. No credential appears anywhere in it — that is the
+ * whole point of reporting health separately from configuration.
+ */
+async function reportModelHealth() {
+  const [hardware, servers] = await Promise.all([detectHardware(), discoverModelServers()]);
+  const installed = servers.flatMap((server) => server.models);
+  return {
+    hardware,
+    servers: servers.map((server) => ({
+      // A host, not a URL with anything in it.
+      location: server.endpoint.includes("127.0.0.1") || server.endpoint.includes("localhost") ? "this machine" : new URL(server.endpoint).host,
+      kind: server.kind,
+      models: server.models,
+    })),
+    ...recommendModels({ hardware, installed }),
+    routes: describeRoutes(router),
+  };
 }
 
 function buildTranscriber() {

@@ -8,11 +8,11 @@ import { createAgentRoutes } from "./agent/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, transcriber = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, transcriber = null, modelHealth = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const pairAttempts = new Map();
-  const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber }) : null;
+  const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
 
   async function startTask(taskId) {
     store.markRunning(taskId);
@@ -46,6 +46,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (agentRoutes && (request.url ?? "").startsWith("/v1/sessions")) { if (await agentRoutes.handle(request, response, identity)) return; }
     if (agentRoutes && request.method === "GET" && request.url === "/v1/executors") { if (await agentRoutes.handle(request, response, identity)) return; }
     if (agentRoutes && request.method === "POST" && request.url === "/v1/transcribe") { if (await agentRoutes.handle(request, response, identity)) return; }
+    if (agentRoutes && request.method === "GET" && request.url === "/v1/models/health") { if (await agentRoutes.handle(request, response, identity)) return; }
     if (!runtime && (request.url ?? "").startsWith("/v1/sessions")) return send(response, 503, { message: "The Atlas agent runtime is not running in this process." });
     if (request.method === "GET" && request.url === "/v1/tasks") return send(response, 200, { tasks: store.list() });
     if (request.method === "GET" && request.url === "/v1/models") { try { return send(response, 200, await discoverModels()); } catch (error) { return send(response, 503, { message: error instanceof Error ? error.message : "Model discovery failed.", models: [] }); } }
