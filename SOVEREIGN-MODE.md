@@ -71,6 +71,50 @@ profiles and device credentials stay on the customer's PC; consequential
 actions still require approval. Pair this with the local coder to avoid model
 and hosted-browser APIs entirely.
 
+### Approval-bound infrastructure administration
+
+The loopback control plane exposes a deliberately narrow infrastructure API for
+Cloudflare DNS upserts, Vercel environment-variable upserts, and Vercel
+deployment creation. It is not a general-purpose provider API proxy.
+
+1. `POST /v1/infrastructure/preview` validates and normalizes the requested
+   `action` and `input`. The response contains a redacted preview, SHA-256 action
+   digest, expiry, and approval ID. It never returns the stored input.
+2. Approve that exact request through `/v1/approvals/:id/decision`. Editing any
+   field changes the digest and invalidates the approval.
+3. `POST /v1/infrastructure/plans/:id/execute` atomically consumes the approval,
+   resolves credentials locally, performs the change, verifies provider state,
+   and records a redacted receipt. Approvals cannot be replayed.
+
+Inputs accept credential *references*, never secret values. The built-in
+runtime supports names such as `env:CLOUDFLARE_API_TOKEN` and
+`env:VERCEL_API_TOKEN`; an OS-vault resolver can implement `vault:NAME` without
+changing an adapter. A Vercel environment value is likewise passed as
+`valueRef`, so it is resolved only after approval and is never present in the
+preview, URL, response, or audit entry.
+
+Example dry-run request (the preview endpoint does not contact Cloudflare):
+
+```json
+{
+  "action": "cloudflare.dns.upsert",
+  "input": {
+    "credentialRef": "env:CLOUDFLARE_API_TOKEN",
+    "zoneId": "the-zone-id",
+    "type": "CNAME",
+    "name": "app.example.com",
+    "content": "origin.example.net",
+    "ttl": 1,
+    "proxied": true
+  }
+}
+```
+
+Use least-privilege tokens scoped to only the intended Cloudflare zone or
+Vercel project. Atlas intentionally does not create provider tokens, accept raw
+tokens over HTTP, delete DNS records, or expose provider response bodies on
+failures.
+
 ## Dependency boundary
 
 | Capability | Sovereign path | Optional hosted path |

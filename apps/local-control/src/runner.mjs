@@ -12,15 +12,28 @@ export function runLocalCoder(task, options = {}) {
   return new Promise((resolveRun) => {
     const child = spawn(process.execPath, args, { cwd: atlasRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let summary = "";
-    const collect = (chunk) => { summary = `${summary}${chunk}`.slice(-8_000); };
-    child.stdout.on("data", collect);
-    child.stderr.on("data", collect);
+    let settled = false;
+    const collect = (stream) => (chunk) => {
+      const text = chunk.toString();
+      summary = `${summary}${text}`.slice(-8_000);
+      options.onEvent?.({ type: "runner.output", payload: { stream, text: text.slice(-16_000) } });
+    };
+    child.stdout.on("data", collect("stdout"));
+    child.stderr.on("data", collect("stderr"));
+    const abort = () => { if (!settled) child.kill(); };
+    if (options.signal?.aborted) abort();
+    else options.signal?.addEventListener("abort", abort, { once: true });
     child.on("error", (error) => resolveRun({ ok: false, message: error.message }));
-    child.on("close", (code) => resolveRun({ ok: code === 0, message: summary.trim() || `Atlas exited with code ${code}.` }));
+    child.on("close", (code) => {
+      settled = true;
+      options.signal?.removeEventListener("abort", abort);
+      resolveRun({ ok: code === 0 && !options.signal?.aborted, cancelled: options.signal?.aborted === true, message: options.signal?.aborted ? "Cancelled by the operator." : summary.trim() || `Atlas exited with code ${code}.` });
+    });
   });
 }
 
-export async function runIsolatedLocalCoder(task, { dataDirectory, verifyDir } = {}) {
+export async function runIsolatedLocalCoder(task, options = {}) {
+  const { dataDirectory, verifyDir, signal, onEvent } = options;
   if (!dataDirectory) throw new Error("A local data directory is required for isolated runs.");
   const worktrees = join(dataDirectory, "worktrees");
   const patches = join(dataDirectory, "patches");
@@ -34,7 +47,7 @@ export async function runIsolatedLocalCoder(task, { dataDirectory, verifyDir } =
   const add = await capture("git", ["-C", repository, "worktree", "add", "--detach", worktree, "HEAD"]);
   if (!add.ok) return { ok: false, message: `Could not create an isolated worktree: ${add.stderr.trim()}` };
 
-  const result = await runLocalCoder({ ...task, repository: worktree }, { verifyDir });
+  const result = await runLocalCoder({ ...task, repository: worktree }, { verifyDir, signal, onEvent });
   const diff = await capture("git", ["-C", worktree, "diff", "--binary", "--no-ext-diff"]);
   const patch = join(patches, `${task.id}.patch`);
   if (diff.ok && diff.stdout.length > 0) await writeFile(patch, diff.stdout, { encoding: "utf8", mode: 0o600 });

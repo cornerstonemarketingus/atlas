@@ -6,6 +6,7 @@ import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
 import { LocalTaskStore } from "./store.mjs";
 import { verifyOfflineLicense } from "./offline-license.mjs";
+import { createInfrastructureAdmin, environmentSecretResolver } from "./infrastructure-adapters.mjs";
 
 const dataDirectory = process.env.ATLAS_LOCAL_DATA_DIR || join(homedir(), ".atlas");
 const tokenFile = join(dataDirectory, "local-token");
@@ -25,8 +26,9 @@ const license = loadLicense();
 const server = createLocalControlServer({
   store,
   token,
-  runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
+  runTask: (task, options) => runIsolatedLocalCoder(task, { dataDirectory, ...options }),
   license,
+  infrastructure: createInfrastructureAdmin({ resolveSecret: environmentSecretResolver }),
 });
 const host = process.env.ATLAS_LOCAL_HOST || "127.0.0.1";
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);

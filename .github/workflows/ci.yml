@@ -124,6 +124,27 @@ jobs:
       - name: Check and test Windows companion
         run: npm run check && npm test
 
+  mobile-shell:
+    name: apps/mobile
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Typecheck native bridge
+        run: npm run check
+      - name: Reject high-severity dependency findings
+        run: npm audit --audit-level=high
+
   runner-scripts:
     name: runner scripts
     runs-on: ubuntu-latest

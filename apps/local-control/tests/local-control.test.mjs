@@ -12,6 +12,7 @@ import { decryptBackup, encryptBackup } from "../src/encrypted-backup.mjs";
 import { verifyOfflineLicense } from "../src/offline-license.mjs";
 import { buildRequest, publishChange } from "../src/publish-adapters.mjs";
 import { discoverLocalModels } from "../src/model-discovery.mjs";
+import { ToolRegistry } from "../src/tool-registry.mjs";
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
 
@@ -122,4 +123,39 @@ test("Git worktree command accepts an ordinary repository path", async (t) => {
   assert.equal(spawnSync("git", ["init", directory], { encoding: "utf8" }).status, 0);
   const check = spawnSync("git", ["-C", directory, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
   assert.equal(check.stdout.trim(), "true");
+});
+
+test("task events support cursor reconnect, cancellation, and resume", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-local-events-")); const store = new LocalTaskStore(join(directory, "test.sqlite"));
+  let runs = 0;
+  const server = createLocalControlServer({ store, token: TOKEN, runTask: async (_task, { signal, onEvent }) => {
+    runs += 1; onEvent({ type: "assistant.delta", payload: { text: `run ${runs}` } });
+    if (runs === 1) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    return { ok: true, cancelled: signal.aborted, message: signal.aborted ? "cancelled" : "done" };
+  } });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); store.close(); await rm(directory, { recursive: true, force: true }); });
+  const origin = `http://127.0.0.1:${server.address().port}`, headers = { authorization: `Bearer ${TOKEN}` };
+  await fetch(`${origin}/v1/policies`, { method: "PUT", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ capability: "code.write", decision: "allow" }) });
+  const created = await (await fetch(`${origin}/v1/tasks`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ repository: directory, objective: "stream" }) })).json();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const first = await (await fetch(`${origin}/v1/tasks/${created.task.id}/events`, { headers })).json();
+  assert.deepEqual(first.events.map((event) => event.type), ["task.created", "task.started", "assistant.delta"]);
+  assert.equal((await fetch(`${origin}/v1/tasks/${created.task.id}/cancel`, { method: "POST", headers })).status, 202);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(store.get(created.task.id).status, "cancelled");
+  const after = first.events.at(-1).sequence;
+  const reconnect = await (await fetch(`${origin}/v1/tasks/${created.task.id}/events?after=${after}`, { headers })).json();
+  assert.deepEqual(reconnect.events.map((event) => event.type), ["task.cancelled"]);
+  assert.equal((await fetch(`${origin}/v1/tasks/${created.task.id}/resume`, { method: "POST", headers })).status, 202);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(store.get(created.task.id).status, "completed"); assert.equal(runs, 2);
+});
+
+test("tool registry validates capabilities, approvals, cancellation, and output bounds", async () => {
+  const registry = new ToolRegistry().register({ name: "repository.read", capability: "repository.read", risk: "read", timeoutMs: 1000, outputBytes: 1024, validate: (input) => { if (typeof input.path !== "string") throw new Error("path required"); } }, async (input) => ({ path: input.path }));
+  assert.equal((await registry.invoke("repository.read", { path: "README.md" }, { policy: () => "ask" })).status, "approval_required");
+  assert.deepEqual((await registry.invoke("repository.read", { path: "README.md" }, { policy: () => "allow" })).value, { path: "README.md" });
+  await assert.rejects(registry.invoke("unknown", {}, { policy: () => "allow" }), /Unknown tool/u);
+  await assert.rejects(registry.invoke("repository.read", {}, { policy: () => "allow" }), /path required/u);
 });
