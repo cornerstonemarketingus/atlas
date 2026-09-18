@@ -139,6 +139,16 @@ export function createConversationExecutor({
           const durationMs = now() - startedAtMs;
 
           if (result.status === "approval-required") {
+            // Recorded before the event is emitted, so the approval exists to
+            // be answered the moment a client sees the request.
+            await approvals?.request?.({
+              digest: result.digest,
+              capability: result.capability,
+              risk: result.risk,
+              sessionId: session.id,
+              summary: `${call.name} — ${declared?.description ?? "a consequential action"}`,
+              input: result.input,
+            });
             emit(approvalRequestEvent({
               approvalId: result.digest,
               capability: result.capability,

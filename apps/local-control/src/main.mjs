@@ -15,6 +15,11 @@ import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { registerRepositoryTools } from "./agent/tools/repository-tools.mjs";
+import { registerRepositoryWriteTools } from "./agent/tools/repository-write-tools.mjs";
+import { registerFilesystemTools } from "./agent/tools/filesystem-tools.mjs";
+import { registerBrowserTools } from "./agent/tools/browser-tools.mjs";
+import { registerCommunicationsTools } from "./agent/tools/communications-tools.mjs";
+import { registerWorkflowTools } from "./agent/tools/workflow-tools.mjs";
 
 const dataDirectory = process.env.ATLAS_LOCAL_DATA_DIR || join(homedir(), ".atlas");
 const tokenFile = join(dataDirectory, "local-token");
@@ -77,6 +82,13 @@ function buildExecutors() {
     conversation: createConversationExecutor({
       client: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
       registry: buildToolRegistry(),
+      approvals: {
+        // One-time and digest-bound: spending an approval consumes it, and it
+        // only matches the exact action it was granted for.
+        check: (digest) => store.consumeApprovedDigest(digest),
+        request: ({ digest, capability, summary, sessionId }) =>
+          store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
+      },
     }),
   };
   const token = process.env.ATLAS_GITHUB_TOKEN;
@@ -101,6 +113,14 @@ function buildToolRegistry() {
     secrets: (reference) => process.env[reference] ?? null,
   });
   registerRepositoryTools(registry);
+  registerRepositoryWriteTools(registry);
+  registerFilesystemTools(registry, { roots: [join(dataDirectory, "workspace")] });
+  registerCommunicationsTools(registry, { send: null });
+  registerWorkflowTools(registry);
+  // The browser family is registered whether or not a companion is attached:
+  // its tools then fail closed with "no browser on this machine", which is a
+  // better answer than the model never learning the capability exists.
+  registerBrowserTools(registry, { session: null, uploadRoot: join(dataDirectory, "workspace") });
   return registry;
 }
 

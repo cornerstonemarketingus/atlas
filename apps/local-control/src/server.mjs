@@ -67,7 +67,27 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (request.method === "PUT" && request.url === "/v1/policies") { if (identity.role !== "admin") return send(response, 403, { message: "Owner access required." }); const body = await parseBody(request,response); if (!body) return; try { return send(response,200,{ policy: store.setPolicy(body.capability,body.decision) }); } catch(error){ return send(response,400,{message:error.message}); } }
     if (request.method === "GET" && request.url === "/v1/approvals") return send(response, 200, { approvals: store.approvals() });
     const approvalMatch = request.method === "POST" ? /^\/v1\/approvals\/([0-9a-f-]+)\/decision$/u.exec(request.url ?? "") : null;
-    if (approvalMatch) { const body = await parseBody(request,response); if (!body) return; try { const approval = store.decideApproval(approvalMatch[1], body.decision); if (!approval) return send(response,409,{message:"Approval is missing or already resolved."}); if (approval.taskId) { if (body.decision === "approved") queueMicrotask(()=>startTask(approval.taskId)); else store.finish(approval.taskId,"failed","Denied by local approval."); } return send(response,200,{approval}); } catch(error) { return send(response,400,{message:error.message}); } }
+    if (approvalMatch) {
+      const body = await parseBody(request, response); if (!body) return;
+      try {
+        const approval = store.decideApproval(approvalMatch[1], body.decision);
+        if (!approval) return send(response, 409, { message: "Approval is missing or already resolved." });
+        if (approval.taskId) {
+          if (body.decision === "approved") queueMicrotask(() => startTask(approval.taskId));
+          else store.finish(approval.taskId, "failed", "Denied by local approval.");
+        }
+        // An agent session waiting on this approval carries on, or is told no.
+        if (approval.sessionId && runtime) {
+          queueMicrotask(() => {
+            try {
+              if (body.decision === "approved") runtime.resume(approval.sessionId);
+              else runtime.denyApproval(approval.sessionId, approval.summary);
+            } catch { /* The session may have been cancelled while waiting. */ }
+          });
+        }
+        return send(response, 200, { approval });
+      } catch (error) { return send(response, 400, { message: error.message }); }
+    }
     if (request.method === "POST" && request.url === "/v1/pair") { if (identity.role !== "admin") return send(response,403,{message:"Owner access required."}); const code=String(randomInt(100000,1000000)); const expiresAt=new Date(Date.now()+5*60_000).toISOString(); store.addPairingCode(digest(code),expiresAt); return send(response,201,{code,expiresAt}); }
     if (request.method === "GET" && request.url === "/v1/devices") { if (identity.role !== "admin") return send(response,403,{message:"Owner access required."}); return send(response,200,{devices:store.devices()}); }
     const deviceMatch = request.method === "DELETE" ? /^\/v1\/devices\/([0-9a-f-]+)$/u.exec(request.url ?? "") : null;

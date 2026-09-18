@@ -13,7 +13,7 @@ const DEFAULT_HEARTBEAT_MS = 10_000;
  * leaves the session in one of them with work still pending; refusing to
  * resume those would strand the turn forever.
  */
-const RESUMABLE = new Set(["idle", "queued", "interrupted", "failed", "cancelled", "paused"]);
+const RESUMABLE = new Set(["idle", "queued", "interrupted", "failed", "cancelled", "paused", "awaiting_approval"]);
 
 export class AgentRuntimeError extends Error {
   constructor(code, message) {
@@ -174,7 +174,10 @@ export class AgentRuntime {
     if (!RESUMABLE.has(session.status)) {
       throw new AgentRuntimeError("NOT_RESUMABLE", `A ${session.status} session cannot be resumed.`);
     }
-    this.#emit(sessionId, statusEvent("Resuming after interruption."));
+    for (const turn of this.#sessions.turns(sessionId)) {
+      if (turn.state === "awaiting_approval") this.#sessions.requeueTurn(turn.id);
+    }
+    this.#emit(sessionId, statusEvent(session.status === "awaiting_approval" ? "Approved; continuing." : "Resuming after interruption."));
     this.#start(sessionId);
     return this.#sessions.session(sessionId);
   }
@@ -192,6 +195,22 @@ export class AgentRuntime {
     this.#sessions.setStatus(sessionId, "cancelled", "Cancelled before the run started.");
     this.#emit(sessionId, completionEvent({ status: "cancelled", summary: "Cancelled before the run started." }));
     return this.#sessions.session(session.id);
+  }
+
+  /**
+   * Records that the operator refused. The session stops rather than looping:
+   * an agent that re-proposes a refused action until it is approved is an
+   * agent working around its operator.
+   */
+  denyApproval(sessionId, summary = "The operator denied this action.") {
+    const session = this.#requireSession(sessionId);
+    if (session.status !== "awaiting_approval") return session;
+    for (const turn of this.#sessions.turns(sessionId)) {
+      if (turn.state === "awaiting_approval") this.#sessions.setTurnState(turn.id, "denied");
+    }
+    this.#sessions.setStatus(sessionId, "cancelled", `Denied: ${summary}`);
+    this.#emit(sessionId, completionEvent({ status: "denied", summary: `The operator denied this action: ${summary}` }));
+    return this.#sessions.session(sessionId);
   }
 
   /** Puts the last unfinished turn back on the queue and runs it again. */

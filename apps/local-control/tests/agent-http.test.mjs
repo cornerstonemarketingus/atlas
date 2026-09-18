@@ -9,6 +9,8 @@ import { LocalTaskStore } from "../src/store.mjs";
 import { AgentSessionStore } from "../src/agent/session-store.mjs";
 import { AgentRuntime } from "../src/agent/runtime.mjs";
 import { assistantMessageEvent, statusEvent } from "../src/agent/events.mjs";
+import { createConversationExecutor } from "../src/agent/conversation-executor.mjs";
+import { ToolRegistry } from "../src/agent/tool-registry.mjs";
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
 
@@ -305,4 +307,159 @@ test("dictation is owner-only, bounded, and absent until an endpoint is configur
     body: Buffer.from("audio"),
   });
   assert.equal(denied.status, 403, "a paired device cannot spend the owner's transcription endpoint");
+});
+
+
+test("an approval travels from the model, to the operator, and back into the run", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-approval-e2e-"));
+  const store = new LocalTaskStore(join(directory, "atlas.sqlite"));
+  const sessions = new AgentSessionStore(join(directory, "agent.sqlite"));
+
+  const sent = [];
+  const registry = new ToolRegistry({ policy: () => "allow" });
+  registry.register({
+    name: "mail.send",
+    description: "Send an email to the team.",
+    capability: "communications.send",
+    risk: "critical",
+    timeoutMs: 5_000,
+    maxOutputCharacters: 500,
+    requiresApproval: true,
+    inputSchema: { type: "object", required: ["to"], properties: { to: { type: "string", maxLength: 200 } } },
+    execute: async ({ input }) => { sent.push(input.to); return `sent to ${input.to}`; },
+  });
+
+  // The model asks for the tool, then — once it has the result — answers.
+  let round = 0;
+  const client = {
+    async *stream() {
+      round += 1;
+      if (round === 1 || round === 2) {
+        yield { type: "tool_call", id: `c${round}`, name: "mail.send", arguments: '{"to":"team@example.invalid"}' };
+      } else {
+        yield { type: "text", delta: "Sent." };
+      }
+      yield { type: "done", finishReason: "stop", usage: null };
+    },
+  };
+
+  const executor = createConversationExecutor({
+    client,
+    registry,
+    approvals: {
+      check: (digest) => store.consumeApprovedDigest(digest),
+      request: ({ digest, capability, summary, sessionId }) => store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
+    },
+  });
+
+  const runtime = new AgentRuntime({ sessions, executors: { conversation: executor }, audit: (c, m) => store.audit(c, m) });
+  const server = createLocalControlServer({ store, token: TOKEN, runTask: async () => ({ ok: true, message: "" }), runtime });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    await runtime.stop();
+    await new Promise((resolve) => server.close(resolve));
+    sessions.close(); store.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const admin = { authorization: `Bearer ${TOKEN}` };
+
+  const { session } = await (await fetch(`${origin}/v1/sessions`, {
+    method: "POST",
+    headers: { ...admin, "content-type": "application/json" },
+    body: JSON.stringify({ title: "Outreach", repository: "/tmp/repo", model: "local", executor: "conversation" }),
+  })).json();
+
+  await fetch(`${origin}/v1/sessions/${session.id}/turns`, {
+    method: "POST",
+    headers: { ...admin, "content-type": "application/json" },
+    body: JSON.stringify({ text: "Email the team." }),
+  });
+  await runtime.drain();
+
+  assert.equal(runtime.getSession(session.id).status, "awaiting_approval");
+  assert.equal(sent.length, 0, "nothing was sent while waiting");
+
+  // The operator sees exactly one pending approval, carrying the action digest.
+  const pending = (await (await fetch(`${origin}/v1/approvals`, { headers: admin })).json()).approvals.filter((a) => a.status === "pending");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].sessionId, session.id);
+  assert.match(pending[0].actionDigest, /^[0-9a-f]{64}$/u);
+  assert.match(pending[0].summary, /mail\.send/u);
+
+  const decided = await fetch(`${origin}/v1/approvals/${pending[0].id}/decision`, {
+    method: "POST",
+    headers: { ...admin, "content-type": "application/json" },
+    body: JSON.stringify({ decision: "approved" }),
+  });
+  assert.equal(decided.status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  await runtime.drain();
+
+  assert.deepEqual(sent, ["team@example.invalid"], "the approved action ran exactly once");
+  assert.equal(runtime.getSession(session.id).status, "completed");
+  // The approval was spent: the same digest cannot authorize a second send.
+  assert.equal(store.consumeApprovedDigest(pending[0].actionDigest), false);
+});
+
+test("a denied approval stops the session instead of letting it retry", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-denial-"));
+  const store = new LocalTaskStore(join(directory, "atlas.sqlite"));
+  const sessions = new AgentSessionStore(join(directory, "agent.sqlite"));
+
+  let executions = 0;
+  const registry = new ToolRegistry({ policy: () => "allow" });
+  registry.register({
+    name: "repo.delete_all", description: "Delete everything.", capability: "repository.write", risk: "critical",
+    timeoutMs: 5_000, maxOutputCharacters: 200, requiresApproval: true,
+    inputSchema: { type: "object", required: [], properties: {} },
+    execute: async () => { executions += 1; return "deleted"; },
+  });
+  const client = {
+    async *stream() {
+      yield { type: "tool_call", id: "c1", name: "repo.delete_all", arguments: "{}" };
+      yield { type: "done", finishReason: "stop", usage: null };
+    },
+  };
+  const executor = createConversationExecutor({
+    client, registry,
+    approvals: {
+      check: (digest) => store.consumeApprovedDigest(digest),
+      request: ({ digest, capability, summary, sessionId }) => store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
+    },
+  });
+  const runtime = new AgentRuntime({ sessions, executors: { conversation: executor }, audit: (c, m) => store.audit(c, m) });
+  const server = createLocalControlServer({ store, token: TOKEN, runTask: async () => ({ ok: true, message: "" }), runtime });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    await runtime.stop();
+    await new Promise((resolve) => server.close(resolve));
+    sessions.close(); store.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const admin = { authorization: `Bearer ${TOKEN}` };
+
+  const { session } = await (await fetch(`${origin}/v1/sessions`, {
+    method: "POST", headers: { ...admin, "content-type": "application/json" },
+    body: JSON.stringify({ title: "Risky", repository: "/tmp/repo", model: "local", executor: "conversation" }),
+  })).json();
+  await fetch(`${origin}/v1/sessions/${session.id}/turns`, {
+    method: "POST", headers: { ...admin, "content-type": "application/json" },
+    body: JSON.stringify({ text: "Clean up the repo." }),
+  });
+  await runtime.drain();
+
+  const pending = (await (await fetch(`${origin}/v1/approvals`, { headers: admin })).json()).approvals.find((a) => a.status === "pending");
+  await fetch(`${origin}/v1/approvals/${pending.id}/decision`, {
+    method: "POST", headers: { ...admin, "content-type": "application/json" },
+    body: JSON.stringify({ decision: "denied" }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  await runtime.drain();
+
+  assert.equal(executions, 0, "a denied action never ran");
+  assert.equal(runtime.getSession(session.id).status, "cancelled");
+  const completion = runtime.getEvents(session.id).at(-1);
+  assert.equal(completion.data.status, "denied");
 });

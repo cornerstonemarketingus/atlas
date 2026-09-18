@@ -259,7 +259,43 @@ vLLM, LM Studio), so no hosted provider is involved.
 Needs external credentials: none. A local model server must be running to do
 real work.
 
-### Milestones 3–10 — not started
+### Milestone 3 — tool runtime — **done**
+
+Implemented and configured. Six families, every tool declaring a complete
+contract before it can register.
+
+- **Repository** — list, read, search, write, rename, delete, diff, branch,
+  commit, and run one of a fixed set of verification commands.
+- **Browser** — navigate, accessibility snapshot, click, type, submit, upload,
+  download, extract. Accessibility-first: the model works from named element
+  references, never coordinates, because a pixel is not something an operator
+  can meaningfully approve.
+- **Filesystem** — bounded read/write inside a named workspace, ZIP archiving
+  (written by hand; this package takes no third-party dependencies), and
+  artifact receipts that record where a file is without copying it anywhere.
+- **Communications** — draft, request a decision, and send. A message must be
+  drafted before it can be sent, so the operator has read the exact text.
+- **Business workflows** — job application, CRM research, sales prospect, and
+  marketing campaign briefs. Preparation only: none of them sends, submits, or
+  applies, and an unsourced claim is labelled as unsourced.
+
+Enforcement, all tested:
+
+- Commands run without a shell, with an allow-listed environment, so a
+  credential exported beside the daemon is not visible to a tool.
+- Every path argument is confined to its repository or workspace root.
+- A branch name cannot smuggle a command-line option.
+- Approvals are one-time and bound to a digest over the session, the tool and
+  the exact validated arguments. Editing a message after approval invalidates
+  it; a denial stops the session rather than letting the model re-propose.
+- Bulk outreach is refused outright rather than gated, since a limit an agent
+  can ask permission to exceed is not a limit.
+
+Needs external credentials: a browser session (the Windows companion, M5) and
+a message transport for `communications.send`. Both fail closed with a clear
+message until configured.
+
+### Milestones 4–10 — not started
 
 These are unbuilt. The runtime is the foundation they attach to, and the
 adapter seams they need (executors, the tool-proposal and approval-request
@@ -267,12 +303,6 @@ event kinds, the capability/risk fields already carried on `tool_proposal`)
 exist — but no code behind them has been written yet. Do not read the event
 contract as evidence the features exist.
 
-- **3 — tool runtime.** The registry itself is built and enforcing:
-  declarations (capability, risk, schema, credential references, timeout,
-  retry, output bounds, approval), fail-closed validation, capability policy,
-  and one-time approvals bound to an action digest. Only the *repository read*
-  family is registered so far — browser, filesystem, infrastructure,
-  communications, and business-workflow families do not exist yet.
 - **4 — infrastructure administration.** No Cloudflare, Vercel, or
   Git-host administration adapters. This one carries the most risk: it must
   never hold a credential that can mint other credentials.
