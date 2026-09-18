@@ -7,7 +7,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
 <form id="session-form"><label>Repository folder<input id="session-repository" placeholder="C:\\path\\to\\project"></label><label>Model<select id="session-model"><option>qwen2.5-coder:7b</option></select></label><label>Executor<select id="session-executor"><option value="local">local</option></select></label></form>
 <div id="transcript" class="transcript"><p class="empty">Unlock this tab, then send a message to start a session.</p></div>
 <p id="run-status" class="hint"></p>
-<form id="turn-form"><label>Message<textarea id="turn-text" maxlength="10000" placeholder="Describe what you want Atlas to do, or reply to what it just said"></textarea></label><div class="actions"><button>Send</button><button type="button" class="secondary" id="pause">Pause</button><button type="button" class="secondary" id="resume">Resume</button><button type="button" class="secondary" id="stop">Stop</button><button type="button" class="secondary" id="retry">Retry</button></div></form></section>
+<form id="turn-form"><label>Message<textarea id="turn-text" maxlength="10000" placeholder="Describe what you want Atlas to do, or reply to what it just said"></textarea></label><label>Attachments<input id="attachments" type="file" multiple accept="image/*,text/*,.pdf,.md,.json,.csv"></label><div class="actions"><button>Send</button><button type="button" class="secondary" id="dictate">Dictate</button><button type="button" class="secondary" id="pause">Pause</button><button type="button" class="secondary" id="resume">Resume</button><button type="button" class="secondary" id="stop">Stop</button><button type="button" class="secondary" id="retry">Retry</button><button type="button" class="secondary" id="regenerate">Regenerate</button><button type="button" class="secondary" id="edit-last">Edit last</button></div></form></section>
 <section class="panel"><h2>Run local coder</h2><form id="task-form"><label>Repository folder<input id="repository" required placeholder="C:\\path\\to\\project"></label><label>Objective<textarea id="objective" required maxlength="10000" placeholder="Describe one bounded change"></textarea></label><label>Discovered local model<select id="model"><option>qwen2.5-coder:7b</option></select></label><button>Queue isolated task</button></form><p id="notice" role="status"></p></section>
 <section><div class="section-title"><h2>Tasks</h2><button class="secondary" id="refresh">Refresh</button></div><div id="tasks" class="tasks"><p class="empty">Unlock this tab to load tasks.</p></div></section>
 <section class="panel"><div class="section-title"><h2>Approvals</h2><div class="actions"><button class="secondary" id="notify">Enable notifications</button><button class="secondary" id="pair">Pair phone</button></div></div><p id="pair-code" role="status"></p><div id="approvals" class="tasks"><p class="empty">No pending approvals.</p></div></section>
@@ -86,7 +86,8 @@ q('#turn-form').onsubmit=async e=>{
   await selectSession((await created.json()).session.id,{replay:false});openStream();
  }
  q('#turn-text').value='';
- const sent=await api('/v1/sessions/'+sessionId+'/turns',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text})});
+ const attachments=await collectAttachments();
+ const sent=await api('/v1/sessions/'+sessionId+'/turns',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,attachments})});
  if(!sent.ok)runStatus.textContent=(await sent.json()).message;
  loadSessions();
 };
@@ -100,4 +101,59 @@ async function control(action){
 q('#pause').onclick=()=>control('pause');q('#resume').onclick=()=>control('resume');q('#stop').onclick=()=>control('cancel');q('#retry').onclick=()=>control('retry');
 /* Reopening the tab resumes the transcript from where it stopped. */
 if(sessionStorage.getItem('atlas-token')){loadSessions();if(sessionId)selectSession(sessionId)}
+/* Attachments are read in the browser and sent inline: a file the operator
+   picks never becomes a temporary file on disk for Atlas to forget about. */
+async function collectAttachments(){
+ const input=q('#attachments'),files=[...(input.files||[])];
+ const out=[];
+ for(const file of files.slice(0,10)){
+  if(file.size>8*1024*1024){runStatus.textContent=file.name+' is too large to attach.';continue}
+  const kind=file.type.startsWith('image/')?'image':(file.type==='application/pdf'?'pdf':'text');
+  if(kind==='text'){out.push({kind,name:file.name,text:await file.text()})}
+  else{runStatus.textContent=file.name+' must be attached by path; inline binary attachments are not accepted yet.'}
+ }
+ input.value='';
+ return out;
+}
+q('#regenerate').onclick=()=>control('regenerate');
+q('#edit-last').onclick=async()=>{
+ if(!sessionId)return;
+ const detail=await api('/v1/sessions/'+sessionId);if(!detail.ok)return;
+ const turns=(await detail.json()).turns.filter(t=>t.role==='user');
+ const last=turns[turns.length-1];if(!last)return runStatus.textContent='Nothing to edit yet.';
+ const text=prompt('Edit your message and resend. Everything after it will be removed.',last.text);
+ if(text===null||!text.trim())return;
+ const response=await api('/v1/sessions/'+sessionId+'/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'edit',turnId:last.id,text:text.trim()})});
+ const body=await response.json();
+ runStatus.textContent=response.ok?'Resent.':body.message;
+ if(response.ok)selectSession(sessionId);
+};
+/* Dictation records locally and posts the audio to whichever transcription
+   endpoint this machine is configured for -- loopback by default. */
+let recorder=null;
+q('#dictate').onclick=async()=>{
+ if(recorder){recorder.stop();return}
+ if(!navigator.mediaDevices?.getUserMedia)return runStatus.textContent='This browser cannot capture audio.';
+ let media;
+ try{media=await navigator.mediaDevices.getUserMedia({audio:true})}catch{return runStatus.textContent='Microphone permission was not granted.'}
+ const chunks=[];
+ recorder=new MediaRecorder(media);
+ recorder.ondataavailable=e=>chunks.push(e.data);
+ recorder.onstop=async()=>{
+  media.getTracks().forEach(track=>track.stop());
+  q('#dictate').textContent='Dictate';
+  const blob=new Blob(chunks,{type:recorder.mimeType||'audio/webm'});
+  recorder=null;
+  runStatus.textContent='Transcribing…';
+  const response=await api('/v1/transcribe',{method:'POST',headers:{'content-type':blob.type},body:blob});
+  const body=await response.json();
+  if(!response.ok)return runStatus.textContent=body.message;
+  const field=q('#turn-text');
+  field.value=(field.value?field.value+' ':'')+body.text;
+  runStatus.textContent='Transcribed.';
+ };
+ recorder.start();
+ q('#dictate').textContent='Stop recording';
+ runStatus.textContent='Recording…';
+};
 `;

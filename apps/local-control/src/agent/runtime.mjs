@@ -210,6 +210,42 @@ export class AgentRuntime {
     return this.#sessions.session(sessionId);
   }
 
+  /**
+   * Answers the last user turn again, discarding the answer it already gave.
+   * The turn is not duplicated: regenerating is a second attempt at the same
+   * question, and a transcript that showed it twice would be a lie.
+   */
+  regenerate(sessionId) {
+    const session = this.#requireSession(sessionId);
+    if (this.#runs.has(sessionId)) throw new AgentRuntimeError("ALREADY_RUNNING", "Stop the current run before regenerating.");
+    const last = [...this.#sessions.turns(sessionId)].reverse().find((turn) => turn.role === "user");
+    if (!last) throw new AgentRuntimeError("NOTHING_TO_REGENERATE", "This session has no turn to regenerate.");
+    this.#sessions.requeueTurn(last.id);
+    this.#sessions.setStatus(sessionId, "queued");
+    this.#emit(sessionId, statusEvent("Regenerating the last answer.", { turnId: last.id }));
+    this.#start(sessionId);
+    return this.#sessions.session(session.id);
+  }
+
+  /**
+   * Rewrites a turn and answers it again. Everything after it is removed,
+   * because those answers replied to a question that no longer exists.
+   */
+  editAndResend(sessionId, turnId, { text, attachments = null }) {
+    this.#requireSession(sessionId);
+    if (this.#runs.has(sessionId)) throw new AgentRuntimeError("ALREADY_RUNNING", "Stop the current run before editing a turn.");
+    const turn = this.#sessions.turn(turnId);
+    if (!turn || turn.sessionId !== sessionId) throw new AgentRuntimeError("UNKNOWN_TURN", "That turn is not part of this session.");
+    if (turn.role !== "user") throw new AgentRuntimeError("UNKNOWN_TURN", "Only a turn you sent can be edited.");
+    const removed = this.#sessions.deleteTurnsAfter(sessionId, turnId);
+    this.#sessions.updateTurnText(turnId, text, attachments);
+    this.#sessions.requeueTurn(turnId);
+    this.#sessions.setStatus(sessionId, "queued");
+    this.#emit(sessionId, statusEvent(`Edited a message and resent it; ${removed} later message(s) were removed.`, { turnId }));
+    this.#start(sessionId);
+    return this.#sessions.session(sessionId);
+  }
+
   /** Resolves once every in-flight run in this process has settled. */
   async drain() {
     while (this.#runs.size > 0) await Promise.allSettled([...this.#runs.values()].map((run) => run.finished));

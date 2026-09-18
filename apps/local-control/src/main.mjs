@@ -10,6 +10,11 @@ import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { createGitHubActionsExecutor, createLocalExecutor } from "./agent/executors.mjs";
 import { createGitHubActionsClient } from "./agent/github-actions-client.mjs";
+import { createConversationExecutor } from "./agent/conversation-executor.mjs";
+import { createModelClient } from "./agent/model-client.mjs";
+import { createSpeechTranscriber } from "./agent/speech.mjs";
+import { ToolRegistry } from "./agent/tool-registry.mjs";
+import { registerRepositoryTools } from "./agent/tools/repository-tools.mjs";
 
 const dataDirectory = process.env.ATLAS_LOCAL_DATA_DIR || join(homedir(), ".atlas");
 const tokenFile = join(dataDirectory, "local-token");
@@ -44,6 +49,7 @@ const server = createLocalControlServer({
   runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
   license,
   runtime,
+  transcriber: buildTranscriber(),
 });
 const host = process.env.ATLAS_LOCAL_HOST || "127.0.0.1";
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
@@ -66,7 +72,13 @@ process.on("SIGTERM", shutdown);
  * acceptance test passes, with the remote executor absent entirely.
  */
 function buildExecutors() {
-  const executors = { local: createLocalExecutor({ dataDirectory }) };
+  const executors = {
+    local: createLocalExecutor({ dataDirectory }),
+    conversation: createConversationExecutor({
+      client: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
+      registry: buildToolRegistry(),
+    }),
+  };
   const token = process.env.ATLAS_GITHUB_TOKEN;
   const repository = process.env.ATLAS_GITHUB_REPOSITORY;
   const workflow = process.env.ATLAS_GITHUB_WORKFLOW || "atlas-coder.yml";
@@ -75,6 +87,30 @@ function buildExecutors() {
     executors["github-actions"] = createGitHubActionsExecutor({ dispatch: (input) => client.dispatch(input), poll: (input) => client.poll(input) });
   }
   return executors;
+}
+
+/**
+ * Policy comes from the same allow/ask/deny table the operator already edits
+ * in the local UI. A capability with no row is denied.
+ */
+function buildToolRegistry() {
+  const registry = new ToolRegistry({
+    policy: (capability) => store.policy(capability).decision,
+    // Secrets are read from the process environment for now, by reference
+    // only. No tool receives a value it did not declare a need for.
+    secrets: (reference) => process.env[reference] ?? null,
+  });
+  registerRepositoryTools(registry);
+  return registry;
+}
+
+function buildTranscriber() {
+  try {
+    return createSpeechTranscriber();
+  } catch {
+    // A misconfigured endpoint disables dictation; it must not stop Atlas.
+    return null;
+  }
 }
 
 function loadLicense() {

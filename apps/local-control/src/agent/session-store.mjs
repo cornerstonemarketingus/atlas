@@ -212,6 +212,37 @@ export class AgentSessionStore {
     this.#db.prepare(`UPDATE agent_turns SET state = ?, ${column} = ? WHERE id = ?`).run(state, now, id);
   }
 
+  turn(id) {
+    const row = this.#db
+      .prepare(
+        `SELECT id, session_id AS sessionId, role, text, attachments_json AS attachmentsJson, state, created_at AS createdAt
+           FROM agent_turns WHERE id = ?`,
+      )
+      .get(id);
+    return row ? { ...row, attachments: JSON.parse(row.attachmentsJson), attachmentsJson: undefined } : null;
+  }
+
+  /** Rewrites a turn for edit-and-resend. The turn keeps its identity and place. */
+  updateTurnText(id, text, attachments = null) {
+    if (attachments === null) this.#db.prepare("UPDATE agent_turns SET text = ? WHERE id = ?").run(text, id);
+    else this.#db.prepare("UPDATE agent_turns SET text = ?, attachments_json = ? WHERE id = ?").run(text, JSON.stringify(attachments), id);
+    return this.turn(id);
+  }
+
+  /**
+   * Drops the turns that came after an edited one. Their answers were replies
+   * to a question that no longer exists, so keeping them would put the model
+   * in a conversation that never happened.
+   */
+  deleteTurnsAfter(sessionId, turnId) {
+    const anchor = this.turn(turnId);
+    if (!anchor) return 0;
+    const result = this.#db
+      .prepare("DELETE FROM agent_turns WHERE session_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))")
+      .run(sessionId, anchor.createdAt, anchor.createdAt, turnId);
+    return result.changes;
+  }
+
   /** Puts a turn back in the queue so a retry or a resume re-answers it. */
   requeueTurn(id) {
     this.#db.prepare("UPDATE agent_turns SET state = 'pending', started_at = NULL, completed_at = NULL WHERE id = ?").run(id);

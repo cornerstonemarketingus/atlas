@@ -1,6 +1,7 @@
 import { AgentRuntimeError } from "./runtime.mjs";
 
 const MAX_TURN_CHARACTERS = 10_000;
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const SSE_KEEPALIVE_MS = 15_000;
 
 /**
@@ -11,13 +12,26 @@ const SSE_KEEPALIVE_MS = 15_000;
  * phone can watch a session and answer approvals, which is the split the
  * local control plane already draws for tasks.
  */
-export function createAgentRoutes({ runtime, keepaliveMs = SSE_KEEPALIVE_MS }) {
+export function createAgentRoutes({ runtime, transcriber = null, keepaliveMs = SSE_KEEPALIVE_MS }) {
   async function handle(request, response, identity) {
     const url = new URL(request.url ?? "/", "http://local.atlas");
     const path = url.pathname;
 
     if (request.method === "GET" && path === "/v1/executors") {
       return send(response, 200, { executors: runtime.executorIds() });
+    }
+
+    if (request.method === "POST" && path === "/v1/transcribe") {
+      if (identity.role !== "admin") return send(response, 403, { message: "Only the local owner can transcribe audio." });
+      if (!transcriber) return send(response, 503, { message: "No speech-to-text endpoint is configured on this machine." });
+      const mediaType = request.headers["content-type"] ?? "";
+      const audio = await readRaw(request, response, MAX_AUDIO_BYTES);
+      if (!audio) return true;
+      try {
+        return send(response, 200, await transcriber.transcribe({ audio, mediaType }));
+      } catch (error) {
+        return send(response, error?.code === "SPEECH_NOT_AUTHORIZED" ? 502 : 400, { message: error.message });
+      }
     }
 
     if (request.method === "GET" && path === "/v1/sessions") {
@@ -72,10 +86,16 @@ export function createAgentRoutes({ runtime, keepaliveMs = SSE_KEEPALIVE_MS }) {
       const body = await readJson(request, response);
       if (!body) return true;
       const action = trimmed(body.action, 20);
-      if (!["pause", "resume", "cancel", "retry"].includes(action)) {
-        return send(response, 400, { message: "action must be pause, resume, cancel, or retry." });
+      if (!["pause", "resume", "cancel", "retry", "regenerate", "edit"].includes(action)) {
+        return send(response, 400, { message: "action must be pause, resume, cancel, retry, regenerate, or edit." });
       }
       try {
+        if (action === "edit") {
+          const text = trimmed(body.text, MAX_TURN_CHARACTERS);
+          const turnId = trimmed(body.turnId, 36);
+          if (!text || !turnId) return send(response, 400, { message: "turnId and text are required to edit a message." });
+          return send(response, 200, { session: runtime.editAndResend(sessionId, turnId, { text, attachments: normalizeAttachments(body.attachments) }) });
+        }
         return send(response, 200, { session: runtime[action](sessionId) });
       } catch (error) {
         return send(response, statusForError(error), { message: error.message });
@@ -124,17 +144,23 @@ function streamEvents(request, response, runtime, sessionId, url, keepaliveMs) {
 
 function normalizeAttachments(value) {
   if (!Array.isArray(value)) return [];
+  // Shape only. The attachment module does the real validation — kind, size,
+  // media type, and path confinement — at the point the file is actually read.
   return value.slice(0, 20).map((entry) => ({
-    kind: trimmed(entry?.kind, 40) || "file",
+    kind: trimmed(entry?.kind, 40) || "text",
     name: trimmed(entry?.name, 200) || "attachment",
-    path: entry?.path === undefined ? null : trimmed(entry.path, 4096),
-    mediaType: trimmed(entry?.mediaType, 100) || null,
+    path: typeof entry?.path === "string" ? entry.path.trim().slice(0, 4096) : undefined,
+    text: typeof entry?.text === "string" ? entry.text.slice(0, 1_000_000) : undefined,
   }));
 }
 
 function statusForError(error) {
   if (!(error instanceof AgentRuntimeError)) return 400;
-  return { UNKNOWN_SESSION: 404, UNKNOWN_EXECUTOR: 400, ALREADY_RUNNING: 409, NOT_RUNNING: 409, NOT_RESUMABLE: 409, NOT_RETRYABLE: 409, NOTHING_TO_RETRY: 409 }[error.code] ?? 400;
+  return {
+    UNKNOWN_SESSION: 404, UNKNOWN_TURN: 404, UNKNOWN_EXECUTOR: 400,
+    ALREADY_RUNNING: 409, NOT_RUNNING: 409, NOT_RESUMABLE: 409,
+    NOT_RETRYABLE: 409, NOTHING_TO_RETRY: 409, NOTHING_TO_REGENERATE: 409,
+  }[error.code] ?? 400;
 }
 
 function trimmed(value, max) {
@@ -155,6 +181,19 @@ async function readJson(request, response) {
     send(response, 400, { message: "Request body must be JSON." });
     return null;
   }
+}
+
+async function readRaw(request, response, limit) {
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of request) {
+    length += chunk.length;
+    if (length > limit) { send(response, 413, { message: "The upload is too large." }); return null; }
+    chunks.push(chunk);
+  }
+  const body = Buffer.concat(chunks);
+  if (body.length === 0) { send(response, 400, { message: "The request body is empty." }); return null; }
+  return body;
 }
 
 function send(response, status, value) {

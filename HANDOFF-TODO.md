@@ -228,7 +228,38 @@ Two pre-existing bugs were found and fixed while building this:
   abort signal and returned `completed` was believed. Cancellation is now
   authoritative.
 
-### Milestones 2–10 — not started
+### Milestone 2 — conversational agent loop — **done**
+
+Implemented and configured. The `conversation` executor streams a real
+multi-turn loop against any OpenAI-compatible endpoint (Ollama, llama.cpp,
+vLLM, LM Studio), so no hosted provider is involved.
+
+- Incremental streaming: partial `assistant_message` events carry deltas, the
+  final one carries the whole answer, so a client that joins late needs no
+  replay of tokens.
+- The model requests bounded tools; arguments are validated against a declared
+  schema before anything executes, and unknown properties are refused rather
+  than dropped.
+- Private reasoning never leaves the daemon. Inline `<think>` blocks — which
+  reasoning models emit inside `content`, where they would otherwise *be* the
+  answer — are stripped, and the reasoning summary reveals no content unless an
+  operator configures a summarizer.
+- Attachments: images (inline as data URLs, so nothing is uploaded anywhere),
+  text, repository files, screenshots, and PDFs with dependency-free text
+  extraction that returns nothing rather than inventing content it could not
+  read.
+- Dictation against a configurable transcription endpoint, loopback by default.
+- Stop-generation, regenerate, edit-and-resend, and retry. Editing a turn
+  removes the answers that followed it, because they replied to a question that
+  no longer exists.
+- Compaction keeps the objective, pinned decisions and approvals, and
+  tool-call/result pairs; it refuses rather than silently truncating what it
+  cannot fit.
+
+Needs external credentials: none. A local model server must be running to do
+real work.
+
+### Milestones 3–10 — not started
 
 These are unbuilt. The runtime is the foundation they attach to, and the
 adapter seams they need (executors, the tool-proposal and approval-request
@@ -236,14 +267,12 @@ event kinds, the capability/risk fields already carried on `tool_proposal`)
 exist — but no code behind them has been written yet. Do not read the event
 contract as evidence the features exist.
 
-- **2 — conversational agent loop.** The turn queue, streaming, and
-  reconnection are in place; incremental token streaming, attachments,
-  speech-to-text, edit-and-resend, and conversation compaction are not.
-- **3 — tool runtime.** `packages/atlas-cli` already has a policy-enforced
-  read-only tool registry, capability/risk classification, and one-time
-  action-bound approvals. Nothing yet exposes that registry *through* the
-  runtime, and the browser, filesystem, infrastructure, communications, and
-  business-workflow families do not exist.
+- **3 — tool runtime.** The registry itself is built and enforcing:
+  declarations (capability, risk, schema, credential references, timeout,
+  retry, output bounds, approval), fail-closed validation, capability policy,
+  and one-time approvals bound to an action digest. Only the *repository read*
+  family is registered so far — browser, filesystem, infrastructure,
+  communications, and business-workflow families do not exist yet.
 - **4 — infrastructure administration.** No Cloudflare, Vercel, or
   Git-host administration adapters. This one carries the most risk: it must
   never hold a credential that can mint other credentials.

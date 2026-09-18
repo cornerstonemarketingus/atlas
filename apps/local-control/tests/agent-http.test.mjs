@@ -12,12 +12,12 @@ import { assistantMessageEvent, statusEvent } from "../src/agent/events.mjs";
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
 
-async function serve(t, executor) {
+async function serve(t, executor, { transcriber = null } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "atlas-agent-http-"));
   const store = new LocalTaskStore(join(directory, "atlas.sqlite"));
   const sessions = new AgentSessionStore(join(directory, "agent.sqlite"));
   const runtime = new AgentRuntime({ sessions, executors: { local: executor }, audit: (category, summary) => store.audit(category, summary) });
-  const server = createLocalControlServer({ store, token: TOKEN, runTask: async () => ({ ok: true, message: "" }), runtime });
+  const server = createLocalControlServer({ store, token: TOKEN, runTask: async () => ({ ok: true, message: "" }), runtime, transcriber });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => {
     await runtime.stop();
@@ -258,13 +258,51 @@ test("the local UI script is syntactically valid and wired to the session API", 
   // `node --check` and would only surface in the browser. Parse it here.
   assert.doesNotThrow(() => new Function(LOCAL_UI_JS));
 
-  for (const endpoint of ["/v1/sessions", "/v1/executors", "/turns", "/control", "/events?after="]) {
+  for (const endpoint of ["/v1/sessions", "/v1/executors", "/turns", "/control", "/events?after=", "/v1/transcribe"]) {
     assert.ok(LOCAL_UI_JS.includes(endpoint), `the UI calls ${endpoint}`);
   }
-  for (const id of ["transcript", "turn-form", "session-picker", "pause", "resume", "stop", "retry"]) {
+  for (const id of ["transcript", "turn-form", "session-picker", "pause", "resume", "stop", "retry", "regenerate", "edit-last", "dictate", "attachments"]) {
     assert.ok(LOCAL_UI_HTML.includes(`id="${id}"`), `the UI renders #${id}`);
     assert.ok(LOCAL_UI_JS.includes(`#${id}`), `the UI script binds #${id}`);
   }
   // The bearer token must never travel in a URL, where it would be logged.
   assert.equal(/access_token=|token=|new EventSource/u.test(LOCAL_UI_JS), false);
+});
+
+
+test("dictation is owner-only, bounded, and absent until an endpoint is configured", async (t) => {
+  const unconfigured = await serve(t, echoExecutor);
+  const missing = await fetch(`${unconfigured.origin}/v1/transcribe`, {
+    method: "POST",
+    headers: { ...unconfigured.admin, "content-type": "audio/webm" },
+    body: Buffer.from("audio"),
+  });
+  assert.equal(missing.status, 503, "no transcription endpoint means a clear 503, not a crash");
+
+  const transcriber = { transcribe: async ({ audio, mediaType }) => ({ text: `${mediaType}:${audio.length}` }) };
+  const { origin, admin } = await serve(t, echoExecutor, { transcriber });
+
+  const ok = await fetch(`${origin}/v1/transcribe`, {
+    method: "POST",
+    headers: { ...admin, "content-type": "audio/webm" },
+    body: Buffer.from("some audio"),
+  });
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).text, "audio/webm:10");
+
+  const empty = await fetch(`${origin}/v1/transcribe`, { method: "POST", headers: { ...admin, "content-type": "audio/webm" } });
+  assert.equal(empty.status, 400);
+
+  const { code } = await (await fetch(`${origin}/v1/pair`, { method: "POST", headers: admin })).json();
+  const { deviceToken } = await (await fetch(`${origin}/v1/pair/claim`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code, name: "Phone" }),
+  })).json();
+  const denied = await fetch(`${origin}/v1/transcribe`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${deviceToken}`, "content-type": "audio/webm" },
+    body: Buffer.from("audio"),
+  });
+  assert.equal(denied.status, 403, "a paired device cannot spend the owner's transcription endpoint");
 });
