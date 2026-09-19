@@ -16,6 +16,9 @@ import { registerWorkflowTools } from "../src/agent/tools/workflow-tools.mjs";
 import { createZipArchive, sanitizeEntryName } from "../src/agent/tools/archive.mjs";
 import { runCommand, safeEnvironment } from "../src/agent/tools/process.mjs";
 import { createPlaywrightPage, createLocalScreenshotStore, BrowserUnavailableError } from "../src/agent/browser/playwright-page.mjs";
+import { confineRealPath } from "../src/agent/tools/path-confinement.mjs";
+import { normalizeAttachment, loadAttachment } from "../src/agent/attachments.mjs";
+import { symlink } from "node:fs/promises";
 
 const git = (cwd, ...args) => {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
@@ -386,4 +389,96 @@ test("screenshots are written to the operator's disk with restrictive permission
   assert.match(path, /screenshots/u);
   assert.equal(await readFile(path, "utf8"), "png bytes");
   assert.equal(store.uploadsRequireApproval, true, "storing a screenshot never implies permission to send it");
+});
+
+
+test("a symlink inside a root cannot be used to read or write outside it", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-symlink-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+
+  const repo = join(directory, "repo");
+  const outside = join(directory, "outside");
+  await mkdir(join(repo, "sub"), { recursive: true });
+  await mkdir(outside, { recursive: true });
+  await writeFile(join(outside, "secret.txt"), "TOP SECRET", "utf8");
+  await writeFile(join(repo, "sub", "ok.txt"), "ordinary file", "utf8");
+  // A symlink pointing out of the repository, and one to an absolute system
+  // path. Both are things a cloned repository can legitimately contain.
+  await symlink(outside, join(repo, "escape"));
+  await symlink("/etc/passwd", join(repo, "passwd-link"));
+
+  const { registry, approvals } = registryFor();
+  registerRepositoryTools(registry);
+  registerRepositoryWriteTools(registry);
+  const run = call(registry, approvals, { repository: repo });
+
+  // path.resolve() only normalizes lexically, so before this was fixed every
+  // one of these succeeded.
+  for (const path of ["escape/secret.txt", "passwd-link"]) {
+    const result = await run("repository.read", { path });
+    assert.equal(result.status, "failed", `${path} must not be readable`);
+    assert.equal(result.code, "PATH_ESCAPES_REPOSITORY");
+  }
+
+  const written = await run("repository.write", { path: "escape/planted.txt", content: "x" });
+  assert.equal(written.status, "failed");
+  assert.equal(existsSync(join(outside, "planted.txt")), false, "nothing was written outside the repository");
+
+  // Ordinary paths, and a new file in a directory that does not exist yet,
+  // must still work — the fix must not break writing.
+  assert.equal((await run("repository.read", { path: "sub/ok.txt" })).status, "completed");
+  assert.equal((await run("repository.write", { path: "new/deep/file.txt", content: "hi" })).status, "completed");
+  assert.ok(existsSync(join(repo, "new", "deep", "file.txt")));
+});
+
+test("the workspace and attachment boundaries resist the same symlink escape", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-symlink-ws-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+
+  const workspace = join(directory, "workspace");
+  const outside = join(directory, "outside");
+  await mkdir(workspace, { recursive: true });
+  await mkdir(outside, { recursive: true });
+  await writeFile(join(outside, "secret.txt"), "OUTSIDE DATA", "utf8");
+  await symlink(outside, join(workspace, "link"));
+
+  const { registry, approvals } = registryFor();
+  registerFilesystemTools(registry, { roots: [workspace] });
+  const run = call(registry, approvals, {});
+
+  assert.equal((await run("filesystem.read", { path: "link/secret.txt" })).code, "PATH_OUTSIDE_WORKSPACE");
+  assert.equal((await run("filesystem.write", { path: "link/planted.txt", content: "x" })).status, "failed");
+  assert.equal(existsSync(join(outside, "planted.txt")), false);
+
+  // Refused at normalize time, before the file is ever opened.
+  assert.throws(
+    () => normalizeAttachment({ kind: "text", name: "s", path: join(workspace, "link", "secret.txt") }, { root: workspace }),
+    (error) => error.code === "PATH_ESCAPES_ROOT",
+    "an attachment cannot be read through a symlink out of the root",
+  );
+  // And a legitimate attachment inside the workspace still loads.
+  await writeFile(join(workspace, "inside.txt"), "fine", "utf8");
+  const ok = await loadAttachment(normalizeAttachment({ kind: "text", name: "inside", path: join(workspace, "inside.txt") }, { root: workspace }));
+  assert.equal(ok.bytes.toString("utf8"), "fine");
+});
+
+test("a root that is itself a symlink still accepts its own contents", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-symlink-root-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+
+  const real = join(directory, "real-repo");
+  const linked = join(directory, "linked-repo");
+  await mkdir(real, { recursive: true });
+  await writeFile(join(real, "file.txt"), "content", "utf8");
+  await symlink(real, linked);
+
+  // The root is reached through a symlink — a profile under a symlinked home,
+  // for instance. Resolving the root too is what stops every path under it
+  // looking like an escape.
+  const confined = confineRealPath(linked, "file.txt", (code, message) => new Error(`${code}: ${message}`));
+  assert.equal(confined, join(await import("node:fs/promises").then((fs) => fs.realpath(real)), "file.txt"));
+
+  const { registry, approvals } = registryFor();
+  registerRepositoryTools(registry);
+  assert.equal((await call(registry, approvals, { repository: linked })("repository.read", { path: "file.txt" })).status, "completed");
 });

@@ -1,5 +1,7 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve } from "node:path";
+
+import { confineRealPath } from "./path-confinement.mjs";
 
 import { createZipArchive } from "./archive.mjs";
 
@@ -22,13 +24,17 @@ export class FilesystemToolError extends Error {
 
 export function confineToRoots(roots, candidate) {
   if (!roots || roots.length === 0) throw new FilesystemToolError("NO_WORKSPACE", "No filesystem workspace is configured.");
-  const target = resolve(roots[0], candidate ?? ".");
-  const allowed = roots.some((root) => {
-    const base = resolve(root);
-    return target === base || target.startsWith(base + sep);
-  });
-  if (!allowed) throw new FilesystemToolError("PATH_OUTSIDE_WORKSPACE", `'${candidate}' is outside the configured workspace.`);
-  return target;
+  // Tried against each configured root in turn, symlink-aware. The candidate
+  // is resolved relative to the first root, matching the previous behaviour.
+  let lastError = null;
+  for (const root of roots) {
+    try {
+      return confineRealPath(root, candidate, (code, message) => new FilesystemToolError(code, message));
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new FilesystemToolError("PATH_OUTSIDE_WORKSPACE", `'${candidate}' resolves outside the configured workspace.`);
 }
 
 export function registerFilesystemTools(registry, { roots, maxFileBytes = 4 * 1024 * 1024, maxArchiveBytes = 64 * 1024 * 1024 } = {}) {

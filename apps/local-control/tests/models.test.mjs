@@ -5,6 +5,7 @@ import { detectHardware } from "../src/agent/models/hardware.mjs";
 import { discoverModelServers, inferContextWindow } from "../src/agent/models/discovery.mjs";
 import { recommendModels, CANDIDATES } from "../src/agent/models/recommend.mjs";
 import { fitToContext, usableContextCharacters, estimateTokens, describeContextFailure } from "../src/agent/models/context-fit.mjs";
+import { measure } from "../src/agent/compaction.mjs";
 import { createModelRouter, describeRoutes, parseRoutes, NoRouteError, ROUTABLE_TASKS } from "../src/agent/models/router.mjs";
 import { evaluateModel, EVALUATIONS } from "../src/agent/models/evaluations.mjs";
 import { ContextTooLargeError } from "../src/agent/compaction.mjs";
@@ -263,4 +264,65 @@ test("the evaluation fixtures tell an operator whether a model can be trusted wi
   const brokenReport = await evaluateModel({ client: broken, model: "broken-model" });
   assert.equal(brokenReport.passed, 0);
   assert.match(brokenReport.results[0].detail, /connection refused/u);
+});
+
+
+test("the tool schemas come out of the context budget", () => {
+  // Tools ride along on every request and are not in the message array, so
+  // measuring only the messages left them out of the budget entirely. On a
+  // small window they are a large share of it, and the result was a prompt
+  // that passed this check and was then truncated by the server.
+  const toolCharacters = 10_864; // the real size of Atlas's registered families
+  const withTools = usableContextCharacters({ contextWindow: 8_192, reservedCharacters: toolCharacters });
+  const withoutTools = usableContextCharacters({ contextWindow: 8_192 });
+  assert.ok(withTools < withoutTools);
+  assert.equal(withTools, withoutTools - toolCharacters);
+
+  // A conversation that fits by the message-only measure but not once the
+  // tools are counted must now be refused rather than sent.
+  const messages = [{ role: "system", content: "S", pinned: true }, { role: "user", content: "x".repeat(15_000) }];
+  assert.equal(fitToContext(messages, { contextWindow: 8_192 }).compacted, false, "fits when tools are ignored");
+  assert.throws(
+    () => fitToContext(messages, { contextWindow: 8_192, reservedCharacters: toolCharacters }),
+    ContextTooLargeError,
+    "refused once the tools are counted",
+  );
+
+  // Tools alone larger than the window cannot be fixed by compacting messages.
+  assert.throws(
+    () => fitToContext([{ role: "user", content: "hi" }], { contextWindow: 4_096, reservedCharacters: 60_000 }),
+    ContextTooLargeError,
+  );
+});
+
+test("a refused context compares two numbers in the same unit", () => {
+  // The message reported token counts labelled as characters, so the two
+  // figures in it were not comparable.
+  const messages = [{ role: "system", content: "x".repeat(200_000), pinned: true }];
+  try {
+    fitToContext(messages, { contextWindow: 8_192 });
+    assert.fail("should have refused");
+  } catch (error) {
+    assert.equal(error.code, "CONTEXT_TOO_LARGE");
+    assert.equal(error.unit, "tokens");
+    assert.match(error.message, /tokens after compaction/u);
+    assert.equal(error.message.includes("characters"), false);
+    assert.ok(error.required > error.available);
+  }
+});
+
+test("an inline image attachment is measured, not smuggled past the budget", () => {
+  // Attachments become base64 data URLs inside the message content. An 8MB
+  // image is ~11M characters; if `measure()` did not walk into structured
+  // content, it would pass through and be truncated at the server.
+  const base64 = "A".repeat(1_000_000);
+  const messages = [
+    { role: "system", content: "You are Atlas.", pinned: true },
+    { role: "user", content: [
+      { type: "text", text: "What is in this screenshot?" },
+      { type: "image_url", image_url: { url: `data:image/png;base64,${base64}` } },
+    ] },
+  ];
+  assert.ok(measure(messages) > 1_000_000, "the image is counted");
+  assert.throws(() => fitToContext(messages, { contextWindow: 32_768 }), ContextTooLargeError);
 });

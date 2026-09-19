@@ -12,9 +12,75 @@ export const ACTION_CLASSES = ["read", "navigate", "input", "sensitive_input", "
 /** Approval is required for everything that leaves the machine or destroys something. */
 const REQUIRES_APPROVAL = new Set(["sensitive_input", "submit", "transfer", "destructive"]);
 
-const SUBMIT_WORDS = /\b(submit|send|post|publish|apply|complete application|place order|checkout|check out|buy|purchase|pay|order now|confirm|continue to payment|sign the|accept and continue|agree and continue)\b/iu;
-const DESTRUCTIVE_WORDS = /\b(delete|remove|deactivate|close account|cancel subscription|revoke|wipe|erase|terminate|unsubscribe all)\b/iu;
-const TRANSFER_WORDS = /\b(upload|attach|download|export|import|share|transfer|send file)\b/iu;
+/**
+ * Consequential wording.
+ *
+ * These are matched against the element's accessible name and the model's
+ * stated intent together. The lists are broad on purpose: a false positive
+ * costs one extra tap, and a false negative sends somebody's money.
+ *
+ * They are also English. That is a real limit, not an oversight — see
+ * `additionalConsequentialPatterns` below for how a non-English deployment
+ * closes it, and the common non-Latin verbs included here for the most
+ * frequent cases.
+ */
+const SUBMIT_WORDS = new RegExp(
+  [
+    // Sending and publishing.
+    String.raw`\b(submit|send|sending|post|posting|publish|publishing|go live|broadcast)\b`,
+    String.raw`\b(tweet|xeet|toot|share to|post to)\b`,
+    // Applying and booking.
+    String.raw`\b(apply|applying|complete application|book|booking|reserve|reservation|enroll|enrol|register now|sign up now)\b`,
+    // Buying and paying. `pay` must also catch payment/paying/repay.
+    String.raw`\b(buy|purchase|purchasing|order|checkout|check out|basket|cart)\b`,
+    String.raw`\b(pay|pays|paying|payment|payments|authori[sz]e|authori[sz]ation|charge my|place .{0,12}order)\b`,
+    String.raw`\b(donate|donation|tip|pledge|subscribe now|start subscription)\b`,
+    // Money movement.
+    String.raw`\b(transfer|withdraw|withdrawal|deposit|wire|remit|payout|send money)\b`,
+    // Agreement and signature.
+    String.raw`\b(confirm|confirming|sign|signing|signature|accept|agree|consent|authorise)\b`,
+    // Common non-Latin and non-English verbs for the most frequent cases.
+    // Not exhaustive, and not a substitute for configuring your own.
+    String.raw`(送信|提交|确认|購入|購買|支付|付款|삭제|제출|결제)`,
+    String.raw`\b(enviar|env[ií]o|absenden|senden|envoyer|invia|inviare|verzenden|skicka|wyślij|отправить|подтвердить|оплатить)\b`,
+    String.raw`\b(comprar|kaufen|acheter|comprare|bestellen|beställ|zamów|купить)\b`,
+  ].join("|"),
+  "iu",
+);
+
+const DESTRUCTIVE_WORDS = new RegExp(
+  [
+    String.raw`\b(delete|deleting|remove|removing|deactivate|disable account|close account|cancel subscription)\b`,
+    String.raw`\b(revoke|wipe|erase|erasing|destroy|terminate|purge|unsubscribe all|reset everything|factory reset)\b`,
+    String.raw`(削除|刪除|删除|삭제|löschen|supprimer|eliminar|удалить)`,
+  ].join("|"),
+  "iu",
+);
+
+const TRANSFER_WORDS = new RegExp(
+  [
+    String.raw`\b(upload|uploading|attach|attachment|download|downloading|export|exporting|import|importing)\b`,
+    String.raw`\b(share|sharing|transfer|send file|send a copy|email a copy|sync to)\b`,
+  ].join("|"),
+  "iu",
+);
+
+/**
+ * Extra patterns an operator can add for their own language or their own
+ * applications. Matched exactly like the built-ins, and only ever able to
+ * raise the risk class — there is deliberately no way to configure something
+ * *down* to not needing approval.
+ */
+let additionalConsequentialPatterns = [];
+
+export function setAdditionalConsequentialPatterns(patterns) {
+  additionalConsequentialPatterns = (patterns ?? []).map((pattern) => (pattern instanceof RegExp ? pattern : new RegExp(String(pattern), "iu")));
+  return additionalConsequentialPatterns.length;
+}
+
+function matchesAdditional(label) {
+  return additionalConsequentialPatterns.some((pattern) => pattern.test(label));
+}
 const SENSITIVE_WORDS = /\b(password|passcode|pin|social security|ssn|national insurance|credit card|card number|cvv|cvc|bank account|routing number|iban|sort code|private key|api key|secret|recovery code|security question|date of birth|passport)\b/iu;
 
 /**
@@ -71,6 +137,20 @@ export function classifyAction(action, context = {}) {
     if (DESTRUCTIVE_WORDS.test(label)) return decide("destructive", "Deletes or deactivates something.", label);
     if (TRANSFER_WORDS.test(label)) return decide("transfer", "Moves data off this machine.", label);
     if (SUBMIT_WORDS.test(label) || type === "submit") return decide("submit", "Sends, submits, buys, or publishes.", label);
+    if (matchesAdditional(label)) return decide("submit", "Matches a consequential pattern configured for this machine.", label);
+    // A control with no readable words — empty, or only an arrow or an icon
+    // glyph — is not "an ordinary click", it is an unknown one, and the
+    // classifier has nothing to go on. Icon-only buttons are exactly where a
+    // send or a purchase hides.
+    //
+    // The cost is real: a bare "→" on a paginated list now asks. That is the
+    // right direction to be wrong in, and the prompt says plainly that the
+    // control is unreadable rather than inventing a description. An operator
+    // who hits this often on a trusted site should be given a named element
+    // by that site, not a quieter classifier here.
+    if (!/[\p{L}\p{N}]/u.test(label)) {
+      return decide("submit", "This control has no readable label, so Atlas cannot tell what it does.", label);
+    }
     return decide("navigate", "An ordinary, reversible click.", label);
   }
 

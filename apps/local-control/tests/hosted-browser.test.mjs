@@ -212,3 +212,41 @@ test("the Cloudflare provider scopes every call and refuses to upload local file
   await assert.rejects(() => page.setInputFiles({ ref: "e1", path: "C:/cv.pdf" }), /cannot upload a file from your machine/u);
   assert.throws(() => createCloudflareBrowserProvider({ accountId: "a" }), /account id and a scoped token/u);
 });
+
+
+test("a hosted session cannot be opened or claimed without a tenant identity", async () => {
+  const provider = fakeProvider();
+  const service = createHostedBrowserService({ provider });
+
+  // Before this check, a caller that forgot to pass a tenant matched a
+  // session opened by another caller that also forgot: `undefined ===
+  // undefined` is true, so two unrelated callers shared a browser.
+  for (const missing of [undefined, null, "", {}, NaN]) {
+    await assert.rejects(
+      () => service.open({ tenantId: missing, plan: "pro", sessionId: `s-${Math.random()}` }),
+      (error) => error.code === "NO_TENANT",
+      `opening with tenantId=${JSON.stringify(missing)} must be refused`,
+    );
+  }
+  assert.equal(provider.scopes.length, 0, "no container was created for a tenant-less request");
+
+  await service.open({ tenantId: "tenant-a", plan: "pro", sessionId: "s1" });
+  for (const missing of [undefined, null, ""]) {
+    assert.throws(() => service.page({ sessionId: "s1", tenantId: missing }), (error) => error.code === "NO_TENANT");
+  }
+  assert.ok(service.page({ sessionId: "s1", tenantId: "tenant-a" }), "the real owner is unaffected");
+
+  // A numeric tenant id is a real identity, and is normalized so that 7 and
+  // "7" are the same tenant rather than two that can see each other's work.
+  await service.open({ tenantId: 7, plan: "pro", sessionId: "s2" });
+  assert.ok(service.page({ sessionId: "s2", tenantId: "7" }));
+  assert.throws(() => service.page({ sessionId: "s2", tenantId: "8" }), (error) => error.code === "NO_SUCH_SESSION");
+
+  // Reusing a live session identifier must not silently replace it.
+  await assert.rejects(
+    () => service.open({ tenantId: "tenant-b", plan: "pro", sessionId: "s1" }),
+    (error) => error.code === "SESSION_EXISTS",
+    "a second tenant cannot take over an in-use session identifier",
+  );
+  assert.equal(service.page({ sessionId: "s1", tenantId: "tenant-a" }).tenantScope, provider.scopes[0], "the original owner still holds it");
+});

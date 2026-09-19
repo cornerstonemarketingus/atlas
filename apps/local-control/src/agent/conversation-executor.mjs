@@ -53,13 +53,16 @@ export function createConversationExecutor({
       await checkpoint();
       const messages = await buildMessages({ session, history, turn, attachmentRoot, emit });
       const tools = registry.toModelTools();
+      // The tool schemas ride along on every request and are not part of the
+      // message array, so they have to come out of the same budget.
+      const toolCharacters = JSON.stringify(tools).length;
 
       for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
         await checkpoint();
 
         let fitted;
         try {
-          fitted = fit(messages, { contextWindow, contextSource, maxOutputTokens, model: session.model }, emit);
+          fitted = fit(messages, { contextWindow, contextSource, maxOutputTokens, model: session.model, reservedCharacters: toolCharacters }, emit);
         } catch (error) {
           // Refused out loud. Sending this would have made the server drop the
           // start of the conversation without telling anyone.
@@ -212,9 +215,9 @@ async function buildMessages({ session, history, turn, attachmentRoot, emit }) {
   return messages;
 }
 
-function fit(messages, { contextWindow, contextSource, maxOutputTokens, model }, emit) {
+function fit(messages, { contextWindow, contextSource, maxOutputTokens, model, reservedCharacters }, emit) {
   try {
-    const result = fitToContext(messages, { contextWindow, maxOutputTokens, contextSource });
+    const result = fitToContext(messages, { contextWindow, maxOutputTokens, contextSource, reservedCharacters });
     if (result.compacted) emit(statusEvent(result.note));
     return result.messages;
   } catch (error) {

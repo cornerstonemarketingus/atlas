@@ -14,12 +14,18 @@
 export const PRESERVED_ROLES = new Set(["system"]);
 
 export class ContextTooLargeError extends Error {
-  constructor(required, available) {
-    super(`The conversation needs ${required} characters after compaction but only ${available} are available.`);
+  /**
+   * @param unit whichever the caller is counting in. Compaction works in
+   *   characters and the context check works in tokens; labelling the number
+   *   wrong made the message compare two figures that were not comparable.
+   */
+  constructor(required, available, unit = "characters") {
+    super(`The conversation needs ${required.toLocaleString("en-US")} ${unit} after compaction but only ${available.toLocaleString("en-US")} are available.`);
     this.name = "ContextTooLargeError";
     this.code = "CONTEXT_TOO_LARGE";
     this.required = required;
     this.available = available;
+    this.unit = unit;
   }
 }
 

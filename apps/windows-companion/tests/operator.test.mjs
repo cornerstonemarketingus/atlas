@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyAction, describeForApproval, detectHumanRequired, ACTION_CLASSES } from "../src/operator/classification.mjs";
+import { classifyAction, describeForApproval, detectHumanRequired, ACTION_CLASSES, setAdditionalConsequentialPatterns } from "../src/operator/classification.mjs";
 import { createOperatorSession, OperatorError } from "../src/operator/session.mjs";
 import { createFixtureBrowser, createMemoryScreenshotStore, createScriptedApprovals } from "../src/operator/fixtures.mjs";
 import { SCENARIOS } from "../src/operator/scenarios.mjs";
@@ -175,4 +175,80 @@ test("cancellation interrupts an action in flight", async () => {
   const pending = session.click({ ref: "b1", submit: true, intent: "Send it", signal: controller.signal });
   controller.abort();
   await assert.rejects(() => pending, (error) => error.code === "CANCELLED");
+});
+
+
+test("consequential labels a real site would use all require approval", () => {
+  // Every one of these classified as an ordinary navigation before the
+  // patterns were widened, which meant Atlas would have clicked them without
+  // asking. They are the labels real checkout, banking and social pages use.
+  const consequential = [
+    "Place my order", "Pay $49", "Pay now", "Confirm & pay", "Complete purchase",
+    "Continue to checkout", "Book now", "Reserve", "Donate", "Transfer funds",
+    "Authorize payment", "Withdraw", "Sign and send", "Agree & continue",
+    "Yes, delete it", "Permanently erase", "Deactivate my account",
+    "Post to LinkedIn", "Tweet", "Publish now", "Go live",
+    // Non-English labels, for the most common cases.
+    "Enviar", "Absenden", "Envoyer", "送信", "Comprar ahora", "削除",
+  ];
+  for (const name of consequential) {
+    const result = classifyAction({ type: "click", name });
+    assert.equal(result.requiresApproval, true, `"${name}" must require approval, classified as ${result.actionClass}`);
+  }
+});
+
+test("ordinary navigation still does not prompt", () => {
+  // The other half of the trade-off: a classifier that asks about everything
+  // teaches people to approve without reading, which is worse than not asking.
+  const ordinary = [
+    "Read more", "Refresh list", "Next page", "Back", "Close", "Search",
+    "Filter results", "Sort by date", "Expand section", "Show details",
+    "Home", "Settings", "Help", "Copy link", "Print preview",
+  ];
+  for (const name of ordinary) {
+    const result = classifyAction({ type: "click", name });
+    assert.equal(result.requiresApproval, false, `"${name}" should not prompt, classified as ${result.actionClass}`);
+  }
+});
+
+test("a control with no readable label is treated as consequential", () => {
+  // An icon-only button is where a send or a purchase hides, and the
+  // classifier has nothing to read. Asking is the right direction to be
+  // wrong in, and the prompt says the label is unreadable rather than
+  // inventing a description.
+  for (const name of ["", "   ", "→", "▶", "✓", "»"]) {
+    const result = classifyAction({ type: "click", name });
+    assert.equal(result.requiresApproval, true, `an unreadable label ${JSON.stringify(name)} must ask`);
+    assert.match(result.reason, /no readable label/u);
+  }
+  // A label with any real word is readable again.
+  assert.equal(classifyAction({ type: "click", name: "→ Next" }).requiresApproval, false);
+});
+
+test("an operator can add patterns for their own language, but cannot remove any", () => {
+  const before = classifyAction({ type: "click", name: "Bekreft bestilling" });
+  assert.equal(before.requiresApproval, false, "an unknown Norwegian label starts unrecognized");
+
+  setAdditionalConsequentialPatterns([/bekreft|bestilling/iu]);
+  const after = classifyAction({ type: "click", name: "Bekreft bestilling" });
+  assert.equal(after.requiresApproval, true);
+  assert.match(after.reason, /configured for this machine/u);
+
+  // Configuration can only raise the class. There is no way to spell
+  // "stop asking me about Delete".
+  setAdditionalConsequentialPatterns([/never matches anything xyzzy/iu]);
+  assert.equal(classifyAction({ type: "click", name: "Delete this project" }).actionClass, "destructive");
+  assert.equal(classifyAction({ type: "click", name: "Place my order" }).requiresApproval, true);
+  setAdditionalConsequentialPatterns([]);
+});
+
+test("the sensitive-value check does not backtrack catastrophically", () => {
+  // These patterns run against page content on every action; a quadratic one
+  // would be a denial of service on an ordinary page full of digits.
+  for (const size of [1_000, 20_000]) {
+    const started = process.hrtime.bigint();
+    classifyAction({ type: "fill", label: "Notes", text: "4".repeat(size) });
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(ms < 250, `classifying ${size} digits took ${ms.toFixed(1)}ms`);
+  }
 });

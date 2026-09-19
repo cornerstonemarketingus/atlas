@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { inflateSync } from "node:zlib";
-import { extname, isAbsolute, resolve } from "node:path";
+import { extname, resolve } from "node:path";
+
+import { confineRealPath } from "./tools/path-confinement.mjs";
 
 /**
  * Attachments an operator can put in front of the model: images, text files,
@@ -63,14 +65,13 @@ export function normalizeAttachment(raw, { root = null } = {}) {
  * out of the repository the operator attached.
  */
 function confinePath(candidate, root) {
-  const resolved = resolve(candidate);
-  if (!root) return resolved;
-  const base = resolve(root);
-  if (resolved !== base && !resolved.startsWith(`${base}/`)) {
-    throw new AttachmentError("PATH_ESCAPES_ROOT", "An attachment path must stay inside the attached repository.");
-  }
-  if (!isAbsolute(resolved)) throw new AttachmentError("PATH_ESCAPES_ROOT", "An attachment path must resolve absolutely.");
-  return resolved;
+  if (!root) return resolve(candidate);
+  // Symlink-aware, for the same reason the repository tools are: an
+  // attachment path comes from the model or from a client request.
+  return confineRealPath(root, candidate, () => new AttachmentError(
+    "PATH_ESCAPES_ROOT",
+    "An attachment path must stay inside the attached repository.",
+  ));
 }
 
 /** Reads an attachment, refusing anything past its kind's byte limit. */

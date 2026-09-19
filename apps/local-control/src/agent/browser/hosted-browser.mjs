@@ -26,10 +26,25 @@ export function createHostedBrowserService({ provider, quotas = createQuotaLedge
   /** sessionId -> { tenantId, page, expiresAtMs } */
   const sessions = new Map();
 
+  /**
+   * A usable tenant identity. Without this check, a caller that forgot to
+   * pass a tenant matched a session opened by another caller that also forgot
+   * — `undefined === undefined` is true, so the isolation check passed and
+   * two unrelated callers shared a browser. Isolation must not depend on
+   * every caller remembering.
+   */
+  function requireTenant(tenantId) {
+    const usable = (typeof tenantId === "string" && tenantId.length > 0) || (typeof tenantId === "number" && Number.isFinite(tenantId));
+    if (!usable) throw new HostedBrowserError("NO_TENANT", "A hosted browser session must name the tenant it belongs to.");
+    return String(tenantId);
+  }
+
   function resolve(sessionId, tenantId) {
+    const owner = requireTenant(tenantId);
     const session = sessions.get(sessionId);
-    // One message for both cases, on purpose.
-    if (!session || session.tenantId !== tenantId) {
+    // One message for both cases, on purpose: distinguishing "not yours" from
+    // "does not exist" is an enumeration oracle.
+    if (!session || session.tenantId !== owner) {
       throw new HostedBrowserError("NO_SUCH_SESSION", "No hosted session with that identifier is available to you.");
     }
     return session;
@@ -42,24 +57,29 @@ export function createHostedBrowserService({ provider, quotas = createQuotaLedge
      */
     async open({ tenantId, plan, sessionId, signal }) {
       if (!provider) throw new HostedBrowserError("NOT_CONFIGURED", "Hosted browser execution is not configured on this Atlas.");
-      const decision = quotas.check({ tenantId, plan });
+      const owner = requireTenant(tenantId);
+      if (typeof sessionId !== "string" || sessionId.length === 0) {
+        throw new HostedBrowserError("NO_SESSION_ID", "A hosted browser session must have an identifier.");
+      }
+      if (sessions.has(sessionId)) throw new HostedBrowserError("SESSION_EXISTS", "That session identifier is already in use.");
+      const decision = quotas.check({ tenantId: owner, plan });
       if (!decision.allowed) {
         return {
           opened: false,
           code: decision.code,
-          message: localCompanionAvailable({ tenantId })
+          message: localCompanionAvailable({ tenantId: owner })
             ? `${decision.message} Atlas will run this on your paired companion instead.`
             : decision.message,
-          fallback: localCompanionAvailable({ tenantId }) ? "windows-companion" : null,
+          fallback: localCompanionAvailable({ tenantId: owner }) ? "windows-companion" : null,
           limits: decision.limits,
         };
       }
 
-      const lease = quotas.open({ tenantId, plan, sessionId });
+      const lease = quotas.open({ tenantId: owner, plan, sessionId });
       // The provider is handed a tenant scope and nothing else. No credential
       // of the operator's travels in a task payload.
-      const page = await provider.createPage({ tenantScope: scopeFor(tenantId), signal });
-      sessions.set(sessionId, { tenantId, page, expiresAtMs: lease.expiresAtMs });
+      const page = await provider.createPage({ tenantScope: scopeFor(owner), signal });
+      sessions.set(sessionId, { tenantId: owner, page, expiresAtMs: lease.expiresAtMs });
       return { opened: true, sessionId, expiresAtMs: lease.expiresAtMs, limits: lease.limits };
     },
 
@@ -74,7 +94,7 @@ export function createHostedBrowserService({ provider, quotas = createQuotaLedge
       const session = resolve(sessionId, tenantId);
       sessions.delete(sessionId);
       await session.page.close?.().catch(() => {});
-      return quotas.close({ tenantId, sessionId, reason });
+      return quotas.close({ tenantId: session.tenantId, sessionId, reason });
     },
 
     /** Cancellation closes the remote container, not just the local handle. */

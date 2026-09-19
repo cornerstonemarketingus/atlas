@@ -186,6 +186,37 @@ The short version, because these have each already cost a day:
 
 ## 6. Interactive AI operator — scope status
 
+### Post-review fixes
+
+An adversarial review pass over the finished work found four real defects, all
+now fixed with regression tests. Recording them because each is a class of
+mistake worth checking for again:
+
+1. **Path confinement did not follow symlinks (CRITICAL).** `path.resolve()`
+   normalizes lexically; it does not resolve links. A symlink inside a
+   repository or workspace let the agent read and write anywhere on the disk —
+   confirmed by reading `/etc/passwd` and planting a file outside the root
+   through all three boundaries (repository tools, filesystem tools,
+   attachments). Now resolved through `realpath`, including for paths that do
+   not exist yet, in `agent/tools/path-confinement.mjs`.
+2. **Fifteen consequential button labels required no approval (HIGH).**
+   "Place my order", "Authorize payment", "Withdraw", "Donate", "Tweet",
+   "Go live", and every non-English label classified as an ordinary click.
+   Patterns widened, common non-Latin verbs added, an operator-configurable
+   list added that can only *raise* the risk class, and a control with no
+   readable label now asks rather than being assumed harmless.
+3. **Tool schemas were not counted against the context window (HIGH).** They
+   ride on every request and are not in the message array. At ~3,000 tokens
+   they are 55% of an 8k window's budget, so a prompt could pass Atlas's own
+   "it fits" check and then be silently truncated by the server — the exact
+   failure Milestone 6 exists to prevent.
+4. **A hosted session opened without a tenant could be claimed by any other
+   tenant-less caller (HIGH).** `undefined === undefined` passed the isolation
+   check. A tenant identity is now required to open or resolve a session.
+
+Two hypotheses were checked and held up: DNS plan digests do cover the zone, and
+the sensitive-value patterns do not backtrack catastrophically.
+
 **Definition of done, checked against what is now in the repository:**
 
 | Criterion | Status |

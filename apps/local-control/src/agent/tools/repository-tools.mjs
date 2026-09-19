@@ -1,5 +1,7 @@
 import { readFile, readdir, stat } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { join, relative } from "node:path";
+
+import { confineRealPath } from "./path-confinement.mjs";
 
 /**
  * Read-only repository tools.
@@ -21,12 +23,12 @@ export class RepositoryToolError extends Error {
 
 export function confineToRepository(root, candidate) {
   if (!root) throw new RepositoryToolError("NO_REPOSITORY", "This session has no repository attached.");
-  const base = resolve(root);
-  const target = resolve(base, candidate ?? ".");
-  if (target !== base && !target.startsWith(base + sep)) {
-    throw new RepositoryToolError("PATH_ESCAPES_REPOSITORY", `'${candidate}' is outside the repository.`);
-  }
-  return target;
+  // Symlink-aware: a lexical resolve would let a link inside the repository
+  // read or write outside it.
+  return confineRealPath(root, candidate, (code, message) => new RepositoryToolError(
+    code === "PATH_ESCAPES_ROOT" ? "PATH_ESCAPES_REPOSITORY" : code,
+    code === "PATH_ESCAPES_ROOT" ? `'${candidate}' is outside the repository.` : message,
+  ));
 }
 
 export function registerRepositoryTools(registry, { readFileImpl = readFile, readdirImpl = readdir, statImpl = stat } = {}) {
