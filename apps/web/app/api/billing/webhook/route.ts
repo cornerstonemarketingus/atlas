@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
-import { subscriptions } from "../../../../db/schema";
-import { stripeConfiguration, verifyWebhookSignature, mapStripeStatus } from "../stripe.mjs";
+import { billingEvents, subscriptions } from "../../../../db/schema";
+import { stripeConfiguration, verifyWebhookSignature } from "../stripe.mjs";
+import { decideEvent, subscriptionChangeFor } from "../idempotency.mjs";
 
 export async function POST(request: Request) {
   const configuration = stripeConfiguration();
@@ -14,7 +15,7 @@ export async function POST(request: Request) {
   const valid = await verifyWebhookSignature(rawBody, signature, configuration.webhookSecret);
   if (!valid) return Response.json({ message: "Invalid signature." }, { status: 400 });
 
-  let event: { type?: unknown; data?: { object?: Record<string, unknown> } };
+  let event: { id?: string; type?: string; created?: number; data?: { object?: Record<string, unknown> } };
   try {
     event = JSON.parse(rawBody);
   } catch {
@@ -22,42 +23,73 @@ export async function POST(request: Request) {
   }
 
   const db = getDb();
-  const object = event.data?.object;
   const now = new Date().toISOString();
 
-  // Stripe doesn't contractually guarantee delivery order, but in practice
-  // checkout.session.completed (which persists stripeCustomerId) arrives
-  // before the subscription events below that key off it — an out-of-order
-  // delivery would just leave that one subscription un-synced until its
-  // next update, not misattribute it to a different account.
-  switch (event.type) {
-    case "checkout.session.completed": {
-      const dbUserId = Number(object?.client_reference_id);
-      const customerId = object?.customer;
-      if (Number.isInteger(dbUserId) && typeof customerId === "string") {
-        await db.update(subscriptions).set({ stripeCustomerId: customerId, updatedAt: now }).where(eq(subscriptions.userId, dbUserId));
+  // Has this exact event already been applied? Stripe retries on timeouts, on
+  // 500s, and on a deploy that lands mid-request.
+  const [seen] = await db.select().from(billingEvents).where(eq(billingEvents.id, String(event.id ?? "")));
+  // The change modules are plain JS, so their union is narrowed here rather
+  // than inferred: an untyped `change.userId` reaching a query is exactly the
+  // kind of thing that only fails once it is in production.
+  const change = subscriptionChangeFor(event) as {
+    kind: string;
+    userId?: number;
+    customerId?: string | null;
+    tier?: "pro" | "team" | "free";
+    status?: "active" | "past_due" | "canceled";
+    subscriptionId?: string | null;
+    currentPeriodEnd?: string | null;
+  };
+  const customerId = change.customerId ?? null;
+  const [existing] = customerId
+    ? await db.select().from(subscriptions).where(eq(subscriptions.stripeCustomerId, customerId))
+    : [];
+
+  const decide = decideEvent as (input: {
+    event: unknown;
+    seen: boolean;
+    lastAppliedAt: number | null;
+  }) => { apply: boolean; reason: string | null; createdAt?: number | null };
+  const decision = decide({ event, seen: Boolean(seen), lastAppliedAt: existing?.lastEventAt ?? null });
+  if (!decision.apply) {
+    // Always 200. A replay answered with an error is retried forever, and
+    // Stripe eventually disables the endpoint.
+    return Response.json({ received: true, applied: false, reason: decision.reason });
+  }
+
+  switch (change.kind) {
+    case "link-customer": {
+      const userId = Number(change.userId);
+      if (Number.isInteger(userId) && change.customerId) {
+        await db.update(subscriptions)
+          .set({ stripeCustomerId: change.customerId, updatedAt: now })
+          .where(eq(subscriptions.userId, userId));
       }
       break;
     }
-    case "customer.subscription.created":
-    case "customer.subscription.updated": {
-      const metadata = object?.metadata as Record<string, unknown> | undefined;
-      const tier = metadata?.tier;
-      const customerId = object?.customer;
-      if ((tier === "pro" || tier === "team") && typeof customerId === "string") {
-        const status = mapStripeStatus(object?.status);
-        const currentPeriodEnd = typeof object?.current_period_end === "number" ? new Date(object.current_period_end * 1000).toISOString() : null;
-        await db
-          .update(subscriptions)
-          .set({ tier, status, stripeSubscriptionId: object?.id as string | undefined, currentPeriodEnd, updatedAt: now })
-          .where(eq(subscriptions.stripeCustomerId, customerId));
+    case "set-subscription": {
+      if (change.customerId) {
+        await db.update(subscriptions)
+          .set({
+            tier: change.tier ?? "free",
+            status: change.status ?? "canceled",
+            stripeSubscriptionId: change.subscriptionId ?? undefined,
+            currentPeriodEnd: change.currentPeriodEnd ?? null,
+            lastEventAt: decision.createdAt ?? null,
+            updatedAt: now,
+          })
+          .where(eq(subscriptions.stripeCustomerId, change.customerId));
       }
       break;
     }
-    case "customer.subscription.deleted": {
-      const customerId = object?.customer;
-      if (typeof customerId === "string") {
-        await db.update(subscriptions).set({ tier: "free", status: "canceled", updatedAt: now }).where(eq(subscriptions.stripeCustomerId, customerId));
+    case "set-status": {
+      // A failed payment marks past_due rather than cancelling: Stripe retries
+      // for days, and cutting access on the first failure punishes a customer
+      // whose card expired over a weekend.
+      if (change.customerId) {
+        await db.update(subscriptions)
+          .set({ status: change.status ?? "active", lastEventAt: decision.createdAt ?? null, updatedAt: now })
+          .where(eq(subscriptions.stripeCustomerId, change.customerId));
       }
       break;
     }
@@ -65,5 +97,11 @@ export async function POST(request: Request) {
       break;
   }
 
-  return Response.json({ received: true });
+  // Recorded after the change, so a crash mid-apply leaves the event
+  // unrecorded and Stripe's retry replays it rather than skipping it.
+  await db.insert(billingEvents)
+    .values({ id: String(event.id), type: String(event.type ?? "unknown"), createdAt: Number(event.created ?? 0), receivedAt: now })
+    .onConflictDoNothing();
+
+  return Response.json({ received: true, applied: true });
 }

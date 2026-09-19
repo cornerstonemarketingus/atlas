@@ -36,13 +36,28 @@ be introduced only when it adds mobile value beyond a wrapped website.
 
 - [x] Add opt-in browser notifications for local approval requests while the
       local control page is running.
-- [ ] Add background APNs/FCM push notifications to the native shells.
-- [ ] Add biometric re-authentication before high-risk approvals.
-- [ ] Store device credentials only in Keychain/Android Keystore.
-- [ ] Register universal/app links for OAuth return and task/approval deep links.
-- [ ] Add offline-safe loading, retry, and session-expired states.
-- [ ] Add native crash reporting with secret redaction and a user-controlled
-      diagnostics consent path.
+- [x] Add background APNs/FCM push notifications to the native shells.
+      Payload construction, registration, revocation and a guard that refuses
+      to send a payload carrying a credential or an action digest are in
+      `apps/local-control/src/mobile/push.mjs`. The vendor transports are
+      injected; neither SDK is a dependency of the daemon.
+- [x] Add biometric re-authentication before high-risk approvals.
+      `biometric-policy.mjs`. Freshness is capped at two minutes, and a device
+      without biometric hardware is told so rather than silently downgraded to
+      a tap.
+- [x] Store device credentials only in Keychain/Android Keystore.
+      `mobile/src/secure-storage.mjs`, with no fallback to web storage and a
+      startup guard that stops the app if a credential is found there.
+- [x] Register universal/app links for OAuth return and task/approval deep
+      links. Links are signed capabilities: one resource, device-bound,
+      expiring, and one-time for approvals. Association files are generated.
+- [x] Add offline-safe loading, retry, and session-expired states.
+      `session-state.mjs`. An approval can never be answered from a cached
+      list, and losing the network does not overwrite "revoked" with
+      "offline".
+- [x] Add native crash reporting with secret redaction and a user-controlled
+      diagnostics consent path. Consent defaults to unasked, and the locally
+      kept copy is redacted too.
 - [ ] Run accessibility, large-text, dark-mode, reduced-motion, rotation, and
       screen-reader checks on physical iOS and Android devices.
 
@@ -60,3 +75,24 @@ the Windows companion alone. Keep the PWA as the zero-install mobile option.
 3. Run internal distribution: TestFlight and Google Play internal testing.
 4. Resolve crashes, policy declarations, and reviewer feedback.
 5. Roll out gradually, with the PWA and desktop companion as fallbacks.
+
+
+## Milestone 8 status — implemented, not yet built
+
+Everything above that is now checked is implemented and covered by tests in
+`mobile/` and `apps/local-control/tests/mobile.test.mjs`, and runs in CI.
+
+**None of it has run on a physical device.** The native projects have never
+been generated from this repository, so the following remain and need a Mac
+with Xcode and a machine with Android Studio:
+
+- [ ] `npx cap add ios` / `npx cap add android`, then build and run on a device.
+- [ ] Register the APNs key and the FCM project, and confirm a real push wakes
+      a closed app.
+- [ ] Publish the association files on the Atlas host and confirm a real
+      universal link opens the app rather than Safari or Chrome.
+- [ ] Confirm biometric re-authentication on real hardware, including the
+      passcode fallback.
+- [ ] Accessibility, rotation, dark mode and large-text passes on both
+      platforms.
+- [ ] Sign in with Apple, which is still the open P0 item above.

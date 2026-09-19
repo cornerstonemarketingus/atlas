@@ -3,7 +3,15 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13.0" },
-  "scripts": { "start": "node src/index.mjs", "check": "node --check src/index.mjs && node --check src/policy.mjs && node --check src/profile.mjs && node --check src/runtime.mjs", "test": "node --test tests/*.test.mjs" },
-  "dependencies": { "playwright-core": "1.55.0" }
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "check": "node --check src/index.mjs && node --check src/policy.mjs && node --check src/profile.mjs && node --check src/runtime.mjs && node --check src/operator/classification.mjs && node --check src/operator/session.mjs && node --check src/operator/fixtures.mjs && node --check src/operator/scenarios.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.55.0"
+  }
 }

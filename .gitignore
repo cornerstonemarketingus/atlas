@@ -4,7 +4,7 @@ __pycache__/
 .venv/
 venv/
 .env
-models/
+/models/
 node_modules/
 .npm-cache/
 dist/

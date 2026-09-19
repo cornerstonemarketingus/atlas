@@ -1,0 +1,297 @@
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { ToolRegistry } from "../src/agent/tool-registry.mjs";
+import { registerInfrastructureTools } from "../src/agent/tools/infrastructure-tools.mjs";
+import { createCloudflareAdapter } from "../src/agent/infrastructure/cloudflare.mjs";
+import { createVercelAdapter } from "../src/agent/infrastructure/vercel.mjs";
+import { createGitHostAdapter, sealSecret } from "../src/agent/infrastructure/git-hosts.mjs";
+import { buildPlan, describePlan, planDigest, redactValue, InfrastructureError } from "../src/agent/infrastructure/adapter.mjs";
+import { assertCredentialName, createCredentialVault, detectVaultBackend, VaultError } from "../src/agent/credential-vault.mjs";
+
+const TOKEN = "cf-token-never-logged";
+
+/** A fake Cloudflare that records every request it is sent. */
+function cloudflareServer({ records = [] } = {}) {
+  const requests = [];
+  const state = [...records];
+  const fetchImpl = async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    const method = init.method ?? "GET";
+    requests.push({ path, method, headers: init.headers, body: init.body ? JSON.parse(init.body) : null });
+
+    if (path === "/client/v4/zones") return Response.json({ result: [{ id: "zone1", name: "example.invalid", status: "active" }] });
+    if (path.endsWith("/dns_records") && method === "GET") {
+      const name = new URL(url).searchParams.get("name");
+      return Response.json({ result: state.filter((record) => !name || record.name === name) });
+    }
+    if (path.endsWith("/dns_records") && method === "POST") {
+      state.push({ id: "rec-new", ...JSON.parse(init.body) });
+      return Response.json({ result: state.at(-1) });
+    }
+    if (/\/dns_records\/[^/]+$/u.test(path) && method === "PUT") {
+      const id = path.split("/").pop();
+      const index = state.findIndex((record) => record.id === id);
+      state[index] = { ...state[index], ...JSON.parse(init.body) };
+      return Response.json({ result: state[index] });
+    }
+    if (path.endsWith("/d1/database")) return Response.json({ result: [{ uuid: "db1", name: "atlas-db", version: "beta" }] });
+    if (path.endsWith("/workers/scripts")) return Response.json({ result: [{ id: "atlas-web", modified_on: "2026-01-01T00:00:00Z" }] });
+    if (path.endsWith("/browser-rendering/limits")) return new Response(JSON.stringify({ errors: [{ message: "not entitled" }] }), { status: 403 });
+    return Response.json({ result: [] });
+  };
+  return { fetchImpl, requests, state };
+}
+
+test("a credential name is validated and the vault never lists values", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-vault-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const path = join(directory, "vault.json");
+  const vault = createCredentialVault({ backend: "file", filePath: path, passphrase: "a long enough passphrase" });
+
+  await vault.set("CLOUDFLARE_TOKEN", "super-secret-value");
+  assert.equal(await vault.get("CLOUDFLARE_TOKEN"), "super-secret-value");
+  assert.equal(await vault.has("CLOUDFLARE_TOKEN"), true);
+
+  const listed = await vault.list();
+  assert.deepEqual(listed.map((entry) => entry.name), ["CLOUDFLARE_TOKEN"]);
+  assert.equal(JSON.stringify(listed).includes("super-secret-value"), false, "listing exposes names, never values");
+
+  // The file on disk is encrypted, not merely hidden.
+  const onDisk = await readFile(path, "utf8");
+  assert.equal(onDisk.includes("super-secret-value"), false);
+  assert.match(onDisk, /aes-256-gcm\+scrypt/u);
+
+  await assert.rejects(() => vault.set("lowercase", "x"), VaultError);
+  await assert.rejects(() => vault.set("CLOUDFLARE_TOKEN", ""), VaultError);
+  assert.throws(() => assertCredentialName("A"), /3-64 characters/u);
+
+  await vault.delete("CLOUDFLARE_TOKEN");
+  assert.equal(await vault.get("CLOUDFLARE_TOKEN"), null);
+
+  const locked = createCredentialVault({ backend: "file", filePath: path, passphrase: null });
+  await assert.rejects(() => locked.list(), /ATLAS_VAULT_PASSPHRASE/u);
+  assert.equal(detectVaultBackend("win32"), "dpapi");
+  assert.equal(detectVaultBackend("darwin"), "keychain");
+  assert.equal(detectVaultBackend("linux"), "libsecret");
+  assert.equal(detectVaultBackend("aix"), "file");
+});
+
+test("a plan names the exact target, redacts values, and states reversibility", () => {
+  const plan = buildPlan({
+    provider: "vercel", operation: "rotate", resource: "environment_variable",
+    target: "STRIPE_KEY on prj_1 (production)",
+    before: { key: "STRIPE_KEY" }, after: { key: "STRIPE_KEY", value: redactValue("sk_live_abcdef123456") },
+    reversible: false, notes: ["A redeploy is needed."],
+  });
+  const described = describePlan(plan);
+  assert.match(described, /Target: STRIPE_KEY on prj_1 \(production\)/u);
+  assert.match(described, /Reversible: no/u);
+  assert.match(described, /A redeploy is needed/u);
+  assert.equal(described.includes("sk_live_abcdef123456"), false, "the secret is not in the preview");
+  assert.match(redactValue("sk_live_abcdef123456"), /\(20 characters, ending 56\)/u);
+
+  // Digests cover the target and the new state, so a different record differs.
+  const other = buildPlan({ ...plan, target: "OTHER_KEY on prj_1 (production)" });
+  assert.notEqual(plan.digest, other.digest);
+  assert.equal(planDigest(plan), plan.digest);
+  assert.throws(() => buildPlan({ provider: "x", operation: "destroy", resource: "y", target: "z" }), /Unknown operation/u);
+});
+
+test("Cloudflare reads state and plans a DNS change without touching anything", async () => {
+  const server = cloudflareServer({ records: [{ id: "rec1", type: "A", name: "www.example.invalid", content: "203.0.113.1", ttl: 1, proxied: true }] });
+  const cloudflare = createCloudflareAdapter({ token: TOKEN, fetchImpl: server.fetchImpl });
+
+  assert.deepEqual(await cloudflare.listZones(), [{ id: "zone1", name: "example.invalid", status: "active" }]);
+  assert.deepEqual(await cloudflare.d1Status({ accountId: "acct" }), [{ uuid: "db1", name: "atlas-db", version: "beta" }]);
+  assert.equal((await cloudflare.workerStatus({ accountId: "acct", scriptName: "atlas-web" })).present, true);
+  assert.equal((await cloudflare.workerStatus({ accountId: "acct", scriptName: "missing" })).present, false);
+  // Not entitled is an answer, not a crash.
+  assert.deepEqual(await cloudflare.browserRenderingStatus({ accountId: "acct" }), { available: false, reason: "This token or account is not entitled to Browser Rendering." });
+
+  const plan = await cloudflare.planDnsRecord({ zoneId: "zone1", type: "A", name: "www.example.invalid", content: "203.0.113.9" });
+  assert.equal(plan.operation, "update");
+  assert.deepEqual(plan.before, { type: "A", content: "203.0.113.1", ttl: 1, proxied: true });
+  assert.equal(plan.reversible, true);
+  assert.match(plan.notes[0], /back to 203\.0\.113\.1/u);
+  assert.equal(server.requests.some((request) => request.method !== "GET"), false, "planning is read-only");
+
+  const applied = await cloudflare.applyDnsRecord({ zoneId: "zone1", plan });
+  assert.equal(applied.verified, true);
+  assert.equal(applied.observed.content, "203.0.113.9");
+  assert.equal(server.requests.some((request) => request.method === "PUT"), true);
+});
+
+test("the Cloudflare token travels in a header and never in a URL or an error", async () => {
+  const server = cloudflareServer();
+  const cloudflare = createCloudflareAdapter({ token: TOKEN, fetchImpl: server.fetchImpl });
+  await cloudflare.listZones();
+  assert.equal(server.requests[0].headers.authorization, `Bearer ${TOKEN}`);
+  assert.equal(server.requests[0].path.includes(TOKEN), false);
+
+  const failing = createCloudflareAdapter({
+    token: TOKEN,
+    fetchImpl: async () => new Response(JSON.stringify({ errors: [{ message: "Invalid token" }] }), { status: 403 }),
+  });
+  await assert.rejects(
+    () => failing.listZones(),
+    (error) => error.code === "NOT_AUTHORIZED" && !error.message.includes(TOKEN),
+  );
+  assert.throws(() => createCloudflareAdapter({ token: null }), InfrastructureError);
+});
+
+test("Vercel writes an environment variable without ever reading one back", async () => {
+  const requests = [];
+  let stored = [];
+  const fetchImpl = async (url, init = {}) => {
+    const parsed = new URL(url);
+    requests.push({ path: parsed.pathname, method: init.method ?? "GET", decrypt: parsed.searchParams.get("decrypt"), body: init.body ? JSON.parse(init.body) : null });
+    if (parsed.pathname.endsWith("/env") && (init.method ?? "GET") === "GET") return Response.json({ envs: stored });
+    if (parsed.pathname.endsWith("/env") && init.method === "POST") {
+      stored = [...stored, { id: "env1", key: JSON.parse(init.body).key, target: JSON.parse(init.body).target, type: "encrypted", updatedAt: 1 }];
+      return Response.json({});
+    }
+    return Response.json({});
+  };
+  const vercel = createVercelAdapter({ token: "vercel-token", fetchImpl });
+
+  const plan = await vercel.planEnvironmentVariable({ projectId: "prj_1", key: "STRIPE_SECRET_KEY", value: "sk_live_0123456789", target: ["production"] });
+  assert.equal(plan.operation, "create");
+  assert.equal(plan.reversible, false);
+  assert.match(plan.after.value, /\(18 characters, ending 89\)/u);
+  assert.equal(JSON.stringify(plan).includes("sk_live_0123456789"), false);
+  assert.ok(plan.notes.some((note) => /redeploy/u.test(note)));
+
+  const applied = await vercel.applyEnvironmentVariable({ projectId: "prj_1", plan, value: "sk_live_0123456789" });
+  assert.equal(applied.verified, true);
+  assert.equal(applied.observed.key, "STRIPE_SECRET_KEY");
+  // Verification is by metadata; Atlas never asks Vercel to decrypt.
+  assert.equal(requests.every((request) => request.decrypt !== "true"), true);
+
+  const listed = await vercel.listEnvironmentVariables({ projectId: "prj_1" });
+  assert.equal(JSON.stringify(listed).includes("sk_live_0123456789"), false);
+  assert.equal("value" in listed[0], false, "a listed variable carries no value field at all");
+});
+
+test("repository secrets are sealed or refused, never sent in the clear", async () => {
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const spki = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+
+  const sealed = sealSecret("my-secret-value", spki);
+  assert.notEqual(sealed, Buffer.from("my-secret-value").toString("base64"));
+  const { privateDecrypt, constants } = await import("node:crypto");
+  const opened = privateDecrypt({ key: privateKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }, Buffer.from(sealed, "base64"));
+  assert.equal(opened.toString("utf8"), "my-secret-value");
+
+  // A libsodium key cannot be sealed here, and that is said plainly rather
+  // than falling back to sending the plaintext.
+  assert.throws(() => sealSecret("x", Buffer.alloc(32).toString("base64")), /needs a native dependency/u);
+
+  const requests = [];
+  let secrets = [];
+  const fetchImpl = async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push({ path, method: init.method ?? "GET", body: init.body ? JSON.parse(init.body) : null });
+    if (path.endsWith("/secrets/public-key")) return Response.json({ key: spki, key_id: "kid1" });
+    if (path.endsWith("/actions/secrets")) return Response.json({ secrets });
+    if (path.includes("/actions/secrets/") && init.method === "PUT") { secrets = [{ name: "DEPLOY_TOKEN", updated_at: "now" }]; return new Response(null, { status: 204 }); }
+    return Response.json({ secrets: [] });
+  };
+  const host = createGitHostAdapter({ host: "github", token: "gh-token", repository: "owner/name", fetchImpl });
+
+  const plan = await host.planSecret({ name: "DEPLOY_TOKEN", value: "ghp_supersecretvalue" });
+  assert.equal(plan.operation, "create");
+  assert.equal(JSON.stringify(plan).includes("ghp_supersecretvalue"), false);
+  assert.ok(plan.notes.some((note) => /read a secret back/u.test(note)), "the plan says the value can never be read back");
+
+  const applied = await host.applySecret({ name: "DEPLOY_TOKEN", value: "ghp_supersecretvalue" });
+  assert.equal(applied.verified, true);
+  const put = requests.find((request) => request.method === "PUT");
+  assert.ok(put.body.encrypted_value);
+  assert.equal(JSON.stringify(put.body).includes("ghp_supersecretvalue"), false, "the plaintext never crossed the network");
+
+  assert.throws(() => createGitHostAdapter({ host: "github", token: "t", repository: "not-a-repo" }), /owner\/name/u);
+  assert.throws(() => createGitHostAdapter({ host: "bitbucket", token: "t", repository: "a/b" }), /Unsupported host/u);
+});
+
+test("plan and apply are separate, approval-bound, and verified", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-infra-tools-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const vault = createCredentialVault({ backend: "file", filePath: join(directory, "vault.json"), passphrase: "a long enough passphrase" });
+  await vault.set("STRIPE_LIVE_KEY", "sk_live_0123456789");
+
+  const server = cloudflareServer({ records: [{ id: "rec1", type: "A", name: "www.example.invalid", content: "203.0.113.1", ttl: 1, proxied: false }] });
+  const cloudflare = createCloudflareAdapter({ token: TOKEN, fetchImpl: server.fetchImpl });
+
+  const approved = new Set();
+  const registry = new ToolRegistry({ policy: () => "allow" });
+  registerInfrastructureTools(registry, { providers: { cloudflare }, vault });
+  const run = (name, args) => registry.invoke({ name, rawArguments: JSON.stringify(args), sessionId: "s1", approvals: { check: async (d) => approved.has(d) }, context: {} });
+
+  const planned = await run("infrastructure.plan", { resource: "dns_record", zoneId: "zone1", recordType: "A", name: "www.example.invalid", content: "203.0.113.50" });
+  assert.equal(planned.status, "completed");
+  assert.match(planned.output, /Currently: .*203\.0\.113\.1/u);
+  assert.match(planned.output, /Nothing has changed/u);
+  const digest = /Plan: ([0-9a-f]{64})/u.exec(planned.output)[1];
+  assert.equal(server.requests.some((request) => request.method !== "GET"), false, "the dry run changed nothing");
+
+  const blocked = await run("infrastructure.apply", { plan: digest });
+  assert.equal(blocked.status, "approval-required");
+  assert.equal(server.requests.some((request) => request.method !== "GET"), false, "nothing was applied without approval");
+
+  approved.add(blocked.digest);
+  const applied = await run("infrastructure.apply", { plan: digest });
+  assert.equal(applied.status, "completed");
+  assert.match(applied.output, /Applied and verified/u);
+  assert.match(applied.output, /203\.0\.113\.50/u);
+
+  // The plan is spent: an old approval cannot be replayed onto a new change.
+  approved.clear();
+  const replayed = await run("infrastructure.apply", { plan: digest });
+  assert.equal(replayed.status, "approval-required");
+  const stale = await registry.invoke({ name: "infrastructure.apply", rawArguments: JSON.stringify({ plan: digest }), sessionId: "s1", approvals: { check: async () => true }, context: {} });
+  assert.equal(stale.status, "failed");
+  assert.equal(stale.code, "UNKNOWN_PLAN");
+});
+
+test("a secret value can never be passed as a tool argument", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-infra-ref-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const vault = createCredentialVault({ backend: "file", filePath: join(directory, "vault.json"), passphrase: "a long enough passphrase" });
+
+  const registry = new ToolRegistry({ policy: () => "allow" });
+  registerInfrastructureTools(registry, { providers: {}, vault });
+  const run = (name, args) => registry.invoke({ name, rawArguments: JSON.stringify(args), sessionId: "s1", approvals: { check: async () => true }, context: {} });
+
+  // There is no "value" argument in the schema at all.
+  const rejected = await run("infrastructure.plan", { resource: "repository_secret", name: "TOKEN", value: "sk_live_leak" });
+  assert.equal(rejected.code, "INVALID_INPUT");
+  assert.match(rejected.message, /not an accepted argument/u);
+
+  const noReference = await run("infrastructure.plan", { resource: "repository_secret", name: "TOKEN" });
+  assert.equal(noReference.status, "failed");
+  assert.match(noReference.message, /never takes a secret value as an argument/u);
+
+  const unknown = await run("infrastructure.plan", { resource: "repository_secret", name: "TOKEN", valueRef: "ABSENT_KEY" });
+  assert.equal(unknown.code, "UNKNOWN_REFERENCE");
+
+  const listed = await run("infrastructure.list_credentials", {});
+  assert.match(listed.output, /No credentials are stored yet/u);
+});
+
+test("an unconfigured provider fails closed with an actionable message", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-infra-none-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const vault = createCredentialVault({ backend: "file", filePath: join(directory, "vault.json"), passphrase: "a long enough passphrase" });
+  const registry = new ToolRegistry({ policy: () => "allow" });
+  registerInfrastructureTools(registry, { providers: {}, vault });
+
+  const result = await registry.invoke({ name: "infrastructure.inspect", rawArguments: JSON.stringify({ provider: "cloudflare", what: "zones" }), sessionId: "s", context: {} });
+  assert.equal(result.status, "failed");
+  assert.equal(result.code, "PROVIDER_NOT_CONFIGURED");
+  assert.match(result.message, /Add a scoped token to the Atlas vault/u);
+});

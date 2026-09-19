@@ -6,6 +6,29 @@ import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
 import { LocalTaskStore } from "./store.mjs";
 import { verifyOfflineLicense } from "./offline-license.mjs";
+import { AgentSessionStore } from "./agent/session-store.mjs";
+import { AgentRuntime } from "./agent/runtime.mjs";
+import { createGitHubActionsExecutor, createLocalExecutor } from "./agent/executors.mjs";
+import { createGitHubActionsClient } from "./agent/github-actions-client.mjs";
+import { createConversationExecutor } from "./agent/conversation-executor.mjs";
+import { createModelClient } from "./agent/model-client.mjs";
+import { createSpeechTranscriber } from "./agent/speech.mjs";
+import { detectHardware } from "./agent/models/hardware.mjs";
+import { discoverModelServers } from "./agent/models/discovery.mjs";
+import { recommendModels } from "./agent/models/recommend.mjs";
+import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/router.mjs";
+import { ToolRegistry } from "./agent/tool-registry.mjs";
+import { registerRepositoryTools } from "./agent/tools/repository-tools.mjs";
+import { registerRepositoryWriteTools } from "./agent/tools/repository-write-tools.mjs";
+import { registerFilesystemTools } from "./agent/tools/filesystem-tools.mjs";
+import { registerBrowserTools } from "./agent/tools/browser-tools.mjs";
+import { registerCommunicationsTools } from "./agent/tools/communications-tools.mjs";
+import { registerWorkflowTools } from "./agent/tools/workflow-tools.mjs";
+import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.mjs";
+import { createCredentialVault } from "./agent/credential-vault.mjs";
+import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
+import { createVercelAdapter } from "./agent/infrastructure/vercel.mjs";
+import { createGitHostAdapter } from "./agent/infrastructure/git-hosts.mjs";
 
 const dataDirectory = process.env.ATLAS_LOCAL_DATA_DIR || join(homedir(), ".atlas");
 const tokenFile = join(dataDirectory, "local-token");
@@ -21,20 +44,206 @@ if (!token) {
 }
 
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
+const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
+const vault = createCredentialVault({ filePath: join(dataDirectory, "credentials.vault.json") });
 const license = loadLicense();
+const runtime = new AgentRuntime({
+  sessions,
+  executors: buildExecutors(),
+  audit: (category, summary) => store.audit(category, summary),
+});
+// Anything left running by the previous process is reconciled before the
+// first request arrives, so a client never sees a session that claims to be
+// running inside a runtime that no longer exists.
+const recovered = runtime.recover();
+if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
+
 const server = createLocalControlServer({
   store,
   token,
   runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
   license,
+  runtime,
+  transcriber: buildTranscriber(),
+  modelHealth: reportModelHealth,
 });
 const host = process.env.ATLAS_LOCAL_HOST || "127.0.0.1";
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
-server.listen(port, host, () => console.log(`Atlas sovereign control plane: http://${host}:${port}`));
+server.listen(port, host, () => console.log(`Atlas sovereign control plane: http://${host}:${port}\nAgent runtime ${runtime.instanceId} executors: ${runtime.executorIds().join(", ")}`));
 
-function shutdown() { server.close(() => { store.close(); process.exit(0); }); }
+function shutdown() {
+  server.close(async () => {
+    await runtime.stop();
+    sessions.close();
+    store.close();
+    process.exit(0);
+  });
+}
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+/**
+ * Local execution is always available. GitHub Actions is registered only when
+ * this machine has been given a token for it — the runtime works, and every
+ * acceptance test passes, with the remote executor absent entirely.
+ */
+function buildExecutors() {
+  const executors = {
+    local: createLocalExecutor({ dataDirectory }),
+    conversation: createConversationExecutor({
+      client: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
+      registry: buildToolRegistry(),
+      approvals: {
+        // One-time and digest-bound: spending an approval consumes it, and it
+        // only matches the exact action it was granted for.
+        check: (digest) => store.consumeApprovedDigest(digest),
+        request: ({ digest, capability, summary, sessionId }) =>
+          store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
+      },
+    }),
+  };
+  const token = process.env.ATLAS_GITHUB_TOKEN;
+  const repository = process.env.ATLAS_GITHUB_REPOSITORY;
+  const workflow = process.env.ATLAS_GITHUB_WORKFLOW || "atlas-coder.yml";
+  if (token && repository) {
+    const client = createGitHubActionsClient({ token, repository, workflow, ref: process.env.ATLAS_GITHUB_REF || "main" });
+    executors["github-actions"] = createGitHubActionsExecutor({ dispatch: (input) => client.dispatch(input), poll: (input) => client.poll(input) });
+  }
+  return executors;
+}
+
+/**
+ * Policy comes from the same allow/ask/deny table the operator already edits
+ * in the local UI. A capability with no row is denied.
+ */
+function buildToolRegistry() {
+  const registry = new ToolRegistry({
+    policy: (capability) => store.policy(capability).decision,
+    // Secrets are read from the process environment for now, by reference
+    // only. No tool receives a value it did not declare a need for.
+    secrets: (reference) => process.env[reference] ?? null,
+  });
+  registerRepositoryTools(registry);
+  registerRepositoryWriteTools(registry);
+  registerFilesystemTools(registry, { roots: [join(dataDirectory, "workspace")] });
+  registerCommunicationsTools(registry, { send: null });
+  registerWorkflowTools(registry);
+  // The browser family is registered whether or not a companion is attached:
+  // its tools then fail closed with "no browser on this machine", which is a
+  // better answer than the model never learning the capability exists.
+  registerBrowserTools(registry, { session: buildBrowserSession, uploadRoot: join(dataDirectory, "workspace") });
+  registerInfrastructureTools(registry, { providers: buildInfrastructureProviders(), vault });
+  return registry;
+}
+
+/**
+ * Builds the computer-operation session on first use.
+ *
+ * The operator runtime — classification, approval gating, CAPTCHA detection,
+ * evidence — lives with the Windows companion, because that is the component
+ * that ships to a customer's machine. The daemon drives the same runtime over
+ * a Playwright page when one is available here. On a machine with neither, the
+ * browser tools answer "no browser on this machine", which is the honest
+ * answer rather than a missing capability.
+ */
+async function buildBrowserSession() {
+  const [{ createPlaywrightPage, createLocalScreenshotStore }, { createOperatorSession }] = await Promise.all([
+    import("./agent/browser/playwright-page.mjs"),
+    import("../../windows-companion/src/operator/session.mjs"),
+  ]);
+  const page = await createPlaywrightPage({
+    profileDirectory: join(dataDirectory, "browser-profile"),
+    downloadDirectory: join(dataDirectory, "workspace", "downloads"),
+  });
+  return createOperatorSession({
+    page,
+    // Screenshots are written to the operator's disk. Sending one anywhere is
+    // a separate, approval-bound decision.
+    screenshots: createLocalScreenshotStore(join(dataDirectory, "screenshots")),
+    approvals: {
+      request: async ({ digest, summary }) => {
+        // The operator session asks here; the registry's own approval gate has
+        // already run for the tool call, so this covers the page-level action
+        // the model is about to take on a specific element.
+        store.createApproval({ capability: "computer.high_risk", summary, actionDigest: digest });
+        return store.consumeApprovedDigest(digest);
+      },
+    },
+  });
+}
+
+/**
+ * Providers are resolved lazily, so a machine with no infrastructure
+ * credentials still starts and still offers the tools — they simply answer
+ * "not configured on this machine" instead of silently not existing.
+ *
+ * The tokens here are administration credentials. They are deliberately
+ * separate from anything the coding agent holds: nothing Atlas gives the
+ * coder can mint or change a credential, which is the whole point of keeping
+ * these behind the vault and behind approval.
+ */
+function buildInfrastructureProviders() {
+  const lazily = (name, build) => {
+    let cached;
+    return () => {
+      if (cached === undefined) cached = build() ?? null;
+      if (!cached) throw new Error(`No ${name} credentials are configured on this machine.`);
+      return cached;
+    };
+  };
+  const providers = {};
+  if (process.env.ATLAS_CLOUDFLARE_TOKEN) {
+    providers.cloudflare = lazily("Cloudflare", () => createCloudflareAdapter({ token: process.env.ATLAS_CLOUDFLARE_TOKEN }));
+  }
+  if (process.env.ATLAS_VERCEL_TOKEN) {
+    providers.vercel = lazily("Vercel", () => createVercelAdapter({ token: process.env.ATLAS_VERCEL_TOKEN, teamId: process.env.ATLAS_VERCEL_TEAM_ID || null }));
+  }
+  if (process.env.ATLAS_GITHUB_TOKEN && process.env.ATLAS_GITHUB_REPOSITORY) {
+    providers.gitHost = lazily("Git host", () => createGitHostAdapter({
+      host: process.env.ATLAS_GIT_HOST || "github",
+      token: process.env.ATLAS_GITHUB_TOKEN,
+      repository: process.env.ATLAS_GITHUB_REPOSITORY,
+      baseUrl: process.env.ATLAS_GIT_HOST_BASE_URL || null,
+    }));
+  }
+  return providers;
+}
+
+const router = createModelRouter({
+  routes: parseRoutes(process.env.ATLAS_MODEL_ROUTES ?? "[]"),
+  createClient: (route) => createModelClient({ baseUrl: route.endpoint }),
+});
+
+/**
+ * What an operator needs to judge whether their models are healthy: what this
+ * machine can run, what is installed, what Atlas would pick, and how the
+ * routes are configured. No credential appears anywhere in it — that is the
+ * whole point of reporting health separately from configuration.
+ */
+async function reportModelHealth() {
+  const [hardware, servers] = await Promise.all([detectHardware(), discoverModelServers()]);
+  const installed = servers.flatMap((server) => server.models);
+  return {
+    hardware,
+    servers: servers.map((server) => ({
+      // A host, not a URL with anything in it.
+      location: server.endpoint.includes("127.0.0.1") || server.endpoint.includes("localhost") ? "this machine" : new URL(server.endpoint).host,
+      kind: server.kind,
+      models: server.models,
+    })),
+    ...recommendModels({ hardware, installed }),
+    routes: describeRoutes(router),
+  };
+}
+
+function buildTranscriber() {
+  try {
+    return createSpeechTranscriber();
+  } catch {
+    // A misconfigured endpoint disables dictation; it must not stop Atlas.
+    return null;
+  }
+}
 
 function loadLicense() {
   const licensePath = process.env.ATLAS_OFFLINE_LICENSE_FILE;

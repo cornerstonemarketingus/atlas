@@ -29,6 +29,14 @@ export class LocalTaskStore {
       CREATE TABLE IF NOT EXISTS local_audit (id TEXT PRIMARY KEY, category TEXT NOT NULL, summary TEXT NOT NULL, created_at TEXT NOT NULL);
       INSERT OR IGNORE INTO local_policies (capability, decision) VALUES ('code.write', 'ask'), ('computer.high_risk', 'ask'), ('publish.remote', 'ask'), ('repository.read', 'allow');
     `);
+    // Additive migrations for approvals bound to an agent action. Older
+    // installations have the table without these columns; adding them is
+    // safe and keeps existing approvals readable.
+    for (const column of ["action_digest TEXT", "session_id TEXT", "consumed_at TEXT"]) {
+      try { this.#db.exec(`ALTER TABLE local_approvals ADD COLUMN ${column}`); }
+      catch { /* Already present. */ }
+    }
+    this.#db.exec("CREATE INDEX IF NOT EXISTS local_approvals_digest_idx ON local_approvals(action_digest)");
     this.#db.prepare("UPDATE local_tasks SET status = 'interrupted', message = 'Atlas restarted while this task was running.', completed_at = ? WHERE status = 'running'")
       .run(new Date().toISOString());
   }
@@ -69,9 +77,43 @@ export class LocalTaskStore {
     this.audit("policy.changed", `${capability}=${decision}`); return this.policy(capability);
   }
 
-  createApproval({ taskId = null, capability, summary }) { const row = { id: randomUUID(), taskId, capability, summary, status: "pending", requestedAt: new Date().toISOString(), resolvedAt: null }; this.#db.prepare("INSERT INTO local_approvals VALUES (?, ?, ?, ?, ?, ?, ?)").run(row.id, row.taskId, row.capability, row.summary, row.status, row.requestedAt, row.resolvedAt); this.audit("approval.requested", `${capability}: ${summary}`); return row; }
-  approvals() { return this.#db.prepare("SELECT id, task_id AS taskId, capability, summary, status, requested_at AS requestedAt, resolved_at AS resolvedAt FROM local_approvals ORDER BY requested_at DESC").all(); }
-  approval(id) { return this.#db.prepare("SELECT id, task_id AS taskId, capability, summary, status, requested_at AS requestedAt, resolved_at AS resolvedAt FROM local_approvals WHERE id = ?").get(id) ?? null; }
+  createApproval({ taskId = null, capability, summary, actionDigest = null, sessionId = null }) {
+    // One pending approval per action: a model that asks twice for the same
+    // thing must not produce two prompts the operator has to answer.
+    if (actionDigest) {
+      const existing = this.#db.prepare("SELECT id FROM local_approvals WHERE action_digest = ? AND status = 'pending'").get(actionDigest);
+      if (existing) return this.approval(existing.id);
+    }
+    const row = { id: randomUUID(), taskId, capability, summary, status: "pending", requestedAt: new Date().toISOString(), resolvedAt: null, actionDigest, sessionId };
+    this.#db.prepare("INSERT INTO local_approvals (id, task_id, capability, summary, status, requested_at, resolved_at, action_digest, session_id, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)")
+      .run(row.id, row.taskId, row.capability, row.summary, row.status, row.requestedAt, row.resolvedAt, actionDigest, sessionId);
+    this.audit("approval.requested", `${capability}: ${summary}`);
+    return row;
+  }
+  approvals() { return this.#db.prepare("SELECT id, task_id AS taskId, capability, summary, status, requested_at AS requestedAt, resolved_at AS resolvedAt, action_digest AS actionDigest, session_id AS sessionId FROM local_approvals ORDER BY requested_at DESC").all(); }
+  approval(id) { return this.#db.prepare("SELECT id, task_id AS taskId, capability, summary, status, requested_at AS requestedAt, resolved_at AS resolvedAt, action_digest AS actionDigest, session_id AS sessionId FROM local_approvals WHERE id = ?").get(id) ?? null; }
+
+  /**
+   * Spends an approval for exactly this action digest, once.
+   *
+   * The read and the update share a transaction, so two tool calls racing for
+   * the same approval cannot both be told yes.
+   */
+  consumeApprovedDigest(actionDigest) {
+    if (!actionDigest) return false;
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.#db.prepare("SELECT id FROM local_approvals WHERE action_digest = ? AND status = 'approved' AND consumed_at IS NULL").get(actionDigest);
+      if (!row) { this.#db.exec("COMMIT"); return false; }
+      this.#db.prepare("UPDATE local_approvals SET consumed_at = ? WHERE id = ?").run(new Date().toISOString(), row.id);
+      this.#db.exec("COMMIT");
+      this.audit("approval.consumed", `${actionDigest.slice(0, 16)} spent`);
+      return true;
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   decideApproval(id, decision) { if (!['approved','denied'].includes(decision)) throw new Error("Invalid approval decision."); const current = this.approval(id); if (!current || current.status !== 'pending') return null; this.#db.prepare("UPDATE local_approvals SET status = ?, resolved_at = ? WHERE id = ?").run(decision, new Date().toISOString(), id); this.audit("approval.decided", `${id}=${decision}`); return this.approval(id); }
 
   addPairingCode(codeHash, expiresAt) { this.#db.prepare("INSERT INTO local_pairing_codes VALUES (?, ?, NULL)").run(codeHash, expiresAt); }
@@ -92,8 +134,13 @@ export class LocalTaskStore {
       for (const row of snapshot.tasks) { const status = row.status === "running" ? "interrupted" : row.status; task.run(row.id, row.repository, row.objective, row.model, status, status === "interrupted" ? "Imported task was running when exported." : row.message ?? null, row.createdAt, row.startedAt ?? null, row.completedAt ?? null); }
       const policy = this.#db.prepare("INSERT INTO local_policies (capability,decision) VALUES (?,?) ON CONFLICT(capability) DO UPDATE SET decision=excluded.decision");
       for (const row of snapshot.policies) { if (!/^[a-z][a-z0-9_.-]{1,63}$/u.test(row.capability) || !["allow", "ask", "deny"].includes(row.decision)) throw new Error("Invalid policy in backup."); policy.run(row.capability, row.decision); }
-      const approval = this.#db.prepare("INSERT OR IGNORE INTO local_approvals VALUES (?, ?, ?, ?, ?, ?, ?)");
-      for (const row of snapshot.approvals) approval.run(row.id, row.taskId ?? null, row.capability, row.summary, row.status, row.requestedAt, row.resolvedAt ?? null);
+      // Columns are named rather than positional: the table gained
+      // action_digest, session_id and consumed_at, and a positional insert
+      // would have silently started failing on every restore.
+      const approval = this.#db.prepare("INSERT OR IGNORE INTO local_approvals (id, task_id, capability, summary, status, requested_at, resolved_at, action_digest, session_id, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      for (const row of snapshot.approvals) {
+        approval.run(row.id, row.taskId ?? null, row.capability, row.summary, row.status, row.requestedAt, row.resolvedAt ?? null, row.actionDigest ?? null, row.sessionId ?? null, row.consumedAt ?? null);
+      }
       const audit = this.#db.prepare("INSERT OR IGNORE INTO local_audit VALUES (?, ?, ?, ?)");
       for (const row of snapshot.audit) audit.run(row.id, row.category, row.summary, row.createdAt);
       this.audit("backup.imported", `Imported ${snapshot.tasks.length} tasks, ${snapshot.approvals.length} approvals, and ${snapshot.audit.length} audit events.`);
