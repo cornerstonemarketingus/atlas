@@ -21,18 +21,16 @@ and more to the point a wrapper would deliver none of the above.
 | --- | --- |
 | Signed deep links, push payloads, biometric policy, session states, crash redaction | `apps/local-control/src/mobile/` — shared with the daemon, which issues the links |
 | Keychain/Keystore access, plugin wiring, deep-link handling | `mobile/src/` |
-| Native projects | `mobile/ios/`, `mobile/android/` — generated, not checked in yet |
+| Native projects | `mobile/ios/`, `mobile/android/` — generated and checked in for reviewable platform configuration |
 
 ## Building
 
-The native projects are generated rather than committed, so the platform
-tooling owns them:
+The native projects are checked in. Install dependencies, sync the web assets,
+and open the relevant platform project:
 
 ```
 cd mobile
 npm install
-npx cap add ios
-npx cap add android
 npm run sync
 npm run open:ios      # or open:android
 ```
@@ -56,8 +54,9 @@ import { appleAppSiteAssociation, androidAssetLinks } from "../apps/local-contro
 
 ## What is not done
 
-The native projects have never been generated, built, or submitted from this
-repository. Everything in `mobile/src/` and `apps/local-control/src/mobile/` is
-covered by tests; none of it has run on a physical device. See
+The native projects have been generated and synchronized, but the iOS project
+still requires macOS/Xcode/CocoaPods and neither platform has run on a physical
+device or been submitted. Everything in `mobile/src/` and
+`apps/local-control/src/mobile/` is covered by tests. See
 [`../MOBILE-RELEASE.md`](../MOBILE-RELEASE.md) for the remaining store gates,
 including Sign in with Apple, which is still open.
