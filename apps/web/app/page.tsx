@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { AtlasDashboard } from "./AtlasDashboard";
 
 export const metadata: Metadata = {
-  title: "Atlas — Build what you're imagining",
-  description: "Build, investigate, and operate software with a private AI workspace.",
+  title: "Atlas — The private AI operator",
+  description: "Give Atlas a software or computer mission. It builds, operates, verifies, and pauses before consequential actions.",
 };
 
 export default function Home() {
