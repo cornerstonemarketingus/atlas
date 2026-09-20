@@ -36,6 +36,10 @@ export async function createCheckoutSession(configuration, { tier, customerId, c
       // webhook event (renewal, cancellation, payment failure) still carries
       // the tier without us having to resolve it back from a Stripe price id.
       "subscription_data[metadata][tier]": tier,
+      // Carried so a subscription event that arrives before
+      // checkout.session.completed can still find the right row: without it
+      // the update matches nothing and the paying customer stays on free.
+      "subscription_data[metadata][atlas_user_id]": clientReferenceId,
     }),
   });
   if (!response.ok) throw new Error(`Stripe checkout session creation failed: ${await safeErrorDetail(response)}`);

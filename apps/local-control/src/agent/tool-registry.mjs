@@ -38,13 +38,15 @@ export function validateAgainstSchema(schema, value, path = "input") {
   if (type === "object") {
     if (value === null || typeof value !== "object" || Array.isArray(value)) throw new ToolError("INVALID_INPUT", `${path} must be an object.`);
     for (const required of schema.required ?? []) {
-      if (!(required in value)) throw new ToolError("INVALID_INPUT", `${path}.${required} is required.`);
+      // hasOwn, not `in`: `in` walks the prototype chain, so a schema
+      // requiring "toString" was satisfied by any object at all.
+      if (!Object.hasOwn(value, required)) throw new ToolError("INVALID_INPUT", `${path}.${required} is required.`);
     }
     const properties = schema.properties ?? {};
     // Unknown properties are refused rather than ignored: a silently dropped
     // argument is a tool doing something other than what was approved.
     for (const key of Object.keys(value)) {
-      if (!(key in properties)) throw new ToolError("INVALID_INPUT", `${path}.${key} is not an accepted argument.`);
+      if (!Object.hasOwn(properties, key)) throw new ToolError("INVALID_INPUT", `${path}.${key} is not an accepted argument.`);
     }
     const out = {};
     for (const [key, sub] of Object.entries(properties)) {
@@ -120,6 +122,12 @@ function requireDeclaration(definition) {
   if (problems.length > 0) {
     throw new ToolError("INCOMPLETE_DECLARATION", `Tool '${definition.name ?? "(unnamed)"}' must declare ${problems.join(", ")}.`);
   }
+  // An approval is spent once. A tool that retries would run a second time on
+  // the strength of an approval that is already gone, so the combination is
+  // refused at registration rather than guarded at call time.
+  if (definition.requiresApproval && (definition.retries ?? 0) > 0) {
+    throw new ToolError("UNSAFE_DECLARATION", `Tool '${definition.name}' requires approval, so it cannot also declare retries: an approval authorizes one execution.`);
+  }
 }
 
 export class ToolRegistry {
@@ -187,7 +195,7 @@ export class ToolRegistry {
       input = validateAgainstSchema(tool.inputSchema, parsed);
     } catch (error) {
       const message = error instanceof ToolError ? error.message : `Arguments for '${name}' are not valid JSON.`;
-      return { status: "rejected", code: "INVALID_INPUT", message };
+      return { status: "rejected", code: "INVALID_INPUT", message: this.#redact(message) };
     }
 
     const decision = this.#policy(tool.capability, tool.risk);
@@ -196,13 +204,10 @@ export class ToolRegistry {
     }
 
     const digest = actionDigest({ sessionId, tool: name, input });
-    if (tool.requiresApproval || decision === "ask") {
-      const granted = approvals ? await approvals.check(digest) : false;
-      if (!granted) {
-        return { status: "approval-required", code: "APPROVAL_REQUIRED", digest, input, capability: tool.capability, risk: tool.risk };
-      }
-    }
 
+    // Credentials first: spending a one-time approval on a call that then
+    // fails for a missing credential burns the operator's decision on
+    // something that never ran.
     const credentials = {};
     for (const reference of tool.credentials) {
       const value = this.#secrets(reference);
@@ -210,6 +215,13 @@ export class ToolRegistry {
         return { status: "rejected", code: "MISSING_CREDENTIAL", message: `This tool needs the credential '${reference}', which is not configured on this machine.`, input };
       }
       credentials[reference] = value;
+    }
+
+    if (tool.requiresApproval || decision === "ask") {
+      const granted = approvals ? await approvals.check(digest) : false;
+      if (!granted) {
+        return { status: "approval-required", code: "APPROVAL_REQUIRED", digest, input, capability: tool.capability, risk: tool.risk };
+      }
     }
 
     const attempts = tool.retries + 1;
@@ -221,8 +233,10 @@ export class ToolRegistry {
       } catch (error) {
         lastError = error;
         // An input or authorization failure will fail identically next time;
-        // only genuinely transient failures are worth another attempt.
-        if (error?.code === "INVALID_INPUT" || error?.code === "NOT_AUTHORIZED" || attempt === attempts) break;
+        // only genuinely transient failures are worth another attempt. A
+        // timeout is NOT one: the first call may still be running, so a retry
+        // runs the same side effect twice, concurrently.
+        if (["INVALID_INPUT", "NOT_AUTHORIZED", "TOOL_TIMEOUT", "TOOL_CANCELLED"].includes(error?.code) || attempt === attempts) break;
       }
     }
     return {

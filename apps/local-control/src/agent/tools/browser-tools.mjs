@@ -161,7 +161,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
       },
     },
     async execute({ input, signal }) {
-      const result = await (await need()).click({ ref: input.ref, submit: true, signal });
+      const result = await (await need()).click({ ref: input.ref, submit: true, intent: input.intent, signal });
       return result?.summary ?? `Submitted: ${input.intent}.`;
     },
   });

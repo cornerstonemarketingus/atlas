@@ -11,6 +11,10 @@ export const SESSION_STATES = ["ready", "connecting", "offline", "expired", "rev
 export function nextSessionState({ current = "connecting", event, now = Date.now(), expiresAtMs = null }) {
   switch (event?.type) {
     case "connected":
+      // Revoked and unpaired are facts about the account, not the transport.
+      // Reconnecting used to clear them and re-enable the approve buttons on
+      // a device that had been revoked.
+      if (["revoked", "unpaired"].includes(current)) return describe(current);
       return describe(expiresAtMs !== null && expiresAtMs <= now ? "expired" : "ready");
     case "network-lost":
       // Revoked and unpaired are facts about the account, not the network, so

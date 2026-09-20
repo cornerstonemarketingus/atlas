@@ -66,7 +66,15 @@ export function createDeepLinkSigner({ secret, scheme = "atlas", universalHost =
      * @param spentNonces a Set of nonces already used; approval links are
      *   one-time, so a link forwarded to someone else is already dead.
      */
-    verify(link, { deviceId, now = Date.now(), spentNonces = null } = {}) {
+    verify(link, { deviceId, now = Date.now(), spentNonces = null, expectScheme = true } = {}) {
+      // Fail closed on a missing device. `if (deviceId && ...)` skipped the
+      // binding check entirely whenever the caller had no device id — which is
+      // the shell's state on every install-then-pair run, because the
+      // credential is read once at startup, before pairing. Anyone holding a
+      // forwarded link could open it on their own phone.
+      if (typeof deviceId !== "string" || deviceId.length === 0) {
+        return { valid: false, reason: "This device is not paired yet, so Atlas cannot verify who a link was issued for." };
+      }
       let url;
       try {
         url = new URL(link);
@@ -74,9 +82,21 @@ export function createDeepLinkSigner({ secret, scheme = "atlas", universalHost =
         return { valid: false, reason: "That is not a usable link." };
       }
 
-      const target = url.protocol.startsWith("http")
+      // The signer advertises a scheme and a host; check them rather than
+      // accepting any URL whose query happens to carry a valid signature.
+      const isHttp = url.protocol === "https:";
+      if (expectScheme) {
+        if (isHttp) {
+          if (universalHost && url.hostname.toLowerCase() !== universalHost.toLowerCase()) {
+            return { valid: false, reason: "That link points at a different host than this Atlas." };
+          }
+        } else if (url.protocol !== `${scheme}:`) {
+          return { valid: false, reason: "That link is not an Atlas link." };
+        }
+      }
+      const target = isHttp
         ? url.pathname.replace(/^\/open\//u, "").replace(/\/$/u, "")
-        : url.hostname || url.pathname.replace(/^\/+/u, "");
+        : (url.hostname || url.pathname.replace(/^\/+/u, "")).toLowerCase();
       if (!LINK_TARGETS.includes(target)) return { valid: false, reason: "That link does not point at a task or an approval." };
 
       const parameters = url.searchParams;
@@ -95,7 +115,7 @@ export function createDeepLinkSigner({ secret, scheme = "atlas", universalHost =
       if (a.length !== b.length || !timingSafeEqual(a, b)) return { valid: false, reason: "That link has been altered or was not issued by this Atlas." };
 
       if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now) return { valid: false, reason: "That link has expired. Open Atlas and find the item there." };
-      if (deviceId && linkDevice !== deviceId) return { valid: false, reason: "That link was issued for a different device." };
+      if (linkDevice !== deviceId) return { valid: false, reason: "That link was issued for a different device." };
       if (spentNonces?.has(nonce)) return { valid: false, reason: "That link has already been used." };
 
       return { valid: true, reason: null, target, id, deviceId: linkDevice, nonce, expiresAtMs };

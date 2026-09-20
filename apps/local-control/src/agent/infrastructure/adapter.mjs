@@ -14,6 +14,8 @@
  */
 import { createHash } from "node:crypto";
 
+import { redactSecrets } from "../redaction.mjs";
+
 export const OPERATIONS = ["create", "update", "rotate", "delete"];
 
 export class InfrastructureError extends Error {
@@ -131,10 +133,18 @@ function safeJson(text) {
   try { return JSON.parse(text); } catch { return { raw: text.slice(0, 500) }; }
 }
 
+/**
+ * The provider's own prose, redacted.
+ *
+ * A 400 response frequently echoes the request back, and the request we just
+ * sent carried the secret. Without this, that value reached the model, the
+ * tool-execution event and the audit log — through the error path, which is
+ * exactly where nobody looks for a leak.
+ */
 function describeError(payload) {
   if (!payload) return null;
-  if (Array.isArray(payload.errors) && payload.errors.length > 0) return payload.errors.map((e) => e.message ?? JSON.stringify(e)).join("; ").slice(0, 400);
-  if (payload.error?.message) return String(payload.error.message).slice(0, 400);
-  if (payload.message) return String(payload.message).slice(0, 400);
-  return JSON.stringify(payload).slice(0, 400);
+  const raw = Array.isArray(payload.errors) && payload.errors.length > 0
+    ? payload.errors.map((entry) => entry.message ?? JSON.stringify(entry)).join("; ")
+    : payload.error?.message ?? payload.message ?? JSON.stringify(payload);
+  return redactSecrets(String(raw)).slice(0, 400);
 }

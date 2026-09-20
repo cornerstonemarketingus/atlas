@@ -23,8 +23,14 @@ export class HostedBrowserError extends Error {
 }
 
 export function createHostedBrowserService({ provider, quotas = createQuotaLedger(), now = () => Date.now(), localCompanionAvailable = () => false }) {
-  /** sessionId -> { tenantId, page, expiresAtMs } */
+  /**
+   * Keyed by tenant AND session id, so ids cannot collide across tenants at
+   * all. A single global namespace meant one tenant could discover another's
+   * session ids through `SESSION_EXISTS`, and made the sweep collision below
+   * possible in the first place.
+   */
   const sessions = new Map();
+  const keyFor = (tenantId, sessionId) => `${tenantId}\u0000${sessionId}`;
 
   /**
    * A usable tenant identity. Without this check, a caller that forgot to
@@ -41,7 +47,7 @@ export function createHostedBrowserService({ provider, quotas = createQuotaLedge
 
   function resolve(sessionId, tenantId) {
     const owner = requireTenant(tenantId);
-    const session = sessions.get(sessionId);
+    const session = sessions.get(keyFor(owner, sessionId));
     // One message for both cases, on purpose: distinguishing "not yours" from
     // "does not exist" is an enumeration oracle.
     if (!session || session.tenantId !== owner) {
@@ -61,7 +67,10 @@ export function createHostedBrowserService({ provider, quotas = createQuotaLedge
       if (typeof sessionId !== "string" || sessionId.length === 0) {
         throw new HostedBrowserError("NO_SESSION_ID", "A hosted browser session must have an identifier.");
       }
-      if (sessions.has(sessionId)) throw new HostedBrowserError("SESSION_EXISTS", "That session identifier is already in use.");
+      // Scoped to this tenant, so the answer says nothing about anybody else's
+      // sessions. Checking a global namespace made this a free existence
+      // oracle for a caller not even entitled to the feature.
+      if (sessions.has(keyFor(owner, sessionId))) throw new HostedBrowserError("SESSION_EXISTS", "You already have a session with that identifier.");
       const decision = quotas.check({ tenantId: owner, plan });
       if (!decision.allowed) {
         return {
@@ -76,10 +85,19 @@ export function createHostedBrowserService({ provider, quotas = createQuotaLedge
       }
 
       const lease = quotas.open({ tenantId: owner, plan, sessionId });
-      // The provider is handed a tenant scope and nothing else. No credential
-      // of the operator's travels in a task payload.
-      const page = await provider.createPage({ tenantScope: scopeFor(owner), signal });
-      sessions.set(sessionId, { tenantId: owner, page, expiresAtMs: lease.expiresAtMs });
+      let page;
+      try {
+        // The provider is handed a tenant scope and nothing else. No credential
+        // of the operator's travels in a task payload.
+        page = await provider.createPage({ tenantScope: scopeFor(owner), signal });
+      } catch (error) {
+        // The slot was reserved before the page existed; without this the
+        // reservation leaked permanently and the tenant was stuck at its
+        // concurrency limit until the next billing period.
+        quotas.close({ tenantId: owner, sessionId, reason: "failed-to-open" });
+        throw error;
+      }
+      sessions.set(keyFor(owner, sessionId), { tenantId: owner, page, expiresAtMs: lease.expiresAtMs });
       return { opened: true, sessionId, expiresAtMs: lease.expiresAtMs, limits: lease.limits };
     },
 
@@ -92,7 +110,7 @@ export function createHostedBrowserService({ provider, quotas = createQuotaLedge
 
     async close({ sessionId, tenantId, reason = "completed" }) {
       const session = resolve(sessionId, tenantId);
-      sessions.delete(sessionId);
+      sessions.delete(keyFor(session.tenantId, sessionId));
       await session.page.close?.().catch(() => {});
       return quotas.close({ tenantId: session.tenantId, sessionId, reason });
     },
@@ -107,13 +125,21 @@ export function createHostedBrowserService({ provider, quotas = createQuotaLedge
      * open bills the operator for time nobody is using.
      */
     async sweep({ tenantId, plan }) {
+      const owner = requireTenant(tenantId);
       const closed = [];
-      for (const sessionId of quotas.expired({ tenantId, plan })) {
-        const session = sessions.get(sessionId);
-        if (!session) continue;
-        sessions.delete(sessionId);
-        await session.page.close?.().catch(() => {});
-        closed.push(quotas.close({ tenantId, sessionId, reason: "timed-out" }));
+      for (const sessionId of quotas.expired({ tenantId: owner, plan })) {
+        // Tenant-scoped, like every other lookup. This was the one path that
+        // skipped `resolve()`, so a sweep could close another tenant's live
+        // session and be handed their billing receipt.
+        const session = sessions.get(keyFor(owner, sessionId));
+        if (session) {
+          sessions.delete(keyFor(owner, sessionId));
+          await session.page.close?.().catch(() => {});
+        }
+        // Closed in the ledger either way, so a reservation with no page
+        // behind it is released rather than leaking.
+        const receipt = quotas.close({ tenantId: owner, sessionId, reason: session ? "timed-out" : "abandoned" });
+        if (receipt) closed.push(receipt);
       }
       return closed;
     },

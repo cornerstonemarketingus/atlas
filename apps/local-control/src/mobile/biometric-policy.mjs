@@ -8,24 +8,39 @@
  * single check cannot cover an afternoon.
  */
 export const BIOMETRIC_REQUIRED_CLASSES = new Set(["sensitive_input", "submit", "transfer", "destructive"]);
-export const BIOMETRIC_REQUIRED_CAPABILITIES = new Set([
-  "communications.send",
-  "infrastructure.write",
-  "browser.submit",
-  "browser.upload",
-  "computer.high_risk",
-  "repository.execute",
+/**
+ * Low-risk capabilities that may be approved without re-authentication.
+ *
+ * An allowlist rather than a blocklist: the previous list named the risky
+ * capabilities and silently missed the ones the registry actually issues
+ * approvals under — `repository.git` (a push to a real remote),
+ * `repository.write` (which covers deletion), `code.write`, `filesystem.write`
+ * — so a passer-by with an unlocked phone could approve a repository delete.
+ * Anything not named here re-authenticates.
+ */
+export const BIOMETRIC_EXEMPT_CAPABILITIES = new Set([
+  "repository.read",
+  "filesystem.read",
+  "infrastructure.read",
+  "browser.read",
+  "communications.draft",
+  "workflow.prepare",
 ]);
 
 /** A re-authentication counts as fresh for this long, and no longer. */
 export const FRESHNESS_MS = 120_000;
 
 export function biometricDecision({ approval, lastVerifiedAtMs = null, now = Date.now(), biometricsAvailable = true }) {
-  const required = BIOMETRIC_REQUIRED_CAPABILITIES.has(approval?.capability)
+  // An approval Atlas cannot describe is not a safe approval: the old shape
+  // returned "no re-authentication needed" for an undefined approval.
+  const capability = approval?.capability;
+  const required = typeof capability !== "string"
+    || !BIOMETRIC_EXEMPT_CAPABILITIES.has(capability)
     || BIOMETRIC_REQUIRED_CLASSES.has(approval?.actionClass)
-    || approval?.risk === "critical";
+    || approval?.risk === "critical"
+    || approval?.risk === "high";
 
-  if (!required) return { required: false, satisfied: true, reason: "This approval does not need re-authentication." };
+  if (!required) return { required: false, satisfied: true, reason: "This approval only reads, so it does not need re-authentication." };
 
   if (!biometricsAvailable) {
     // Not silently downgraded to "tap to confirm": the operator is told the

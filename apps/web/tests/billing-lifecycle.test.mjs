@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { decideEvent, subscriptionChangeFor, mapStatus, entitlement, HANDLED_EVENTS } from "../app/api/billing/idempotency.mjs";
+import { decideEvent, subscriptionChangeFor, mapStatus, entitlement, streamOf, watermarkFor, HANDLED_EVENTS } from "../app/api/billing/idempotency.mjs";
 import { decideHostedSession, hostedBrowserAllowance, HOSTED_BROWSER_LIMITS } from "../app/api/billing/hosted-usage.mjs";
 import { billingSurfaceFor, priceDisplay } from "../app/api/billing/surface.mjs";
 
@@ -153,4 +153,68 @@ test("prices come from configuration and are never invented", () => {
   assert.equal(configured.complete, true);
   assert.equal(configured.notice, null);
   assert.deepEqual(configured.prices, { pro: "$20/month", team: "$60/month" });
+});
+
+
+test("a subscription event carries the user, so it can land before the checkout does", () => {
+  // Stripe does not guarantee order and customer.subscription.created
+  // routinely precedes checkout.session.completed — at which point no row
+  // carries the customer id. The update matched zero rows, the event was
+  // recorded as seen, and the paying customer stayed on free until the next
+  // subscription event a month later.
+  const change = subscriptionChangeFor({
+    id: "evt_1", type: "customer.subscription.created", created: 1_000,
+    data: { object: { id: "sub_1", customer: "cus_NEW", status: "active", metadata: { tier: "pro", atlas_user_id: "42" } } },
+  });
+  assert.equal(change.kind, "set-subscription");
+  assert.equal(change.customerId, "cus_NEW");
+  assert.equal(change.userId, 42, "the row can be found by user when the customer id is not linked yet");
+
+  // Without the metadata it degrades to NaN rather than matching a wrong row.
+  const anonymous = subscriptionChangeFor({
+    id: "evt_2", type: "customer.subscription.updated", created: 1_000,
+    data: { object: { customer: "cus_X", status: "active", metadata: { tier: "pro" } } },
+  });
+  assert.equal(Number.isInteger(anonymous.userId), false);
+});
+
+test("invoice and subscription events keep separate ordering watermarks", () => {
+  assert.equal(streamOf("customer.subscription.updated"), "subscription");
+  assert.equal(streamOf("invoice.payment_succeeded"), "invoice");
+  assert.equal(streamOf("invoice.payment_failed"), "invoice");
+  assert.equal(streamOf("checkout.session.completed"), "subscription");
+
+  // At every renewal Stripe emits both. Sharing one watermark meant that if
+  // the invoice (later timestamp) arrived first, the subscription update
+  // carrying the new tier was rejected as stale and dropped permanently.
+  const subscriptionUpdate = { id: "evt_sub", type: "customer.subscription.updated", created: 1_000, data: { object: {} } };
+  // Against the invoice stream's watermark it would have looked stale...
+  assert.equal(decideEvent({ event: subscriptionUpdate, seen: false, lastAppliedAt: 2_000 }).apply, false);
+  // ...but against its own stream's watermark it applies.
+  assert.equal(decideEvent({ event: subscriptionUpdate, seen: false, lastAppliedAt: 500 }).apply, true);
+});
+
+test("the watermark read is the one belonging to the event's own stream", () => {
+  // A row mid-renewal: the invoice for the new period has been applied, the
+  // subscription update carrying the new tier has not.
+  const row = { lastEventAt: 500, lastInvoiceEventAt: 2_000 };
+
+  assert.equal(watermarkFor("subscription", row), 500);
+  assert.equal(watermarkFor("invoice", row), 2_000);
+
+  // Reading the invoice watermark for a subscription event is what dropped
+  // the upgrade; reading its own leaves it applicable.
+  const subscriptionUpdate = { id: "evt_sub", type: "customer.subscription.updated", created: 1_000, data: { object: {} } };
+  const decision = decideEvent({
+    event: subscriptionUpdate,
+    seen: false,
+    lastAppliedAt: watermarkFor(streamOf(subscriptionUpdate.type), row),
+  });
+  assert.equal(decision.apply, true);
+
+  // No row yet, and a column never written, both read as "nothing applied"
+  // rather than as 0 — which would make every event look newer.
+  assert.equal(watermarkFor("invoice", null), null);
+  assert.equal(watermarkFor("invoice", { lastEventAt: 500 }), null);
+  assert.equal(watermarkFor("subscription", { lastInvoiceEventAt: 2_000 }), null);
 });

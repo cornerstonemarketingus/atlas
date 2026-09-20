@@ -14,6 +14,9 @@ import { describePlan, InfrastructureError } from "../infrastructure/adapter.mjs
  * no argument, plan, receipt or error.
  */
 const RESOURCES = ["dns_record", "environment_variable", "repository_secret", "repository_variable"];
+const MAX_PLANS = 100;
+/** A plan describes state that was read at the time; it goes stale. */
+const PLAN_LIFETIME_MS = 15 * 60_000;
 
 export function registerInfrastructureTools(registry, { providers, vault, plans = new Map() }) {
   const need = (name) => {
@@ -80,7 +83,18 @@ export function registerInfrastructureTools(registry, { providers, vault, plans 
     },
     async execute({ input, signal }) {
       const plan = await buildFor(input, { need, vault, signal });
-      plans.set(plan.digest, { plan, input, createdAt: Date.now() });
+      // Bounded and expiring. Planning needs no approval, the map lived for
+      // the life of the process, and a plan survived a DENIED approval — so a
+      // change the operator refused could be applied later from another
+      // session that obtained its own approval.
+      const at = Date.now();
+      for (const [key, held] of plans) {
+        if (at - held.createdAt > PLAN_LIFETIME_MS) plans.delete(key);
+      }
+      if (plans.size >= MAX_PLANS) {
+        for (const key of [...plans.keys()].slice(0, plans.size - MAX_PLANS + 1)) plans.delete(key);
+      }
+      plans.set(plan.digest, { plan, input, createdAt: at });
       return `${describePlan(plan)}\nPlan: ${plan.digest}\n\nNothing has changed. Call infrastructure.apply with this plan to make it real; the operator must approve it.`;
     },
   });
@@ -98,8 +112,20 @@ export function registerInfrastructureTools(registry, { providers, vault, plans 
       required: ["plan"],
       properties: { plan: { type: "string", minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" } },
     },
+    // The approval prompt is built from this, so it names the actual target
+    // rather than the tool's generic description. Answering "infrastructure
+    // write — apply a plan" from a phone tells the operator nothing about
+    // which zone or which key.
+    describeForApproval: ({ input }) => {
+      const record = plans.get(input.plan);
+      return record ? `Apply: ${describePlan(record.plan)}` : `Apply plan ${input.plan.slice(0, 12)} (no longer held; it will be refused).`;
+    },
     async execute({ input, signal }) {
       const record = plans.get(input.plan);
+      if (record && Date.now() - record.createdAt > PLAN_LIFETIME_MS) {
+        plans.delete(input.plan);
+        throw new InfrastructureError("PLAN_EXPIRED", "That plan is older than Atlas will apply. Re-plan the change so the preview reflects the current state.");
+      }
       // A plan that was never made here cannot be applied, which is what
       // stops an approval being obtained for a plan nobody ever previewed.
       if (!record) throw new InfrastructureError("UNKNOWN_PLAN", "That plan is not known. Run infrastructure.plan first and apply the plan it returns.");

@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { billingEvents, subscriptions } from "../../../../db/schema";
 import { stripeConfiguration, verifyWebhookSignature } from "../stripe.mjs";
-import { decideEvent, subscriptionChangeFor } from "../idempotency.mjs";
+import { decideEvent, subscriptionChangeFor, streamOf, watermarkFor } from "../idempotency.mjs";
 
 export async function POST(request: Request) {
   const configuration = stripeConfiguration();
@@ -41,16 +41,30 @@ export async function POST(request: Request) {
     currentPeriodEnd?: string | null;
   };
   const customerId = change.customerId ?? null;
+  // Resolved by customer id, and failing that by the user carried on the
+  // subscription's metadata. Stripe does not guarantee order, so a
+  // subscription event can arrive before the customer id has been linked to
+  // any row at all.
   const [existing] = customerId
     ? await db.select().from(subscriptions).where(eq(subscriptions.stripeCustomerId, customerId))
     : [];
+  const [byUser] = !existing && Number.isInteger(change.userId)
+    ? await db.select().from(subscriptions).where(eq(subscriptions.userId, Number(change.userId)))
+    : [];
+  const row = existing ?? byUser ?? null;
+  // Watermarks are per stream. Subscription and invoice events are unordered
+  // relative to each other, so comparing an invoice against the subscription
+  // watermark (or the reverse) drops a renewal's tier change as "stale".
+  const stream = streamOf(event.type);
+  const pickWatermark = watermarkFor as (stream: string, row: { lastEventAt?: number | null; lastInvoiceEventAt?: number | null } | null) => number | null;
+  const watermark = pickWatermark(stream, row);
 
   const decide = decideEvent as (input: {
     event: unknown;
     seen: boolean;
     lastAppliedAt: number | null;
   }) => { apply: boolean; reason: string | null; createdAt?: number | null };
-  const decision = decide({ event, seen: Boolean(seen), lastAppliedAt: existing?.lastEventAt ?? null });
+  const decision = decide({ event, seen: Boolean(seen), lastAppliedAt: watermark });
   if (!decision.apply) {
     // Always 200. A replay answered with an error is retried forever, and
     // Stripe eventually disables the endpoint.
@@ -68,17 +82,24 @@ export async function POST(request: Request) {
       break;
     }
     case "set-subscription": {
-      if (change.customerId) {
+      if (row) {
         await db.update(subscriptions)
           .set({
             tier: change.tier ?? "free",
             status: change.status ?? "canceled",
             stripeSubscriptionId: change.subscriptionId ?? undefined,
+            // Backfilled when the event beat the checkout completion.
+            stripeCustomerId: change.customerId ?? row.stripeCustomerId,
             currentPeriodEnd: change.currentPeriodEnd ?? null,
             lastEventAt: decision.createdAt ?? null,
             updatedAt: now,
           })
-          .where(eq(subscriptions.stripeCustomerId, change.customerId));
+          .where(eq(subscriptions.id, row.id));
+      } else {
+        // Nothing to write to. Recording the event would dedupe it forever and
+        // leave a paying customer on the free plan, so it is left unrecorded
+        // for Stripe to retry.
+        return Response.json({ received: true, applied: false, reason: "No subscription row matches this customer yet." }, { status: 409 });
       }
       break;
     }
@@ -86,10 +107,12 @@ export async function POST(request: Request) {
       // A failed payment marks past_due rather than cancelling: Stripe retries
       // for days, and cutting access on the first failure punishes a customer
       // whose card expired over a weekend.
-      if (change.customerId) {
+      if (row) {
         await db.update(subscriptions)
-          .set({ status: change.status ?? "active", lastEventAt: decision.createdAt ?? null, updatedAt: now })
-          .where(eq(subscriptions.stripeCustomerId, change.customerId));
+          .set({ status: change.status ?? "active", lastInvoiceEventAt: decision.createdAt ?? null, updatedAt: now })
+          .where(eq(subscriptions.id, row.id));
+      } else {
+        return Response.json({ received: true, applied: false, reason: "No subscription row matches this customer yet." }, { status: 409 });
       }
       break;
     }

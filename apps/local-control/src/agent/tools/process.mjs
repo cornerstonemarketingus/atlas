@@ -24,7 +24,9 @@ export function safeEnvironment(extra = {}) {
   for (const key of SAFE_ENVIRONMENT_KEYS) {
     if (process.env[key] !== undefined) base[key] = process.env[key];
   }
-  return { ...base, ...extra };
+  // Caller-supplied values cannot override the allow-listed ones — PATH in
+  // particular, where a replacement redirects every command that follows.
+  return { ...extra, ...base };
 }
 
 export function runCommand(command, args, { cwd, timeoutMs = 60_000, signal, maxBytes = 1_000_000, env = {}, input = null } = {}) {
@@ -37,6 +39,11 @@ export function runCommand(command, args, { cwd, timeoutMs = 60_000, signal, max
       // they would be visible in the process table to every user on the box.
       stdio: [input === null ? "ignore" : "pipe", "pipe", "pipe"],
       env: safeEnvironment(env),
+      // Its own process group, so a timeout can kill everything the command
+      // started. Killing only the direct child left grandchildren running and
+      // holding the inherited stdio open, which meant a 300ms timeout could
+      // take 30 seconds and leave an orphan behind.
+      detached: process.platform !== "win32",
     });
     if (input !== null) {
       child.stdin.on("error", () => {});
@@ -47,8 +54,22 @@ export function runCommand(command, args, { cwd, timeoutMs = 60_000, signal, max
     let timedOut = false;
     let cancelled = false;
 
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
-    const onAbort = () => { cancelled = true; child.kill("SIGTERM"); };
+    const killTree = (signal) => {
+      try {
+        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {
+        // Already gone.
+      }
+    };
+    const timer = setTimeout(() => { timedOut = true; killTree("SIGKILL"); }, timeoutMs);
+    const onAbort = () => {
+      cancelled = true;
+      killTree("SIGTERM");
+      // A child that ignores SIGTERM used to leave this promise unsettled
+      // forever. Escalate rather than wait.
+      setTimeout(() => killTree("SIGKILL"), 2_000).unref?.();
+    };
     signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout.on("data", (chunk) => { stdout = `${stdout}${chunk}`.slice(0, maxBytes); });
@@ -59,7 +80,9 @@ export function runCommand(command, args, { cwd, timeoutMs = 60_000, signal, max
       resolve(value);
     };
     child.on("error", (error) => settle({ ok: false, code: "SPAWN_FAILED", stdout, stderr: error.message }));
-    child.on("close", (status) => settle({
+    // `exit`, not `close`: close waits for every inherited pipe, which a
+    // backgrounded grandchild holds open indefinitely.
+    child.on("exit", (status) => settle({
       ok: status === 0 && !timedOut && !cancelled,
       status,
       timedOut,

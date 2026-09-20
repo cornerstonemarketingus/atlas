@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 
 import { createDeepLinkSigner, appleAppSiteAssociation, androidAssetLinks, DeepLinkError } from "../src/mobile/deep-links.mjs";
-import { biometricDecision, BIOMETRIC_REQUIRED_CAPABILITIES, FRESHNESS_MS } from "../src/mobile/biometric-policy.mjs";
+import { biometricDecision, BIOMETRIC_EXEMPT_CAPABILITIES, FRESHNESS_MS } from "../src/mobile/biometric-policy.mjs";
 import { createPushRegistry, buildApprovalNotification, assertPayloadIsSafe, sendApprovalPush, PushError } from "../src/mobile/push.mjs";
+import { Buffer } from "node:buffer";
 import { nextSessionState, canActOnCachedApproval } from "../src/mobile/session-state.mjs";
 import { buildCrashReport, redactDiagnostic, consentCopy } from "../src/mobile/crash-reporting.mjs";
 
@@ -82,10 +83,20 @@ test("high-risk approvals require fresh biometric re-authentication", () => {
 
   const low = biometricDecision({ approval: { capability: "repository.read", risk: "low" }, now });
   assert.equal(low.required, false);
+  for (const capability of BIOMETRIC_EXEMPT_CAPABILITIES) {
+    assert.equal(biometricDecision({ approval: { capability }, now }).required, false, `${capability} only reads`);
+  }
 
-  for (const capability of BIOMETRIC_REQUIRED_CAPABILITIES) {
+  // An allowlist, so a capability nobody thought about re-authenticates. The
+  // previous blocklist missed the ones the registry actually issues approvals
+  // under, so a passer-by could approve a git push or a repository delete.
+  for (const capability of ["communications.send", "infrastructure.write", "browser.submit", "browser.upload", "computer.high_risk", "repository.execute", "repository.git", "repository.write", "code.write", "filesystem.write", "some.capability.added.next.year"]) {
     assert.equal(biometricDecision({ approval: { capability }, now }).required, true, `${capability} must re-authenticate`);
   }
+  // And an approval Atlas cannot describe is never waved through.
+  assert.equal(biometricDecision({ approval: undefined, now }).required, true);
+  assert.equal(biometricDecision({ approval: {}, now }).required, true);
+  assert.equal(biometricDecision({ approval: { capability: "repository.read", risk: "high" }, now }).required, true);
   assert.equal(biometricDecision({ approval: { capability: "anything", risk: "critical" }, now }).required, true);
   assert.equal(biometricDecision({ approval: { actionClass: "destructive" }, now }).required, true);
 
@@ -211,4 +222,87 @@ test("crash reports need consent and are redacted either way", () => {
   assert.equal(redactDiagnostic("plain text"), "plain text");
   assert.equal(consentCopy().defaultState, "unasked", "consent is off until it is given");
   assert.match(consentCopy().body, /never include your conversations/u);
+});
+
+
+test("a link cannot be verified by a device that is not paired yet", () => {
+  const signer = createDeepLinkSigner({ secret: SECRET, universalHost: "atlas.example.invalid" });
+  const link = signer.create({ target: "approval", id: randomUUID(), deviceId: "phone-1" });
+
+  // `if (deviceId && ...)` skipped the binding check whenever the verifier had
+  // no device id — which is the shell's state on every install-then-pair run,
+  // because the credential is read once at startup. Anyone holding a forwarded
+  // link could open it on their own phone.
+  for (const missing of [undefined, null, ""]) {
+    const result = signer.verify(link.appLink, { deviceId: missing });
+    assert.equal(result.valid, false, `deviceId=${JSON.stringify(missing)} must not verify`);
+    assert.match(result.reason, /not paired yet/u);
+  }
+  assert.equal(signer.verify(link.appLink).valid, false, "no options at all is also refused");
+  assert.equal(signer.verify(link.appLink, { deviceId: "phone-1" }).valid, true);
+});
+
+test("a link must arrive on this Atlas's own scheme and host", () => {
+  const signer = createDeepLinkSigner({ secret: SECRET, universalHost: "atlas.example.invalid" });
+  const link = signer.create({ target: "approval", id: randomUUID(), deviceId: "phone-1" });
+  const query = link.appLink.split("?")[1];
+
+  // The signature is valid in all of these; the destination is not ours.
+  assert.equal(signer.verify(`nonsense://approval?${query}`, { deviceId: "phone-1" }).valid, false);
+  assert.equal(signer.verify(`https://evil.example/open/approval?${query}`, { deviceId: "phone-1" }).valid, false);
+  assert.equal(signer.verify(`https://atlas.example.invalid/open/approval?${query}`, { deviceId: "phone-1" }).valid, true);
+});
+
+test("a push payload cannot carry a digest in any casing or encoding", () => {
+  const digest = "a".repeat(64);
+  assert.throws(() => assertPayloadIsSafe({ data: { d: digest } }), PushError);
+  assert.throws(() => assertPayloadIsSafe({ data: { d: digest.toUpperCase() } }), PushError, "uppercase hex must be caught");
+  assert.throws(() => assertPayloadIsSafe({ data: { d: "AbCdEf0123456789".repeat(4) } }), PushError, "mixed case must be caught");
+  assert.throws(() => assertPayloadIsSafe({ data: { d: Buffer.alloc(32).toString("base64url") + "xxxxx" } }), PushError, "base64url must be caught");
+
+  // A real notification still passes.
+  const signer = createDeepLinkSigner({ secret: SECRET });
+  const link = signer.create({ target: "approval", id: randomUUID(), deviceId: "phone-1" });
+  assert.equal(assertPayloadIsSafe(buildApprovalNotification({ approval: { capability: "browser.submit" }, link })), true);
+});
+
+test("the push registry keeps no raw token in the record it stores", () => {
+  const store = new Map();
+  const registry = createPushRegistry({ store });
+  registry.register({ deviceId: "phone-1", platform: "apns", token: "SUPER-SECRET-PUSH-TOKEN-0123456789" });
+
+  // The docstring promised storage by digest and then kept the plaintext
+  // beside it, so a leaked store handed out a fleet's worth of tokens.
+  assert.equal(JSON.stringify([...store.values()]).includes("SUPER-SECRET-PUSH-TOKEN-0123456789"), false);
+  assert.equal(JSON.stringify(registry.list()).includes("SUPER-SECRET"), false);
+  // The transport can still reach it.
+  assert.equal(registry.for("phone-1").token, "SUPER-SECRET-PUSH-TOKEN-0123456789");
+  registry.unregister("phone-1");
+  assert.equal(registry.for("phone-1"), null);
+});
+
+test("reconnecting does not clear a revoked device", () => {
+  // Revoked is a fact about the account, not the transport. Reconnecting used
+  // to show "Connected" and re-enable the approve buttons.
+  for (const state of ["revoked", "unpaired"]) {
+    const next = nextSessionState({ current: state, event: { type: "connected" } });
+    assert.equal(next.state, state);
+    assert.equal(next.canApprove, false);
+  }
+  assert.equal(nextSessionState({ current: "connecting", event: { type: "connected" } }).state, "ready");
+});
+
+test("a Windows home path is actually redacted from a crash report", () => {
+  // The pattern was over-escaped: `\\\\` in a regex literal is two literal
+  // backslashes, so every Windows crash report shipped the account name under
+  // a consent dialog promising file paths were removed.
+  const report = buildCrashReport({
+    consent: "granted",
+    error: Object.assign(new Error("boom"), { stack: "at C:\\Users\\alice.smith\\atlas\\runner.js:12" }),
+    appVersion: "1.0.0",
+    platform: "windows",
+  });
+  assert.equal(report.report.stack.includes("alice.smith"), false);
+  assert.match(report.report.stack, /\[home\]/u);
+  assert.match(redactDiagnostic("at /home/alice/atlas/x.js"), /\[home\]/u);
 });

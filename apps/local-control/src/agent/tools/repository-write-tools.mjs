@@ -100,7 +100,10 @@ export function registerRepositoryWriteTools(registry, { writeFileImpl = writeFi
   registry.register({
     name: "repository.diff",
     description: "Show the uncommitted changes in the repository, including new files.",
-    capability: "repository.read",
+    // Declared as a write because it stages: `git add` mutates the index, and
+    // a tool that changes state under a read capability is a policy of
+    // "repository.read: allow" quietly granting more than it says.
+    capability: "repository.write",
     risk: "low",
     timeoutMs: 20_000,
     maxOutputCharacters: 60_000,
@@ -112,11 +115,15 @@ export function registerRepositoryWriteTools(registry, { writeFileImpl = writeFi
     },
     async execute({ input, context, signal }) {
       const root = context.repository;
-      confineToRepository(root, input.path);
+      // The CONFINED path is the pathspec. Passing the raw input let git
+      // pathspec magic through — `:(exclude)sub` reached git and let the agent
+      // scope the operator's own review surface.
+      const target = confineToRepository(root, input.path);
+      const pathspec = relative(root, target) || ".";
       // Staged into the worktree's own index first, so files the agent
       // created appear in the diff rather than silently missing from it.
-      await gitImpl(root, ["add", "-A", "--", input.path], { signal });
-      const diff = await gitImpl(root, ["diff", "--cached", "--no-ext-diff", "--", input.path], { signal });
+      await gitImpl(root, ["add", "-A", "--", pathspec], { signal });
+      const diff = await gitImpl(root, ["diff", "--cached", "--no-ext-diff", "--", pathspec], { signal });
       return diff.trim() || "No uncommitted changes.";
     },
   });

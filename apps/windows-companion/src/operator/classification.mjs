@@ -104,12 +104,23 @@ const SENSITIVE_WORDS = new RegExp(
  * on an account the operator owns, a good way to get them locked out.
  */
 const HUMAN_REQUIRED = [
-  { pattern: /\b(captcha|recaptcha|hcaptcha|cloudflare turnstile|are you a robot|verify you are human|press and hold)\b/iu, reason: "a CAPTCHA or anti-bot challenge" },
-  { pattern: /\b(two-factor|2fa|one-time (?:code|password)|otp|authenticator app|verification code sent|security code we sent)\b/iu, reason: "a two-factor authentication prompt" },
-  { pattern: /\b(sign in with|log in to continue|session expired|please re-?authenticate|enter your password to continue)\b/iu, reason: "a sign-in or re-authentication prompt" },
-  { pattern: /\b(identity verification|upload (?:your )?(?:id|passport|driver'?s licen[cs]e)|liveness check|selfie)\b/iu, reason: "an identity verification step" },
-  { pattern: /\b(payment (?:method|details) required|enter card details|3-?d secure)\b/iu, reason: "a payment step" },
+  { pattern: /\b(captcha|recaptcha|hcaptcha|turnstile|are you a robot|verify (?:you are|you're) human|press and hold|i'?m not a robot|complete the challenge)\b|(私はロボットではありません|我不是机器人|로봇이 아닙니다)|\b(kein roboter|no soy un robot|pas un robot|non sono un robot|я не робот)\b/iu, reason: "a CAPTCHA or anti-bot challenge" },
+  { pattern: /\b(two-factor|2fa|mfa|one-time (?:code|password)|otp|authenticator app|verification code|security code we sent|code we texted|enter the code)\b|(認証コード|验证码|인증번호)|\b(bestätigungscode|c[oó]digo de verificaci[oó]n|code de v[eé]rification|код подтверждения)\b/iu, reason: "a two-factor authentication prompt" },
+  { pattern: /\b(sign in with|log in to continue|session expired|please re-?authenticate|enter your password to continue|confirm it'?s you|verify it'?s you)\b|\b(anmelden|iniciar sesi[oó]n|se connecter|войти)\b/iu, reason: "a sign-in or re-authentication prompt" },
+  { pattern: /\b(identity verification|verify your identity|upload (?:your )?(?:id|passport|driver'?s licen[cs]e)|liveness check|selfie)\b/iu, reason: "an identity verification step" },
+  { pattern: /\b(payment (?:method|details) required|enter card details|3-?d secure|card verification)\b/iu, reason: "a payment step" },
 ];
+
+/**
+ * Extra wall patterns for an operator's own language or applications. Like the
+ * consequential list, this can only ever ADD a reason to stop.
+ */
+let additionalWallPatterns = [];
+
+export function setAdditionalWallPatterns(patterns) {
+  additionalWallPatterns = (patterns ?? []).map((pattern) => (pattern instanceof RegExp ? pattern : new RegExp(String(pattern), "iu")));
+  return additionalWallPatterns.length;
+}
 
 /** Action types whose `text` is a value being typed, not a visible label. */
 /**
@@ -295,8 +306,17 @@ function decide(actionClass, reason, label) {
  * Looks for a wall that only a person can get past. Checked against the
  * accessibility snapshot, so it sees the text the page actually exposes.
  */
-export function detectHumanRequired(snapshotText) {
-  const text = String(snapshotText ?? "");
+/**
+ * @param elementNames the accessible names on the page. Checked as well as the
+ *   body text, because a CAPTCHA's control is often the only thing that says
+ *   so — the button is literally called "Press and hold".
+ * @param readable whether the page could be read at all. An empty snapshot is
+ *   not a safe page, it is an unknown one: `ariaSnapshot` timing out silently
+ *   turned this whole check off while the session kept working.
+ */
+export function detectHumanRequired(snapshotText, { elementNames = [], readable = true } = {}) {
+  const text = normalizeLabel([String(snapshotText ?? ""), ...elementNames].join(" "), { foldConfusables: false });
+
   for (const { pattern, reason } of HUMAN_REQUIRED) {
     const match = pattern.exec(text);
     if (match) {
@@ -307,6 +327,16 @@ export function detectHumanRequired(snapshotText) {
       };
     }
   }
+  for (const pattern of additionalWallPatterns) {
+    if (pattern.test(text)) return { blocked: true, reason: "a pattern this machine is configured to stop at", evidence: null };
+  }
+  if (!readable) {
+    return {
+      blocked: true,
+      reason: "a page Atlas could not read at all",
+      evidence: "The accessibility tree was empty or unavailable, so Atlas cannot tell whether this page is showing a CAPTCHA, a sign-in, or a payment step.",
+    };
+  }
   return { blocked: false, reason: null, evidence: null };
 }
 
@@ -315,13 +345,27 @@ export function detectHumanRequired(snapshotText) {
  * action, the element, and the site — the three things needed to tell
  * "submit this job application" from "submit this bank transfer".
  */
-export function describeForApproval({ classification, url, intent }) {
+export function describeForApproval({ classification, url, intent, element = null, detail = null }) {
   const site = safeHost(url);
-  return [
-    `${classification.actionClass.replaceAll("_", " ")}: ${intent || classification.label || "(no description)"}`,
+  // The element leads. The model's intent is a claim about what it is doing,
+  // and showing it first meant the sentence a human consented to was written
+  // by the thing asking for consent — while the classifier acted on something
+  // else entirely.
+  const target = element?.name || classification.label || "(no readable label)";
+  const lines = [
+    `${classification.actionClass.replaceAll("_", " ")}: ${oneLine(target)}`,
+    element?.role ? `Element: ${oneLine(element.role)}` : null,
     `On: ${site}`,
-    classification.reason,
-  ].join("\n");
+  ];
+  if (detail) lines.push(oneLine(detail));
+  lines.push(classification.reason);
+  if (intent) lines.push(`Atlas says it is doing this to: ${oneLine(intent)}`);
+  return lines.filter(Boolean).join("\n");
+}
+
+/** One field, one line: a newline in a page-supplied name cannot forge a row. */
+function oneLine(value) {
+  return String(value ?? "").replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, " ").replace(/\s+/gu, " ").trim().slice(0, 300);
 }
 
 function safeHost(url) {

@@ -24,20 +24,28 @@ export class PushError extends Error {
  * push token is a bearer capability for sending to that phone, and a leaked
  * database should not hand out a fleet's worth of them.
  */
-export function createPushRegistry({ store = new Map() } = {}) {
+export function createPushRegistry({ store = new Map(), tokens = new Map() } = {}) {
   return {
     register({ deviceId, platform, token }) {
       if (!PUSH_PLATFORMS.includes(platform)) throw new PushError("BAD_PLATFORM", `Unknown push platform: ${platform}.`);
       if (typeof token !== "string" || token.length < 16) throw new PushError("BAD_TOKEN", "A push token is required.");
-      store.set(deviceId, { deviceId, platform, tokenDigest: digest(token), token, registeredAt: new Date().toISOString() });
+      // The docstring above promised registrations are stored by digest so a
+      // leaked database cannot hand out a fleet's worth of push tokens — and
+      // then kept the plaintext beside it. The raw token lives only in the
+      // separate map the transport reads, which callers can back with a vault.
+      store.set(deviceId, { deviceId, platform, tokenDigest: digest(token), registeredAt: new Date().toISOString() });
+      tokens.set(deviceId, token);
       return { deviceId, platform, registered: true };
     },
-    unregister(deviceId) { return store.delete(deviceId); },
-    /** Safe to serialize: no raw token. */
+    unregister(deviceId) { tokens.delete(deviceId); return store.delete(deviceId); },
+    /** Safe to serialize: no raw token anywhere in the record. */
     list() {
-      return [...store.values()].map(({ token, ...rest }) => rest);
+      return [...store.values()];
     },
-    for(deviceId) { return store.get(deviceId) ?? null; },
+    for(deviceId) {
+      const record = store.get(deviceId);
+      return record ? { ...record, token: tokens.get(deviceId) ?? null } : null;
+    },
   };
 }
 
@@ -61,13 +69,27 @@ export function buildApprovalNotification({ approval, link, badge = 1 }) {
   };
 }
 
-/** Rejects a payload that carries anything it should not, before it is sent. */
+/**
+ * Rejects a payload that carries anything it should not, before it is sent.
+ *
+ * `data.link` is excluded from the scan on purpose: it is a signed,
+ * device-bound, expiring capability that authorizes *opening* an approval and
+ * nothing more, and it necessarily contains a long random-looking signature.
+ * Everything else in the payload is checked.
+ */
 export function assertPayloadIsSafe(notification) {
-  const serialized = JSON.stringify(notification);
+  const { data = {}, ...rest } = notification ?? {};
+  const { link, ...scannedData } = data;
+  const serialized = JSON.stringify({ ...rest, data: scannedData });
   const leaks = [
     [/\b(?:sk|gsk|ghp|github_pat|xox[abps])[-_][A-Za-z0-9_-]{8,}/u, "a credential"],
     [/"(?:token|secret|password|apiKey|api_key)"\s*:/iu, "a secret field"],
-    [/[0-9a-f]{64}/u, "an action digest"],
+    // Case-insensitive, and base64url too: anything that renders a digest
+    // with toUpperCase() or as base64 walked straight past this onto a lock
+    // screen — and the signer in deep-links.mjs emits base64url itself.
+    [/[0-9a-fA-F]{64}/u, "an action digest"],
+    // Long opaque strings anywhere other than the signed link.
+    [/\b[A-Za-z0-9_-]{43,}\b/u, "something that looks like a token or digest"],
   ];
   for (const [pattern, what] of leaks) {
     if (pattern.test(serialized)) throw new PushError("UNSAFE_PAYLOAD", `A push payload must not carry ${what}.`);

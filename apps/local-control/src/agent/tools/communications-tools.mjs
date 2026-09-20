@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
  * agent can ask permission to exceed is not a limit.
  */
 const MAX_RECIPIENTS = 5;
+const MAX_DRAFTS = 200;
 
 export class CommunicationsToolError extends Error {
   constructor(code, message) {
@@ -49,6 +50,11 @@ export function registerCommunicationsTools(registry, { drafts = new Map(), send
     async execute({ input, context }) {
       if (input.recipients.length === 0) throw new CommunicationsToolError("NO_RECIPIENTS", "A draft needs at least one recipient.");
       const digest = messageDigest(input);
+      // Bounded: drafting needs no approval, so an unbounded map is memory
+      // exhaustion from a tool declared harmless. Oldest out first.
+      if (drafts.size >= MAX_DRAFTS) {
+        for (const key of [...drafts.keys()].slice(0, drafts.size - MAX_DRAFTS + 1)) drafts.delete(key);
+      }
       drafts.set(digest, { ...input, sessionId: context?.sessionId ?? null, createdAt: new Date().toISOString() });
       return [
         `Draft ready (${digest.slice(0, 12)}).`,

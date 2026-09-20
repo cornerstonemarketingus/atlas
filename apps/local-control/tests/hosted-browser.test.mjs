@@ -242,11 +242,76 @@ test("a hosted session cannot be opened or claimed without a tenant identity", a
   assert.ok(service.page({ sessionId: "s2", tenantId: "7" }));
   assert.throws(() => service.page({ sessionId: "s2", tenantId: "8" }), (error) => error.code === "NO_SUCH_SESSION");
 
-  // Reusing a live session identifier must not silently replace it.
-  await assert.rejects(
-    () => service.open({ tenantId: "tenant-b", plan: "pro", sessionId: "s1" }),
-    (error) => error.code === "SESSION_EXISTS",
-    "a second tenant cannot take over an in-use session identifier",
+  // Session ids are namespaced per tenant, so two tenants can each have their
+  // own "s1" without colliding — and neither learns anything about the other.
+  // A single global namespace made `SESSION_EXISTS` a free existence oracle.
+  await service.open({ tenantId: "tenant-b", plan: "pro", sessionId: "s1" });
+  assert.notEqual(
+    service.page({ sessionId: "s1", tenantId: "tenant-a" }).tenantScope,
+    service.page({ sessionId: "s1", tenantId: "tenant-b" }).tenantScope,
+    "each tenant's s1 is its own session",
   );
-  assert.equal(service.page({ sessionId: "s1", tenantId: "tenant-a" }).tenantScope, provider.scopes[0], "the original owner still holds it");
+
+  // Reusing your OWN live identifier is still refused.
+  await assert.rejects(
+    () => service.open({ tenantId: "tenant-a", plan: "pro", sessionId: "s1" }),
+    (error) => error.code === "SESSION_EXISTS",
+  );
+});
+
+test("a sweep cannot reach another tenant's session, and releases a failed reservation", async () => {
+  const provider = fakeProvider();
+  let clock = Date.parse("2026-06-01T00:00:00Z");
+  const quotas = createQuotaLedger({ now: () => clock });
+  const service = createHostedBrowserService({ provider, quotas, now: () => clock });
+
+  // An open that fails after the quota slot was reserved used to leak the slot
+  // forever, and left a ledger entry with no session behind it.
+  const failing = createHostedBrowserService({
+    provider: { createPage: async () => { throw new Error("provider is down"); } },
+    quotas,
+    now: () => clock,
+  });
+  await assert.rejects(() => failing.open({ tenantId: "attacker", plan: "pro", sessionId: "batch-7" }));
+  assert.equal(quotas.usage("attacker").activeSessions, 0, "the reservation was released");
+  // So the tenant is not stuck at its concurrency limit.
+  assert.equal(quotas.check({ tenantId: "attacker", plan: "pro" }).allowed, true);
+
+  // The victim's session is untouchable from the attacker's sweep.
+  await service.open({ tenantId: "victim", plan: "pro", sessionId: "batch-7" });
+  clock += 60 * 60_000;
+  const swept = await service.sweep({ tenantId: "attacker", plan: "pro" });
+  assert.deepEqual(swept, [], "the attacker's sweep found nothing of theirs");
+  assert.equal(provider.closed.length, 0, "the victim's container was not closed by someone else's sweep");
+  assert.equal(quotas.usage("victim").activeSessions, 1, "and the victim's session is still theirs");
+  // The victim's own sweep is the one that closes it, and the receipt is
+  // filed under the victim — it used to be handed to whoever swept.
+  const own = await service.sweep({ tenantId: "victim", plan: "pro" });
+  assert.equal(own.length, 1);
+  assert.equal(own[0].tenantId, "victim");
+  assert.equal(provider.closed.length, 1);
+});
+
+test("a month rollover resets the allowance without losing running sessions", async () => {
+  let clock = Date.parse("2026-01-31T23:55:00Z");
+  const provider = fakeProvider();
+  const quotas = createQuotaLedger({ now: () => clock });
+  const service = createHostedBrowserService({ provider, quotas, now: () => clock });
+
+  await service.open({ tenantId: "t1", plan: "pro", sessionId: "A" });
+  assert.equal(quotas.check({ tenantId: "t1", plan: "pro" }).code, "CONCURRENCY_REACHED");
+
+  // Over the boundary. Replacing the whole tenant record used to drop every
+  // open session: concurrency stopped counting them, the sweeper could never
+  // close them (so containers ran forever), and closing one produced no
+  // receipt, so the minutes were never billed.
+  clock = Date.parse("2026-02-01T00:01:00Z");
+  assert.equal(quotas.usage("t1").minutesUsed, 0, "the allowance reset");
+  assert.equal(quotas.usage("t1").activeSessions, 1, "the running session survived");
+  assert.equal(quotas.check({ tenantId: "t1", plan: "pro" }).code, "CONCURRENCY_REACHED", "it still counts against concurrency");
+
+  const receipt = await service.close({ sessionId: "A", tenantId: "t1" });
+  assert.ok(receipt, "closing it still produces a billing receipt");
+  assert.ok(receipt.minutes >= 6, `the minutes either side of midnight are charged, got ${receipt.minutes}`);
+  assert.equal(provider.closed.length, 1);
 });

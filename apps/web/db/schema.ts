@@ -47,6 +47,13 @@ export const subscriptions = sqliteTable("subscriptions", {
    * after a newer one would downgrade a customer who just upgraded.
    */
   lastEventAt: integer("last_event_at"),
+  /**
+   * A separate watermark for the invoice stream. Subscription events and
+   * invoice events are unordered relative to each other, so sharing one
+   * column made a renewal's invoice reject the subscription update carrying
+   * the new tier.
+   */
+  lastInvoiceEventAt: integer("last_invoice_event_at"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({

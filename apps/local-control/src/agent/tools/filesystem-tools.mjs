@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 
 import { confineRealPath } from "./path-confinement.mjs";
 
@@ -108,10 +108,16 @@ export function registerFilesystemTools(registry, { roots, maxFileBytes = 4 * 10
       const entries = [];
       let total = 0;
       for await (const file of walkFiles(source)) {
-        const content = await readFile(file);
-        total += content.length;
+        // Sized BEFORE reading. Checking after the read meant a single 200 MiB
+        // file was fully buffered before a 1 MiB cap rejected it.
+        const info = await stat(file).catch(() => null);
+        total += info?.size ?? 0;
         if (total > maxArchiveBytes) throw new FilesystemToolError("TOO_LARGE", `The archive would exceed ${maxArchiveBytes} bytes.`);
-        entries.push({ name: relative(source, file) || file.split(sep).pop(), content });
+        const content = await readFile(file);
+        // `relative()` returns "" when the source IS the file, and the old
+        // fallback referenced an unimported `sep`, so archiving a single file
+        // always threw a ReferenceError into the model's context.
+        entries.push({ name: relative(source, file) || basename(file), content });
       }
       if (entries.length === 0) throw new FilesystemToolError("EMPTY", `'${input.source}' contains no files to archive.`);
       const archive = createZipArchive(entries);

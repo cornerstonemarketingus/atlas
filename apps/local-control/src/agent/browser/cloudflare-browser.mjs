@@ -35,13 +35,19 @@ export function createCloudflareBrowserProvider({ accountId, token, fetchImpl = 
 
         async snapshot() {
           const result = (await act("/snapshot", { url: current }))?.result ?? {};
-          lastElements = new Map((result.elements ?? []).map((element, index) => [`e${index + 1}`, element]));
+          // Truncated once, here, so the name the operator is shown and the
+          // name the approval digest covers are the same string the adapter
+          // holds — they used to diverge for anything over 200 characters.
+          lastElements = new Map((result.elements ?? []).map((element, index) => [
+            `e${index + 1}`,
+            { ...element, name: String(element.name ?? "").slice(0, 200) },
+          ]));
           return {
             text: String(result.text ?? "").slice(0, 200_000),
             elements: [...lastElements.entries()].map(([ref, element]) => ({
               ref,
               role: element.role ?? "element",
-              name: String(element.name ?? "").slice(0, 200),
+              name: element.name,
               value: element.value ?? null,
             })),
           };
@@ -76,8 +82,22 @@ export function createCloudflareBrowserProvider({ accountId, token, fetchImpl = 
   };
 }
 
+/**
+ * The provider's own handle for an element, and nothing else.
+ *
+ * This used to fall back to `element.name` — the accessible name, i.e. text
+ * the page writes. A hostile page could render a decoy whose name is
+ * `button[type=submit]`, have the operator approve *that* element, and have
+ * the provider execute a CSS selector against a different node entirely. The
+ * local adapter documents this exact invariant ("references are assigned by
+ * us, not taken from the page"); the hosted path laundered them back through
+ * page content.
+ */
 function selectorFor(ref, elements) {
   const element = elements.get(ref);
   if (!element) throw new InfrastructureError("STALE_REFERENCE", `Reference '${ref}' is not in the current snapshot.`);
-  return element.selector ?? element.name;
+  if (!element.selector) {
+    throw new InfrastructureError("NO_HANDLE", `The hosted browser did not return a usable handle for '${ref}'. Atlas will not target an element by its page-supplied text.`);
+  }
+  return element.selector;
 }

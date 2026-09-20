@@ -12,7 +12,10 @@ const REDACTIONS = [
   [/\b(?:sk|gsk|ghp|github_pat|xox[abps])[-_][A-Za-z0-9_-]{8,}/gu, "[credential]"],
   [/\bBearer\s+[A-Za-z0-9._-]+/giu, "Bearer [redacted]"],
   [/\b[\w.%+-]+@[\w.-]+\.[A-Za-z]{2,}\b/gu, "[email]"],
-  [/(?:\/Users\/|\/home\/|C:\\\\Users\\\\)[^\s/\\:"']+/gu, "[home]"],
+  // `\\\\` in a regex literal is two LITERAL backslashes, so this only ever
+  // matched `C:\\Users\\` and every Windows crash report shipped the
+  // operator's account name — under a consent dialog promising paths removed.
+  [/(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)[^\s/\\:"']+/gu, "[home]"],
   [/\b(?:\d[ -]?){13,19}\b/gu, "[card]"],
   [/\b(?:\d{1,3}\.){3}\d{1,3}\b/gu, "[ip]"],
 ];

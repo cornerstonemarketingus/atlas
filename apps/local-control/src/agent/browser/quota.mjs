@@ -29,10 +29,21 @@ export function createQuotaLedger({ now = () => Date.now(), plans = PLANS } = {}
   function record(tenantId) {
     const existing = tenants.get(tenantId);
     const period = periodOf(now());
-    if (!existing || existing.periodStart !== period) {
+    if (!existing) {
       const fresh = { minutesUsed: 0, periodStart: period, active: new Map(), receipts: [] };
       tenants.set(tenantId, fresh);
       return fresh;
+    }
+    if (existing.periodStart !== period) {
+      // A new period resets the ALLOWANCE, not the running sessions. Replacing
+      // the whole record dropped every open session from the ledger: they
+      // stopped counting against concurrency, could never be swept (so their
+      // containers ran forever), and closing one produced no receipt, so the
+      // minutes were never billed. Keeping `active` across the boundary means
+      // a session that spans midnight is charged in the period it ends in.
+      existing.minutesUsed = 0;
+      existing.periodStart = period;
+      existing.receipts = [];
     }
     return existing;
   }

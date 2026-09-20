@@ -25,6 +25,35 @@ export const HANDLED_EVENTS = new Set([
  * @param lastAppliedAt epoch seconds of the newest event applied to this
  *   subscription, or null when none has been
  */
+/**
+ * Watermarks are kept per stream.
+ *
+ * Subscription events and invoice events are two unordered streams sharing one
+ * `last_event_at` column. At every renewal Stripe emits both; if the invoice
+ * arrived first its timestamp became the watermark and the subscription
+ * update — carrying the new tier and period end — was rejected as stale and
+ * dropped permanently. An upgrade paid for at renewal simply did not apply.
+ */
+export function streamOf(type) {
+  return String(type ?? "").startsWith("invoice.") ? "invoice" : "subscription";
+}
+
+/**
+ * The watermark an event must be compared against, given its stream.
+ *
+ * Picking the column here rather than at the call site is deliberate: reading
+ * the wrong one is silent — no error, no failing write, just a renewal's tier
+ * change quietly rejected as stale.
+ *
+ * @param stream "invoice" or "subscription", from {@link streamOf}
+ * @param row the subscription row, or null when none matches yet
+ */
+export function watermarkFor(stream, row) {
+  if (!row) return null;
+  const value = stream === "invoice" ? row.lastInvoiceEventAt : row.lastEventAt;
+  return value ?? null;
+}
+
 export function decideEvent({ event, seen, lastAppliedAt = null }) {
   const type = String(event?.type ?? "");
   const id = String(event?.id ?? "");
@@ -69,6 +98,12 @@ export function subscriptionChangeFor(event) {
       return {
         kind: "set-subscription",
         customerId: str(object.customer),
+        // Stripe does not guarantee order, and `customer.subscription.created`
+        // routinely arrives before `checkout.session.completed` — at which
+        // point no row carries this customer id yet. Carrying the user through
+        // lets the write find the row either way, instead of updating zero
+        // rows and being permanently deduped while the customer stays on free.
+        userId: Number(object.metadata?.atlas_user_id ?? NaN),
         tier,
         status: mapStatus(object.status),
         subscriptionId: str(object.id),

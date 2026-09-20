@@ -18,6 +18,7 @@ import { discoverModelServers } from "./agent/models/discovery.mjs";
 import { recommendModels } from "./agent/models/recommend.mjs";
 import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/router.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
+import { redactSecrets } from "./agent/redaction.mjs";
 import { registerRepositoryTools } from "./agent/tools/repository-tools.mjs";
 import { registerRepositoryWriteTools } from "./agent/tools/repository-write-tools.mjs";
 import { registerFilesystemTools } from "./agent/tools/filesystem-tools.mjs";
@@ -122,6 +123,10 @@ function buildToolRegistry() {
     // Secrets are read from the process environment for now, by reference
     // only. No tool receives a value it did not declare a need for.
     secrets: (reference) => process.env[reference] ?? null,
+    // The last boundary before repository content becomes model context. The
+    // registry supports this and defaulted to identity, so until now a search
+    // for "sk_live" returned live keys verbatim.
+    redact: redactSecrets,
   });
   registerRepositoryTools(registry);
   registerRepositoryWriteTools(registry);
