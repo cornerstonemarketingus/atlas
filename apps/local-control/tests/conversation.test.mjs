@@ -277,9 +277,9 @@ test("repository tools stay inside the repository", async (t) => {
   registerRepositoryTools(registry);
   const call = (name, args) => registry.invoke({ name, rawArguments: JSON.stringify(args), sessionId: "s", context: { repository: directory } });
 
-  assert.match((await call("repository.list", { depth: 2 })).output, /src\/app\.js/u);
+  assert.match((await call("repository.list", { depth: 2 })).output.replaceAll("\\", "/"), /src\/app\.js/u);
   assert.match((await call("repository.read", { path: "README.md" })).output, /1\t# Title/u);
-  assert.match((await call("repository.search", { query: "marker" })).output, /src\/app\.js:1/u);
+  assert.match((await call("repository.search", { query: "marker" })).output.replaceAll("\\", "/"), /src\/app\.js:1/u);
   assert.equal((await call("repository.search", { query: "(", regex: true })).code, "INVALID_INPUT");
 
   for (const escape of ["../../../etc/passwd", "/etc/passwd", "src/../../outside"]) {

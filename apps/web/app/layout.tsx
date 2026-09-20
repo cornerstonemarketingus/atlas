@@ -5,6 +5,7 @@ import "./workspace.css";
 import "./workspace-navigation.css";
 import "./operator.css";
 import "./operator-controls.css";
+import "./marketing.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,8 +18,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Atlas — Build what you're imagining",
-  description: "Build, investigate, and operate software with a private AI workspace.",
+  title: "Atlas — The private AI operator",
+  description: "Build software, operate your computer, and verify every consequential action with one private AI operator.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
@@ -28,6 +29,11 @@ export const metadata: Metadata = {
   themeColor: "#171a17",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Atlas" },
   formatDetection: { telephone: false },
+  openGraph: {
+    title: "Atlas — The private AI operator",
+    description: "One persistent operator for software and computer work. Local-first, evidence-driven, and under your control.",
+    type: "website",
+  },
 };
 
 export default function RootLayout({
