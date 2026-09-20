@@ -630,3 +630,144 @@ contract as evidence the features exist.
 
 - **10 — billing.** See §2 above. Prices stay in configuration until the
   owner supplies final amounts.
+
+
+---
+
+## 7. Open findings from the parallel review — **unfixed**
+
+Six review agents were run against the finished work. Four reported before the
+account hit its session limit; **two slices were never reviewed at all** (the
+runtime/conversation loop, and models/release tooling). The three CRITICALs
+below the line marked *fixed* are done and pushed; everything else here is
+**open**, reproduced by the reviewer, and ordered by severity.
+
+Nothing in this section is theoretical — each was demonstrated with a working
+script against the real modules.
+
+### Fixed already (commit `b9acf84`)
+Vault-read primitive via `repository_variable`; DNS name re-parsed out of plan
+prose; plan-text line forgery; DNS re-read guards; proxied carry-forward;
+classifier gaps (select/check/press, non-English credentials, Cyrillic, homoglyphs,
+action URLs).
+
+### CRITICAL — open
+
+- **`.git` is writable, which is arbitrary shell execution.** `repository.write`
+  confines to the repository root, and that includes `.git/`. Writing a
+  `core.fsmonitor` entry into `.git/config` gives shell execution the next time
+  any git-running tool runs — and `repository.diff`, `.branch` and `.commit` are
+  all no-approval. Two calls, zero approvals, `uid=0`. Defeats the no-shell rule,
+  the fixed test-command list, and the `repository.execute` gate in one move.
+  *Fix: refuse any confined path whose first segment is `.git`, in every
+  write/rename/delete tool, and in `filesystem.write` when a repo is under the
+  workspace.*
+- **`accessibleName` prefers `aria-label` over visible text**
+  (`playwright-page.mjs:100`). The classifier is a pure function of that string,
+  and `aria-label` is the one attribute with no relationship to what a control
+  does and is trivially set by the page. `<button aria-label="Read more"
+  onclick="sendMoney()">Send money</button>` classifies as an ordinary click.
+  *Fix: classify against the union of aria-label, innerText, value, title and
+  name, taking the most severe class any of them yields.*
+- **Element references silently rebind across pages** (`session.mjs:70`). Refs
+  are regenerated `e1, e2, e3…` on every snapshot and `resolve()` checks only
+  presence, so after a navigation `e2` is a different element. Demonstrated:
+  a password typed into a public bio field, zero approvals. `refresh()` is
+  called by `extract()` and `recordEvidence()` too, so this happens without any
+  navigation. The existing "stale reference" scenario passes only because its
+  two fixture pages use disjoint ref names.
+  *Fix: refs carry a snapshot generation plus a role/name/url fingerprint;
+  `resolve()` refuses a ref from a superseded snapshot.*
+
+### HIGH — open
+
+- **Password values are read into the snapshot** (`playwright-page.mjs:65`).
+  `inputValue()` is called with no type filter, so `<input type=password>`
+  returns plaintext into the string handed to the model — and the persistent
+  browser profile means the browser's own autofill leaks values Atlas never
+  typed.
+- **Dangling-symlink write escape** (`path-confinement.mjs:48`). `realpathSync`
+  throws ENOENT for a link whose target does not exist, so the link is treated
+  as a missing file and the write follows it. Creates `~/.ssh/authorized_keys`.
+  The doc comment claims to close exactly this case.
+- **`browser.upload` still uses lexical confinement** (`browser-tools.mjs:186`)
+  — the pre-fix bug, in the one tool that hands a file to a remote page. Also
+  passes the raw relative path to the session rather than the checked one.
+- **The retry loop re-executes approval-bound tools** (`tool-registry.mjs:215`).
+  Approval is consumed once, outside the loop; `TOOL_TIMEOUT` is retryable.
+  Demonstrated: one approval, three deliveries of the same message.
+- **The redactor is never wired up** (`main.mjs:120`). `ToolRegistry` supports
+  one and defaults to identity, so tool output and error messages are bounded
+  but unredacted. `repository.search` for `sk_live` returns live keys; `eachFile`
+  does not skip dotfiles, so `.env*` is searchable and readable.
+- **`describeError` splices provider text into errors** (`adapter.mjs:100`) and
+  the request body it just sent holds the secret; a provider that echoes the
+  request on a 400 reflects a credential into the model, the event and the audit
+  log.
+- **Hosted `sweep()` skips the tenant check** (`hosted-browser.mjs:109`) — the
+  only path that bypasses `resolve()`. One tenant can close another's live
+  session and be handed the billing receipt.
+- **A month rollover orphans active hosted sessions** (`quota.mjs:29`). `active`
+  is dropped on period change: double concurrency, unbilled minutes, and
+  containers the sweeper can never close. On `team`, 5 extra sessions and 150
+  unbilled minutes every month, repeatable.
+- **The hosted adapter derives selectors from page content**
+  (`cloudflare-browser.mjs:83`) — `element.selector ?? element.name`. A decoy
+  control named `button[type=submit]` makes the approved element and the
+  executed element differ.
+- **Deep-link device binding is off when the verifier's `deviceId` is falsy**
+  (`deep-links.mjs:98`), which is the shell's first-run state — `bridge.mjs`
+  reads the credential once, before pairing.
+- **Subscription events arriving before `checkout.session.completed` update
+  zero rows and are then permanently deduped** (`webhook/route.ts:61`). The
+  customer pays and stays on `free`, silently, until the next subscription event.
+- **Unconditional success claims** (`session.mjs:183,192,201`): `type`, `upload`
+  and `download` ignore the evidence they just collected; only `click` consults
+  it. `download` reports the *requested* path when the adapter returned nothing.
+- **`changed` is a raw text diff** (`session.mjs:117`): a page with a clock
+  reports every action as successful; an SPA that posts via `fetch` reports
+  every action as failed.
+- **The approval prompt leads with the model's own intent**
+  (`classification.mjs:199`), and `browser-tools.mjs:164` drops `intent`
+  entirely — so the sentence a human reads is either model-written or the
+  page-controlled accessible name from the CRITICAL above.
+- **Wall detection reads only `lastSnapshot.text`**, which is `""` whenever
+  `ariaSnapshot` times out — disabling CAPTCHA/2FA detection while the session
+  stays operational. Element names are never checked, the patterns are
+  English-only, and real CAPTCHA widgets live in cross-origin iframes that
+  `ariaSnapshot` does not descend into.
+
+### MEDIUM and LOW — open
+
+Recorded in full in the review transcripts. Summary: shared `last_event_at`
+watermark across two Stripe streams; rate limiter is quadratic past 10k buckets
+(206s of CPU for 200k clients) and per-IP keying makes the 6-digit pairing code
+brute-forceable on a LAN; hosted `SESSION_EXISTS` is a cross-tenant existence
+oracle; a failed `createPage` leaks a concurrency slot permanently; spent-nonce
+set is per-launch so approval links replay after an app restart; push digest
+guard is lowercase-hex only; the push registry stores the raw token despite its
+docstring; biometric policy omits `repository.git`, `repository.write` and
+`code.write`; the Windows home-path redaction is over-escaped and never matches,
+so every Windows crash report ships the operator's account name; `plans` Map and
+drafts Map are both unbounded and process-lifetime; `repository.diff` mutates the
+git index under a `repository.read` capability and passes an unconfined pathspec;
+`filesystem.archive` of a single file crashes on an unimported `sep`; the archive
+byte cap is checked after the whole file is in memory; `runCommand`'s timeout
+does not bound the call and orphans grandchildren; `key in properties` walks the
+prototype chain; an approval is spent before credentials are resolved;
+`redactValue` discloses exact length plus last two characters.
+
+**Operational note, not a defect:** GitHub really does return a 32-byte libsodium
+key, so `applySecret` on GitHub can never succeed — and it fails *after* the
+approval is consumed and the plan deleted.
+
+### Not reviewed at all
+
+- The persistent runtime and conversation loop (`runtime.mjs`,
+  `session-store.mjs`, `run-control.mjs`, `conversation-executor.mjs`,
+  `model-client.mjs`, `compaction.mjs`, `routes.mjs`, `server.mjs`).
+- Models and release tooling (`models/*`, `release/*`, `scripts/release/*`).
+
+Both agents died on the account limit before producing anything. The
+subscribe-replay race, lease handover, and the 3.6 characters-per-token
+assumption behind the no-silent-truncation guarantee are all still unexamined.
