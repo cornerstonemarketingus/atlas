@@ -59,14 +59,28 @@ export async function createPlaywrightPage({
       const elements = [];
       for (const [index, locator] of locators.slice(0, 250).entries()) {
         const ref = `e${index + 1}`;
-        const [role, name, value] = await Promise.all([
+        const [role, name, rawValue, secretField] = await Promise.all([
           locator.evaluate((node) => node.getAttribute("role") ?? node.tagName.toLowerCase()).catch(() => "element"),
           accessibleName(locator),
           locator.inputValue().catch(() => null),
+          // Decided from the DOM, not from the field's label: `inputValue()`
+          // on a password input returns plaintext, and the persistent profile
+          // means the browser's own autofill puts credentials there that Atlas
+          // never typed. That value used to go straight into the snapshot the
+          // model reads.
+          locator.evaluate((node) => {
+            const type = (node.getAttribute("type") ?? "").toLowerCase();
+            const autocomplete = (node.getAttribute("autocomplete") ?? "").toLowerCase();
+            return type === "password" || /password|one-time-code|cc-number|cc-csc/u.test(autocomplete);
+          }).catch(() => true),
         ]);
-        if (!name) continue;
+        const value = secretField ? "(hidden)" : rawValue;
+        if (!name.display) continue;
         handles.set(ref, locator);
-        elements.push({ ref, role, name: name.slice(0, 200), value });
+        // `name` is what the operator sees; `names` is every string the element
+        // offers. Classification runs over the union, so a benign aria-label
+        // cannot mask dangerous visible text.
+        elements.push({ ref, role, name: name.display.slice(0, 200), names: name.candidates, value });
       }
       return { text, elements };
     },
@@ -97,17 +111,34 @@ export async function createPlaywrightPage({
     return locator;
   }
 
+  /**
+   * Every name an element offers, not the first one that answers.
+   *
+   * `aria-label` used to be read first, and it is the one attribute with no
+   * relationship to what a control does and nothing stopping a hostile page
+   * from setting it: `<button aria-label="Read more" onclick="sendMoney()">
+   * Send money</button>` classified as an ordinary click. The classifier is a
+   * pure function of this string, so ranking an attacker-chosen field above
+   * the visible text inverted the trust order.
+   *
+   * Visible text leads for display, because that is what the operator sees on
+   * screen; the union is what gets classified.
+   */
   async function accessibleName(locator) {
+    const candidates = [];
     for (const read of [
-      () => locator.getAttribute("aria-label"),
       () => locator.evaluate((node) => node.innerText?.trim().slice(0, 200) ?? ""),
+      () => locator.getAttribute("aria-label"),
+      () => locator.getAttribute("title"),
       () => locator.getAttribute("placeholder"),
+      () => locator.getAttribute("value"),
       () => locator.getAttribute("name"),
     ]) {
       const value = await read().catch(() => null);
-      if (value) return String(value).replace(/\s+/gu, " ").trim();
+      const cleaned = value ? String(value).replace(/\s+/gu, " ").trim() : "";
+      if (cleaned && !candidates.includes(cleaned)) candidates.push(cleaned);
     }
-    return "";
+    return { display: candidates[0] ?? "", candidates };
   }
 }
 

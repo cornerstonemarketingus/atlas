@@ -1,5 +1,16 @@
-import { realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
+
+/**
+ * Path segments no tool may touch, whatever its root.
+ *
+ * `.git` is not just data — it is executable configuration. A `core.fsmonitor`
+ * entry in `.git/config` is run through a shell by the next git command, so
+ * writing inside `.git` is arbitrary code execution that bypasses the no-shell
+ * rule, the fixed list of approved test commands, and the approval gate on
+ * running anything. Reading it is bad too: remote URLs there can carry tokens.
+ */
+export const FORBIDDEN_SEGMENTS = new Set([".git"]);
 
 /**
  * Confines a path to a root, through symlinks.
@@ -25,7 +36,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
  * attacker is the model's own path choices rather than a local hostile
  * process, resolving the link is the boundary that matters.
  */
-export function confineRealPath(root, candidate, makeError) {
+export function confineRealPath(root, candidate, makeError, { forbidSegments = false } = {}) {
   if (!root) throw makeError("NO_ROOT", "No root directory is configured for this operation.");
 
   // The root itself may be a symlink — a profile directory under a symlinked
@@ -38,6 +49,18 @@ export function confineRealPath(root, candidate, makeError) {
   if (real !== realRoot && !real.startsWith(realRoot + sep)) {
     throw makeError("PATH_ESCAPES_ROOT", `'${candidate}' resolves outside the permitted directory.`);
   }
+
+  // Checked on the RESOLVED path, so a symlink named innocuously cannot lead
+  // into `.git`, and checked at every depth to cover submodules and nested
+  // repositories.
+  if (forbidSegments) {
+    const relative = real === realRoot ? "" : real.slice(realRoot.length + 1);
+    for (const segment of relative.split(sep)) {
+      if (FORBIDDEN_SEGMENTS.has(segment.toLowerCase())) {
+        throw makeError("FORBIDDEN_PATH", `'${candidate}' is inside a repository's ${segment} directory, which Atlas never reads or writes: its configuration is executed by git.`);
+      }
+    }
+  }
   return real;
 }
 
@@ -48,16 +71,36 @@ export function confineRealPath(root, candidate, makeError) {
 function realpathOf(target) {
   const missing = [];
   let current = target;
-  for (;;) {
+  // Bounded, so a symlink cycle cannot spin here.
+  for (let hops = 0; hops < 64; hops += 1) {
     try {
       const resolved = realpathSync(current);
       return missing.length === 0 ? resolved : join(resolved, ...missing);
     } catch {
+      // A DANGLING symlink: realpath throws ENOENT because the link's target
+      // is missing, not because the link is. Treating that as "a file that
+      // does not exist yet" let a write follow the link straight out of the
+      // root — which is precisely the case the comment above claims to close,
+      // and it did not.
+      const link = readlinkIfSymbolic(current);
+      if (link !== null) {
+        current = resolve(dirname(current), link);
+        continue;
+      }
       const parent = dirname(current);
       // Reached the filesystem root without finding anything that exists.
       if (parent === current) return target;
       missing.unshift(basename(current));
       current = parent;
     }
+  }
+  return target;
+}
+
+function readlinkIfSymbolic(path) {
+  try {
+    return lstatSync(path).isSymbolicLink() ? readlinkSync(path) : null;
+  } catch {
+    return null;
   }
 }

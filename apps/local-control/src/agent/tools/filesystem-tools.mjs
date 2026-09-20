@@ -29,7 +29,7 @@ export function confineToRoots(roots, candidate) {
   let lastError = null;
   for (const root of roots) {
     try {
-      return confineRealPath(root, candidate, (code, message) => new FilesystemToolError(code, message));
+      return confineRealPath(root, candidate, (code, message) => new FilesystemToolError(code, message), { forbidSegments: true });
     } catch (error) {
       lastError = error;
     }

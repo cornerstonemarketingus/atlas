@@ -651,9 +651,9 @@ prose; plan-text line forgery; DNS re-read guards; proxied carry-forward;
 classifier gaps (select/check/press, non-English credentials, Cyrillic, homoglyphs,
 action URLs).
 
-### CRITICAL — open
+### CRITICAL — all fixed (commit `b9acf84` and follow-up)
 
-- **`.git` is writable, which is arbitrary shell execution.** `repository.write`
+- **`.git` is writable, which is arbitrary shell execution.** FIXED. `repository.write`
   confines to the repository root, and that includes `.git/`. Writing a
   `core.fsmonitor` entry into `.git/config` gives shell execution the next time
   any git-running tool runs — and `repository.diff`, `.branch` and `.commit` are
@@ -662,14 +662,14 @@ action URLs).
   *Fix: refuse any confined path whose first segment is `.git`, in every
   write/rename/delete tool, and in `filesystem.write` when a repo is under the
   workspace.*
-- **`accessibleName` prefers `aria-label` over visible text**
+- **`accessibleName` prefers `aria-label` over visible text** — FIXED.
   (`playwright-page.mjs:100`). The classifier is a pure function of that string,
   and `aria-label` is the one attribute with no relationship to what a control
   does and is trivially set by the page. `<button aria-label="Read more"
   onclick="sendMoney()">Send money</button>` classifies as an ordinary click.
   *Fix: classify against the union of aria-label, innerText, value, title and
   name, taking the most severe class any of them yields.*
-- **Element references silently rebind across pages** (`session.mjs:70`). Refs
+- **Element references silently rebind across pages** — FIXED. (`session.mjs:70`). Refs
   are regenerated `e1, e2, e3…` on every snapshot and `resolve()` checks only
   presence, so after a navigation `e2` is a different element. Demonstrated:
   a password typed into a public bio field, zero approvals. `refresh()` is
@@ -679,14 +679,17 @@ action URLs).
   *Fix: refs carry a snapshot generation plus a role/name/url fingerprint;
   `resolve()` refuses a ref from a superseded snapshot.*
 
-### HIGH — open
+Also fixed since: the snapshot now delimits Atlas's element table from
+untrusted page text, so a page cannot forge element rows.
 
-- **Password values are read into the snapshot** (`playwright-page.mjs:65`).
+### HIGH — open (the five above are done; these are not)
+
+- **Password values are read into the snapshot** — FIXED. (`playwright-page.mjs:65`).
   `inputValue()` is called with no type filter, so `<input type=password>`
   returns plaintext into the string handed to the model — and the persistent
   browser profile means the browser's own autofill leaks values Atlas never
   typed.
-- **Dangling-symlink write escape** (`path-confinement.mjs:48`). `realpathSync`
+- **Dangling-symlink write escape** — FIXED. (`path-confinement.mjs:48`). `realpathSync`
   throws ENOENT for a link whose target does not exist, so the link is treated
   as a missing file and the write follows it. Creates `~/.ssh/authorized_keys`.
   The doc comment claims to close exactly this case.

@@ -482,3 +482,59 @@ test("a root that is itself a symlink still accepts its own contents", async (t)
   registerRepositoryTools(registry);
   assert.equal((await call(registry, approvals, { repository: linked })("repository.read", { path: "file.txt" })).status, "completed");
 });
+
+
+test("no tool can read or write inside .git", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-gitdir-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  git(directory, "init", "--quiet", ".");
+  git(directory, "config", "user.email", "atlas@example.invalid");
+  git(directory, "config", "user.name", "Atlas");
+  await writeFile(join(directory, "f.txt"), "x", "utf8");
+  git(directory, "add", "f.txt");
+  git(directory, "commit", "--quiet", "-m", "init");
+
+  const { registry, approvals } = registryFor();
+  registerRepositoryTools(registry);
+  registerRepositoryWriteTools(registry);
+  const run = call(registry, approvals, { repository: directory });
+
+  // `.git/config` is executable configuration: a core.fsmonitor entry is run
+  // through a shell by the next git command. Writing there was arbitrary code
+  // execution that bypassed the no-shell rule, the fixed test-command list and
+  // the approval gate — two calls, no approvals.
+  const written = await run("repository.write", { path: ".git/config", content: "[core]\n\tfsmonitor = \"touch /tmp/atlas-pwned; false\"\n" });
+  assert.equal(written.status, "failed");
+  assert.equal(written.code, "FORBIDDEN_PATH");
+
+  // Reading is refused too: remote URLs in there can carry tokens.
+  assert.equal((await run("repository.read", { path: ".git/config" })).code, "FORBIDDEN_PATH");
+  assert.equal((await run("repository.list", { path: ".git" })).code, "FORBIDDEN_PATH");
+  assert.equal((await run("repository.rename", { from: "f.txt", to: ".git/hooks/pre-commit" })).code, "FORBIDDEN_PATH");
+  // At any depth, for submodules and nested repositories.
+  assert.equal((await run("repository.write", { path: "nested/.git/config", content: "x" })).code, "FORBIDDEN_PATH");
+
+  // Ordinary paths are unaffected, and git itself still works.
+  assert.equal((await run("repository.write", { path: "ok.txt", content: "fine" })).status, "completed");
+  assert.equal((await run("repository.diff", {})).status, "completed");
+});
+
+test("a dangling symlink cannot be used to write outside the root", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-dangling-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const workspace = join(directory, "ws");
+  const outside = join(directory, "outside");
+  await mkdir(workspace, { recursive: true });
+  await mkdir(outside, { recursive: true });
+  // The target does not exist, so realpath throws ENOENT — which used to be
+  // read as "a file that does not exist yet" rather than "a symlink".
+  await symlink(join(outside, "authorized_keys"), join(workspace, "notes.txt"));
+
+  const { registry, approvals } = registryFor();
+  registerFilesystemTools(registry, { roots: [workspace] });
+  const result = await call(registry, approvals, {})("filesystem.write", { path: "notes.txt", content: "ssh-rsa ATTACKER\n" });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.code, "PATH_OUTSIDE_WORKSPACE");
+  assert.equal(existsSync(join(outside, "authorized_keys")), false, "nothing was written through the link");
+});

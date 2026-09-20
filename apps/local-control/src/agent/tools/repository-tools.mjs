@@ -25,10 +25,16 @@ export function confineToRepository(root, candidate) {
   if (!root) throw new RepositoryToolError("NO_REPOSITORY", "This session has no repository attached.");
   // Symlink-aware: a lexical resolve would let a link inside the repository
   // read or write outside it.
-  return confineRealPath(root, candidate, (code, message) => new RepositoryToolError(
-    code === "PATH_ESCAPES_ROOT" ? "PATH_ESCAPES_REPOSITORY" : code,
-    code === "PATH_ESCAPES_ROOT" ? `'${candidate}' is outside the repository.` : message,
-  ));
+  return confineRealPath(
+    root,
+    candidate,
+    (code, message) => new RepositoryToolError(
+      code === "PATH_ESCAPES_ROOT" ? "PATH_ESCAPES_REPOSITORY" : code,
+      code === "PATH_ESCAPES_ROOT" ? `'${candidate}' is outside the repository.` : message,
+    ),
+    // `.git` holds configuration git executes; no tool path may reach it.
+    { forbidSegments: true },
+  );
 }
 
 export function registerRepositoryTools(registry, { readFileImpl = readFile, readdirImpl = readdir, statImpl = stat } = {}) {
