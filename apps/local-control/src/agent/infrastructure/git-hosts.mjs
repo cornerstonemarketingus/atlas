@@ -1,6 +1,6 @@
 import { createPublicKey, publicEncrypt, constants } from "node:crypto";
 
-import { buildPlan, createApiClient, InfrastructureError, redactValue } from "./adapter.mjs";
+import { buildPlan, CONFIRMATION, createApiClient, InfrastructureError, redactValue } from "./adapter.mjs";
 
 /**
  * GitHub, GitLab and Forgejo behind one shape: repository settings,
@@ -79,6 +79,12 @@ export function createGitHostAdapter({ host, token, repository, baseUrl = null, 
         notes: [
           "Neither this host nor Atlas can read a secret back after it is written.",
           existing ? "Rotating replaces the current value; the old one is not recoverable." : "This creates a new secret.",
+          // Said at plan time rather than at apply time. Learning that this
+          // cannot work only after approving it wastes the approval and
+          // reads as a failure rather than as a known limitation.
+          ...(host === "github"
+            ? ["GitHub seals secrets with a libsodium key, which needs a native dependency Atlas does not carry, so this will be refused. Set this secret in the repository's own settings."]
+            : []),
         ],
       });
     },
@@ -98,8 +104,10 @@ export function createGitHostAdapter({ host, token, repository, baseUrl = null, 
           signal,
         });
       }
+      // A secret's value is never readable, so this establishes that a
+      // secret of that name is now there and nothing about what it holds.
       const after = (await api.listSecrets({ signal })).some((secret) => secret.name === name);
-      return { verified: after, observed: { name, present: after } };
+      return { verified: after, confirmation: after ? CONFIRMATION.PRESENCE : null, observed: { name, present: after } };
     },
 
     async planVariable({ name, value, signal }) {
@@ -127,8 +135,13 @@ export function createGitHostAdapter({ host, token, repository, baseUrl = null, 
         if (existing) await call(`/repos/${repository}/actions/variables/${encodeURIComponent(name)}`, { method: "PATCH", body: { name, value }, signal });
         else await call(`/repos/${repository}/actions/variables`, { method: "POST", body: { name, value }, signal });
       }
+      // Presence only, and deliberately so. A variable is not secret, but
+      // listVariables drops values on purpose: a value that came back here
+      // would make "write a variable, then read the listing" a way to pull
+      // anything out of the vault through a tool result. Confirming the write
+      // is not worth handing over that primitive.
       const after = (await api.listVariables({ signal })).some((variable) => variable.name === name);
-      return { verified: after, observed: { name, present: after } };
+      return { verified: after, confirmation: after ? CONFIRMATION.PRESENCE : null, observed: { name, present: after } };
     },
   };
 
@@ -138,10 +151,19 @@ export function createGitHostAdapter({ host, token, repository, baseUrl = null, 
 /**
  * Seals a secret to a repository public key.
  *
- * GitHub documents libsodium sealed boxes; that needs a native dependency
- * this package will not take. RSA-OAEP through Node's own crypto is used when
- * the host supplies an RSA key, and a non-RSA key is refused loudly rather
- * than silently sent in the clear.
+ * Worth stating rather than leaving to be discovered: GitHub's secrets API
+ * hands out a libsodium sealed-box key and only that, so on GitHub this
+ * refuses every time. Sealing a box needs a native dependency, and this
+ * package carries none on purpose -- that is a deliberate trade, not an
+ * oversight, and writing a GitHub Actions secret through Atlas is simply not
+ * available until it is revisited.
+ *
+ * The RSA-OAEP branch is not dead code: a self-hosted host or an enterprise
+ * deployment that publishes an RSA key is sealed correctly here. What it is
+ * not is a path GitHub.com will ever take.
+ *
+ * Either way a key this cannot seal is refused loudly, never sent in the
+ * clear.
  */
 export function sealSecret(value, base64Key) {
   const der = Buffer.from(base64Key, "base64");

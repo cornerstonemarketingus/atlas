@@ -634,7 +634,7 @@ contract as evidence the features exist.
 
 ---
 
-## 7. Open findings from the parallel review — **unfixed**
+## 7. Findings from the parallel review — **all closed except the unreviewed slices**
 
 Six review agents were run against the finished work. Four reported before the
 account hit its session limit; **two slices were never reviewed at all** (the
@@ -740,29 +740,73 @@ untrusted page text, so a page cannot forge element rows.
   English-only, and real CAPTCHA widgets live in cross-origin iframes that
   `ariaSnapshot` does not descend into.
 
-### MEDIUM and LOW — open
+### MEDIUM and LOW — all closed
 
-Recorded in full in the review transcripts. Summary: shared `last_event_at`
-watermark across two Stripe streams; rate limiter is quadratic past 10k buckets
-(206s of CPU for 200k clients) and per-IP keying makes the 6-digit pairing code
-brute-forceable on a LAN; hosted `SESSION_EXISTS` is a cross-tenant existence
-oracle; a failed `createPage` leaks a concurrency slot permanently; spent-nonce
-set is per-launch so approval links replay after an app restart; push digest
-guard is lowercase-hex only; the push registry stores the raw token despite its
-docstring; biometric policy omits `repository.git`, `repository.write` and
-`code.write`; the Windows home-path redaction is over-escaped and never matches,
-so every Windows crash report ships the operator's account name; `plans` Map and
-drafts Map are both unbounded and process-lifetime; `repository.diff` mutates the
-git index under a `repository.read` capability and passes an unconfined pathspec;
-`filesystem.archive` of a single file crashes on an unimported `sep`; the archive
-byte cap is checked after the whole file is in memory; `runCommand`'s timeout
-does not bound the call and orphans grandchildren; `key in properties` walks the
-prototype chain; an approval is spent before credentials are resolved;
-`redactValue` discloses exact length plus last two characters.
+Every item below was reproduced against the real modules before it was
+changed, and each carries a test that fails without the change.
 
-**Operational note, not a defect:** GitHub really does return a 32-byte libsodium
-key, so `applySecret` on GitHub can never succeed — and it fails *after* the
-approval is consumed and the plan deleted.
+Fixed earlier in this pass: rate limiter quadratic past 10k buckets and per-IP
+keying of the pairing code; hosted `SESSION_EXISTS` cross-tenant existence
+oracle; failed `createPage` leaking a concurrency slot; push digest guard
+lowercase-hex only; push registry storing the raw token; biometric policy
+omitting `repository.git`, `repository.write` and `code.write`; over-escaped
+Windows home-path redaction; unbounded `plans` and drafts Maps; `repository.diff`
+mutating the git index and passing an unconfined pathspec; `filesystem.archive`
+crashing on an unimported `sep`; archive byte cap checked after the read;
+`runCommand` orphaning grandchildren; `key in properties` walking the prototype
+chain; approval spent before credentials are resolved.
+
+Fixed in this batch:
+
+- **Shared `last_event_at` watermark across two Stripe streams.** Invoice and
+  subscription events are unordered relative to each other. At renewal Stripe
+  emits both, and whichever arrived first set the watermark — so an invoice
+  landing first made the subscription update carrying the new tier look stale,
+  and the upgrade was dropped permanently. The watermark is now read per
+  stream, through `watermarkFor`, against `last_invoice_event_at` (migration
+  `0012`) or `last_event_at`.
+- **Spent-nonce set was per-launch**, so an approval link replayed after an app
+  restart — a forwarded notification opened cleanly, still signed and still
+  inside its expiry. Replaced by `mobile/src/spent-nonces.mjs`, a ledger
+  persisted to preference storage, pruned at each link's own expiry and bounded
+  at 512 entries. The handler now *requires* one and refuses links until it has
+  been read back, because an unloaded ledger looks empty.
+- **`redactValue` disclosed exact length plus the last two characters.** Plans
+  are persisted, shown and audited, so that accumulated a length and a known
+  suffix for every secret Atlas ever wrote. Now presence only: `(a value is
+  set)` or `(empty)`. `verifyToken` returns Cloudflare's own token id instead
+  of anything derived from the token.
+- **"Verified" meant only that a name exists.** A secret cannot be read back,
+  so the read-back could not tell a correct write from one that stored the
+  wrong value under the right name — and it said "Applied and verified" either
+  way. Adapters now report `confirmation` as `value`, `presence` or `absence`,
+  and the tool output states which was established.
+- **The keychain took the secret as a command argument**, visible in the
+  process list to anything running as that user. It now goes through
+  `security -i` on standard input, confirmed by reading the credential back,
+  with the argument form kept as a fallback so a macOS that refuses
+  interactive mode still stores the credential rather than silently not.
+- **Vault files were written in place.** `writeFileSync` truncates first, so an
+  interrupted write left an unparseable file and no copy of the old
+  credentials. Writes now go to a 0600 temporary file and are renamed over the
+  target; the containing directory is created, which also fixes a first run
+  before `~/.atlas` exists.
+- **The DPAPI vault defaulted to a relative path**, so credentials followed the
+  working directory and presented as an empty vault when the daemon was started
+  from elsewhere. Now `defaultVaultPath`, absolute and under `~/.atlas`. The
+  DPAPI blob also moved from the PowerShell command text to standard input.
+- **Archive limits failed as `ERR_OUT_OF_RANGE`** naming a byte offset. Entry
+  names over 65535 bytes, more than 65535 entries and sizes over 4 GiB are now
+  refused with the entry and the limit named.
+- **`x-atlas-client` was described as a control it is not.** It is set by the
+  client; the docstring claimed the decision could not be made by the client.
+  Corrected to say what it is for — store-review compliance, not an access
+  boundary — and `billingSurfaceFor` is now actually enforced at the checkout
+  endpoint, which previously used it nowhere at all.
+
+**Operational note, not a defect:** GitHub really does return a 32-byte
+libsodium key, so `applySecret` on GitHub can never succeed. It now says so in
+the plan's notes, before the approval is spent, rather than failing afterwards.
 
 ### Not reviewed at all
 

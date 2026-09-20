@@ -9,8 +9,8 @@ import { registerInfrastructureTools } from "../src/agent/tools/infrastructure-t
 import { createCloudflareAdapter } from "../src/agent/infrastructure/cloudflare.mjs";
 import { createVercelAdapter } from "../src/agent/infrastructure/vercel.mjs";
 import { createGitHostAdapter, sealSecret } from "../src/agent/infrastructure/git-hosts.mjs";
-import { buildPlan, describePlan, planDigest, redactValue, oneLine, InfrastructureError } from "../src/agent/infrastructure/adapter.mjs";
-import { assertCredentialName, createCredentialVault, detectVaultBackend, VaultError } from "../src/agent/credential-vault.mjs";
+import { buildPlan, describeConfirmation, describePlan, planDigest, redactValue, oneLine, InfrastructureError } from "../src/agent/infrastructure/adapter.mjs";
+import { assertCredentialName, createCredentialVault, defaultVaultPath, detectVaultBackend, VaultError } from "../src/agent/credential-vault.mjs";
 
 const TOKEN = "cf-token-never-logged";
 
@@ -92,7 +92,17 @@ test("a plan names the exact target, redacts values, and states reversibility", 
   assert.match(described, /Reversible: no/u);
   assert.match(described, /A redeploy is needed/u);
   assert.equal(described.includes("sk_live_abcdef123456"), false, "the secret is not in the preview");
-  assert.match(redactValue("sk_live_abcdef123456"), /\(20 characters, ending 56\)/u);
+
+  // Presence, and nothing derived from the value. A plan is persisted and
+  // audited, so an exact length and a known suffix would accumulate across
+  // every secret this agent writes — which is what narrows a search and
+  // confirms a guess.
+  const redacted = redactValue("sk_live_abcdef123456");
+  assert.equal(redacted, "(a value is set)");
+  assert.equal(/\d/u.test(redacted), false, "the length is not disclosed");
+  assert.equal(redacted.includes("56"), false, "no part of the value is disclosed");
+  assert.equal(redactValue(""), "(empty)", "set and cleared stay distinguishable");
+  assert.equal(redactValue(null), null);
 
   // Digests cover the target and the new state, so a different record differs.
   const other = buildPlan({ ...plan, target: "OTHER_KEY on prj_1 (production)" });
@@ -161,14 +171,19 @@ test("Vercel writes an environment variable without ever reading one back", asyn
   const plan = await vercel.planEnvironmentVariable({ projectId: "prj_1", key: "STRIPE_SECRET_KEY", value: "sk_live_0123456789", target: ["production"] });
   assert.equal(plan.operation, "create");
   assert.equal(plan.reversible, false);
-  assert.match(plan.after.value, /\(18 characters, ending 89\)/u);
+  assert.equal(plan.after.value, "(a value is set)");
   assert.equal(JSON.stringify(plan).includes("sk_live_0123456789"), false);
   assert.ok(plan.notes.some((note) => /redeploy/u.test(note)));
 
   const applied = await vercel.applyEnvironmentVariable({ projectId: "prj_1", plan, value: "sk_live_0123456789" });
   assert.equal(applied.verified, true);
   assert.equal(applied.observed.key, "STRIPE_SECRET_KEY");
-  // Verification is by metadata; Atlas never asks Vercel to decrypt.
+  // The read-back is metadata, so it is reported as presence and not as a
+  // confirmed value: it would look exactly like this if the wrong value had
+  // been stored under the right name.
+  assert.equal(applied.confirmation, "presence");
+  assert.match(describeConfirmation(applied.confirmation), /cannot be read back/u);
+  // Atlas never asks Vercel to decrypt.
   assert.equal(requests.every((request) => request.decrypt !== "true"), true);
 
   const listed = await vercel.listEnvironmentVariables({ projectId: "prj_1" });
@@ -246,7 +261,10 @@ test("plan and apply are separate, approval-bound, and verified", async (t) => {
   approved.add(blocked.digest);
   const applied = await run("infrastructure.apply", { plan: digest });
   assert.equal(applied.status, "completed");
-  assert.match(applied.output, /Applied and verified/u);
+  assert.match(applied.output, /^Applied: cloudflare update dns_record\./u);
+  // A DNS record can be read back content for content, so this one really is
+  // confirmed — and says so in terms that do not also cover a secret.
+  assert.match(applied.output, /The stored value was read back and matches the plan\./u);
   assert.match(applied.output, /203\.0\.113\.50/u);
 
   // The plan is spent: an old approval cannot be replayed onto a new change.
@@ -385,4 +403,162 @@ test("a plan cannot forge its own approval text", () => {
   assert.equal(described.split("\n").length, 5);
   assert.match(described, /Reversible: no/u, "the real reversibility line is the one that renders");
   assert.equal(described.includes("\nNote: approved earlier."), false);
+});
+
+test("a vault file is replaced in one step, never truncated in place", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-vault-atomic-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const path = join(directory, "vault.json");
+  const vault = createCredentialVault({ backend: "file", filePath: path, passphrase: "a long enough passphrase" });
+
+  await vault.set("FIRST_TOKEN", "first-value");
+  await vault.set("SECOND_TOKEN", "second-value");
+
+  // The replacement is a rename over the target, so the old contents survive
+  // right up to the moment the new ones are complete, and no half-written
+  // file is ever visible under the vault's own name.
+  const { readdir } = await import("node:fs/promises");
+  assert.deepEqual(
+    (await readdir(directory)).filter((entry) => entry !== "vault.json"),
+    [],
+    "a temporary file was left beside the vault",
+  );
+
+  // The daemon's data directory does not necessarily exist yet on a first
+  // run. Writing straight to the path failed with ENOENT there, which read
+  // to the operator as a broken vault rather than as a missing directory.
+  const nested = join(directory, "not", "created", "yet", "vault.json");
+  const fresh = createCredentialVault({ backend: "file", filePath: nested, passphrase: "a long enough passphrase" });
+  await fresh.set("THIRD_TOKEN", "third-value");
+  assert.equal(await fresh.get("THIRD_TOKEN"), "third-value");
+
+  // The temporary file is created 0600 from the start rather than written
+  // world-readable and chmod-ed afterwards, so there is no window in which
+  // another user can read it.
+  const { statSync } = await import("node:fs");
+  assert.equal(statSync(nested).mode & 0o777, 0o600);
+
+  const reopened = createCredentialVault({ backend: "file", filePath: path, passphrase: "a long enough passphrase" });
+  assert.deepEqual((await reopened.list()).map((entry) => entry.name), ["FIRST_TOKEN", "SECOND_TOKEN"]);
+});
+
+test("a vault path defaults to an absolute location, not the working directory", () => {
+  const path = defaultVaultPath("credentials.dpapi.json", "/home/someone");
+  assert.equal(path.startsWith("/"), true, "a relative default follows the process's working directory");
+  assert.match(path, /credentials\.dpapi\.json$/u);
+  assert.match(path, /\.atlas/u);
+});
+
+test("the macOS keychain is written without putting the secret in argv", async () => {
+  const calls = [];
+  const stored = new Map();
+  const runCommandImpl = async (command, args, options = {}) => {
+    calls.push({ command, args, input: options.input ?? null });
+    if (args[0] === "-i") {
+      // `security -i` reads the whole command, secret included, from stdin.
+      const match = /add-generic-password -a "([^"]+)" -s "[^"]+" -w "((?:[^"\\]|\\.)*)"/u.exec(options.input ?? "");
+      if (match) stored.set(match[1], match[2].replace(/\\(.)/gu, "$1"));
+      return { ok: true, stdout: "", stderr: "" };
+    }
+    if (args[0] === "find-generic-password") {
+      const name = args[args.indexOf("-a") + 1];
+      return stored.has(name) ? { ok: true, stdout: `${stored.get(name)}\n`, stderr: "" } : { ok: false, stdout: "", stderr: "not found" };
+    }
+    return { ok: true, stdout: "", stderr: "" };
+  };
+
+  const vault = createCredentialVault({ backend: "keychain", runCommandImpl });
+  await vault.set("CLOUDFLARE_TOKEN", 'a "quoted" \\ value');
+  assert.equal(await vault.get("CLOUDFLARE_TOKEN"), 'a "quoted" \\ value');
+
+  // The process list is the thing being protected: no argument to any call
+  // carries the credential.
+  const everyArgument = calls.flatMap((call) => call.args);
+  assert.equal(everyArgument.some((argument) => argument.includes("quoted")), false, "the secret reached argv");
+  assert.equal(calls.some((call) => call.args[0] === "add-generic-password"), false, "the argv fallback was not needed");
+
+  // A line break cannot be represented in that command, so it is refused
+  // rather than silently truncating the credential.
+  await assert.rejects(() => vault.set("BROKEN_TOKEN", "line\nbreak"), /line break/u);
+});
+
+test("a keychain that will not take the secret on stdin still stores it", async () => {
+  const calls = [];
+  const stored = new Map();
+  const runCommandImpl = async (command, args, options = {}) => {
+    calls.push({ args, input: options.input ?? null });
+    // This macOS refuses interactive mode outright.
+    if (args[0] === "-i") return { ok: false, stdout: "", stderr: "unrecognised option" };
+    if (args[0] === "add-generic-password") {
+      stored.set(args[args.indexOf("-a") + 1], args[args.indexOf("-w") + 1]);
+      return { ok: true, stdout: "", stderr: "" };
+    }
+    if (args[0] === "find-generic-password") {
+      const name = args[args.indexOf("-a") + 1];
+      return stored.has(name) ? { ok: true, stdout: `${stored.get(name)}\n`, stderr: "" } : { ok: false, stdout: "", stderr: "not found" };
+    }
+    return { ok: true, stdout: "", stderr: "" };
+  };
+
+  const vault = createCredentialVault({ backend: "keychain", runCommandImpl });
+  await vault.set("CLOUDFLARE_TOKEN", "fallback-value");
+  assert.equal(await vault.get("CLOUDFLARE_TOKEN"), "fallback-value");
+  assert.equal(calls.some((call) => call.args[0] === "add-generic-password"), true, "the write was abandoned instead of falling back");
+});
+
+test("a repository secret is reported as present, never as a confirmed value", async () => {
+  const secrets = [];
+  const fetchImpl = async (url, init = {}) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/actions/secrets") && (init.method ?? "GET") === "GET") {
+      return Response.json({ secrets: secrets.map((name) => ({ name, updated_at: null })) });
+    }
+    if (parsed.pathname.endsWith("/public-key")) {
+      const { generateKeyPairSync } = await import("node:crypto");
+      const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+      return Response.json({ key: publicKey.export({ type: "spki", format: "der" }).toString("base64"), key_id: "k1" });
+    }
+    if (init.method === "PUT") {
+      secrets.push(decodeURIComponent(parsed.pathname.split("/").pop()));
+      return Response.json({});
+    }
+    return Response.json({});
+  };
+
+  const github = createGitHostAdapter({ host: "github", token: "gh-token", repository: "owner/repo", fetchImpl });
+  const applied = await github.applySecret({ name: "STRIPE_KEY", value: "sk_live_0123456789" });
+
+  assert.equal(applied.verified, true);
+  // The read-back saw a name in a listing. It would look identical if the
+  // write had stored something other than the value that was planned.
+  assert.equal(applied.confirmation, "presence");
+  assert.match(describeConfirmation(applied.confirmation), /not confirmed/u);
+  assert.equal(describeConfirmation(applied.confirmation).includes("matches the plan"), false);
+});
+
+test("a GitHub secret says at plan time that it cannot be written", async () => {
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/actions/secrets")) return Response.json({ secrets: [] });
+    return Response.json({});
+  };
+
+  const github = createGitHostAdapter({ host: "github", token: "gh-token", repository: "owner/repo", fetchImpl });
+  const plan = await github.planSecret({ name: "STRIPE_KEY", value: "sk_live_0123456789" });
+
+  // GitHub hands out a libsodium key and nothing else, so applying this plan
+  // always refuses. An operator who reads the plan learns that before
+  // spending an approval on it, not after.
+  assert.ok(plan.notes.some((note) => /libsodium/u.test(note) && /repository's own settings/u.test(note)));
+
+  // A host that publishes an RSA key carries no such note, because there the
+  // write really does work.
+  const gitlab = createGitHostAdapter({
+    host: "gitlab",
+    token: "gl-token",
+    repository: "group/project",
+    fetchImpl: async (url) => (new URL(url).pathname.endsWith("/variables") ? Response.json([]) : Response.json({})),
+  });
+  const gitlabPlan = await gitlab.planSecret({ name: "STRIPE_KEY", value: "sk_live_0123456789" });
+  assert.equal(gitlabPlan.notes.some((note) => /libsodium/u.test(note)), false);
 });

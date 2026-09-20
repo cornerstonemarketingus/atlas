@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { createSecureStorage, assertNoCredentialsInWebStorage, SecureStorageError, CREDENTIAL_KEYS } from "../src/secure-storage.mjs";
 import { createDeepLinkHandler } from "../src/deep-link-handler.mjs";
+import { createSpentNonceLedger } from "../src/spent-nonces.mjs";
 import { startShell } from "../src/bridge.mjs";
 import { createDeepLinkSigner } from "../../apps/local-control/src/mobile/deep-links.mjs";
 
@@ -17,6 +18,15 @@ function vaultPlugin() {
     async set({ key, value }) { values.set(key, value); },
     async get({ key }) { if (!values.has(key)) throw new Error("not found"); return { value: values.get(key) }; },
     async remove({ key }) { values.delete(key); },
+  };
+}
+
+/** A stand-in for the Preferences plugin, with contents that outlive a launch. */
+function preferencesPlugin(values = new Map()) {
+  return {
+    values,
+    async get(key) { return values.has(key) ? values.get(key) : null; },
+    async set(key, value) { values.set(key, value); },
   };
 }
 
@@ -71,10 +81,13 @@ test("a deep link is verified before anything is opened, and is spent on use", a
 
   const opened = [];
   const rejected = [];
+  const ledger = createSpentNonceLedger({ storage: preferencesPlugin() });
+  await ledger.load();
   const handler = createDeepLinkHandler({
     signer,
     deviceId: "phone-1",
     navigate: async (screen) => { opened.push(screen); },
+    spentNonces: ledger,
     onRejected: (info) => rejected.push(info),
   });
 
@@ -113,6 +126,7 @@ test("the shell registers for push, handles a tapped notification, and can revok
     webStorages: { localStorage: webStorage({ "atlas-theme": "dark" }) },
     plugins: {
       secureStorage: plugin,
+      preferences: preferencesPlugin(),
       app: { addListener: (name, handler) => listeners.set(name, handler) },
       push: {
         requestPermissions: async () => ({ receive: "granted" }),
@@ -156,7 +170,7 @@ test("a shell with no biometric hardware reports it instead of pretending", asyn
     platform: "android",
     signer: createDeepLinkSigner({ secret: SECRET }),
     navigate: async () => {},
-    plugins: { secureStorage: plugin, push: { requestPermissions: async () => ({ receive: "denied" }) } },
+    plugins: { secureStorage: plugin, preferences: preferencesPlugin(), push: { requestPermissions: async () => ({ receive: "denied" }) } },
   });
   const identity = await shell.verifyIdentity({ reason: "Approve" });
   assert.equal(identity.verified, false);
@@ -175,4 +189,92 @@ test("the Capacitor configuration does not weaken transport security", async () 
   assert.equal(config.ios.limitsNavigationsToAppBoundDomains, true, "the WebView cannot be navigated off Atlas");
   assert.equal(config.server.androidScheme, "https");
   assert.equal(config.appId, "com.cornerstonemarketingus.atlas");
+});
+
+test("an approval link stays spent after the app is restarted", async () => {
+  const signer = createDeepLinkSigner({ secret: SECRET });
+  const id = randomUUID();
+  const link = signer.create({ target: "approval", id, deviceId: "phone-1" });
+
+  // One device's preference store, surviving both launches.
+  const preferences = preferencesPlugin();
+
+  const launch = async () => {
+    const opened = [];
+    const ledger = createSpentNonceLedger({ storage: preferences });
+    await ledger.load();
+    const handler = createDeepLinkHandler({
+      signer,
+      deviceId: "phone-1",
+      navigate: async (screen) => { opened.push(screen); },
+      spentNonces: ledger,
+    });
+    return { handler, opened, ledger };
+  };
+
+  const first = await launch();
+  assert.equal((await first.handler.handle(link.appLink)).opened, true);
+
+  // The app is killed and relaunched. A ledger held only in memory would come
+  // back empty here, and the forwarded notification would open a second time
+  // — the link is still signed and still inside its expiry window.
+  const second = await launch();
+  const replayed = await second.handler.handle(link.appLink);
+  assert.equal(replayed.opened, false);
+  assert.match(replayed.reason, /already been used/u);
+  assert.deepEqual(second.opened, []);
+});
+
+test("a link handled before the ledger is read back is refused, not opened", async () => {
+  const signer = createDeepLinkSigner({ secret: SECRET });
+  const link = signer.create({ target: "approval", id: randomUUID(), deviceId: "phone-1" });
+
+  const opened = [];
+  // Never loaded: every nonce looks unused, which is the replay window.
+  const ledger = createSpentNonceLedger({ storage: preferencesPlugin() });
+  const handler = createDeepLinkHandler({
+    signer,
+    deviceId: "phone-1",
+    navigate: async (screen) => { opened.push(screen); },
+    spentNonces: ledger,
+  });
+
+  const result = await handler.handle(link.appLink);
+  assert.equal(result.opened, false);
+  assert.match(result.reason, /still starting up/u);
+  assert.deepEqual(opened, []);
+
+  // A handler with no ledger at all is a construction error, not a default.
+  assert.throws(() => createDeepLinkHandler({ signer, deviceId: "phone-1", navigate: async () => {} }), /survives a restart/u);
+});
+
+test("the spent-nonce ledger forgets links that have expired anyway", async () => {
+  const preferences = preferencesPlugin();
+  let clock = 1_000;
+  const ledger = createSpentNonceLedger({ storage: preferences, now: () => clock });
+  await ledger.load();
+
+  await ledger.add("short-lived", 2_000);
+  await ledger.add("long-lived", 100_000);
+  assert.equal(ledger.size, 2);
+
+  // Past its expiry a link is refused on those grounds, so the entry buys
+  // nothing and is dropped rather than growing the ledger forever.
+  clock = 50_000;
+  const reopened = createSpentNonceLedger({ storage: preferences, now: () => clock });
+  await reopened.load();
+  assert.equal(reopened.has("short-lived"), false);
+  assert.equal(reopened.has("long-lived"), true);
+  assert.equal(reopened.size, 1);
+});
+
+test("an unreadable ledger is reported rather than silently accepting replays", async () => {
+  const errors = [];
+  const corrupt = { async get() { return "{not json"; }, async set() {} };
+  const ledger = createSpentNonceLedger({ storage: corrupt, onError: (info) => errors.push(info) });
+  await ledger.load();
+
+  assert.equal(ledger.loaded, true);
+  assert.equal(ledger.size, 0);
+  assert.deepEqual(errors.map((entry) => entry.stage), ["load"], "an empty ledger accepts replays, so it is said out loud");
 });

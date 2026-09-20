@@ -3,6 +3,7 @@ import { getDb } from "../../../../db";
 import { subscriptions } from "../../../../db/schema";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { stripeConfiguration, createCheckoutSession } from "../stripe.mjs";
+import { billingSurfaceFor } from "../surface.mjs";
 
 const ALLOWED_TIERS = new Set(["pro", "team"]);
 
@@ -21,6 +22,18 @@ export async function POST(request: Request) {
   const tier = (body as { tier?: unknown } | null)?.tier;
   if (typeof tier !== "string" || !ALLOWED_TIERS.has(tier)) {
     return Response.json({ message: "tier must be 'pro' or 'team'." }, { status: 400 });
+  }
+
+  // Declining here as well as in the UI. Hiding the button is what keeps the
+  // app store reviewer happy; refusing the endpoint is what keeps a native
+  // build from opening checkout through some path nobody remembered to hide.
+  const surface = (billingSurfaceFor as (request: Request, environment?: Record<string, string | undefined>) => {
+    surface: string;
+    showBilling: boolean;
+    reason: string | null;
+  })(request);
+  if (!surface.showBilling) {
+    return Response.json({ message: surface.reason, surface: surface.surface }, { status: 403 });
   }
 
   const configuration = stripeConfiguration();

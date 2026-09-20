@@ -1,4 +1,4 @@
-import { buildPlan, createApiClient, InfrastructureError, redactValue } from "./adapter.mjs";
+import { buildPlan, CONFIRMATION, createApiClient, InfrastructureError, redactValue } from "./adapter.mjs";
 
 /**
  * Vercel: projects, deployments, domains, and encrypted environment
@@ -84,25 +84,28 @@ export function createVercelAdapter({ token, teamId = null, fetchImpl = fetch })
       } else {
         await call(`/v10/projects/${projectId}/env`, { method: "POST", body: { key, value, target, type: "encrypted" }, signal, query: scope });
       }
-      // Verification is existence and metadata, because reading the value
-      // back is exactly what this adapter refuses to do.
+      // Presence and metadata only: reading an encrypted environment value
+      // back is exactly what this adapter refuses to do, so the read-back
+      // cannot tell a correct write from one that stored the wrong value.
       const after = (await this.listEnvironmentVariables({ projectId, signal })).find(
         (entry) => entry.key === key && target.every((scopeName) => entry.target.includes(scopeName)),
       );
-      return { verified: Boolean(after), observed: after ?? null };
+      return { verified: Boolean(after), confirmation: after ? CONFIRMATION.PRESENCE : null, observed: after ?? null };
     },
 
     async deleteEnvironmentVariable({ projectId, id, signal }) {
       await call(`/v9/projects/${projectId}/env/${id}`, { method: "DELETE", signal, query: scope });
       const remaining = await this.listEnvironmentVariables({ projectId, signal });
-      return { verified: !remaining.some((entry) => entry.id === id) };
+      const gone = !remaining.some((entry) => entry.id === id);
+      return { verified: gone, confirmation: gone ? CONFIRMATION.ABSENCE : null };
     },
 
     /** Vercel supports promoting an older deployment, which is a real rollback. */
     async rollbackDeployment({ projectId, deploymentId, signal }) {
       await call(`/v9/projects/${projectId}/promote/${deploymentId}`, { method: "POST", signal, query: scope });
       const deployments = await this.listDeployments({ projectId, signal });
-      return { verified: deployments.some((deployment) => deployment.uid === deploymentId), deploymentId };
+      const present = deployments.some((deployment) => deployment.uid === deploymentId);
+      return { verified: present, confirmation: present ? CONFIRMATION.PRESENCE : null, deploymentId };
     },
   };
 }

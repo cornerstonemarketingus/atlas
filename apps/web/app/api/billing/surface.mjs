@@ -6,12 +6,24 @@
  * store-billing strategy is decided, the safe and honest position is that the
  * native shells show no prices, no upgrade buttons, and no links to checkout.
  *
- * This is a server-side decision rather than a flag the client sets, because
- * the client asking "am I allowed to show this?" is the client deciding.
+ * What this is, precisely: `x-atlas-client` is a header the client sets, so
+ * it is a declaration and not a proof. Anyone can send `x-atlas-client: web`
+ * from a native build and be shown billing. That is acceptable here and it is
+ * worth being exact about why, because the earlier note claimed this was a
+ * server-side decision that the client could not make, which it is not.
+ *
+ * The thing being avoided is a store rejection, and the reviewer's build
+ * sends the header its own shell sends. A user who spoofs the header is not
+ * defeating a security boundary -- they reach the same web checkout they
+ * could have opened in a browser, and Atlas is paid either way. So the header
+ * is trusted for what it is good for: deciding what to render. Nothing that
+ * grants entitlement is decided from it.
  */
 export const BILLING_SURFACES = ["web", "ios", "android"];
 
 export function billingSurfaceFor(request, environment = process.env) {
+  // Absent or unrecognised means web: a new client that forgets the header
+  // gets the working surface rather than a blank one.
   const header = String(request?.headers?.get?.("x-atlas-client") ?? "web").toLowerCase();
   const surface = BILLING_SURFACES.includes(header) ? header : "web";
   const storeBillingApproved = environment.ATLAS_STORE_BILLING_APPROVED === "true";

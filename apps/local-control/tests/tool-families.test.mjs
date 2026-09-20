@@ -182,6 +182,31 @@ test("archive entry names cannot write outside the extraction directory", () => 
   assert.equal(zip.subarray(0, 2).toString("latin1"), "PK");
 });
 
+test("an archive that will not fit the format says so in terms of the format", () => {
+  // The name length field is 16 bits wide, and there is nowhere else to put
+  // a longer one without ZIP64. Overflowing it raised ERR_OUT_OF_RANGE
+  // naming a byte offset in a header, which says nothing about which entry
+  // is at fault or what the limit is.
+  const tooLong = `${"a".repeat(70_000)}.txt`;
+  assert.throws(() => createZipArchive([{ name: tooLong, content: "data" }]), /over the 65535-byte limit/u);
+
+  // Counted in bytes, so a name comfortably inside the limit in characters
+  // can still be over it once encoded.
+  const multiByte = "é".repeat(40_000);
+  assert.equal(multiByte.length < 65_535, true, "under the limit measured in characters");
+  assert.throws(() => createZipArchive([{ name: `${multiByte}.txt`, content: "x" }]), /over the 65535-byte limit/u);
+
+  // The entry-count field is 16 bits too.
+  const many = Array.from({ length: 65_536 }, (unused, index) => ({ name: `f${index}.txt`, content: "x" }));
+  assert.throws(() => createZipArchive(many), /65535 entries without ZIP64/u);
+
+  // A name right at the limit still writes, so the check is a bound and not
+  // an off-by-one that rejects legitimate archives.
+  const atLimit = "b".repeat(65_535);
+  const zip = createZipArchive([{ name: atLimit, content: "data" }]);
+  assert.equal(zip.subarray(0, 2).toString("latin1"), "PK");
+});
+
 test("browser tools only open http(s) and gate sends and uploads behind approval", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "atlas-browser-"));
   t.after(async () => { await rm(directory, { recursive: true, force: true }); });

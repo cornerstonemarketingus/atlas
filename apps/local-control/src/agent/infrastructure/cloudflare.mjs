@@ -1,4 +1,4 @@
-import { buildPlan, createApiClient, InfrastructureError, redactValue } from "./adapter.mjs";
+import { buildPlan, CONFIRMATION, createApiClient, InfrastructureError } from "./adapter.mjs";
 
 /**
  * Cloudflare: zones, DNS, Workers, D1, KV, R2, and Browser Rendering.
@@ -85,13 +85,14 @@ export function createCloudflareAdapter({ token, fetchImpl = fetch }) {
       // Read back rather than trusting the write's own response.
       const after = (await this.listDnsRecords({ zoneId, name: fields.name, signal })).find((record) => record.type === fields.type);
       const verified = Boolean(after) && after.content === body.content;
-      return { verified, observed: after ?? null };
+      return { verified, confirmation: verified ? CONFIRMATION.VALUE : null, observed: after ?? null };
     },
 
     async deleteDnsRecord({ zoneId, recordId, signal }) {
       unwrap(await call(`/zones/${zoneId}/dns_records/${recordId}`, { method: "DELETE", signal }));
       const remaining = await this.listDnsRecords({ zoneId, signal });
-      return { verified: !remaining.some((record) => record.id === recordId) };
+      const gone = !remaining.some((record) => record.id === recordId);
+      return { verified: gone, confirmation: gone ? CONFIRMATION.ABSENCE : null };
     },
 
     async workerStatus({ accountId, scriptName, signal }) {
@@ -129,10 +130,16 @@ export function createCloudflareAdapter({ token, fetchImpl = fetch }) {
       }
     },
 
-    /** Token metadata only — the token itself is never echoed. */
+    /**
+     * Token metadata only — nothing derived from the token itself is echoed.
+     *
+     * Cloudflare's own token id is reported instead: it identifies which token
+     * answered without describing the secret, so "is this the token I think it
+     * is" stays answerable.
+     */
     async verifyToken({ signal }) {
       const result = unwrap(await call("/user/tokens/verify", { signal }));
-      return { status: result?.status ?? "unknown", value: redactValue(token) };
+      return { status: result?.status ?? "unknown", tokenId: result?.id ?? null };
     },
   };
 }

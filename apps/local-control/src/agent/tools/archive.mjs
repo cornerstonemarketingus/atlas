@@ -14,14 +14,38 @@ const SIGNATURE_LOCAL = 0x04034b50;
 const SIGNATURE_CENTRAL = 0x02014b50;
 const SIGNATURE_END = 0x06054b50;
 
+/**
+ * The header fields these limits come from are 16 and 32 bits wide, and
+ * without ZIP64 there is nowhere else to put a larger value. Node throws
+ * ERR_OUT_OF_RANGE when one overflows, which is at least not silent, but it
+ * names a byte offset rather than the entry that could not be written. These
+ * checks fail in the same places with something an operator can act on.
+ */
+const MAX_NAME_BYTES = 0xffff;
+const MAX_ENTRIES = 0xffff;
+const MAX_SIZE = 0xffffffff;
+
 export function createZipArchive(entries) {
   const chunks = [];
   const central = [];
   let offset = 0;
 
-  for (const entry of entries) {
+  const list = [...entries];
+  if (list.length > MAX_ENTRIES) {
+    throw new Error(`An archive can hold ${MAX_ENTRIES} entries without ZIP64, and this one has ${list.length}.`);
+  }
+
+  for (const entry of list) {
     const name = Buffer.from(sanitizeEntryName(entry.name), "utf8");
+    if (name.length > MAX_NAME_BYTES) {
+      // Measured in bytes, not characters: a name well under the limit in
+      // characters can exceed it once it is UTF-8.
+      throw new Error(`Archive entry name is ${name.length} bytes, over the ${MAX_NAME_BYTES}-byte limit: ${String(entry.name).slice(0, 80)}...`);
+    }
     const raw = Buffer.isBuffer(entry.content) ? entry.content : Buffer.from(String(entry.content), "utf8");
+    if (raw.length > MAX_SIZE) {
+      throw new Error(`Archive entry '${name.toString("utf8")}' is ${raw.length} bytes, over the 4 GiB this writer supports without ZIP64.`);
+    }
     const deflated = deflateRawSync(raw);
     // Storing is smaller than deflating for incompressible input; pick whichever wins.
     const useDeflate = deflated.length < raw.length;
@@ -47,6 +71,12 @@ export function createZipArchive(entries) {
     offset += local.length + name.length + body.length;
   }
 
+  // Checked before the central directory is written rather than after: every
+  // record in it carries a 32-bit offset, so the first overflow happens
+  // there, not at the end record.
+  if (offset > MAX_SIZE) {
+    throw new Error(`The archive is ${offset} bytes, over the 4 GiB this writer supports without ZIP64.`);
+  }
   const directoryStart = offset;
   for (const record of central) {
     const header = Buffer.alloc(46);
@@ -64,6 +94,10 @@ export function createZipArchive(entries) {
     header.writeUInt32LE(record.offset, 42);
     chunks.push(header, record.name);
     offset += header.length + record.name.length;
+  }
+
+  if (offset > MAX_SIZE) {
+    throw new Error(`The archive is ${offset} bytes, over the 4 GiB this writer supports without ZIP64.`);
   }
 
   const end = Buffer.alloc(22);

@@ -52,12 +52,51 @@ export function buildPlan({ provider, operation, resource, target, fields = null
   return { ...plan, digest: planDigest(plan) };
 }
 
-/** Replaces a secret with a shape description, so a preview is still useful. */
+/**
+ * How strongly an applied change was confirmed by reading it back.
+ *
+ * The distinction matters because it is not uniform and "verified: true"
+ * hid that. A DNS record can be read back and compared content for content.
+ * A secret cannot — that is the point of a secret — so the read-back only
+ * establishes that something by that name is now there, which is equally
+ * true if the write landed a different value than the one planned. Saying
+ * "applied and verified" for both taught an operator to trust the weaker
+ * claim as much as the stronger one.
+ *
+ * "value"    the stored content was read back and matched the plan
+ * "presence" the resource exists by that name; its content was not readable
+ * "absence"  the resource is gone from a listing that would have shown it
+ */
+export const CONFIRMATION = { VALUE: "value", PRESENCE: "presence", ABSENCE: "absence" };
+
+/** One sentence naming what a read-back did and did not establish. */
+export function describeConfirmation(confirmation) {
+  if (confirmation === CONFIRMATION.VALUE) return "The stored value was read back and matches the plan.";
+  if (confirmation === CONFIRMATION.ABSENCE) return "The resource is no longer listed.";
+  if (confirmation === CONFIRMATION.PRESENCE) {
+    return "A resource of that name is now present. Its value cannot be read back, so that the value stored is the one planned is not confirmed.";
+  }
+  return "The result of the change was not confirmed.";
+}
+
+/**
+ * Replaces a secret with a placeholder.
+ *
+ * It used to describe the secret's shape — exact length and its last two
+ * characters — on the reasoning that a preview is more useful that way. It is
+ * not: what an operator is approving is "set STRIPE_KEY on production", and
+ * the shape does not help them decide. Meanwhile the plan is persisted, shown
+ * and audited, so the exact length and a known suffix of every secret this
+ * agent ever writes accumulate in the receipt log. That narrows a search and
+ * confirms a guess, which is the whole of what an attacker needs from a
+ * redaction.
+ *
+ * Presence is the only thing reported: whether a value is there at all is what
+ * distinguishes "set it" from "clear it".
+ */
 export function redactValue(value) {
   if (value === null || value === undefined) return null;
-  const text = String(value);
-  if (text.length === 0) return "(empty)";
-  return `(${text.length} characters, ending ${text.slice(-2)})`;
+  return String(value).length === 0 ? "(empty)" : "(a value is set)";
 }
 
 /**

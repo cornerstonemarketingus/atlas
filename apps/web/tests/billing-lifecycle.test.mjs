@@ -133,9 +133,16 @@ test("billing is hidden in the native shells until store billing is approved", (
     assert.equal(approved.showBilling, true);
   }
 
-  // The decision is server-side; a client claiming to be web is still just a
-  // header, but the server is the one reading it and deciding.
   assert.equal(billingSurfaceFor(request("IOS"), {}).showBilling, false, "the header is matched case-insensitively");
+
+  // Being exact about what this is: `x-atlas-client` is set by the client, so
+  // a native build claiming to be web is shown billing. That is the header's
+  // real strength, and it is the reason nothing granting entitlement is
+  // decided from it — only what to render, and whether to open checkout.
+  assert.equal(billingSurfaceFor(request("web"), {}).showBilling, true);
+  const spoofed = billingSurfaceFor(request("web"), {});
+  assert.equal(spoofed.surface, "web");
+  assert.equal("entitlement" in spoofed, false, "no entitlement is derived from a client-set header");
 });
 
 test("prices come from configuration and are never invented", () => {

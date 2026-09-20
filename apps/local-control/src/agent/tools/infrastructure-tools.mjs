@@ -1,4 +1,4 @@
-import { describePlan, InfrastructureError } from "../infrastructure/adapter.mjs";
+import { describeConfirmation, describePlan, InfrastructureError } from "../infrastructure/adapter.mjs";
 
 /**
  * Infrastructure administration, as two deliberate steps.
@@ -136,8 +136,11 @@ export function registerInfrastructureTools(registry, { providers, vault, plans 
         throw new InfrastructureError("NOT_VERIFIED", `The change was sent but could not be confirmed by reading it back. Observed: ${JSON.stringify(outcome.observed ?? null)}`);
       }
       return [
-        `Applied and verified: ${record.plan.provider} ${record.plan.operation} ${record.plan.resource}.`,
+        `Applied: ${record.plan.provider} ${record.plan.operation} ${record.plan.resource}.`,
         `Target: ${record.plan.target}`,
+        // What the read-back established, not a blanket "verified": for a
+        // secret it can only be that the name is now there.
+        describeConfirmation(outcome.confirmation),
         `Observed after the change: ${JSON.stringify(outcome.observed ?? null)}`,
         record.plan.reversible ? "This change can be rolled back through Atlas." : "This change cannot be undone through Atlas.",
       ].join("\n");
