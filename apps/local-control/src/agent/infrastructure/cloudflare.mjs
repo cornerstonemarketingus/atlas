@@ -32,15 +32,24 @@ export function createCloudflareAdapter({ token, fetchImpl = fetch }) {
      * wrong record takes a domain off the internet — so the plan always
      * carries the current value, not just the new one.
      */
-    async planDnsRecord({ zoneId, type, name, content, ttl = 1, proxied = false, signal }) {
+    async planDnsRecord({ zoneId, type, name, content, ttl = 1, proxied = undefined, signal }) {
       const existing = (await this.listDnsRecords({ zoneId, name, signal })).find((record) => record.type === type);
+      // Carried forward from the existing record when the caller did not say.
+      // Defaulting to false silently un-proxied a proxied record, exposing the
+      // origin IP and dropping the WAF on what looked like a content change.
+      const nextProxied = proxied === undefined ? (existing?.proxied ?? false) : proxied;
+      assertDnsName(name);
       return buildPlan({
         provider: "cloudflare",
         operation: existing ? "update" : "create",
         resource: "dns_record",
+        // `fields` is what apply acts on. The human-readable `target` used to
+        // be parsed back apart with split(" "), so a name containing a space
+        // applied a different record than the one approved.
+        fields: { zoneId, type, name, existingId: existing?.id ?? null },
         target: `${name} ${type} (zone ${zoneId})`,
         before: existing ? { type: existing.type, content: existing.content, ttl: existing.ttl, proxied: existing.proxied } : null,
-        after: { type, content, ttl, proxied },
+        after: { type, content, ttl, proxied: nextProxied },
         reversible: Boolean(existing),
         notes: existing
           ? [`Restoring this means setting ${name} ${type} back to ${existing.content}.`]
@@ -49,16 +58,32 @@ export function createCloudflareAdapter({ token, fetchImpl = fetch }) {
     },
 
     async applyDnsRecord({ zoneId, plan, signal }) {
-      const body = { type: plan.after.type, name: plan.target.split(" ")[0], content: plan.after.content, ttl: plan.after.ttl, proxied: plan.after.proxied };
+      const fields = plan.fields;
+      if (!fields?.name) throw new InfrastructureError("BAD_PLAN", "This plan predates structured DNS fields and cannot be applied. Re-plan the change.");
+      if (fields.zoneId !== zoneId) throw new InfrastructureError("BAD_PLAN", "This plan was built for a different zone.");
+      const body = { type: fields.type, name: fields.name, content: plan.after.content, ttl: plan.after.ttl, proxied: plan.after.proxied };
+
+      // The zone can change between plan and apply. Both paths re-read and
+      // refuse rather than writing over whatever is there now: a create that
+      // finds a record would add a second one (splitting live traffic), and
+      // an update that finds a different value would overwrite somebody's
+      // emergency fix while reporting success.
+      const current = (await this.listDnsRecords({ zoneId, name: fields.name, signal })).filter((record) => record.type === fields.type);
       if (plan.operation === "create") {
+        if (current.length > 0) {
+          throw new InfrastructureError("CHANGED_UNDERNEATH", `${fields.name} ${fields.type} now exists with content ${current[0].content}; it did not when this change was planned. Re-plan it.`);
+        }
         unwrap(await call(`/zones/${zoneId}/dns_records`, { method: "POST", body, signal }));
       } else {
-        const existing = (await this.listDnsRecords({ zoneId, name: body.name, signal })).find((record) => record.type === body.type);
-        if (!existing) throw new InfrastructureError("CHANGED_UNDERNEATH", "The record this plan was built from no longer exists.");
+        const existing = current.find((record) => record.id === fields.existingId) ?? null;
+        if (!existing) throw new InfrastructureError("CHANGED_UNDERNEATH", "The record this plan was built from no longer exists. Re-plan the change.");
+        if (existing.content !== plan.before?.content) {
+          throw new InfrastructureError("CHANGED_UNDERNEATH", `${fields.name} ${fields.type} is now ${existing.content}, not the ${plan.before?.content} this change was planned against. Re-plan it.`);
+        }
         unwrap(await call(`/zones/${zoneId}/dns_records/${existing.id}`, { method: "PUT", body, signal }));
       }
       // Read back rather than trusting the write's own response.
-      const after = (await this.listDnsRecords({ zoneId, name: body.name, signal })).find((record) => record.type === body.type);
+      const after = (await this.listDnsRecords({ zoneId, name: fields.name, signal })).find((record) => record.type === fields.type);
       const verified = Boolean(after) && after.content === body.content;
       return { verified, observed: after ?? null };
     },
@@ -110,6 +135,14 @@ export function createCloudflareAdapter({ token, fetchImpl = fetch }) {
       return { status: result?.status ?? "unknown", value: redactValue(token) };
     },
   };
+}
+
+/** A DNS name is rendered into a plan a human reads; it cannot carry prose. */
+function assertDnsName(name) {
+  if (!/^[A-Za-z0-9_*.@-]+$/u.test(name ?? "")) {
+    throw new InfrastructureError("BAD_NAME", `'${String(name).slice(0, 80)}' is not a valid DNS record name.`);
+  }
+  return name;
 }
 
 function summarizeRecord(record) {

@@ -31,6 +31,9 @@ export function planDigest(plan) {
       operation: plan.operation,
       resource: plan.resource,
       target: plan.target,
+      // The structured fields apply() acts on. Without these in the digest,
+      // the approved prose and the executed change could diverge.
+      fields: plan.fields ?? null,
       after: plan.after ?? null,
     }))
     .digest("hex");
@@ -41,9 +44,9 @@ export function planDigest(plan) {
  * persisted, shown, and audited, so a secret value in it would end up in all
  * three.
  */
-export function buildPlan({ provider, operation, resource, target, before = null, after = null, reversible = false, notes = [] }) {
+export function buildPlan({ provider, operation, resource, target, fields = null, before = null, after = null, reversible = false, notes = [] }) {
   if (!OPERATIONS.includes(operation)) throw new InfrastructureError("BAD_OPERATION", `Unknown operation: ${operation}.`);
-  const plan = { provider, operation, resource, target, before, after, reversible, notes };
+  const plan = { provider, operation, resource, target, fields, before, after, reversible, notes };
   return { ...plan, digest: planDigest(plan) };
 }
 
@@ -55,16 +58,33 @@ export function redactValue(value) {
   return `(${text.length} characters, ending ${text.slice(-2)})`;
 }
 
+/**
+ * Renders a plan for a human to approve.
+ *
+ * Every interpolated value is flattened to a single line first. These strings
+ * come from the model, and this text is line-oriented: a newline inside a
+ * record name let a plan forge its own "Currently:", "After:" and
+ * "Reversible:" lines, so the operator read an invented harmless change while
+ * the real one trailed below looking like noise.
+ */
 export function describePlan(plan) {
   const lines = [
-    `${plan.provider} ${plan.operation} ${plan.resource}`,
-    `Target: ${plan.target}`,
-    plan.before === null ? "Currently: not present" : `Currently: ${stringify(plan.before)}`,
-    plan.after === null ? "After: removed" : `After: ${stringify(plan.after)}`,
+    `${oneLine(plan.provider)} ${oneLine(plan.operation)} ${oneLine(plan.resource)}`,
+    `Target: ${oneLine(plan.target)}`,
+    plan.before === null ? "Currently: not present" : `Currently: ${oneLine(stringify(plan.before))}`,
+    plan.after === null ? "After: removed" : `After: ${oneLine(stringify(plan.after))}`,
     plan.reversible ? "Reversible: yes, this provider supports rolling this back." : "Reversible: no — this cannot be undone through Atlas.",
   ];
-  for (const note of plan.notes) lines.push(`Note: ${note}`);
+  for (const note of plan.notes) lines.push(`Note: ${oneLine(note)}`);
   return lines.join("\n");
+}
+
+/** Collapses newlines and control characters so one field cannot become many lines. */
+export function oneLine(value) {
+  return String(value ?? "")
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
 }
 
 function stringify(value) {

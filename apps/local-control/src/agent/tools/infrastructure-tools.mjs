@@ -67,7 +67,9 @@ export function registerInfrastructureTools(registry, { providers, vault, plans 
         zoneId: { type: "string", maxLength: 100, default: "" },
         projectId: { type: "string", maxLength: 100, default: "" },
         recordType: { type: "string", enum: ["A", "AAAA", "CNAME", "TXT", "MX"], default: "A" },
-        name: { type: "string", maxLength: 300, default: "" },
+        // No whitespace and no control characters: the name is rendered into
+        // the plan an operator reads and was previously parsed back out of it.
+        name: { type: "string", maxLength: 300, default: "", pattern: "^[A-Za-z0-9_*.@-]*$" },
         content: { type: "string", maxLength: 2_000, default: "" },
         ttl: { type: "integer", minimum: 1, maximum: 86_400, default: 1 },
         proxied: { type: "boolean", default: false },
@@ -193,6 +195,22 @@ async function buildFor(input, { need, vault, signal }) {
       signal,
     });
   }
+  if (input.resource === "repository_variable") {
+    // A repository variable is NOT a secret — its value is readable by anyone
+    // with repository access, and the plan therefore shows it in the clear.
+    // That makes a vault reference catastrophic here: resolving one turned
+    // this unapproved, low-risk "dry run" into a generic vault-read primitive
+    // that printed any stored credential straight into the model's context.
+    // A variable takes a literal value and nothing else.
+    if (input.valueRef) {
+      throw new InfrastructureError(
+        "REFERENCE_NOT_ALLOWED",
+        "A repository variable is not secret — its value is visible to anyone who can read the repository — so it cannot be set from the credential vault. Pass the literal value in `content`, or use resource 'repository_secret'.",
+      );
+    }
+    return need("gitHost").planVariable({ name: requireField(input.name, "name"), value: requireField(input.content, "content"), signal });
+  }
+
   const value = await resolveSecret(vault, input.valueRef);
   if (input.resource === "environment_variable") {
     return need("vercel").planEnvironmentVariable({
@@ -203,10 +221,7 @@ async function buildFor(input, { need, vault, signal }) {
       signal,
     });
   }
-  if (input.resource === "repository_secret") {
-    return need("gitHost").planSecret({ name: requireField(input.name, "name"), value, signal });
-  }
-  return need("gitHost").planVariable({ name: requireField(input.name, "name"), value: input.content || value, signal });
+  return need("gitHost").planSecret({ name: requireField(input.name, "name"), value, signal });
 }
 
 async function applyFor(record, { need, vault, signal }) {
@@ -214,14 +229,16 @@ async function applyFor(record, { need, vault, signal }) {
   if (plan.resource === "dns_record") {
     return need("cloudflare").applyDnsRecord({ zoneId: input.zoneId, plan, signal });
   }
+  if (plan.resource === "repository_variable") {
+    // Literal only, for the same reason as above.
+    return need("gitHost").applyVariable({ name: plan.after.name, value: input.content, signal });
+  }
+
   const value = await resolveSecret(vault, input.valueRef);
   if (plan.resource === "environment_variable") {
     return need("vercel").applyEnvironmentVariable({ projectId: input.projectId, plan, value, signal });
   }
-  if (plan.resource === "repository_secret") {
-    return need("gitHost").applySecret({ name: plan.after.name, value, signal });
-  }
-  return need("gitHost").applyVariable({ name: plan.after.name, value: input.content || value, signal });
+  return need("gitHost").applySecret({ name: plan.after.name, value, signal });
 }
 
 async function resolveSecret(vault, reference) {

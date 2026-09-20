@@ -42,8 +42,11 @@ const SUBMIT_WORDS = new RegExp(
     // Common non-Latin and non-English verbs for the most frequent cases.
     // Not exhaustive, and not a substitute for configuring your own.
     String.raw`(送信|提交|确认|購入|購買|支付|付款|삭제|제출|결제)`,
-    String.raw`\b(enviar|env[ií]o|absenden|senden|envoyer|invia|inviare|verzenden|skicka|wyślij|отправить|подтвердить|оплатить)\b`,
-    String.raw`\b(comprar|kaufen|acheter|comprare|bestellen|beställ|zamów|купить)\b`,
+    // `\b` is ASCII-only, so a Cyrillic alternative inside one can never
+    // match. Non-Latin verbs go in an unanchored group.
+    String.raw`(отправить|подтвердить|оплатить|купить|удалить|перевести)`,
+    String.raw`\b(enviar|env[ií]o|absenden|senden|envoyer|invia|inviare|verzenden|skicka|wyślij)\b`,
+    String.raw`\b(comprar|kaufen|acheter|comprare|bestellen|beställ|zamów)\b`,
   ].join("|"),
   "iu",
 );
@@ -81,7 +84,19 @@ export function setAdditionalConsequentialPatterns(patterns) {
 function matchesAdditional(label) {
   return additionalConsequentialPatterns.some((pattern) => pattern.test(label));
 }
-const SENSITIVE_WORDS = /\b(password|passcode|pin|social security|ssn|national insurance|credit card|card number|cvv|cvc|bank account|routing number|iban|sort code|private key|api key|secret|recovery code|security question|date of birth|passport)\b/iu;
+const SENSITIVE_WORDS = new RegExp(
+  [
+    String.raw`\b(password|passphrase|passcode|\bpin\b|one-?time code|otp|mfa code|2fa code|verification code|security code)\b`,
+    String.raw`\b(seed phrase|recovery phrase|mnemonic|private key|api key|secret key|access token|recovery code)\b`,
+    String.raw`\b(social security|ssn|national insurance|tax id|passport|driver'?s licen[cs]e|date of birth)\b`,
+    String.raw`\b(credit card|card number|cvv|cvc|expiry|expiration date|bank account|account number|routing number|iban|sort code|swift)\b`,
+    String.raw`\b(security question|mother'?s maiden name)\b`,
+    // Non-Latin and non-English, unanchored for the same reason as above.
+    String.raw`(パスワード|密码|密碼|비밀번호|암호|пароль|секрет)`,
+    String.raw`\b(passwort|kennwort|contrase[nñ]a|mot de passe|senha|wachtwoord|lösenord|hasło|parola)\b`,
+  ].join("|"),
+  "iu",
+);
 
 /**
  * Anti-bot and identity walls. Atlas stops and hands the machine back rather
@@ -97,47 +112,129 @@ const HUMAN_REQUIRED = [
 ];
 
 /** Action types whose `text` is a value being typed, not a visible label. */
-const TYPED_VALUE_ACTIONS = new Set(["fill", "type", "select"]);
+/**
+ * Actions whose `text` is a value the operator is typing, and which therefore
+ * must never reach the label. A `select` is deliberately NOT here: its text is
+ * the option chosen from a list the page already displays, so it is visible
+ * either way — and excluding it hid "Delete all messages" from every list.
+ */
+const TYPED_VALUE_ACTIONS = new Set(["fill", "type"]);
 
 /** Values that look like a credential even when the field is innocuously named. */
 const SENSITIVE_VALUE = /\b(?:\d[ -]?){13,19}\b|\b\d{3}-\d{2}-\d{4}\b|\b(?:sk|gsk|ghp|github_pat|xox[abps])[-_][A-Za-z0-9_-]{8,}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----/u;
+
+/**
+ * Confusable letters, folded to their Latin lookalike.
+ *
+ * "Pаy" with a Cyrillic а renders identically to "Pay" and defeated every
+ * word list. The full Unicode confusables table is enormous; these are the
+ * letters that actually appear in the Latin alphabet's homoglyph set, which
+ * is what a label-spoofing attack uses.
+ */
+const CONFUSABLES = new Map(Object.entries({
+  "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c", "\u0445": "x",
+  "\u0443": "y", "\u0456": "i", "\u0458": "j", "\u04bb": "h", "\u0501": "d", "\u0500": "d",
+  "\u03bf": "o", "\u03b1": "a", "\u03c1": "p", "\u03c5": "u", "\u03bd": "v", "\u0392": "b",
+  "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-",
+}));
+
+/**
+ * Normalizes a label before any pattern runs.
+ *
+ * A zero-width space, a soft hyphen or a single Cyrillic lookalike inside a
+ * keyword renders identically in the browser and slipped past every list.
+ * The page controls this string, so it has to be folded to a canonical form
+ * before it is matched — and `\s` in JavaScript does not cover U+200B,
+ * U+200D or U+00AD, so trimming whitespace is not enough.
+ */
+export function normalizeLabel(value, { foldConfusables = true } = {}) {
+  const text = String(value ?? "").normalize("NFKC");
+  let out = "";
+  for (const character of text) {
+    // Format characters (Cf) are invisible and carry no meaning in a label.
+    if (/\p{Cf}/u.test(character)) continue;
+    out += (foldConfusables ? CONFUSABLES.get(character) : undefined) ?? character;
+  }
+  return out.replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * Both readings of a label, because the two defences work against each other:
+ * folding Cyrillic lookalikes to Latin catches "Pаy $49", and it also turns a
+ * genuine Cyrillic word like "Отправить" into mixed-script gibberish that the
+ * Cyrillic patterns can no longer match. A pattern matching EITHER form is
+ * consequential — this is a union, so folding can only ever add matches.
+ */
+function matchesAny(pattern, subject) {
+  return pattern.test(subject.folded) || pattern.test(subject.raw);
+}
 
 export function classifyAction(action, context = {}) {
   const type = String(action?.type ?? "");
   // The typed value is deliberately absent from the label. The label is shown
   // in the approval prompt and written to the audit log, so putting a value
   // here would display and persist the password Atlas is asking to type.
-  const label = [
+  const rawLabel = normalizeLabel([
     action?.name,
     action?.label,
     TYPED_VALUE_ACTIONS.has(type) ? null : action?.text,
     action?.intent,
     action?.description,
     context.elementName,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  ].filter(Boolean).join(" "), { foldConfusables: false });
+  const label = normalizeLabel(rawLabel);
+
+  // A destination is as consequential as a button: a one-click GET link can
+  // delete an account or unsubscribe everybody. The path and query are read,
+  // the rest of the URL is not — a hostname is not an instruction.
+  const rawDestination = typeof action?.url === "string" ? normalizeLabel(readableUrlParts(action.url), { foldConfusables: false }) : "";
+  const destination = { raw: rawDestination, folded: normalizeLabel(rawDestination) };
+  // What the word lists actually run over. Everything the page or the model
+  // supplied, together, so no single attacker-chosen field decides the class.
+  const subject = { raw: `${rawLabel} ${rawDestination}`.trim(), folded: `${label} ${destination.folded}`.trim() };
 
   if (["snapshot", "extract", "screenshot", "read", "wait"].includes(type)) return decide("read", "Reads the page without changing it.", label);
-  if (type === "navigate") return decide("navigate", "Opens a page.", label);
   if (type === "upload" || type === "download") return decide("transfer", `Moves a file ${type === "upload" ? "off" : "onto"} this machine.`, label);
 
+  // Consequence is a property of what is being acted on, not of which verb
+  // the model chose. A dropdown reading "Delete all messages" is destructive
+  // whether it is driven by a click, a select or a keypress, and a link to
+  // `/account/delete?confirm=yes` is destructive as a navigation.
+  if (matchesAny(DESTRUCTIVE_WORDS, subject)) return decide("destructive", "Deletes or deactivates something.", label);
+
   if (["fill", "type", "select", "check", "press"].includes(type)) {
-    if (SENSITIVE_WORDS.test(label)) return decide("sensitive_input", "Enters sensitive personal or credential data.", label);
+    if (matchesAny(SENSITIVE_WORDS, { raw: rawLabel, folded: label })) return decide("sensitive_input", "Enters sensitive personal or credential data.", label);
     // The value is inspected but never echoed: a card number typed into a
     // field called "notes" is still a card number.
     if (typeof action?.text === "string" && SENSITIVE_VALUE.test(action.text)) {
       return decide("sensitive_input", "The value being entered looks like a credential or card number.", label);
     }
+    if (matchesAny(TRANSFER_WORDS, subject)) return decide("transfer", "Moves data off this machine.", label);
+    if (matchesAny(SUBMIT_WORDS, subject) || matchesAdditional(subject.folded) || matchesAdditional(subject.raw)) return decide("submit", "Sends, submits, buys, or publishes.", label);
     if (action?.submit === true) return decide("submit", "Types and submits in one step.", label);
     return decide("input", "Fills in a field.", label);
   }
 
+  if (type === "navigate") {
+    // Deliberately NOT the full submit list. Ordinary page paths contain
+    // "apply", "order", "book" and "post" constantly (/jobs/apply,
+    // /orders/123, /blog/post/4), and prompting on those would train the
+    // operator to approve without reading — which costs more than it buys.
+    // What matters is a one-click GET that *performs* something: an action
+    // verb in the path, or a confirmation token in the query.
+    if (URL_ACTION_DESTRUCTIVE.test(destination.raw)) {
+      return decide("destructive", "Opens a link that deletes or deactivates something.", label || rawDestination);
+    }
+    if (URL_ACTION_SUBMIT.test(destination.raw)) {
+      return decide("submit", "Opens a link that performs an action rather than showing a page.", label || rawDestination);
+    }
+    return decide("navigate", "Opens a page.", label);
+  }
+
   if (type === "click" || type === "submit") {
-    if (DESTRUCTIVE_WORDS.test(label)) return decide("destructive", "Deletes or deactivates something.", label);
-    if (TRANSFER_WORDS.test(label)) return decide("transfer", "Moves data off this machine.", label);
-    if (SUBMIT_WORDS.test(label) || type === "submit") return decide("submit", "Sends, submits, buys, or publishes.", label);
-    if (matchesAdditional(label)) return decide("submit", "Matches a consequential pattern configured for this machine.", label);
+    if (matchesAny(TRANSFER_WORDS, subject)) return decide("transfer", "Moves data off this machine.", label);
+    if (matchesAny(SUBMIT_WORDS, subject) || type === "submit") return decide("submit", "Sends, submits, buys, or publishes.", label);
+    if (matchesAdditional(subject.folded) || matchesAdditional(subject.raw)) return decide("submit", "Matches a consequential pattern configured for this machine.", label);
     // A control with no readable words — empty, or only an arrow or an icon
     // glyph — is not "an ordinary click", it is an unknown one, and the
     // classifier has nothing to go on. Icon-only buttons are exactly where a
@@ -156,6 +253,31 @@ export function classifyAction(action, context = {}) {
 
   if (type === "done") return decide("read", "Finishes the task.", label);
   return decide("unsupported", `Atlas does not perform '${type}' actions.`, label);
+}
+
+/**
+ * One-click GET links that *do* something.
+ *
+ * A destination is only treated as consequential when it looks like an action
+ * endpoint — an action verb as its own path segment, or a confirmation token
+ * in the query. `readableUrlParts` has already turned separators into spaces,
+ * so a segment reads as a standalone word.
+ */
+const URL_ACTION_DESTRUCTIVE = /(?:^|\s)(delete|remove|revoke|deactivate|unsubscribe|close account|destroy|purge|wipe)(?:\s|$)/iu;
+const URL_ACTION_SUBMIT = /(?:^|\s)(confirm|approve|authori[sz]e|execute|pay|payment|checkout|transfer|withdraw|send|submit|unsubscribe)(?:\s|$)/iu;
+
+/**
+ * The parts of a URL worth classifying: the path and the query, with
+ * separators turned into spaces so `/account/delete?confirm=yes` reads as
+ * words. The host is excluded — a domain name is not a statement of intent.
+ */
+function readableUrlParts(candidate) {
+  try {
+    const url = new URL(candidate);
+    return `${decodeURIComponent(url.pathname)} ${decodeURIComponent(url.search)}`.replace(/[/?&=_+.-]+/gu, " ");
+  } catch {
+    return "";
+  }
 }
 
 function decide(actionClass, reason, label) {

@@ -252,3 +252,63 @@ test("the sensitive-value check does not backtrack catastrophically", () => {
     assert.ok(ms < 250, `classifying ${size} digits took ${ms.toFixed(1)}ms`);
   }
 });
+
+
+test("a label cannot evade the word lists with invisible or lookalike characters", () => {
+  // These render identically to the honest label in a browser. JavaScript's
+  // \s does not cover U+200B/U+200D/U+00AD, so trimming was not enough.
+  for (const name of ["Sub​mit", "S‍end money", "De​lete account", "Sub­mit", "Pаy $49", "Ԁelete everything"]) {
+    const result = classifyAction({ type: "click", name });
+    assert.equal(result.requiresApproval, true, `${JSON.stringify(name)} must still require approval`);
+  }
+});
+
+test("non-Latin consequential verbs match, despite homoglyph folding", () => {
+  // Folding Cyrillic lookalikes to Latin catches "Pаy"; it also turns a real
+  // Cyrillic word into mixed-script gibberish. The lists run over both forms,
+  // so one defence cannot disable the other.
+  for (const name of ["Отправить", "Купить", "Подтвердить", "Оплатить", "Удалить", "削除", "送信"]) {
+    assert.equal(classifyAction({ type: "click", name }).requiresApproval, true, `${name} must require approval`);
+  }
+});
+
+test("consequence is judged for every action type, not only clicks", () => {
+  // A bulk-action dropdown is the standard destructive control in webmail,
+  // and it is driven by a select rather than a click.
+  assert.equal(classifyAction({ type: "select", label: "Bulk action", text: "Delete all messages" }).actionClass, "destructive");
+  assert.equal(classifyAction({ type: "check", name: "Delete my account permanently" }).actionClass, "destructive");
+  assert.equal(classifyAction({ type: "press", name: "Place order" }).requiresApproval, true);
+  // A select's option text is visible on the page, so it belongs in the label;
+  // a typed value never does.
+  assert.equal(classifyAction({ type: "fill", label: "Notes", text: "Delete all messages" }).actionClass, "input");
+});
+
+test("credential fields are recognized beyond English", () => {
+  for (const label of ["Passwort", "Contraseña", "Mot de passe", "パスワード", "密码", "Seed phrase", "Recovery phrase", "Mnemonic", "One-time code", "Account number", "Security code"]) {
+    const result = classifyAction({ type: "fill", label, text: "x" });
+    assert.equal(result.actionClass, "sensitive_input", `${label} must be treated as sensitive`);
+  }
+});
+
+test("a one-click action link asks, an ordinary page does not", () => {
+  // A GET that performs something is as consequential as a button.
+  for (const url of [
+    "https://mail.example/account/delete?confirm=yes",
+    "https://m.example/unsubscribe/all",
+    "https://bank.example/transfer/confirm?id=9",
+    "https://shop.example/checkout/pay?token=abc",
+  ]) {
+    assert.equal(classifyAction({ type: "navigate", url }).requiresApproval, true, `${url} must ask`);
+  }
+  // But ordinary page paths contain "apply", "order" and "post" constantly.
+  // Prompting on those would train the operator to approve without reading.
+  for (const url of [
+    "https://example.invalid/apply",
+    "https://jobs.example/jobs/apply",
+    "https://shop.example/orders/123",
+    "https://blog.example/post/4",
+    "https://app.example/settings/account",
+  ]) {
+    assert.equal(classifyAction({ type: "navigate", url }).requiresApproval, false, `${url} must not ask`);
+  }
+});
