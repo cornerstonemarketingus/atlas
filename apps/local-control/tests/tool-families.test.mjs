@@ -20,6 +20,14 @@ import { confineRealPath } from "../src/agent/tools/path-confinement.mjs";
 import { normalizeAttachment, loadAttachment } from "../src/agent/attachments.mjs";
 import { symlink } from "node:fs/promises";
 
+async function symlinkOrSkip(t, target, path) {
+  try { await symlink(target, path); return true; }
+  catch (error) {
+    if (error?.code === "EPERM") { t.skip("Windows Developer Mode or symlink privilege is required for this fixture."); return false; }
+    throw error;
+  }
+}
+
 const git = (cwd, ...args) => {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
   assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
@@ -404,8 +412,8 @@ test("a symlink inside a root cannot be used to read or write outside it", async
   await writeFile(join(repo, "sub", "ok.txt"), "ordinary file", "utf8");
   // A symlink pointing out of the repository, and one to an absolute system
   // path. Both are things a cloned repository can legitimately contain.
-  await symlink(outside, join(repo, "escape"));
-  await symlink("/etc/passwd", join(repo, "passwd-link"));
+  if (!await symlinkOrSkip(t, outside, join(repo, "escape"))) return;
+  if (!await symlinkOrSkip(t, "/etc/passwd", join(repo, "passwd-link"))) return;
 
   const { registry, approvals } = registryFor();
   registerRepositoryTools(registry);
@@ -440,7 +448,7 @@ test("the workspace and attachment boundaries resist the same symlink escape", a
   await mkdir(workspace, { recursive: true });
   await mkdir(outside, { recursive: true });
   await writeFile(join(outside, "secret.txt"), "OUTSIDE DATA", "utf8");
-  await symlink(outside, join(workspace, "link"));
+  if (!await symlinkOrSkip(t, outside, join(workspace, "link"))) return;
 
   const { registry, approvals } = registryFor();
   registerFilesystemTools(registry, { roots: [workspace] });
@@ -470,7 +478,7 @@ test("a root that is itself a symlink still accepts its own contents", async (t)
   const linked = join(directory, "linked-repo");
   await mkdir(real, { recursive: true });
   await writeFile(join(real, "file.txt"), "content", "utf8");
-  await symlink(real, linked);
+  if (!await symlinkOrSkip(t, real, linked)) return;
 
   // The root is reached through a symlink — a profile under a symlinked home,
   // for instance. Resolving the root too is what stops every path under it

@@ -83,8 +83,6 @@ test("the runtime drives a real worktree run and records the patch as an artifac
       }),
     },
   });
-  t.after(async () => { await runtime.stop(); sessions.close(); });
-
   const session = runtime.createSession({ title: "Changelog", repository: checkout, model: "qwen2.5-coder:7b" });
   runtime.submitTurn(session.id, { text: "Add a changelog entry." });
   await runtime.drain();
@@ -97,6 +95,8 @@ test("the runtime drives a real worktree run and records the patch as an artifac
   assert.equal(git(checkout, "status", "--porcelain").trim(), "", "the operator's checkout is still clean");
   // The receipt names where the patch is; it never carries the contents.
   assert.equal("content" in artifact.data, false);
+  await runtime.stop();
+  sessions.close();
 });
 
 test("a run against a directory that is not a Git work tree fails without touching it", async (t) => {

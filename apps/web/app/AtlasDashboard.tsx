@@ -2,6 +2,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { AtlasMark } from "./AtlasMark.js";
 import { AtlasWorkspace } from "./AtlasWorkspace.js";
+import { MarketingNav } from "./MarketingNav.js";
 
 const activity = [
   { title: "Repository intelligence foundation", detail: "149 checks passed", status: "Shipped" },
@@ -246,12 +247,12 @@ export function AtlasDashboard() {
   // is what keeps the server-rendered HTML meaningful instead of a blank
   // loading stub.
   if (!signedIn) {
-    return <main className="signin-shell" id="top"><section className="signin-story">
+    return <main id="top"><MarketingNav /><div className="signin-shell"><section className="signin-story">
       <div className="workspace-brand"><span><AtlasMark /></span>ATLAS</div>
-      <div><p className="signin-kicker">PRIVATE AI WORKSPACE</p><h1>Build what you’re<br />imagining.</h1><p>Atlas understands your project, does the work, validates the result, and keeps every consequential decision under your control.</p></div>
-      <div className="signin-proof"><span>Private by design</span><span>Works with local models</span><span>Every change is reviewable</span></div>
+      <div><p className="signin-kicker">THE PRIVATE AI OPERATOR</p><h1>Give it the mission.<br />Keep the final say.</h1><p>Atlas builds software, operates browser workflows, validates the result, and pauses before every consequential action.</p><p className="signin-demo-link"><a href="/demo">Explore the interactive demo →</a></p></div>
+      <div className="signin-proof"><span>Local-first intelligence</span><span>Persistent missions</span><span>Evidence before trust</span></div>
     </section><section className="signin-access"><div>
-      <p className="signin-kicker">WELCOME TO ATLAS</p><h2>Enter your workspace</h2><p>Continue with your connected account or use an owner access code.</p>
+      <p className="signin-kicker">START FREE</p><h2>Turn intent into verified work.</h2><p>Connect GitHub for software missions, or use an owner access code for your private deployment.</p>
       <div className="signin-actions">
         <a
           href="/api/auth/github/start"
@@ -271,7 +272,7 @@ export function AtlasDashboard() {
           </form>
         )}
         {notice && <p className="notice" role="status">{notice}</p>}
-      </div><small>By continuing, you agree to the <a href="/legal/terms">Terms</a> and <a href="/legal/privacy">Privacy Policy</a>.</small></div></section></main>;
+      </div><small>By continuing, you agree to the <a href="/legal/terms">Terms</a> and <a href="/legal/privacy">Privacy Policy</a>. <a href="/pricing">View pricing</a>.</small></div></section></div></main>;
   }
   if (process.env.NEXT_PUBLIC_ATLAS_WORKSPACE !== "legacy") {
     return <AtlasWorkspace
