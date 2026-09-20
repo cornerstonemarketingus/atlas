@@ -808,7 +808,7 @@ Fixed in this batch:
 libsodium key, so `applySecret` on GitHub can never succeed. It now says so in
 the plan's notes, before the approval is spent, rather than failing afterwards.
 
-### The runtime and conversation loop — reviewed, four defects found and fixed
+### The runtime, conversation loop and release tooling — reviewed, seven defects found and fixed
 
 The two slices the parallel agents never reached were reviewed directly. Each
 finding below was reproduced against the real modules before it was changed.
@@ -842,5 +842,26 @@ finding below was reproduced against the real modules before it was changed.
   the text being sent (`models/token-estimate.mjs`), and calibrated per model
   from the `usage.prompt_tokens` the server reports, which is ground truth.
 
-Still unexamined: lease handover under contention across two live runtimes,
-and the release tooling (`release/*`, `scripts/release/*`).
+Then the two things that note left open:
+
+- **A turn blocked by another runtime's lease was stranded.** Declining the
+  lease is right; declining and never coming back is not. If the holder had
+  died without releasing -- a kill, a closed laptop, a reaped container -- the
+  turn sat `queued` forever, with the operator told only that some other
+  runtime held the lease. Reproduced end to end. The runtime now retries once
+  the lease would have lapsed, and stops on its own as soon as the turn is
+  answered by whoever gets there first.
+- **A prerelease channel could not ship an update.** Two prereleases of the
+  same version compared equal, so every `1.0.0-rc.1` to `1.0.0-rc.2` upgrade
+  was declined as "already installed", and `rc.10` sorted below `rc.9`.
+  Prerelease precedence now follows the specification.
+- **Manifests that could never verify were signed anyway.** An artifact with
+  no byte count vanished from the signed form (`JSON.stringify` drops an
+  undefined field) and `verifyArtifact` then rejected it on every machine,
+  with the release already published. Two artifacts sharing a name were also
+  accepted, and only the first was ever checked. Both are refused before
+  signing now.
+
+That closes every finding from the review. The release tooling below the
+updater (`sbom.mjs`, `dependencies.mjs`, `supervisor.mjs`,
+`scripts/release/*`) was read and nothing was found worth changing.

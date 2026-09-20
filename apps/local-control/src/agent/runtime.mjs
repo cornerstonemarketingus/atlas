@@ -54,6 +54,7 @@ export class AgentRuntime {
   #leaseMs;
   #heartbeatMs;
   #runs = new Map();
+  #retries = new Map();
   #listeners = new Map();
   #stopped = false;
 
@@ -312,6 +313,8 @@ export class AgentRuntime {
 
   async stop() {
     this.#stopped = true;
+    for (const timer of this.#retries.values()) clearTimeout(timer);
+    this.#retries.clear();
     for (const run of this.#runs.values()) run.control.cancel("shutdown");
     await this.drain();
   }
@@ -320,6 +323,27 @@ export class AgentRuntime {
     const session = this.#sessions.session(sessionId);
     if (!session) throw new AgentRuntimeError("UNKNOWN_SESSION", "Session not found.");
     return session;
+  }
+
+  /**
+   * Comes back once the current holder's lease would have expired.
+   *
+   * Self-limiting rather than a poll without end: `#start` does nothing when
+   * the session has no pending turn, so once the holder answers the turn --
+   * or once this runtime takes it over -- the retries stop on their own.
+   */
+  #retryWhenLeaseLapses(sessionId) {
+    if (this.#stopped || this.#retries.has(sessionId)) return;
+    const session = this.#sessions.session(sessionId);
+    const lapsesInMs = session?.leaseExpiresAt ? Date.parse(session.leaseExpiresAt) - Date.now() : this.#leaseMs;
+    const delay = Math.min(this.#leaseMs * 2, Math.max(250, Number.isFinite(lapsesInMs) ? lapsesInMs + 100 : this.#leaseMs));
+    const timer = setTimeout(() => {
+      this.#retries.delete(sessionId);
+      this.#start(sessionId);
+    }, delay);
+    // Never the reason the process stays alive.
+    timer.unref?.();
+    this.#retries.set(sessionId, timer);
   }
 
   #start(sessionId) {
@@ -345,7 +369,13 @@ export class AgentRuntime {
     const session = this.#sessions.session(sessionId);
     const expiresAt = new Date(Date.now() + this.#leaseMs).toISOString();
     if (!this.#sessions.acquireLease(sessionId, this.#instanceId, expiresAt)) {
-      this.#emit(sessionId, statusEvent("Another Atlas runtime holds this session's lease."));
+      // Not an error, and not the end of it either. The holder may be a live
+      // runtime that will answer this turn itself, or a process that died
+      // without releasing anything -- in which case nothing else was going to
+      // come back for the turn, and it sat queued forever with the operator
+      // told only that some other runtime had the lease.
+      this.#emit(sessionId, statusEvent("Another Atlas runtime holds this session's lease; waiting for it to finish or lapse."));
+      this.#retryWhenLeaseLapses(sessionId);
       return;
     }
 

@@ -296,3 +296,62 @@ test("the release pipeline is reproducible from the checked-in scripts", async (
   const reporter = await read(join(root, "scripts", "windows", "report-requirements.mjs"), "utf8");
   assert.match(reporter, /Installs nothing/u);
 });
+
+test("a prerelease channel can actually ship an update", () => {
+  const { publicKeyPem, privateKeyPem } = keys();
+  const manifestFor = (version) => createUpdateManifest({
+    product: "Atlas",
+    version,
+    releasedAt: "2026-01-01T00:00:00Z",
+    artifacts: [artifact("Atlas.msi", "installer bytes")],
+    privateKeyPem,
+  });
+
+  // Two prereleases of the same version compared equal, so every rc-to-rc
+  // upgrade was declined as "already installed" and a beta channel could
+  // not ship anything at all.
+  for (const [from, to] of [["1.0.0-rc.1", "1.0.0-rc.2"], ["1.0.0-rc.9", "1.0.0-rc.10"], ["1.0.0-alpha.9", "1.0.0-beta.1"], ["1.0.0-rc", "1.0.0-rc.1"]]) {
+    const decision = decideUpdate({ manifest: manifestFor(to), installedVersion: from, publicKeyPem });
+    assert.equal(decision.decision, "install", `${from} -> ${to} was ${decision.decision}: ${decision.reason}`);
+  }
+
+  // Going the other way is still a downgrade and is still refused.
+  assert.equal(decideUpdate({ manifest: manifestFor("1.0.0-rc.1"), installedVersion: "1.0.0-rc.2", publicKeyPem }).decision, "reject");
+  assert.equal(decideUpdate({ manifest: manifestFor("1.0.0-rc.2"), installedVersion: "1.0.0-rc.2", publicKeyPem }).decision, "skip");
+
+  // Numeric fields sort as numbers, alphanumeric fields beat numeric ones,
+  // and a release beats the prereleases that precede it.
+  assert.equal(compareVersions("1.0.0-rc.10", "1.0.0-rc.9"), 1);
+  assert.equal(compareVersions("1.0.0-1", "1.0.0-alpha"), -1);
+  assert.equal(compareVersions("1.0.0", "1.0.0-rc.1"), 1);
+  assert.equal(compareVersions("1.0.0-rc.1", "1.0.0-rc.1"), 0);
+  assert.equal(compareVersions("1.2.0", "1.10.0"), -1);
+});
+
+test("a manifest that could never verify is refused before it is signed", () => {
+  const { privateKeyPem } = keys();
+  const base = { product: "Atlas", version: "1.0.0", releasedAt: "2026-01-01T00:00:00Z", privateKeyPem };
+
+  // JSON.stringify drops an undefined field, so an artifact with no byte
+  // count simply vanished from the signed form -- and verifyArtifact then
+  // rejected that artifact on every machine, with the release already signed
+  // and published.
+  assert.throws(
+    () => createUpdateManifest({ ...base, artifacts: [{ name: "Atlas.msi", sha256: "a".repeat(64) }] }),
+    /needs a byte count/u,
+  );
+  assert.throws(
+    () => createUpdateManifest({ ...base, artifacts: [{ name: "Atlas.msi", bytes: -1, sha256: "a".repeat(64) }] }),
+    /needs a byte count/u,
+  );
+
+  // verifyArtifact checks the first entry with a given name, so a second one
+  // sharing that name would never be verified against anything.
+  assert.throws(
+    () => createUpdateManifest({
+      ...base,
+      artifacts: [artifact("Atlas.msi", "one"), artifact("Atlas.msi", "two")],
+    }),
+    /both named 'Atlas.msi'/u,
+  );
+});

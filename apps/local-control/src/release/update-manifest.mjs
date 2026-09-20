@@ -43,8 +43,20 @@ export function createUpdateManifest({ product, version, releasedAt, artifacts, 
   if (!SEMVER.test(version ?? "")) throw new ManifestError("BAD_VERSION", `'${version}' is not a semantic version.`);
   if (rollbackTo !== null && !SEMVER.test(rollbackTo)) throw new ManifestError("BAD_VERSION", `rollbackTo '${rollbackTo}' is not a semantic version.`);
   if (!Array.isArray(artifacts) || artifacts.length === 0) throw new ManifestError("NO_ARTIFACTS", "A manifest must list at least one artifact.");
+  const names = new Set();
   for (const artifact of artifacts) {
     if (!/^[0-9a-f]{64}$/u.test(artifact.sha256 ?? "")) throw new ManifestError("BAD_DIGEST", `Artifact '${artifact.name}' needs a SHA-256 digest.`);
+    // A missing byte count does not fail here -- JSON.stringify drops an
+    // undefined field, so it would simply vanish from the signed form and
+    // `verifyArtifact` would then reject that artifact on every machine,
+    // forever, with the release already signed and published.
+    if (!Number.isInteger(artifact.bytes) || artifact.bytes < 0) {
+      throw new ManifestError("BAD_SIZE", `Artifact '${artifact.name}' needs a byte count; got ${JSON.stringify(artifact.bytes)}.`);
+    }
+    // `verifyArtifact` looks a name up and checks the first match, so a second
+    // artifact sharing a name would never be verified against anything.
+    if (names.has(artifact.name)) throw new ManifestError("DUPLICATE_ARTIFACT", `Two artifacts are both named '${artifact.name}'.`);
+    names.add(artifact.name);
   }
 
   const body = { product, version, releasedAt, artifacts, rollbackTo, minimumUpgradeFrom, manifestVersion: MANIFEST_VERSION };
@@ -96,15 +108,56 @@ export function verifyArtifact({ manifest, name, bytes }) {
   return { valid: true, reason: null };
 }
 
+/**
+ * Semantic version precedence, prereleases included.
+ *
+ * Two prereleases of the same version used to compare equal, so every
+ * `1.0.0-rc.1` to `1.0.0-rc.2` upgrade was reported as "already installed"
+ * and declined: a beta channel could not ship an update at all. Prerelease
+ * identifiers are compared the way the specification says -- field by field,
+ * numerically where both fields are numeric, and a version with more fields
+ * winning when everything before them is equal.
+ */
 export function compareVersions(left, right) {
-  const parse = (value) => String(value).split("-")[0].split(".").map(Number);
-  const [a, b] = [parse(left), parse(right)];
+  const a = parseVersion(left);
+  const b = parseVersion(right);
   for (let index = 0; index < 3; index += 1) {
-    if ((a[index] ?? 0) !== (b[index] ?? 0)) return (a[index] ?? 0) < (b[index] ?? 0) ? -1 : 1;
+    if (a.release[index] !== b.release[index]) return a.release[index] < b.release[index] ? -1 : 1;
   }
-  // A prerelease sorts before the release it precedes.
-  const preLeft = String(left).includes("-");
-  const preRight = String(right).includes("-");
-  if (preLeft === preRight) return 0;
-  return preLeft ? -1 : 1;
+  // A prerelease has lower precedence than the release it precedes.
+  if (a.prerelease.length === 0 || b.prerelease.length === 0) {
+    if (a.prerelease.length === b.prerelease.length) return 0;
+    return a.prerelease.length > 0 ? -1 : 1;
+  }
+  for (let index = 0; index < Math.max(a.prerelease.length, b.prerelease.length); index += 1) {
+    const one = a.prerelease[index];
+    const other = b.prerelease[index];
+    // Running out of fields first loses: 1.0.0-rc < 1.0.0-rc.1.
+    if (one === undefined) return -1;
+    if (other === undefined) return 1;
+    const oneNumeric = /^\d+$/u.test(one);
+    const otherNumeric = /^\d+$/u.test(other);
+    // Numeric fields compare as numbers, so rc.9 comes before rc.10 rather
+    // than after it, and a numeric field always loses to an alphanumeric one.
+    if (oneNumeric && otherNumeric) {
+      if (Number(one) !== Number(other)) return Number(one) < Number(other) ? -1 : 1;
+    } else if (oneNumeric !== otherNumeric) {
+      return oneNumeric ? -1 : 1;
+    } else if (one !== other) {
+      return one < other ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+function parseVersion(value) {
+  const text = String(value);
+  const dash = text.indexOf("-");
+  const releaseText = dash === -1 ? text : text.slice(0, dash);
+  const prereleaseText = dash === -1 ? "" : text.slice(dash + 1);
+  const release = releaseText.split(".").map((part) => Number(part) || 0);
+  return {
+    release: [release[0] ?? 0, release[1] ?? 0, release[2] ?? 0],
+    prerelease: prereleaseText.length > 0 ? prereleaseText.split(".") : [],
+  };
 }

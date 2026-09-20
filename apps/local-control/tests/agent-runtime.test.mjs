@@ -556,3 +556,41 @@ test("a database written before turn ordering existed is numbered on open", asyn
   assert.equal(added.sequence, 4);
   assert.deepEqual(sessions.turns("s1").map((turn) => turn.text), ["third", "first", "second", "fourth"]);
 });
+
+test("a turn blocked by another runtime's lease is picked up when it lapses", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-lease-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const sessions = new AgentSessionStore(join(directory, "agent.sqlite"));
+  t.after(() => sessions.close());
+
+  const runtime = new AgentRuntime({
+    sessions,
+    executors: { local: completingExecutor() },
+    instanceId: "runtime-A",
+    leaseMs: 400,
+  });
+  t.after(async () => { await runtime.stop(); });
+
+  const session = runtime.createSession({ title: "Contended", model: "local-model" });
+
+  // A second runtime took the lease and then died without releasing it -- a
+  // kill, a closed laptop, a container reaped mid-run.
+  sessions.acquireLease(session.id, "runtime-B", new Date(Date.now() + 400).toISOString());
+
+  runtime.submitTurn(session.id, { text: "please do the thing" });
+  await runtime.drain();
+
+  // Declining is right; declining and never coming back is not. The turn used
+  // to sit here queued forever, with the operator told only that some other
+  // runtime held the lease.
+  assert.equal(runtime.getSession(session.id).status, "queued");
+  assert.equal(sessions.turns(session.id)[0].state, "pending");
+  assert.ok(
+    runtime.getEvents(session.id).some((event) => /waiting for it to finish or lapse/u.test(event.data.summary ?? "")),
+    "the operator is told what is being waited on",
+  );
+
+  await waitFor(() => runtime.getSession(session.id).status === "completed", 4_000);
+  assert.equal(sessions.turns(session.id)[0].state, "completed");
+  assert.equal(sessions.session(session.id).leaseOwner, null, "the lease was released after the takeover");
+});
