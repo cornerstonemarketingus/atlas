@@ -6,10 +6,20 @@ test("server-renders the Atlas control plane", async () => {
   const response = await worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /Give it the mission/);
-  assert.match(html, /interactive demo/i);
+  assert.match(html, /Describe the product/);
+  assert.match(html, /product mission/i);
   assert.match(html, /Continue securely/);
   assert.match(html, /access code/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
   assert.doesNotMatch(html, /GitHub Actions runner/);
+});
+
+test("server-renders the public investor thesis", async () => {
+  const workerUrl = new URL(`../dist/server/index.js?investor-test=${Date.now()}`, import.meta.url);
+  const { default: worker } = await import(workerUrl.href);
+  const response = await worker.fetch(new Request("http://localhost/investors", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /operating system for autonomous product creation/i);
+  assert.match(html, /ideas.*become operating products/is);
 });

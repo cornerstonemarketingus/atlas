@@ -249,10 +249,10 @@ export function AtlasDashboard() {
   if (!signedIn) {
     return <main id="top"><MarketingNav /><div className="signin-shell"><section className="signin-story">
       <div className="workspace-brand"><span><AtlasMark /></span>ATLAS</div>
-      <div><p className="signin-kicker">THE PRIVATE AI OPERATOR</p><h1>Give it the mission.<br />Keep the final say.</h1><p>Atlas builds software, operates browser workflows, validates the result, and pauses before every consequential action.</p><p className="signin-demo-link"><a href="/demo">Explore the interactive demo →</a></p></div>
-      <div className="signin-proof"><span>Local-first intelligence</span><span>Persistent missions</span><span>Evidence before trust</span></div>
+      <div><p className="signin-kicker">AUTONOMOUS VIBE CODING, UNDER CONTROL</p><h1>Describe the product.<br />Atlas builds the business.</h1><p>Go from idea to working software with an engineering agent that can code, test, deploy, and operate the browser workflows around your product.</p><p className="signin-demo-link"><a href="/demo">See a product mission in action →</a></p></div>
+      <div className="signin-proof"><span>Prompt to working product</span><span>Code and computer operation</span><span>Local-first ownership</span></div>
     </section><section className="signin-access"><div>
-      <p className="signin-kicker">START FREE</p><h2>Turn intent into verified work.</h2><p>Connect GitHub for software missions, or use an owner access code for your private deployment.</p>
+      <p className="signin-kicker">START FREE</p><h2>Your product team in one workspace.</h2><p>Connect GitHub to build and improve real software, or use an owner access code for your private Atlas deployment.</p>
       <div className="signin-actions">
         <a
           href="/api/auth/github/start"
