@@ -54,12 +54,42 @@ export class AgentSessionStore {
         text TEXT NOT NULL,
         attachments_json TEXT NOT NULL DEFAULT '[]',
         state TEXT NOT NULL,
+        sequence INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         started_at TEXT,
         completed_at TEXT
       );
-      CREATE INDEX IF NOT EXISTS agent_turns_session_idx ON agent_turns(session_id, created_at);
     `);
+    // After the tables, because on a database written before the ordering
+    // column existed the index cannot be built until the column is.
+    this.#addTurnSequence();
+  }
+
+  /**
+   * Adds the ordering column to a database written before it existed.
+   *
+   * Turns were ordered by `created_at` and, on a tie, by `id` -- which is a
+   * random UUID. `created_at` has millisecond resolution, so two turns sent
+   * back to back tie routinely, and roughly a quarter of such pairs were then
+   * answered in the wrong order: "deploy the staging build" answered after
+   * "actually, wait". Existing rows are numbered by insertion order, which is
+   * what rowid records.
+   */
+  #addTurnSequence() {
+    const columns = this.#db.prepare("PRAGMA table_info(agent_turns)").all();
+    if (!columns.some((column) => column.name === "sequence")) {
+      this.#db.exec("ALTER TABLE agent_turns ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0");
+      this.#db.exec(`
+        UPDATE agent_turns SET sequence = (
+          SELECT COUNT(*) FROM agent_turns AS earlier
+           WHERE earlier.session_id = agent_turns.session_id AND earlier.rowid <= agent_turns.rowid
+        );
+      `);
+      // The old index covered (session_id, created_at) under the same name,
+      // so it is replaced rather than left indexing a column nothing reads.
+      this.#db.exec("DROP INDEX IF EXISTS agent_turns_session_idx");
+    }
+    this.#db.exec("CREATE INDEX IF NOT EXISTS agent_turns_session_idx ON agent_turns(session_id, sequence)");
   }
 
   createSession({ title, repository = null, model, executor = "local", budget = {}, status = "idle" }) {
@@ -173,12 +203,15 @@ export class AgentSessionStore {
       state: "pending",
       createdAt: new Date().toISOString(),
     };
+    // Allocated from the session's own turns rather than from a clock, so
+    // two turns sent in the same millisecond still have an order.
     this.#db
       .prepare(
-        `INSERT INTO agent_turns (id, session_id, role, text, attachments_json, state, created_at, started_at, completed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+        `INSERT INTO agent_turns (id, session_id, role, text, attachments_json, state, sequence, created_at, started_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_turns WHERE session_id = ?), ?, NULL, NULL)`,
       )
-      .run(turn.id, sessionId, role, text, JSON.stringify(attachments), turn.state, turn.createdAt);
+      .run(turn.id, sessionId, role, text, JSON.stringify(attachments), turn.state, sessionId, turn.createdAt);
+    turn.sequence = this.#db.prepare("SELECT sequence FROM agent_turns WHERE id = ?").get(turn.id).sequence;
     this.#db.prepare("UPDATE agent_sessions SET updated_at = ? WHERE id = ?").run(turn.createdAt, sessionId);
     return turn;
   }
@@ -186,9 +219,9 @@ export class AgentSessionStore {
   turns(sessionId, limit = 500) {
     return this.#db
       .prepare(
-        `SELECT id, session_id AS sessionId, role, text, attachments_json AS attachmentsJson, state,
+        `SELECT id, session_id AS sessionId, role, text, attachments_json AS attachmentsJson, state, sequence,
                 created_at AS createdAt, started_at AS startedAt, completed_at AS completedAt
-           FROM agent_turns WHERE session_id = ? ORDER BY created_at, id LIMIT ?`,
+           FROM agent_turns WHERE session_id = ? ORDER BY sequence LIMIT ?`,
       )
       .all(sessionId, limit)
       .map((row) => ({ ...row, attachments: JSON.parse(row.attachmentsJson), attachmentsJson: undefined }));
@@ -198,9 +231,9 @@ export class AgentSessionStore {
   nextPendingTurn(sessionId) {
     const row = this.#db
       .prepare(
-        `SELECT id, session_id AS sessionId, role, text, attachments_json AS attachmentsJson, state, created_at AS createdAt
+        `SELECT id, session_id AS sessionId, role, text, attachments_json AS attachmentsJson, state, sequence, created_at AS createdAt
            FROM agent_turns WHERE session_id = ? AND state = 'pending' AND role = 'user'
-           ORDER BY created_at, id LIMIT 1`,
+           ORDER BY sequence LIMIT 1`,
       )
       .get(sessionId);
     return row ? { ...row, attachments: JSON.parse(row.attachmentsJson), attachmentsJson: undefined } : null;
@@ -215,7 +248,7 @@ export class AgentSessionStore {
   turn(id) {
     const row = this.#db
       .prepare(
-        `SELECT id, session_id AS sessionId, role, text, attachments_json AS attachmentsJson, state, created_at AS createdAt
+        `SELECT id, session_id AS sessionId, role, text, attachments_json AS attachmentsJson, state, sequence, created_at AS createdAt
            FROM agent_turns WHERE id = ?`,
       )
       .get(id);
@@ -238,8 +271,8 @@ export class AgentSessionStore {
     const anchor = this.turn(turnId);
     if (!anchor) return 0;
     const result = this.#db
-      .prepare("DELETE FROM agent_turns WHERE session_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))")
-      .run(sessionId, anchor.createdAt, anchor.createdAt, turnId);
+      .prepare("DELETE FROM agent_turns WHERE session_id = ? AND sequence > ?")
+      .run(sessionId, anchor.sequence);
     return result.changes;
   }
 

@@ -808,13 +808,39 @@ Fixed in this batch:
 libsodium key, so `applySecret` on GitHub can never succeed. It now says so in
 the plan's notes, before the approval is spent, rather than failing afterwards.
 
-### Not reviewed at all
+### The runtime and conversation loop — reviewed, four defects found and fixed
 
-- The persistent runtime and conversation loop (`runtime.mjs`,
-  `session-store.mjs`, `run-control.mjs`, `conversation-executor.mjs`,
-  `model-client.mjs`, `compaction.mjs`, `routes.mjs`, `server.mjs`).
-- Models and release tooling (`models/*`, `release/*`, `scripts/release/*`).
+The two slices the parallel agents never reached were reviewed directly. Each
+finding below was reproduced against the real modules before it was changed.
 
-Both agents died on the account limit before producing anything. The
-subscribe-replay race, lease handover, and the 3.6 characters-per-token
-assumption behind the no-silent-truncation guarantee are all still unexamined.
+- **A reconnecting client was replayed one page of the log, not the log.**
+  `subscribe` read at most 5,000 events and then went live from whatever
+  sequence it had reached, so everything between that point and the present
+  was never delivered — and the client's cursor moved past it, so it was never
+  asked for again. Reproduced: 6,001 events in the log, 5,000 delivered, 1,001
+  lost in silence. This is the exact gap the method's own docstring promises to
+  close. The replay now pages to the end, and `getEvents` does too.
+- **Turns were answered out of order.** `agent_turns` was ordered by
+  `created_at`, which is a millisecond timestamp, with ties broken by `id`,
+  which is a random UUID. Two messages sent back to back tie routinely: 77 of
+  300 pairs came back inverted. "Deploy the staging build" followed by
+  "actually, wait" had a one-in-four chance of being answered backwards. An
+  explicit per-session `sequence` column now decides order, for the queue, for
+  the transcript and for what an edit discards; a database written before it
+  is numbered by insertion order on open.
+- **A long wall-clock budget cancelled the run immediately.** The deadline was
+  armed with one `setTimeout`, which cannot hold a delay over 2^31-1 ms: past
+  about 24 days Node warns and fires on the next tick. A session given a month
+  was stopped one millisecond in and told its time budget was spent. The
+  deadline is now armed in chunks.
+- **The no-silent-truncation guarantee did not hold for most content.** The
+  context budget used one ratio, 3.6 characters per token, for everything.
+  Measured against the same 8k window, that is 28% over for source code and
+  JSON tool output, 64% over for base64, and 260% over for Chinese — and a
+  prompt that far over the window is truncated by the server, which is
+  precisely what this module exists to prevent. The ratio is now derived from
+  the text being sent (`models/token-estimate.mjs`), and calibrated per model
+  from the `usage.prompt_tokens` the server reports, which is ground truth.
+
+Still unexamined: lease handover under contention across two live runtimes,
+and the release tooling (`release/*`, `scripts/release/*`).

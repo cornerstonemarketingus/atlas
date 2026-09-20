@@ -5,6 +5,20 @@ import { completionEvent, errorEvent, statusEvent } from "./events.mjs";
 import { RunCancelledError, RunControl } from "./run-control.mjs";
 
 const DEFAULT_LEASE_MS = 30_000;
+
+/**
+ * How many events one replay query reads. The replay pages until the log is
+ * drained, so this bounds memory per query rather than the replay itself.
+ */
+const REPLAY_PAGE = 1_000;
+
+/**
+ * The longest delay `setTimeout` can hold. Past it Node warns and fires on
+ * the next tick instead, so a session given a wall-clock budget of more than
+ * about 24 days was cancelled one millisecond in and told its time budget was
+ * spent. A long deadline is armed in chunks rather than in one call.
+ */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 const DEFAULT_HEARTBEAT_MS = 10_000;
 
 /**
@@ -66,7 +80,19 @@ export class AgentRuntime {
   listSessions(limit = 50) { return this.#sessions.sessions(limit); }
   getSession(sessionId) { return this.#sessions.session(sessionId); }
   getTurns(sessionId) { return this.#sessions.turns(sessionId); }
-  getEvents(sessionId, afterSequence = 0) { return this.#sessions.events(sessionId, afterSequence); }
+  /** Every event after the cursor, paged rather than capped at one query. */
+  getEvents(sessionId, afterSequence = 0) {
+    const all = [];
+    let cursor = afterSequence;
+    for (;;) {
+      const page = this.#sessions.events(sessionId, cursor, REPLAY_PAGE);
+      if (page.length === 0) break;
+      all.push(...page);
+      cursor = page[page.length - 1].sequence;
+      if (page.length < REPLAY_PAGE) break;
+    }
+    return all;
+  }
 
   /**
    * Boot-time recovery. A session whose lease has lapsed was being run by a
@@ -121,6 +147,13 @@ export class AgentRuntime {
    * buffered until the replay drains, so a client that reconnects mid-run
    * cannot fall into the gap between "what was stored" and "what happens
    * next". Duplicate sequences are dropped rather than delivered twice.
+   *
+   * The replay is paged to the end rather than read in one bounded query. A
+   * single read capped the replay at its own limit and then went live from
+   * whatever sequence it had reached, so a session with more events than
+   * that behind the cursor lost every event in between -- silently, with the
+   * client believing it had caught up. Which is exactly the gap this is
+   * supposed to close.
    */
   subscribe(sessionId, afterSequence, listener) {
     this.#requireSession(sessionId);
@@ -140,9 +173,16 @@ export class AgentRuntime {
 
     try {
       let delivered = afterSequence;
-      for (const event of this.#sessions.events(sessionId, afterSequence, 5_000)) {
-        listener(event);
-        delivered = event.sequence;
+      for (;;) {
+        const page = this.#sessions.events(sessionId, delivered, REPLAY_PAGE);
+        if (page.length === 0) break;
+        for (const event of page) {
+          listener(event);
+          delivered = event.sequence;
+        }
+        // A short page is the end of the log. Reading again would be a wasted
+        // query on every subscribe.
+        if (page.length < REPLAY_PAGE) break;
       }
       draining = false;
       for (const event of buffered) if (event.sequence > delivered) listener(event);
@@ -330,8 +370,14 @@ export class AgentRuntime {
       // that throws a budget error out of a cleanup path.
       budget.record({ elapsedMs: Math.min(Date.now() - startedAtMs, budget.remaining().elapsedMs) });
     };
-    const remainingMs = Math.max(0, budget.remaining().elapsedMs);
-    const deadline = setTimeout(() => control.cancel("time-budget"), remainingMs);
+    let deadline = null;
+    const armDeadline = () => {
+      const left = Math.max(0, budget.remaining().elapsedMs - (Date.now() - startedAtMs));
+      deadline = left > MAX_TIMER_MS
+        ? setTimeout(armDeadline, MAX_TIMER_MS)
+        : setTimeout(() => control.cancel("time-budget"), left);
+    };
+    armDeadline();
     const heartbeat = setInterval(() => {
       const renewed = this.#sessions.renewLease(sessionId, this.#instanceId, new Date(Date.now() + this.#leaseMs).toISOString());
       if (!renewed) control.cancel("lease-lost");

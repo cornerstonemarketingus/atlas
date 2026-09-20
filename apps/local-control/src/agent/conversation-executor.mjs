@@ -9,6 +9,7 @@ import {
 } from "./events.mjs";
 import { measure } from "./compaction.mjs";
 import { describeContextFailure, fitToContext } from "./models/context-fit.mjs";
+import { createTokenRatioCalibrator } from "./models/token-estimate.mjs";
 import { loadAttachment, normalizeAttachment, toModelContent } from "./attachments.mjs";
 import { ModelRequestError } from "./model-client.mjs";
 import { ReasoningAccumulator, publicErrorMessage, stripInlineReasoning } from "./reasoning.mjs";
@@ -43,6 +44,10 @@ export function createConversationExecutor({
   maxOutputTokens = 2048,
   summarizeReasoning = null,
   attachmentRoot = null,
+  // Learns each model's real characters-per-token from the prompt token
+  // counts the server reports, so the context budget stops being a guess
+  // after the first request.
+  calibrator = createTokenRatioCalibrator(),
   now = () => Date.now(),
 }) {
   return {
@@ -62,7 +67,7 @@ export function createConversationExecutor({
 
         let fitted;
         try {
-          fitted = fit(messages, { contextWindow, contextSource, maxOutputTokens, model: session.model, reservedCharacters: toolCharacters }, emit);
+          fitted = fit(messages, { contextWindow, contextSource, maxOutputTokens, model: session.model, reservedCharacters: toolCharacters, calibrator }, emit);
         } catch (error) {
           // Refused out loud. Sending this would have made the server drop the
           // start of the conversation without telling anyone.
@@ -115,6 +120,14 @@ export function createConversationExecutor({
 
         flush(true);
         if (reasoning.active) emit(statusEvent(reasoning.summary()));
+        // Ground truth for the next request's budget: the server counted this
+        // prompt, and Atlas knows exactly how many characters it sent.
+        if (usage?.prompt_tokens) {
+          calibrator.record(session.model, {
+            characters: JSON.stringify(fitted.map(toWireMessage)).length + toolCharacters,
+            promptTokens: usage.prompt_tokens,
+          });
+        }
         budget.record({ outputTokens: usage?.completion_tokens ?? estimateTokens(answer.length) });
 
         // Reasoning models put their thinking in `content`; strip it before it
@@ -215,9 +228,9 @@ async function buildMessages({ session, history, turn, attachmentRoot, emit }) {
   return messages;
 }
 
-function fit(messages, { contextWindow, contextSource, maxOutputTokens, model, reservedCharacters }, emit) {
+function fit(messages, { contextWindow, contextSource, maxOutputTokens, model, reservedCharacters, calibrator }, emit) {
   try {
-    const result = fitToContext(messages, { contextWindow, maxOutputTokens, contextSource, reservedCharacters });
+    const result = fitToContext(messages, { contextWindow, maxOutputTokens, contextSource, reservedCharacters, model, calibrator });
     if (result.compacted) emit(statusEvent(result.note));
     return result.messages;
   } catch (error) {

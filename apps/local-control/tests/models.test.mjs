@@ -276,11 +276,18 @@ test("the tool schemas come out of the context budget", () => {
   const withTools = usableContextCharacters({ contextWindow: 8_192, reservedCharacters: toolCharacters });
   const withoutTools = usableContextCharacters({ contextWindow: 8_192 });
   assert.ok(withTools < withoutTools);
-  assert.equal(withTools, withoutTools - toolCharacters);
+  // The schemas are taken out in tokens and the remainder is scaled back to
+  // characters, so the gap is the schemas' token cost rather than their
+  // character count. Those differ whenever the conversation's own ratio is
+  // not the schemas' ratio, which is the usual case.
+  assert.ok(Math.abs((withoutTools - withTools) - toolCharacters) <= 4, `expected roughly ${toolCharacters}, got ${withoutTools - withTools}`);
 
   // A conversation that fits by the message-only measure but not once the
-  // tools are counted must now be refused rather than sent.
-  const messages = [{ role: "system", content: "S", pinned: true }, { role: "user", content: "x".repeat(15_000) }];
+  // tools are counted must now be refused rather than sent. Written as prose,
+  // because the budget is scaled by what the text actually costs and prose is
+  // the content that gets the most characters per token.
+  const prose = "The operator asked for a change and the runtime recorded it. ".repeat(250);
+  const messages = [{ role: "system", content: "S", pinned: true }, { role: "user", content: prose }];
   assert.equal(fitToContext(messages, { contextWindow: 8_192 }).compacted, false, "fits when tools are ignored");
   assert.throws(
     () => fitToContext(messages, { contextWindow: 8_192, reservedCharacters: toolCharacters }),
@@ -325,4 +332,89 @@ test("an inline image attachment is measured, not smuggled past the budget", () 
   ];
   assert.ok(measure(messages) > 1_000_000, "the image is counted");
   assert.throws(() => fitToContext(messages, { contextWindow: 32_768 }), ContextTooLargeError);
+});
+
+test("the context budget is scaled by what the text actually costs", async () => {
+  const { charactersPerToken, estimateTokensForText } = await import("../src/agent/models/token-estimate.mjs");
+
+  // One constant of 3.6 characters per token was applied to everything. It is
+  // about right for English and badly optimistic for what an operator agent
+  // mostly handles, and a prompt that far over the window is truncated by the
+  // server rather than refused here.
+  const samples = {
+    prose: { text: "The operator asked for a change and the runtime recorded it as an event. ".repeat(30), realRatio: 4.0 },
+    json: { text: JSON.stringify({ tools: Array.from({ length: 30 }, (u, i) => ({ name: `tool_${i}`, parameters: { type: "object", properties: { path: { type: "string" } } } })) }), realRatio: 2.8 },
+    base64: { text: Buffer.from("x".repeat(3_000)).toString("base64"), realRatio: 2.2 },
+    japanese: { text: "このセッションは再起動をまたいで開いたままになります。".repeat(30), realRatio: 1.1 },
+    chinese: { text: "会话在重启后保持打开状态并流式传输事件。".repeat(30), realRatio: 1.0 },
+  };
+
+  for (const [name, { text, realRatio }] of Object.entries(samples)) {
+    const estimated = charactersPerToken(text);
+    // Estimating at or below the real rate is what keeps the budget honest:
+    // too low wastes context, too high silently truncates.
+    assert.ok(estimated <= realRatio * 1.15, `${name}: estimated ${estimated.toFixed(2)} against a real ${realRatio}`);
+    assert.ok(estimated > 0.5, `${name}: the estimate collapsed to nothing`);
+  }
+
+  // The old constant would have given the same budget to all five.
+  assert.ok(charactersPerToken(samples.chinese.text) < charactersPerToken(samples.prose.text) / 3);
+  assert.equal(estimateTokensForText(""), 0);
+  assert.ok(estimateTokensForText("a") >= 1, "a non-empty string never costs nothing");
+
+  // The same conversation, in two languages, gets two different budgets.
+  const window = { contextWindow: 8_192, maxOutputTokens: 2_048 };
+  const forProse = usableContextCharacters({ ...window, charactersPerToken: charactersPerToken(samples.prose.text) });
+  const forChinese = usableContextCharacters({ ...window, charactersPerToken: charactersPerToken(samples.chinese.text) });
+  assert.ok(forChinese < forProse / 3, `${forChinese} characters against ${forProse}`);
+});
+
+test("a Chinese conversation is compacted rather than sent over the window", async () => {
+  const { estimateTokensForText } = await import("../src/agent/models/token-estimate.mjs");
+
+  // Sized to pass the old 3.6-characters-per-token check while really being
+  // well over the window.
+  const line = "会话在重启后保持打开状态并向已连接的客户端流式传输规范化的事件记录。";
+  const messages = [
+    { role: "system", content: "You are Atlas.", pinned: true },
+    { role: "user", content: "请帮我部署。" },
+    ...Array.from({ length: 40 }, (unused, index) => ({ role: index % 2 === 0 ? "assistant" : "user", content: line.repeat(8) })),
+  ];
+
+  const characters = messages.reduce((total, message) => total + message.content.length, 0);
+  assert.ok(Math.ceil(characters / 3.6) < 5_529, "the old ratio said this fits");
+  assert.ok(estimateTokensForText(messages.map((message) => message.content).join("")) > 5_529, "it does not");
+
+  const fitted = fitToContext(messages, { contextWindow: 8_192, maxOutputTokens: 2_048 });
+  assert.equal(fitted.compacted, true, "sent whole, the server would have dropped the start of it");
+  assert.ok(fitted.charactersPerToken < 1.2, `budgeted at ${fitted.charactersPerToken} characters per token`);
+  assert.match(fitted.note, /earlier messages were summarized/u);
+});
+
+test("the token ratio is calibrated from what the server reports", async () => {
+  const { createTokenRatioCalibrator, charactersPerToken } = await import("../src/agent/models/token-estimate.mjs");
+  const calibrator = createTokenRatioCalibrator();
+  const text = "The operator asked for a change. ".repeat(50);
+
+  // With nothing measured, the estimate stands.
+  assert.equal(calibrator.ratioFor("qwen", text), charactersPerToken(text));
+  assert.equal(calibrator.measuredFor("qwen"), null);
+
+  // The server counted the prompt, and Atlas knows what it sent. This model
+  // turns out to be hungrier than the estimate.
+  calibrator.record("qwen", { characters: 10_000, promptTokens: 5_000 });
+  assert.equal(calibrator.measuredFor("qwen"), 2);
+  assert.equal(calibrator.ratioFor("qwen", text), 2, "a measurement that says the budget is too generous is believed at once");
+
+  // A model that is more generous than the estimate does not widen the budget
+  // on one observation, because being wrong that way is what truncates.
+  const generous = createTokenRatioCalibrator();
+  generous.record("gpt", { characters: 10_000, promptTokens: 1_000 });
+  assert.ok(generous.ratioFor("gpt", text) <= charactersPerToken(text));
+
+  // Nonsense from the server is ignored rather than poisoning the budget.
+  assert.equal(calibrator.record("qwen", { characters: 0, promptTokens: 10 }), null);
+  assert.equal(calibrator.record("qwen", { characters: 10, promptTokens: 0 }), null);
+  assert.equal(calibrator.record("qwen", { characters: NaN, promptTokens: 10 }), null);
+  assert.equal(calibrator.measuredFor("qwen"), 2, "the bad readings changed nothing");
 });

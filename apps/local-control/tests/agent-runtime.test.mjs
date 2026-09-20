@@ -431,3 +431,128 @@ test("a failing audit sink stops the run rather than losing the record", async (
   assert.equal(finished.status, "failed");
   assert.match(finished.summary, /audit disk is full/u);
 });
+
+test("a reconnecting client is replayed the whole log, not one page of it", async (t) => {
+  const { sessions, runtime } = await harness(t);
+  const session = runtime.createSession({ title: "Long session", model: "local-model" });
+
+  // More events than any one replay query reads. A real session reaches this:
+  // every status line, tool proposal and tool result is an event.
+  const written = 6_000;
+  for (let index = 0; index < written; index += 1) {
+    sessions.appendEvent(session.id, { kind: "status", data: { summary: `event ${index}` } });
+  }
+  const total = sessions.session(session.id).lastSequence;
+
+  const seen = [];
+  const unsubscribe = runtime.subscribe(session.id, 0, (event) => seen.push(event.sequence));
+  t.after(() => unsubscribe());
+
+  // Reading one bounded page and then going live left everything between the
+  // page's end and the present undelivered — silently, with the client
+  // believing it had caught up.
+  assert.equal(seen.length, total, `${total - seen.length} events were never delivered`);
+  assert.deepEqual(seen, Array.from({ length: total }, (unused, index) => index + 1), "delivered in order with no gap");
+
+  // Resuming from a cursor past the first page works the same way.
+  const resumed = [];
+  const stop = runtime.subscribe(session.id, 5_500, (event) => resumed.push(event.sequence));
+  t.after(() => stop());
+  assert.equal(resumed[0], 5_501);
+  assert.equal(resumed.at(-1), total);
+
+  // The plain read is paged too, for the same reason.
+  assert.equal(runtime.getEvents(session.id, 0).length, total);
+});
+
+test("a long wall-clock budget is not cancelled one millisecond in", async (t) => {
+  const { executor, state } = controllableExecutor();
+  const { runtime } = await harness(t, { executors: { local: executor } });
+
+  // Node's setTimeout cannot hold a delay this long: past 2^31-1 ms it warns
+  // and fires on the next tick instead. Armed in one call, the run was
+  // cancelled immediately and told its time budget was spent.
+  const session = runtime.createSession({
+    title: "Patient session",
+    model: "local-model",
+    budget: { elapsedMs: 30 * 24 * 60 * 60 * 1000 },
+  });
+
+  runtime.submitTurn(session.id, { text: "Take your time." });
+  await waitFor(() => state.release !== null);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.equal(runtime.getSession(session.id).status, "running", "the run was cancelled by its own deadline timer");
+  assert.equal(state.sawAbort, false, "the run was aborted despite having a month of budget left");
+
+  state.release();
+  await runtime.drain();
+  assert.equal(runtime.getSession(session.id).status, "completed");
+});
+
+test("turns keep their submitted order even when they share a millisecond", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-turn-order-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const sessions = new AgentSessionStore(join(directory, "agent.sqlite"));
+  t.after(() => sessions.close());
+
+  const session = sessions.createSession({ title: "Fast typist", model: "local-model" });
+
+  // Ten turns with no delay between them, as a person sending several
+  // messages in a row produces. Ordering by a millisecond timestamp and
+  // breaking ties on a random UUID answered about a quarter of such pairs
+  // backwards -- "deploy the staging build" answered after "actually, wait".
+  const submitted = [];
+  for (let index = 0; index < 10; index += 1) {
+    submitted.push(sessions.addTurn({ sessionId: session.id, role: "user", text: `message ${index}` }).id);
+  }
+
+  assert.deepEqual(sessions.turns(session.id).map((turn) => turn.id), submitted);
+  assert.equal(sessions.nextPendingTurn(session.id).text, "message 0", "the queue hands back the oldest turn");
+
+  // The same order decides what an edit discards.
+  const removed = sessions.deleteTurnsAfter(session.id, submitted[3]);
+  assert.equal(removed, 6);
+  assert.deepEqual(sessions.turns(session.id).map((turn) => turn.text), ["message 0", "message 1", "message 2", "message 3"]);
+});
+
+test("a database written before turn ordering existed is numbered on open", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-turn-migrate-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const file = join(directory, "agent.sqlite");
+
+  // The old schema, with no ordering column at all.
+  const { DatabaseSync } = await import("node:sqlite");
+  const legacy = new DatabaseSync(file);
+  legacy.exec(`
+    CREATE TABLE agent_sessions (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, repository TEXT, model TEXT NOT NULL,
+      executor TEXT NOT NULL, status TEXT NOT NULL, summary TEXT, budget_json TEXT NOT NULL,
+      usage_json TEXT NOT NULL, lease_owner TEXT, lease_expires_at TEXT,
+      last_sequence INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE agent_turns (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL,
+      attachments_json TEXT NOT NULL DEFAULT '[]', state TEXT NOT NULL,
+      created_at TEXT NOT NULL, started_at TEXT, completed_at TEXT
+    );
+    CREATE INDEX agent_turns_session_idx ON agent_turns(session_id, created_at);
+    INSERT INTO agent_sessions VALUES ('s1','Old','r','m','local','idle',NULL,'{}','{}',NULL,NULL,0,'t','t');
+    INSERT INTO agent_turns VALUES ('turn-c','s1','user','third','[]','completed','t',NULL,NULL);
+    INSERT INTO agent_turns VALUES ('turn-a','s1','user','first','[]','completed','t',NULL,NULL);
+    INSERT INTO agent_turns VALUES ('turn-b','s1','user','second','[]','pending','t',NULL,NULL);
+  `);
+  legacy.close();
+
+  // Opening it adds the column and numbers the existing rows by the order
+  // they were inserted, which is the order they were sent.
+  const sessions = new AgentSessionStore(file);
+  t.after(() => sessions.close());
+  assert.deepEqual(sessions.turns("s1").map((turn) => turn.text), ["third", "first", "second"]);
+  assert.deepEqual(sessions.turns("s1").map((turn) => turn.sequence), [1, 2, 3]);
+
+  // And a turn added afterwards goes on the end rather than colliding.
+  const added = sessions.addTurn({ sessionId: "s1", role: "user", text: "fourth" });
+  assert.equal(added.sequence, 4);
+  assert.deepEqual(sessions.turns("s1").map((turn) => turn.text), ["third", "first", "second", "fourth"]);
+});
