@@ -129,6 +129,36 @@ test("mission cancellation reaches running children and cancels pending descenda
   assert.equal(snapshot.reason, "Operator stopped it.");
 });
 
+test("pause interrupts active children and resume requeues them without resetting usage", async () => {
+  let attempts = 0;
+  let firstStarted;
+  const started = new Promise((resolve) => { firstStarted = resolve; });
+  const scheduler = new MissionScheduler({
+    plan: plan([child("builder", [], { budget: { toolCalls: 2 } })]),
+    execute: ({ signal, budget }) => {
+      attempts += 1;
+      budget.record({ toolCalls: 1 });
+      if (attempts > 1) return Promise.resolve({ summary: "resumed safely" });
+      firstStarted();
+      return new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    },
+  });
+
+  const finished = scheduler.start();
+  await started;
+  scheduler.pause("Operator takeover.");
+  assert.equal(scheduler.status, "interrupted");
+  await scheduler.resume();
+  const snapshot = await finished;
+
+  assert.equal(snapshot.status, "completed");
+  assert.equal(snapshot.children[0].attempts, 2);
+  assert.equal(snapshot.children[0].usage.toolCalls, 2);
+  assert.equal(snapshot.children[0].result.summary, "resumed safely");
+});
+
 test("per-child budgets are isolated and a budget failure blocks only its dependency branch", async () => {
   const scheduler = new MissionScheduler({
     plan: plan([

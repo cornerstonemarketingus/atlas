@@ -5,15 +5,17 @@ import { decryptBackup, encryptBackup } from "./encrypted-backup.mjs";
 import { publishChange } from "./publish-adapters.mjs";
 import { discoverLocalModels } from "./model-discovery.mjs";
 import { createAgentRoutes } from "./agent/routes.mjs";
+import { createMissionRoutes } from "./agent/mission-routes.mjs";
 import { createRateLimiter, LIMITS } from "./rate-limit.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, transcriber = null, modelHealth = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
+  const missionRoutes = missionService ? createMissionRoutes({ missionService }) : null;
 
   async function startTask(taskId) {
     store.markRunning(taskId);
@@ -45,6 +47,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     const identity = authenticate(request.headers.authorization, expected, store);
     if (!identity) return send(response, 401, { message: "A valid local Atlas or paired-device token is required." });
 
+    if (missionRoutes && (request.url ?? "").startsWith("/v1/missions")) { if (await missionRoutes.handle(request, response, identity)) return; }
+    if (!missionService && (request.url ?? "").startsWith("/v1/missions")) return send(response, 503, { message: "The Atlas mission service is not running in this process." });
     if (agentRoutes && (request.url ?? "").startsWith("/v1/sessions")) { if (await agentRoutes.handle(request, response, identity)) return; }
     if (agentRoutes && request.method === "GET" && request.url === "/v1/executors") { if (await agentRoutes.handle(request, response, identity)) return; }
     if (agentRoutes && request.method === "POST" && request.url === "/v1/transcribe") { if (await agentRoutes.handle(request, response, identity)) return; }
