@@ -34,3 +34,17 @@ test("server-renders the public investor thesis", async () => {
   assert.match(html, /operating system for autonomous product creation/i);
   assert.match(html, /ideas.*become operating products/is);
 });
+
+test("server-renders an honest parallel mission preview", async () => {
+  const workerUrl = new URL(`../dist/server/index.js?parallel-test=${Date.now()}`, import.meta.url);
+  const { default: worker } = await import(workerUrl.href);
+  const response = await worker.fetch(new Request("http://localhost/product", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Parallel mission control/i);
+  assert.match(html, /Research child/);
+  assert.match(html, /Budget envelope/);
+  assert.match(html, /Evidence stream/);
+  assert.match(html, /product preview/i);
+  assert.match(html, /not hidden chain-of-thought/i);
+});
