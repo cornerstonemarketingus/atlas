@@ -343,7 +343,13 @@ export class MissionScheduler {
     } finally {
       this.#clearTimer(timer);
       const elapsed = Math.max(0, Math.floor(this.#clock() - began));
-      const charge = Math.min(elapsed, budget.remaining().elapsedMs);
+      // Timer callbacks can run just before the observable clock advances to
+      // the deadline (for example, 19 ms for a 20 ms timer). Once the timeout
+      // fired, the child consumed its complete remaining elapsed allowance;
+      // recording less would make a restart appear to regain time.
+      const charge = timedOut
+        ? budget.remaining().elapsedMs
+        : Math.min(elapsed, budget.remaining().elapsedMs);
       if (charge > 0) budget.record({ elapsedMs: charge });
       child.usage = budget.used;
       child.completedAt = new Date(this.#clock()).toISOString();
