@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { AtlasDashboard } from "./AtlasDashboard";
+import { AtlasGate } from "./AtlasGate.js";
+import { ChatSection } from "./chat/ChatSection.js";
 
 export const metadata: Metadata = {
   title: "Atlas — The private AI operator",
@@ -7,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function Home() {
-  return <AtlasDashboard />;
+  return <AtlasGate><ChatSection /></AtlasGate>;
 }

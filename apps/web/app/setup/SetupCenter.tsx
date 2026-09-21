@@ -1,43 +1,178 @@
 "use client";
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AtlasMark } from "../AtlasMark.js";
+import { useCallback, useEffect, useState } from "react";
+import { AtlasShell } from "../AtlasShell.js";
 
 type SetupStep = { id: string; label: string; state: "complete" | "action-required" | "failed"; detail: string; action?: string };
 type SetupStatus = { overall: string; completedSteps: number; totalSteps: number; steps: SetupStep[]; optional: { stripeConfigured: boolean } };
+type GitHub = { connected: boolean; method: string; installUrl: string | null };
 
+const MERGE_POLICIES = [
+  { id: "manual", label: "Manual — a person merges every pull request" },
+  { id: "ci-gated", label: "Auto-merge once CI is green" },
+  { id: "none", label: "Auto-merge immediately, no check (not recommended)" },
+];
+
+/**
+ * Connections: everything Atlas needs wired up, in one place.
+ *
+ * The checklist was already here; the GitHub connection, the merge policy and
+ * the chat model endpoint were scattered across a legacy dashboard and two
+ * other pages, which is why nobody could find them.
+ */
 export function SetupCenter() {
   const [status, setStatus] = useState<SetupStatus | null>(null);
+  const [github, setGitHub] = useState<GitHub | null>(null);
+  const [model, setModel] = useState<{ configured: boolean; reason: string | null } | null>(null);
+  const [repository, setRepository] = useState("");
+  const [repositoryOptions, setRepositoryOptions] = useState<string[]>([]);
+  const [mergePolicy, setMergePolicy] = useState("manual");
+  const [policyNotice, setPolicyNotice] = useState("");
   const [error, setError] = useState("");
-  const refresh = () => fetch("/api/setup/status", { cache: "no-store" })
-    .then(async (response) => {
-      if (response.status === 401) { window.location.href = "/"; return null; }
+  const [refreshing, setRefreshing] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const response = await fetch("/api/setup/status", { cache: "no-store" });
+      if (response.status === 401) { window.location.href = "/"; return; }
       if (!response.ok) throw new Error("Setup readiness is temporarily unavailable.");
-      return response.json() as Promise<SetupStatus>;
-    })
-    .then((value) => { if (value) setStatus(value); })
-    .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Setup readiness is temporarily unavailable."));
+      setStatus(await response.json() as SetupStatus);
+      setError("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Setup readiness is temporarily unavailable.");
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
 
-  useEffect(() => { void refresh(); }, []);
+  // Deferred a tick so the first render is not a cascading re-render.
+  useEffect(() => { const timer = window.setTimeout(() => void refresh(), 0); return () => window.clearTimeout(timer); }, [refresh]);
 
-  return <main className="setup-shell">
-    <header className="setup-header"><Link className="brand" href="/"><span className="brandmark"><AtlasMark /></span>ATLAS</Link><Link href="/">Back to tasks</Link></header>
-    <section className="setup-intro">
-      <div className="eyebrow"><span>SETUP</span> Remote control center</div>
-      <h1>Bring Atlas online<br /><em>from anywhere.</em></h1>
-      <p>Eight checks cover GitHub, Cloudflare, the database, runtime credentials, deployment, and sign-in. Completed checks stay complete when you return on another device.</p>
-      <div className="setup-progress" aria-live="polite"><strong>{status ? `${status.completedSteps}/${status.totalSteps}` : "…"}</strong><span>{status?.overall === "ready" ? "Ready" : "setup checks complete"}</span></div>
-    </section>
-    <section className="setup-list" aria-label="Atlas setup checklist">
-      {error && <p className="notice" role="alert">{error}</p>}
-      {!status && !error && <p>Checking the live environment…</p>}
-      {status?.steps.map((item, index) => <article className={`setup-card ${item.state}`} key={item.id}>
-        <div className="setup-number">{String(index + 1).padStart(2, "0")}</div>
-        <div><div className="setup-state">{item.state.replace("-", " ")}</div><h2>{item.label}</h2><p>{item.detail}</p></div>
-        {item.state !== "complete" && <span className="setup-action">{item.action ?? "Action required"}</span>}
-      </article>)}
-      {status && <article className="setup-card optional"><div className="setup-number">+</div><div><div className="setup-state">Optional</div><h2>Stripe billing</h2><p>{status.optional.stripeConfigured ? "Billing credentials are configured." : "Add billing when you are ready to charge customers."}</p></div></article>}
-    </section>
-    <div className="setup-toolbar"><button type="button" onClick={() => void refresh()}>REFRESH LIVE STATUS</button></div>
-  </main>;
+  useEffect(() => {
+    let active = true;
+    void Promise.all([
+      fetch("/api/github/status").then((response) => (response.ok ? response.json() : null)).catch(() => null),
+      fetch("/api/chat", { cache: "no-store" }).then((response) => (response.ok ? response.json() : null)).catch(() => null),
+      fetch("/api/github/options").then((response) => (response.ok ? response.json() : null)).catch(() => null),
+    ]).then(([status, chat, options]) => {
+      if (!active) return;
+      if (status) setGitHub(status as GitHub);
+      if (chat) setModel(chat as { configured: boolean; reason: string | null });
+      const names = (options as { repositories?: string[] } | null)?.repositories ?? [];
+      if (names.length) { setRepositoryOptions(names); setRepository((current) => current || names[0]); }
+    });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!repository.includes("/")) return;
+    const [owner, name] = repository.split("/");
+    let active = true;
+    void fetch("/api/settings/repositories")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((value) => {
+        if (!active || !value) return;
+        const match = (value as { repositories: { owner: string; name: string; mergePolicy: string }[] }).repositories
+          .find((row) => row.owner === owner.toLowerCase() && row.name === name.toLowerCase());
+        setMergePolicy(match?.mergePolicy ?? "manual");
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [repository]);
+
+  async function savePolicy(next: string) {
+    const [owner, name] = repository.split("/");
+    if (!owner || !name) { setPolicyNotice("Choose a project first."); return; }
+    setMergePolicy(next);
+    try {
+      const response = await fetch("/api/settings/repositories", {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ owner, name, mergePolicy: next }),
+      });
+      const result = await response.json() as { message?: string };
+      setPolicyNotice(response.ok ? "Saved." : result.message ?? "Could not save the merge policy.");
+    } catch {
+      setPolicyNotice("The settings service is temporarily unavailable.");
+    }
+  }
+
+  return <AtlasShell section="connections" headerContext={
+    <span className="context-chip">{status ? `${status.completedSteps}/${status.totalSteps} ready` : "Checking…"}</span>
+  }>
+    <div className="section-scroll">
+      <div className="section-page">
+        <header className="page-head">
+          <p className="kicker">CONNECTIONS</p>
+          <h1>Everything Atlas is plugged into.</h1>
+          <p>What is connected, what still needs you, and the two settings that decide how far Atlas may go on its own.</p>
+        </header>
+
+        <section className="page-block">
+          <h2><span>01</span>Live status</h2>
+          <div className="status-grid">
+            <article className={github?.connected ? "status-card good" : "status-card"}>
+              <small>GITHUB</small>
+              <strong>{github === null ? "Checking…" : github.connected ? `Connected via ${github.method}` : "Not connected"}</strong>
+              <p>Atlas needs GitHub to read your projects and open pull requests for the Build section.</p>
+              {github?.installUrl && !github.connected && <a href={github.installUrl} rel="noreferrer">Install the GitHub App ↗</a>}
+            </article>
+            <article className={model?.configured ? "status-card good" : "status-card"}>
+              <small>CHAT MODEL</small>
+              <strong>{model === null ? "Checking…" : model.configured ? "Model endpoint connected" : "No model endpoint"}</strong>
+              <p>{model?.configured
+                ? "The Chat section can answer. Atlas talks to any OpenAI-compatible server you host or subscribe to."
+                : model?.reason ?? "Chat cannot answer until a model endpoint is configured."}</p>
+            </article>
+            <article className="status-card">
+              <small>COMPUTER</small>
+              <strong>Pair from Automation</strong>
+              <p>The Windows companion pairs with a one-time credential and drives a separate browser profile on your PC.</p>
+              <Link href="/automation">Open Automation →</Link>
+            </article>
+          </div>
+        </section>
+
+        <section className="page-block">
+          <h2><span>02</span>How far Atlas may go</h2>
+          <p className="block-hint">Build always opens a pull request. This decides what happens to it next.</p>
+          <div className="policy-row">
+            <label>Project
+              <select aria-label="Project" value={repository} onChange={(event) => setRepository(event.target.value)}>
+                {repositoryOptions.length === 0 && <option value="">No projects available</option>}
+                {repositoryOptions.map((name) => <option key={name}>{name}</option>)}
+              </select>
+            </label>
+            <label>Merge policy
+              <select aria-label="Merge policy" value={mergePolicy} disabled={!repository} onChange={(event) => void savePolicy(event.target.value)}>
+                {MERGE_POLICIES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+          </div>
+          {policyNotice && <p className="page-notice" role="status">{policyNotice}</p>}
+        </section>
+
+        <section className="page-block">
+          <h2><span>03</span>Deployment checklist</h2>
+          {error && <p className="page-notice" role="alert">{error}</p>}
+          {!status && !error && <p className="block-hint">Checking the live environment…</p>}
+          <div className="check-list">
+            {status?.steps.map((item, index) => <article className={`check-row ${item.state}`} key={item.id}>
+              <div className="check-number">{String(index + 1).padStart(2, "0")}</div>
+              <div><div className="check-state">{item.state.replace("-", " ")}</div><h3>{item.label}</h3><p>{item.detail}</p></div>
+              {item.state !== "complete" && <span className="check-action">{item.action ?? "Action required"}</span>}
+            </article>)}
+            {status && <article className="check-row optional">
+              <div className="check-number">+</div>
+              <div><div className="check-state">Optional</div><h3>Stripe billing</h3>
+                <p>{status.optional.stripeConfigured ? "Billing credentials are configured." : "Add billing when you are ready to charge customers."}</p></div>
+            </article>}
+          </div>
+          <button className="page-action" type="button" onClick={() => void refresh()} disabled={refreshing}>
+            {refreshing ? "Refreshing…" : "Refresh live status"}
+          </button>
+        </section>
+      </div>
+    </div>
+  </AtlasShell>;
 }

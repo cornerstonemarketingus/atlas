@@ -12,7 +12,7 @@ export function MarketingNav() {
 export function MarketingFooter() {
   return <footer className="marketing-footer">
     <div><b>ATLAS</b><p>One private AI operator for software and computer work.</p></div>
-    <div><Link href="/computer">Computer operator</Link><Link href="/product">Product</Link><Link href="/demo">Demo</Link><Link href="/pricing">Pricing</Link><Link href="/investors">Vision</Link><Link href="/owner">Owner access</Link><Link href="/setup">Setup</Link></div>
+    <div><Link href="/computer">Computer operator</Link><Link href="/product">Product</Link><Link href="/demo">Demo</Link><Link href="/pricing">Pricing</Link><Link href="/investors">Vision</Link><Link href="/owner">Owner access</Link><Link href="/setup">Connections</Link></div>
     <div><Link href="/legal/privacy">Privacy</Link><Link href="/legal/terms">Terms</Link><Link href="/delete-account">Delete account</Link></div>
     <small>Built for ambitious people who want leverage without surrendering control.</small>
   </footer>;

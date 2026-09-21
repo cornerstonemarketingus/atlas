@@ -2,9 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "./workspace.css";
-import "./workspace-navigation.css";
-import "./operator.css";
-import "./operator-controls.css";
+import "./atlas-shell.css";
 import "./marketing.css";
 
 const geistSans = Geist({
