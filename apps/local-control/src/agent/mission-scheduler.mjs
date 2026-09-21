@@ -120,6 +120,7 @@ export class MissionScheduler {
   #running = new Map();
   #drainPromise = null;
   #resolveDrain = null;
+  #resumePromise = null;
   #pumping = false;
 
   constructor({ plan, execute, maxConcurrency = 2, onStateChange = () => {}, clock = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout }) {
@@ -183,7 +184,10 @@ export class MissionScheduler {
 
   /** Starts a new mission or safely requeues children interrupted by restart. */
   start() {
-    if (this.#drainPromise) return this.#drainPromise;
+    if (this.#drainPromise) {
+      if (this.#status === "interrupted") this.resume();
+      return this.#drainPromise;
+    }
     if (TERMINAL_MISSION_STATES.has(this.#status)) return Promise.resolve(this.snapshot());
     for (const child of this.#children.values()) {
       if (child.state === "interrupted") child.state = "pending";
@@ -195,6 +199,41 @@ export class MissionScheduler {
     this.#changed();
     this.#pump();
     return this.#drainPromise;
+  }
+
+  resume() {
+    if (this.#status !== "interrupted") return this.#drainPromise ?? Promise.resolve(this.snapshot());
+    if (this.#resumePromise) return this.#resumePromise;
+    this.#resumePromise = Promise.allSettled([...this.#running.values()]).then(() => {
+      if (this.#status !== "interrupted") return this.#drainPromise ?? this.snapshot();
+      for (const child of this.#children.values()) {
+        if (child.state === "interrupted") child.state = "pending";
+      }
+      this.#status = "running";
+      this.#reason = null;
+      this.#resumePromise = null;
+      this.#changed();
+      this.#pump();
+      return this.#drainPromise;
+    });
+    return this.#resumePromise;
+  }
+
+  /**
+   * Pauses at the scheduler boundary and interrupts every active child.
+   * Interrupted children retain their recorded usage and are requeued by the
+   * next start(), so pausing never grants a fresh budget or repeats a child
+   * that already reached a terminal state.
+   */
+  pause(reason = "Mission paused by the operator.") {
+    if (this.#status !== "running") return this.snapshot();
+    this.#status = "interrupted";
+    this.#reason = String(reason);
+    for (const controller of this.#controllers.values()) {
+      controller.abort(new MissionPausedError(this.#reason));
+    }
+    this.#changed();
+    return this.snapshot();
   }
 
   /** Cancels pending descendants and propagates an AbortSignal to every running child. */
@@ -333,7 +372,10 @@ export class MissionScheduler {
         child.result = jsonValue(result ?? null, `Result for '${child.id}'`);
       }
     } catch (error) {
-      if (this.#status === "cancelled" || (controller.signal.aborted && !timedOut)) {
+      if (this.#status === "interrupted" && controller.signal.aborted && !timedOut) {
+        child.state = "interrupted";
+        child.error = { code: "MISSION_PAUSED", message: this.#reason ?? "Mission paused." };
+      } else if (this.#status === "cancelled" || (controller.signal.aborted && !timedOut)) {
         child.state = "cancelled";
         child.error = { code: "MISSION_CANCELLED", message: this.#reason ?? "Mission cancelled." };
       } else {
@@ -382,6 +424,10 @@ export class MissionScheduler {
 
 class MissionCancelledError extends Error {
   constructor(message) { super(message); this.name = "MissionCancelledError"; this.code = "MISSION_CANCELLED"; }
+}
+
+class MissionPausedError extends Error {
+  constructor(message) { super(message); this.name = "MissionPausedError"; this.code = "MISSION_PAUSED"; }
 }
 
 function publicChild(child) {

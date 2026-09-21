@@ -8,6 +8,9 @@ export const LOCAL_UI_HTML = `<!doctype html>
 <div id="transcript" class="transcript"><p class="empty">Unlock this tab, then send a message to start a session.</p></div>
 <p id="run-status" class="hint"></p>
 <form id="turn-form"><label>Message<textarea id="turn-text" maxlength="10000" placeholder="Describe what you want Atlas to do, or reply to what it just said"></textarea></label><label>Attachments<input id="attachments" type="file" multiple accept="image/*,text/*,.pdf,.md,.json,.csv"></label><div class="actions"><button>Send</button><button type="button" class="secondary" id="dictate">Dictate</button><button type="button" class="secondary" id="pause">Pause</button><button type="button" class="secondary" id="resume">Resume</button><button type="button" class="secondary" id="stop">Stop</button><button type="button" class="secondary" id="retry">Retry</button><button type="button" class="secondary" id="regenerate">Regenerate</button><button type="button" class="secondary" id="edit-last">Edit last</button></div></form></section>
+<section class="panel" aria-labelledby="missions-heading"><div class="section-title"><div><p class="eyebrow">PARALLEL AGENTS</p><h2 id="missions-heading">Mission Control</h2></div><button type="button" class="secondary" id="mission-refresh">Refresh</button></div>
+<p class="hint">Create explicit child lanes. Atlas starts a lane only after its dependencies finish and keeps every child inside the mission budget.</p>
+<form id="mission-form"><label>Mission objective<textarea id="mission-objective" required maxlength="10000" placeholder="Describe the result this team should deliver"></textarea></label><label>Repository folder<input id="mission-repository" required placeholder="C:\\path\\to\\project"></label><label>Model<select id="mission-model"><option>qwen2.5-coder:7b</option></select></label><label>Child lanes (JSON)<textarea id="mission-lanes" required spellcheck="false" placeholder='[{"id":"research","objective":"Inspect current behavior","dependencies":[]},{"id":"build","objective":"Implement the change","dependencies":["research"]}]'></textarea></label><p class="hint">Each child lane must declare a dependencies array. Use [] for a lane that can start immediately.</p><label>Maximum parallel lanes<input id="mission-concurrency" type="number" min="1" step="1" value="3"></label><button>Create mission</button></form><p id="mission-notice" class="hint" role="status" aria-live="polite"></p><div id="missions" class="tasks" aria-live="polite"><p class="empty">Unlock this tab to load missions.</p></div></section>
 <section class="panel"><h2>Run local coder</h2><form id="task-form"><label>Repository folder<input id="repository" required placeholder="C:\\path\\to\\project"></label><label>Objective<textarea id="objective" required maxlength="10000" placeholder="Describe one bounded change"></textarea></label><label>Discovered local model<select id="model"><option>qwen2.5-coder:7b</option></select></label><button>Queue isolated task</button></form><p id="notice" role="status"></p></section>
 <section><div class="section-title"><h2>Tasks</h2><button class="secondary" id="refresh">Refresh</button></div><div id="tasks" class="tasks"><p class="empty">Unlock this tab to load tasks.</p></div></section>
 <section class="panel"><div class="section-title"><h2>Approvals</h2><div class="actions"><button class="secondary" id="notify">Enable notifications</button><button class="secondary" id="pair">Pair phone</button></div></div><p id="pair-code" role="status"></p><div id="approvals" class="tasks"><p class="empty">No pending approvals.</p></div></section>
@@ -156,4 +159,67 @@ q('#dictate').onclick=async()=>{
  q('#dictate').textContent='Stop recording';
  runStatus.textContent='Recording…';
 };
+
+const missionList=q('#missions'),missionNotice=q('#mission-notice');
+const missionStreams=new Map();
+async function loadMissionModels(){const response=await api('/v1/models');if(!response.ok)return;const available=(await response.json()).models||[];if(available.length)q('#mission-model').innerHTML=available.map(model=>'<option>'+esc(model)+'</option>').join('')}
+function missionChildren(mission){return Array.isArray(mission.children)?mission.children:Object.values(mission.children||{})}
+function usageText(usage={}){
+ const parts=[];
+ for(const [name,value] of Object.entries(usage))if(value!==undefined&&value!==null)parts.push(name+': '+value);
+ return parts.join(' · ')||'No budget used yet';
+}
+function renderMission(mission){
+ const state=mission.status||mission.state||'unknown',children=missionChildren(mission);
+ const lanes=children.map(child=>'<div class="lane"><div class="task-top"><strong>'+esc(child.id||child.name||'Child')+'</strong><span class="status '+esc(child.state||child.status||'queued')+'">'+esc(child.state||child.status||'queued')+'</span></div><p>'+esc(child.objective||'')+'</p><p class="hint">'+esc(usageText(child.usage))+'</p>'+(child.error?'<p class="status failed">'+esc(child.error.message||child.error)+'</p>':'')+(child.result?'<p>'+esc(child.result.summary||child.result)+'</p>':'')+'</div>').join('');
+ const evidence=[...(mission.evidence||[]),...children.flatMap(child=>child.evidence||[])];
+ const evidenceHtml=evidence.length?'<details class="evidence"><summary>Evidence ('+evidence.length+')</summary>'+evidence.map(item=>'<p>'+esc(item.summary||item.name||item.path||JSON.stringify(item))+'</p>').join('')+'</details>':'';
+ const controls=state==='completed'||state==='failed'||state==='cancelled'?'':'<div class="actions"><button class="secondary" data-mission-action="pause" data-mission-id="'+esc(mission.id)+'"'+(state==='interrupted'?' disabled':'')+'>Pause</button><button class="secondary" data-mission-action="resume" data-mission-id="'+esc(mission.id)+'"'+(state!=='interrupted'?' disabled':'')+'>Resume</button><button class="secondary" data-mission-action="cancel" data-mission-id="'+esc(mission.id)+'">Cancel</button></div>';
+ return '<article class="task"><div class="task-top"><h3>'+esc(mission.title||mission.objective||mission.id)+'</h3><span class="status '+esc(state)+'">'+esc(state)+'</span></div>'+(mission.reason?'<p>'+esc(mission.reason)+'</p>':'')+'<p class="hint">Mission '+esc(mission.id)+' · '+esc(usageText(mission.usage||mission.budgetUsage))+'</p><div class="mission-lanes">'+lanes+'</div>'+evidenceHtml+controls+'</article>';
+}
+async function loadMissions(){
+ if(!sessionStorage.getItem('atlas-token')){missionList.innerHTML='<p class="empty">Unlock this tab to load missions.</p>';return}
+ const response=await api('/v1/missions');
+ if(response.status===401){missionList.innerHTML='<p class="empty">Your access token was rejected. Unlock this tab again.</p>';return}
+ if(!response.ok){const body=await response.json().catch(()=>({}));missionNotice.textContent=body.message||'Missions could not be loaded ('+response.status+').';return}
+ const list=(await response.json()).missions||[];
+ missionNotice.textContent='';missionList.innerHTML=list.length?list.map(renderMission).join(''):'<p class="empty">No missions yet.</p>';
+ missionList.querySelectorAll('[data-mission-action]').forEach(button=>button.onclick=()=>controlMission(button.dataset.missionId,button.dataset.missionAction));
+ list.filter(m=>!['completed','failed','cancelled'].includes(m.status||m.state)).forEach(m=>watchMission(m.id));
+}
+async function controlMission(id,action){
+ missionNotice.textContent=action[0].toUpperCase()+action.slice(1)+' requested…';
+ const response=await api('/v1/missions/'+encodeURIComponent(id)+'/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action})});
+ const body=await response.json().catch(()=>({}));
+ missionNotice.textContent=response.ok?'Mission '+action+' accepted.':body.message||'Mission '+action+' failed ('+response.status+').';
+ await loadMissions();
+}
+async function watchMission(id){
+ if(missionStreams.has(id))return;
+ const controller=new AbortController();missionStreams.set(id,controller);let after=0;
+ try{
+  const response=await api('/v1/missions/'+encodeURIComponent(id)+'/events?after='+after,{signal:controller.signal});
+  if(!response.ok||!response.body)return;
+  const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
+  for(;;){const chunk=await reader.read();if(chunk.done)break;buffer+=decoder.decode(chunk.value,{stream:true});let boundary=buffer.indexOf('\\n\\n');while(boundary!==-1){const frame=buffer.slice(0,boundary);buffer=buffer.slice(boundary+2);const data=frame.split('\\n').find(line=>line.startsWith('data: '));if(data){const event=JSON.parse(data.slice(6));after=event.sequence||after;await loadMissions()}boundary=buffer.indexOf('\\n\\n')}}
+ }catch(error){if(error.name!=='AbortError')missionNotice.textContent='Live mission updates disconnected; polling will continue.'}
+ finally{missionStreams.delete(id)}
+}
+q('#mission-form').onsubmit=async event=>{
+ event.preventDefault();let children;
+ try{children=JSON.parse(q('#mission-lanes').value)}catch{return missionNotice.textContent='Child lanes must be valid JSON.'}
+ if(!Array.isArray(children)||!children.length)return missionNotice.textContent='Add at least one child lane.';
+ if(children.some(child=>!child||typeof child.id!=='string'||typeof child.objective!=='string'))return missionNotice.textContent='Every child lane needs a text id and objective.';
+ if(children.some(child=>!Array.isArray(child.dependencies)))return missionNotice.textContent='Every child lane needs a dependencies array. Use [] when it has none.';
+ const title=q('#mission-objective').value.trim(),repository=q('#mission-repository').value.trim(),model=q('#mission-model').value,maxConcurrency=Number(q('#mission-concurrency').value);
+ missionNotice.textContent='Creating mission…';
+ const response=await api('/v1/missions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repository,model,title,children,maxConcurrency})});
+ const body=await response.json().catch(()=>({}));
+ if(!response.ok)return missionNotice.textContent=body.message||'Mission creation failed ('+response.status+').';
+ missionNotice.textContent='Mission created.';q('#mission-lanes').value='';await loadMissions();
+};
+q('#mission-refresh').onclick=loadMissions;
+q('#save-token').addEventListener('click',()=>{loadMissions();loadMissionModels()});
+if(sessionStorage.getItem('atlas-token')){loadMissions();loadMissionModels()}
+setInterval(()=>{if(sessionStorage.getItem('atlas-token'))loadMissions()},5000);
 `;
