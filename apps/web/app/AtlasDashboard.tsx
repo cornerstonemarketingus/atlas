@@ -249,10 +249,10 @@ export function AtlasDashboard() {
   if (!signedIn) {
     return <main id="top"><MarketingNav /><div className="signin-shell"><section className="signin-story">
       <div className="workspace-brand"><span><AtlasMark /></span>ATLAS</div>
-      <div><p className="signin-kicker">AUTONOMOUS VIBE CODING, UNDER CONTROL</p><h1>Describe the product.<br />Atlas builds the business.</h1><p>Go from idea to working software with an engineering agent that can code, test, deploy, and operate the browser workflows around your product.</p><p className="signin-demo-link"><a href="/demo">See a product mission in action →</a></p></div>
-      <div className="signin-proof"><span>Prompt to working product</span><span>Code and computer operation</span><span>Local-first ownership</span></div>
+      <div><p className="signin-kicker">AI COMPUTER OPERATOR + AUTONOMOUS BUILDER</p><h1>Give Atlas a goal.<br />It builds—and operates—the result.</h1><p>Atlas writes and verifies software, then works across websites and business tools to help launch, sell, market, and operate what you built—with approval before consequential actions.</p><p className="signin-demo-link"><a href="/computer">Explore the computer operator →</a></p></div>
+      <div className="signin-proof"><span>Build real software</span><span>Operate websites and tools</span><span>Approve every consequence</span></div>
     </section><section className="signin-access"><div>
-      <p className="signin-kicker">START FREE</p><h2>Your product team in one workspace.</h2><p>Connect GitHub to build and improve real software, or use an owner access code for your private Atlas deployment.</p>
+      <p className="signin-kicker">START FREE</p><h2>Your product team and computer operator.</h2><p>Connect GitHub to start building. Verified owners receive unrestricted personal access automatically; the private access code remains available as a fallback.</p>
       <div className="signin-actions">
         <a
           href="/api/auth/github/start"
@@ -262,7 +262,7 @@ export function AtlasDashboard() {
         </a>
         {!showAccessCode && (
           <button type="button" onClick={() => setShowAccessCode(true)} className="signin-secondary">
-            Use an owner access code
+            Owner access code
           </button>
         )}
         {showAccessCode && (

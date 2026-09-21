@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { subscriptions, users } from "../../../../../db/schema";
-import { exchangeCodeForToken, fetchGitHubProfile, githubOAuthConfiguration, clearStateCookieHeader, readStateCookie } from "../../github-oauth.mjs";
+import { exchangeCodeForToken, fetchGitHubProfile, githubOAuthConfiguration, clearStateCookieHeader, isOwnerGitHubLogin, readStateCookie } from "../../github-oauth.mjs";
 import { signSession, sessionCookieHeader } from "../../session.mjs";
 
 export async function GET(request: Request) {
@@ -42,7 +42,12 @@ export async function GET(request: Request) {
 
     const sessionSecret = process.env.ATLAS_SESSION_SECRET;
     if (!sessionSecret) throw new Error("ATLAS_SESSION_SECRET is not configured.");
-    const token = await signSession({ uid: user.id, gh: user.githubLogin }, sessionSecret);
+    const token = await signSession(
+      isOwnerGitHubLogin(user.githubLogin)
+        ? { role: "operator", gh: user.githubLogin }
+        : { uid: user.id, gh: user.githubLogin },
+      sessionSecret,
+    );
 
     const headers = new Headers({ location: "/" });
     headers.append("set-cookie", clearState);

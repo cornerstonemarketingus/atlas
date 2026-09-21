@@ -150,9 +150,14 @@ on every deploy (each step is skipped, not failed, if its secret is unset):
   Cloudflare deployment) they instead accept `Authorization: Bearer
   <ATLAS_OPERATOR_TOKEN>`. This is a shared admin/dev bypass, not a real
   per-user account — it carries no billing plan and is exempt from the usage
-  caps below. The dashboard's "Use an access code instead" fallback prompts
-  for this value and remembers it in the browser's `localStorage`. Real
-  visitors sign in with GitHub instead — see the next section.
+  caps below. The dashboard's owner-code fallback exchanges this value for a
+  short-lived, HttpOnly signed session; it never stores the credential in
+  browser storage. Real visitors sign in with GitHub instead — see the next
+  section.
+- `ATLAS_OWNER_GITHUB_LOGINS` — an optional comma-separated list of GitHub
+  logins that receive the unrestricted owner role after ordinary GitHub OAuth.
+  Matching is exact and case-insensitive. This is the preferred personal-use
+  path because the operator credential never enters the browser.
 
 ## Membership and billing
 

@@ -11,6 +11,16 @@ export function githubOAuthConfiguration(environment = process.env) {
   return { configured: true, clientId, clientSecret };
 }
 
+/** GitHub logins that receive the private, unrestricted owner role. */
+export function isOwnerGitHubLogin(login, environment = process.env) {
+  if (typeof login !== "string" || !login.trim()) return false;
+  const configured = String(environment.ATLAS_OWNER_GITHUB_LOGINS ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return configured.includes(login.trim().toLowerCase());
+}
+
 export function randomState() {
   return crypto.randomUUID().replace(/-/gu, "");
 }
