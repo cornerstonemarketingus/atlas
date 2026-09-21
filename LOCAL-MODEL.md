@@ -153,9 +153,20 @@ ATLAS_MODEL_API_KEY  = only if your server needs one
 ```
 
 If those are unset it falls back to `ATLAS_CODER_BASE_URL`,
-`ATLAS_CODER_MODEL` and `GROQ_API_KEY`, so one endpoint can serve both. The
-same transport rules apply — HTTPS for any remote host, plain HTTP only for
-loopback, and never credentials in the URL.
+`ATLAS_CODER_MODEL` and `GROQ_API_KEY` *as seen by the Worker*. Note what that
+does and does not mean: the `ATLAS_CODER_*` values in section A are GitHub
+Actions **repository variables**, and a Worker cannot read one. Setting them
+for the coder runtime does not configure Chat. One endpoint can serve both,
+but it has to be configured in both places — as repository variables for the
+runner, and as Worker secrets here.
+
+Worker secrets are uploaded by `.github/workflows/deploy-cloudflare.yml` from
+repository **secrets** of the same name, so set `ATLAS_CHAT_BASE_URL` and
+`ATLAS_CHAT_MODEL` under Settings → Secrets and variables → Actions →
+*Secrets*, not *Variables*, and they land on the Worker on the next deploy.
+
+The same transport rules apply — HTTPS for any remote host, plain HTTP only
+for loopback, and never credentials in the URL.
 
 With nothing configured, Chat says so: Connections shows "No model endpoint",
 the composer explains why it cannot answer, and the send button is disabled.
