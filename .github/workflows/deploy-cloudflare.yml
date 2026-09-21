@@ -62,6 +62,9 @@ jobs:
           ATLAS_SESSION_SECRET: ${{ secrets.ATLAS_SESSION_SECRET }}
           ATLAS_GITHUB_OAUTH_CLIENT_ID: ${{ secrets.ATLAS_GITHUB_OAUTH_CLIENT_ID }}
           ATLAS_GITHUB_OAUTH_CLIENT_SECRET: ${{ secrets.ATLAS_GITHUB_OAUTH_CLIENT_SECRET }}
+          # Comma-separated GitHub logins allowed to receive the unrestricted
+          # owner role after completing the normal OAuth identity check.
+          ATLAS_OWNER_GITHUB_LOGINS: ${{ secrets.ATLAS_OWNER_GITHUB_LOGINS }}
           # Billing
           ATLAS_STRIPE_SECRET_KEY: ${{ secrets.ATLAS_STRIPE_SECRET_KEY }}
           ATLAS_STRIPE_WEBHOOK_SECRET: ${{ secrets.ATLAS_STRIPE_WEBHOOK_SECRET }}
@@ -82,6 +85,7 @@ jobs:
             ATLAS_SESSION_SECRET \
             ATLAS_GITHUB_OAUTH_CLIENT_ID \
             ATLAS_GITHUB_OAUTH_CLIENT_SECRET \
+            ATLAS_OWNER_GITHUB_LOGINS \
             ATLAS_STRIPE_SECRET_KEY \
             ATLAS_STRIPE_WEBHOOK_SECRET \
             ATLAS_STRIPE_PRICE_PRO \
@@ -109,5 +113,6 @@ jobs:
       - name: Report what still needs configuring
         run: |
           echo "Sign-in needs: ATLAS_SESSION_SECRET, ATLAS_GITHUB_OAUTH_CLIENT_ID, ATLAS_GITHUB_OAUTH_CLIENT_SECRET"
+          echo "Optional owner login: ATLAS_OWNER_GITHUB_LOGINS"
           echo "Billing needs: ATLAS_STRIPE_SECRET_KEY, ATLAS_STRIPE_WEBHOOK_SECRET, ATLAS_STRIPE_PRICE_PRO, ATLAS_STRIPE_PRICE_TEAM"
           echo "Verify live with: GET /api/setup/status (send your operator token as a Bearer credential)"

@@ -323,12 +323,17 @@ export class AgentRuntime {
     });
     const startedAtMs = Date.now();
     let charged = false;
-    const chargeElapsed = () => {
+    const chargeElapsed = (exhaustedByDeadline = false) => {
       if (charged) return;
       charged = true;
       // Capped at what is left, so the closing charge can never be the thing
       // that throws a budget error out of a cleanup path.
-      budget.record({ elapsedMs: Math.min(Date.now() - startedAtMs, budget.remaining().elapsedMs) });
+      // A timer may fire just before Date.now() advances to the next integer
+      // millisecond. When that timer is the reason the run stopped, persist
+      // the full remaining allowance rather than leaving a phantom 1 ms that
+      // a resumed session could spend.
+      const remainingElapsedMs = budget.remaining().elapsedMs;
+      budget.record({ elapsedMs: exhaustedByDeadline ? remainingElapsedMs : Math.min(Date.now() - startedAtMs, remainingElapsedMs) });
     };
     const remainingMs = Math.max(0, budget.remaining().elapsedMs);
     const deadline = setTimeout(() => control.cancel("time-budget"), remainingMs);
@@ -379,7 +384,7 @@ export class AgentRuntime {
       chargeElapsed();
       this.#finish(sessionId, "completed", "All queued turns are answered.", budget);
     } catch (error) {
-      chargeElapsed();
+      chargeElapsed(error instanceof RunCancelledError && error.reason === "time-budget");
       this.#handleRunError(sessionId, error, budget);
     } finally {
       clearTimeout(deadline);

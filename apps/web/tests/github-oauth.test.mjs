@@ -9,12 +9,21 @@ import {
   stateCookieHeader,
   clearStateCookieHeader,
   readStateCookie,
+  isOwnerGitHubLogin,
 } from "../app/api/auth/github-oauth.mjs";
 
 test("reports unconfigured when either client credential is missing", () => {
   assert.equal(githubOAuthConfiguration({}).configured, false);
   assert.equal(githubOAuthConfiguration({ ATLAS_GITHUB_OAUTH_CLIENT_ID: "id" }).configured, false);
   assert.equal(githubOAuthConfiguration({ ATLAS_GITHUB_OAUTH_CLIENT_ID: "id", ATLAS_GITHUB_OAUTH_CLIENT_SECRET: "secret" }).configured, true);
+});
+
+test("matches owner GitHub logins exactly and case-insensitively", () => {
+  const environment = { ATLAS_OWNER_GITHUB_LOGINS: "octocat, CornerstoneMarketingUS" };
+  assert.equal(isOwnerGitHubLogin("OCTOCAT", environment), true);
+  assert.equal(isOwnerGitHubLogin("cornerstonemarketingus", environment), true);
+  assert.equal(isOwnerGitHubLogin("cornerstone", environment), false);
+  assert.equal(isOwnerGitHubLogin("", environment), false);
 });
 
 test("builds an authorize URL carrying state and redirect_uri", () => {
