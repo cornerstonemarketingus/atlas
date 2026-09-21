@@ -11,6 +11,15 @@ Companion to `HANDOFF.md`. Updated 2026-09-14 after the production setup complet
 
 Ordering matters. Items in §1 gate everything below them.
 
+## Active product-quality program
+
+The operator, persistent runtime, local-model path, and autonomous builder are
+now one active product program. The prioritized milestones, owners, acceptance
+criteria, and release scorecard live in
+[`docs/OPERATOR-QUALITY-ROADMAP.md`](docs/OPERATOR-QUALITY-ROADMAP.md). Items
+promoted there are no longer "nice to have": they are the current P0–P2 queue
+for product quality, performance, reliability, security, and usability.
+
 ---
 
 ## 1. Production setup — completed
