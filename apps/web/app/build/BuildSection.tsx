@@ -19,12 +19,23 @@ type GitHubOptions = { repositories: string[]; branches: string[]; defaultBranch
 
 const TASK_POLL_MS = 12_000;
 
+/** Statuses after which nothing more will change, so the last trace step reads as done rather than in flight. */
+const TERMINAL = new Set(["succeeded", "failed", "cancelled", "timed_out", "skipped"]);
+
+/**
+ * Only what Atlas actually observes about a run: that the dispatch was
+ * accepted, which Actions run it belongs to, and that run's state. Nothing
+ * here describes what happened *inside* the run, because nothing reports
+ * that back yet.
+ */
 const PROGRESS: Record<string, string[]> = {
-  dispatched: ["Request received", "Preparing a private workspace"],
-  queued: ["Request received", "Waiting for secure compute"],
-  running: ["Understanding your project", "Working through the requested change", "Validation will run next"],
-  succeeded: ["Project understood", "Change completed", "Validation passed"],
-  failed: ["Project understood", "Work stopped during validation"],
+  dispatched: ["Request sent to the runner", "Waiting for the run to appear"],
+  queued: ["Request sent to the runner", "Run queued on GitHub Actions"],
+  running: ["Request sent to the runner", "Run started", "Running now"],
+  succeeded: ["Request sent to the runner", "Run started", "Run finished"],
+  failed: ["Request sent to the runner", "Run started", "Run finished with a failure"],
+  cancelled: ["Request sent to the runner", "Run started", "Run cancelled"],
+  timed_out: ["Request sent to the runner", "Run started", "Run timed out"],
 };
 
 const MODES = [
@@ -39,10 +50,38 @@ const STARTERS = [
   { title: "Fix what's broken", detail: "Debug & validate", prompt: "Diagnose the currently failing tests and fix the root cause, not the symptom." },
 ];
 
-function statusLine(status: string): string {
-  if (status === "succeeded") return "The work is complete and the result passed validation.";
-  if (status === "failed") return "I stopped because the result did not pass its safety or validation checks.";
-  return "I'm working through this now. You can follow the meaningful steps as they happen.";
+/**
+ * What Atlas may honestly say it knows.
+ *
+ * This asserted "the work is complete and the result passed validation" for
+ * any run that exited zero, beside three hardcoded steps — "Project
+ * understood", "Change completed", "Validation passed" — that were constants,
+ * not observations. A Build run that finishes without writing a line of code
+ * exits zero, so it reported all three with no pull request and nothing to
+ * show. Someone hit exactly that on their first build.
+ *
+ * Atlas observes four things: the dispatch was accepted, which run it belongs
+ * to, that run's status and conclusion, and whether a pull request exists.
+ * Everything below is derived from those.
+ */
+function statusLine(task: Task): string {
+  if (task.status === "succeeded") {
+    if (task.mode === "coder") {
+      return task.pullRequest?.url
+        ? "The run finished and opened a pull request. Review it before it goes anywhere."
+        : "The run finished without opening a pull request, so nothing in the project changed. The run log says what happened.";
+    }
+    return task.mode === "inspect"
+      ? "The run finished. Atlas does not report its findings back here yet — they are in the run log."
+      : "The run finished. The results are in the run log.";
+  }
+  if (task.status === "failed") return "The run failed. The log has the error.";
+  if (task.status === "timed_out") return "The run hit its time limit and was stopped.";
+  if (task.status === "cancelled") return "The run was cancelled.";
+  if (task.status === "action_required") return "The run is waiting on an approval in GitHub.";
+  if (task.status === "running") return "The run is going now. Atlas reports the run's state here, not its intermediate reasoning.";
+  if (task.status === "queued") return "Queued on GitHub Actions, waiting for a runner.";
+  return "Sent to the runner. Waiting for GitHub to report the run.";
 }
 
 /** Build: the section where Atlas writes code, sites, and apps against a repository. */
@@ -204,11 +243,14 @@ export function BuildSection() {
             <div className="assistant-avatar"><AtlasMark /></div>
             <div>
               <b>Atlas</b>
-              <p>{statusLine(current.status)}</p>
+              <p>{statusLine(current)}</p>
               <div className="work-trace">
-                {steps.map((item, index) => <div key={item} className={index === steps.length - 1 && !["succeeded", "failed"].includes(current.status) ? "working" : "done"}><i />{item}</div>)}
+                {steps.map((item, index) => <div key={item} className={index === steps.length - 1 && !TERMINAL.has(current.status) ? "working" : "done"}><i />{item}</div>)}
               </div>
-              {current.pullRequest?.url && <a className="result-link" href={current.pullRequest.url} target="_blank" rel="noreferrer">Review the completed change ↗</a>}
+              <div className="result-links">
+                {current.pullRequest?.url && <a className="result-link" href={current.pullRequest.url} target="_blank" rel="noreferrer">Review the pull request ↗</a>}
+                {current.run?.url && <a className="result-link" href={current.run.url} target="_blank" rel="noreferrer">Open the run log ↗</a>}
+              </div>
             </div>
           </div>}
         </div>}
@@ -253,6 +295,7 @@ export function BuildSection() {
           </div>
           <small>LIVE WORK</small>
           {(thread?.events?.length ? thread.events.map((event) => event.label) : steps).map((item) => <div className="panel-event" key={item}><i />{item}</div>)}
+          <p className="panel-note">Atlas reports the run&rsquo;s state, not its intermediate reasoning. Step-by-step progress from inside a run is not wired up yet.</p>
           {current.run?.url && <a className="result-link" href={current.run.url} target="_blank" rel="noreferrer">Open the run log ↗</a>}
         </> : <div className="panel-empty">
           <span aria-hidden="true">◌</span>
