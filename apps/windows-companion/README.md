@@ -10,9 +10,9 @@ Supported actions are deliberately narrow: navigate, click accessible buttons or
 
 ## Install on Windows
 
-1. In Atlas `/computer`, create a pairing and copy the credential shown once.
-2. From a verified Atlas release, run `scripts\windows\Install-AtlasCompanion.ps1`.
-3. Paste the credential when prompted.
+1. In Atlas **Automation → Pair a computer**, create a pairing and download the `.atlas-pair` file shown once.
+2. From a verified Atlas release, run `scripts\windows\Install-AtlasCompanion.ps1 -PairingFile <downloaded-file>`.
+3. The installer validates the HTTPS deployment, protects the credential with Windows DPAPI, and deletes the plaintext handoff file. Copy/paste remains available only as a fallback.
 4. Install the selected Ollama model if the launcher requests it, then open **Atlas Companion** from the Start menu.
 
 Run `Test-AtlasCompanion.ps1` at any time for a JSON preflight report. It reports installed tools, memory, models, and pairing state but never prints the pairing credential or local profile. When no model is specified, the launcher chooses an installed Qwen coder model sized conservatively for system memory (3B below 14 GiB, 7B from 14 GiB, and 14B from 30 GiB).

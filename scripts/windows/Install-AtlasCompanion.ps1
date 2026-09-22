@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA "Atlas Companion"), [switch]$NoShortcut)
+param([string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA "Atlas Companion"), [string]$PairingFile = "", [switch]$NoShortcut)
 $ErrorActionPreference = "Stop"
 if ($env:OS -ne "Windows_NT") { throw "The Atlas companion installer supports Windows only." }
 $sourceRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -32,7 +32,18 @@ catch {
 }
 finally { if ((Get-Location).Path -eq $installedApp) { Pop-Location } }
 if (Test-Path -LiteralPath $backupApp) { Remove-Item -LiteralPath $backupApp -Recurse -Force }
-$secureCredential = Read-Host "Paste the one-time Atlas pairing credential" -AsSecureString
+$secureCredential = $null
+if ($PairingFile) {
+  $resolvedPairingFile = (Resolve-Path -LiteralPath $PairingFile).Path
+  $pairing = Get-Content -Raw -LiteralPath $resolvedPairingFile | ConvertFrom-Json
+  if ($pairing.version -ne 1 -or $pairing.endpoint -notmatch '^https://') { throw "The Atlas pairing file is invalid or does not use HTTPS." }
+  if ($pairing.credential -notmatch '^[0-9a-f-]{36}\.[A-Za-z0-9_-]{20,}$') { throw "The Atlas pairing credential is malformed." }
+  $secureCredential = ConvertTo-SecureString -String ([string]$pairing.credential) -AsPlainText -Force
+  Remove-Item -LiteralPath $resolvedPairingFile -Force
+  Write-Host "Pairing file imported, encrypted with Windows DPAPI, and deleted." -ForegroundColor Green
+} else {
+  $secureCredential = Read-Host "Paste the one-time Atlas pairing credential" -AsSecureString
+}
 $credentialFile = Join-Path $InstallDirectory "pairing.dat"
 $secureCredential | ConvertFrom-SecureString | Set-Content -LiteralPath $credentialFile -Encoding UTF8
 if (-not $NoShortcut) {

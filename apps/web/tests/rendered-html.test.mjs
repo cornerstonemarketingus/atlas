@@ -60,3 +60,18 @@ test("server-renders the login, controls, and self-protection guide", async () =
   assert.match(html, /What blocks a random client/i);
   assert.match(html, /Treat model output as untrusted/i);
 });
+
+// Every signed-in section is reachable by URL and gated the same way. A route
+// that 404s or renders a different chrome is exactly how the interface became
+// something you could get lost in.
+for (const path of ["/build", "/automation", "/computer", "/setup", "/account"]) {
+  test(`server-renders the sign-in gate for ${path}`, async () => {
+    const workerUrl = new URL(`../dist/server/index.js?section-test=${encodeURIComponent(path)}-${Date.now()}`, import.meta.url);
+    const { default: worker } = await import(workerUrl.href);
+    const response = await worker.fetch(new Request(`http://localhost${path}`, { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /Continue securely/);
+    assert.match(html, /Owner access code/);
+  });
+}

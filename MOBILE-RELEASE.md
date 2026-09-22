@@ -11,6 +11,8 @@ be introduced only when it adds mobile value beyond a wrapped website.
 - Public privacy policy and terms pages.
 - An authenticated, in-app account-deletion request path.
 - Hosted-browser access is plan-gated; Windows companion is the default.
+- System, light, and dark appearance controls are available in the authenticated shell and persist without storing credentials.
+- The production bundle identifier is `com.cornerstonemarketingus.atlas`; cleartext and mixed-content traffic are disabled in both native shells.
 
 ## P0 — required before store submission
 

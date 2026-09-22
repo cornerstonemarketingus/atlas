@@ -1,14 +1,12 @@
 import type { Metadata } from "next";
 import { AtlasGate } from "../AtlasGate.js";
-import { AutomationSection } from "../automation/AutomationSection.js";
+import { AutomationSection } from "./AutomationSection.js";
 
-// Kept as an alias of /automation: the Windows companion's setup instructions,
-// the marketing navigation, and the owner sign-in redirect all point here.
 export const metadata: Metadata = {
-  title: "Computer operator — Atlas",
+  title: "Automation — Atlas",
   description: "Give Atlas a browser mission. It researches and prepares autonomously, then pauses before consequential actions.",
 };
 
-export default function ComputerPage() {
+export default function AutomationPage() {
   return <AtlasGate><AutomationSection /></AtlasGate>;
 }
