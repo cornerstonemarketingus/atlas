@@ -1,11 +1,14 @@
 import { desc } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { repositories } from "../../../../db/schema";
-import { authenticatedUserId } from "../../tasks/operator-auth.mjs";
+import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
+import { isDeploymentOwner } from "../../tasks/self-protection.mjs";
 import { validateRepositorySetting } from "./validation.mjs";
 
 export async function GET(request: Request) {
-  if (!(await authenticatedUserId(request))) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  const account = await authenticatedAccount(request);
+  if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  if (!isDeploymentOwner(account)) return Response.json({ message: "Owner access is required to manage repository policy." }, { status: 403 });
   try {
     const db = getDb();
     const rows = await db.select().from(repositories).orderBy(desc(repositories.updatedAt));
@@ -16,7 +19,9 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
-  if (!(await authenticatedUserId(request))) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  const account = await authenticatedAccount(request);
+  if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  if (!isDeploymentOwner(account)) return Response.json({ message: "Owner access is required to manage repository policy." }, { status: 403 });
   let body: unknown;
   try {
     body = await request.json();

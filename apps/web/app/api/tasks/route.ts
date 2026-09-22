@@ -15,6 +15,7 @@ import {
 } from "./github-runs.mjs";
 import { authenticatedAccount } from "./operator-auth.mjs";
 import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun, visibleTasks } from "./run-status.mjs";
+import { selfModificationDecision } from "./self-protection.mjs";
 
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
@@ -24,6 +25,8 @@ export async function POST(request: Request) {
   const validated = validateTask(body, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES));
   if ("error" in validated) return Response.json({ message: validated.error }, { status: validated.status });
   const task = validated.task;
+  const selfModification = selfModificationDecision(account, task);
+  if (!selfModification.allowed) return Response.json({ message: selfModification.reason }, { status: selfModification.status });
   const requestedConversationId = typeof (body as { conversationId?: unknown }).conversationId === "string" ? (body as { conversationId: string }).conversationId : "";
   const conversationId = /^[0-9a-f-]{36}$/u.test(requestedConversationId) ? requestedConversationId : randomUUID();
 
