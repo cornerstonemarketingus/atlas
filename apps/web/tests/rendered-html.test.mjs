@@ -20,7 +20,7 @@ test("server-renders the secure owner access page", async () => {
   const response = await worker.fetch(new Request("http://localhost/owner", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /unrestricted owner role/i);
+  assert.match(html, /deployment-owner role/i);
   assert.match(html, /Continue with GitHub/i);
   assert.doesNotMatch(html, /ATLAS_OPERATOR_TOKEN/);
 });
@@ -31,8 +31,8 @@ test("server-renders the public investor thesis", async () => {
   const response = await worker.fetch(new Request("http://localhost/investors", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /operating system for autonomous product creation/i);
-  assert.match(html, /ideas.*become operating products/is);
+  assert.match(html, /execution layer after chat/i);
+  assert.match(html, /ideas should not stop.*at an answer/is);
 });
 
 test("server-renders an honest parallel mission preview", async () => {
@@ -47,4 +47,16 @@ test("server-renders an honest parallel mission preview", async () => {
   assert.match(html, /Evidence stream/);
   assert.match(html, /product preview/i);
   assert.match(html, /not hidden chain-of-thought/i);
+});
+
+test("server-renders the login, controls, and self-protection guide", async () => {
+  const workerUrl = new URL(`../dist/server/index.js?guide-test=${Date.now()}`, import.meta.url);
+  const { default: worker } = await import(workerUrl.href);
+  const response = await worker.fetch(new Request("http://localhost/guide", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Three access paths/i);
+  assert.match(html, /Buying a plan.*does not create owner or deployment authority/is);
+  assert.match(html, /What blocks a random client/i);
+  assert.match(html, /Treat model output as untrusted/i);
 });
