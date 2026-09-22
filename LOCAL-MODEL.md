@@ -138,3 +138,42 @@ describing a limit that is not the one in force.
 Raising the window costs RAM: the KV cache grows with it, and the runner has
 16 GB shared with the model weights. 16k is a deliberate floor-to-ceiling
 compromise; 32k is plausible with a 7B model at 4-bit, 64k is not.
+
+---
+
+## C. The Chat section in the web app
+
+The Chat section talks to the same kind of endpoint, configured on the
+**Cloudflare Worker** rather than on the GitHub runner:
+
+```
+ATLAS_CHAT_BASE_URL  = https://your-server/v1
+ATLAS_CHAT_MODEL     = the model name that server serves
+ATLAS_MODEL_API_KEY  = only if your server needs one
+```
+
+If those are unset it falls back to `ATLAS_CODER_BASE_URL`,
+`ATLAS_CODER_MODEL` and `GROQ_API_KEY` *as seen by the Worker*. Note what that
+does and does not mean: the `ATLAS_CODER_*` values in section A are GitHub
+Actions **repository variables**, and a Worker cannot read one. Setting them
+for the coder runtime does not configure Chat. One endpoint can serve both,
+but it has to be configured in both places — as repository variables for the
+runner, and as Worker secrets here.
+
+Worker secrets are uploaded by `.github/workflows/deploy-cloudflare.yml` from
+repository **secrets** of the same name, so set `ATLAS_CHAT_BASE_URL` and
+`ATLAS_CHAT_MODEL` under Settings → Secrets and variables → Actions →
+*Secrets*, not *Variables*, and they land on the Worker on the next deploy.
+
+The same transport rules apply — HTTPS for any remote host, plain HTTP only
+for loopback, and never credentials in the URL.
+
+With nothing configured, Chat says so: Connections shows "No model endpoint",
+the composer explains why it cannot answer, and the send button is disabled.
+Atlas does not fabricate a reply, for the same reason it never invents a
+preview URL.
+
+Note that a Worker cannot reach `localhost` — a loopback endpoint only works
+when you run the web app locally (`npm run dev` in `apps/web`, with the
+variables in `.dev.vars`). A deployed Worker needs a reachable HTTPS endpoint;
+Cloudflare Tunnel is the free way to give a home machine one.

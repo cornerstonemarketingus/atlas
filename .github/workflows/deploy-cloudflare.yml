@@ -65,6 +65,15 @@ jobs:
           # Comma-separated GitHub logins allowed to receive the unrestricted
           # owner role after completing the normal OAuth identity check.
           ATLAS_OWNER_GITHUB_LOGINS: ${{ secrets.ATLAS_OWNER_GITHUB_LOGINS }}
+          # Chat. The model endpoint the Chat section talks to. These are
+          # separate from the ATLAS_CODER_* repository *variables*, which only
+          # ever reach the GitHub Actions runner — a Worker cannot read a
+          # repository variable, so Chat stays unconfigured until these are
+          # uploaded here. One endpoint can still serve both; it just has to be
+          # configured in both places.
+          ATLAS_CHAT_BASE_URL: ${{ secrets.ATLAS_CHAT_BASE_URL }}
+          ATLAS_CHAT_MODEL: ${{ secrets.ATLAS_CHAT_MODEL }}
+          ATLAS_MODEL_API_KEY: ${{ secrets.ATLAS_MODEL_API_KEY }}
           # Billing
           ATLAS_STRIPE_SECRET_KEY: ${{ secrets.ATLAS_STRIPE_SECRET_KEY }}
           ATLAS_STRIPE_WEBHOOK_SECRET: ${{ secrets.ATLAS_STRIPE_WEBHOOK_SECRET }}
@@ -86,6 +95,9 @@ jobs:
             ATLAS_GITHUB_OAUTH_CLIENT_ID \
             ATLAS_GITHUB_OAUTH_CLIENT_SECRET \
             ATLAS_OWNER_GITHUB_LOGINS \
+            ATLAS_CHAT_BASE_URL \
+            ATLAS_CHAT_MODEL \
+            ATLAS_MODEL_API_KEY \
             ATLAS_STRIPE_SECRET_KEY \
             ATLAS_STRIPE_WEBHOOK_SECRET \
             ATLAS_STRIPE_PRICE_PRO \
@@ -114,5 +126,6 @@ jobs:
         run: |
           echo "Sign-in needs: ATLAS_SESSION_SECRET, ATLAS_GITHUB_OAUTH_CLIENT_ID, ATLAS_GITHUB_OAUTH_CLIENT_SECRET"
           echo "Optional owner login: ATLAS_OWNER_GITHUB_LOGINS"
+          echo "Chat needs: ATLAS_CHAT_BASE_URL, ATLAS_CHAT_MODEL (ATLAS_MODEL_API_KEY only if your server authenticates)"
           echo "Billing needs: ATLAS_STRIPE_SECRET_KEY, ATLAS_STRIPE_WEBHOOK_SECRET, ATLAS_STRIPE_PRICE_PRO, ATLAS_STRIPE_PRICE_TEAM"
           echo "Verify live with: GET /api/setup/status (send your operator token as a Bearer credential)"
