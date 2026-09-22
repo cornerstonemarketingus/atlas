@@ -27,7 +27,7 @@ const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1", "[::1]"];
 export function resolveChatModel(environment = process.env) {
   const baseUrl = (environment.ATLAS_CHAT_BASE_URL || "").trim();
   const model = (environment.ATLAS_CHAT_MODEL || "").trim();
-  const apiKey = (environment.ATLAS_MODEL_API_KEY || environment.GROQ_API_KEY || "").trim();
+  let apiKey = (environment.ATLAS_MODEL_API_KEY || "").trim();
 
   if (!baseUrl || !model) {
     return {
@@ -45,10 +45,12 @@ export function resolveChatModel(environment = process.env) {
   if (url.username || url.password) {
     return { configured: false, reason: "The model endpoint must not carry credentials in its URL. Put the key in ATLAS_MODEL_API_KEY instead." };
   }
-  if (url.protocol !== "https:" && !LOOPBACK_HOSTS.includes(url.hostname)) {
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK_HOSTS.includes(url.hostname))) {
     return { configured: false, reason: "A model endpoint must use HTTPS unless it is loopback." };
   }
 
+  if (url.search || url.hash) return { configured: false, reason: "The model endpoint must not contain a query or fragment." };
+  if (!apiKey && url.origin === "https://api.groq.com") apiKey = (environment.GROQ_API_KEY || "").trim();
   return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null };
 }
 

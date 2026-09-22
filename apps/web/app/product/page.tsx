@@ -63,7 +63,7 @@ export default function ProductPage() {
     </section>
 
     <section className="closing-cta">
-      <p>Still being built: step-by-step progress from inside a run, and findings reported back into the thread rather than left in the run log.</p>
+      <p>Run findings and validation evidence return to the thread. Detailed step-by-step progress inside a run is still being built.</p>
       <h2>Give Atlas the outcome.<br />Keep control of the mission.</h2>
       <Link href="/guide">See how access and safeguards work →</Link>
     </section>

@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { statusLine } from "./task-presentation.mjs";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
@@ -39,7 +40,7 @@ const PROGRESS: Record<string, string[]> = {
 };
 
 const MODES = [
-  { id: "inspect", label: "Plan", hint: "Read the project and report back. Changes nothing." },
+  { id: "inspect", label: "Plan", hint: "Inspect the project structure and report findings. Changes nothing." },
   { id: "debug", label: "Debug", hint: "Build and run the tests to find what is actually broken." },
   { id: "coder", label: "Build", hint: "Write the change and open a pull request for review." },
 ];
@@ -49,40 +50,6 @@ const STARTERS = [
   { title: "Add a feature", detail: "Apps & product", prompt: "Add a feature to this project. Read the codebase first, propose the smallest version that works, then build it." },
   { title: "Fix what's broken", detail: "Debug & validate", prompt: "Diagnose the currently failing tests and fix the root cause, not the symptom." },
 ];
-
-/**
- * What Atlas may honestly say it knows.
- *
- * This asserted "the work is complete and the result passed validation" for
- * any run that exited zero, beside three hardcoded steps — "Project
- * understood", "Change completed", "Validation passed" — that were constants,
- * not observations. A Build run that finishes without writing a line of code
- * exits zero, so it reported all three with no pull request and nothing to
- * show. Someone hit exactly that on their first build.
- *
- * Atlas observes four things: the dispatch was accepted, which run it belongs
- * to, that run's status and conclusion, and whether a pull request exists.
- * Everything below is derived from those.
- */
-function statusLine(task: Task): string {
-  if (task.status === "succeeded") {
-    if (task.mode === "coder") {
-      return task.pullRequest?.url
-        ? "The run finished and opened a pull request. Review it before it goes anywhere."
-        : "The run finished without opening a pull request, so nothing in the project changed. The run log says what happened.";
-    }
-    return task.mode === "inspect"
-      ? "The run finished. Atlas does not report its findings back here yet — they are in the run log."
-      : "The run finished. The results are in the run log.";
-  }
-  if (task.status === "failed") return "The run failed. The log has the error.";
-  if (task.status === "timed_out") return "The run hit its time limit and was stopped.";
-  if (task.status === "cancelled") return "The run was cancelled.";
-  if (task.status === "action_required") return "The run is waiting on an approval in GitHub.";
-  if (task.status === "running") return "The run is going now. Atlas reports the run's state here, not its intermediate reasoning.";
-  if (task.status === "queued") return "Queued on GitHub Actions, waiting for a runner.";
-  return "Sent to the runner. Waiting for GitHub to report the run.";
-}
 
 /** Build: the section where Atlas writes code, sites, and apps against a repository. */
 export function BuildSection() {
@@ -162,6 +129,20 @@ export function BuildSection() {
     }
   }
 
+  useEffect(() => {
+    if (!conversationId) return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, { cache: "no-store" });
+        if (response.ok && active) setThread(await response.json() as Detail);
+      } catch { /* Keep the last received evidence while offline. */ }
+    };
+    void refresh();
+    const timer = setInterval(() => { void refresh(); }, TASK_POLL_MS);
+    return () => { active = false; clearInterval(timer); };
+  }, [conversationId]);
+
   function startNew() { setConversationId(null); setThread(null); setObjective(""); setNotice(""); }
 
   async function submit(event: FormEvent) {
@@ -206,7 +187,7 @@ export function BuildSection() {
   const threadTasks = thread?.tasks?.length
     ? thread.tasks.map((task) => tasks.find((live) => live.taskId === task.taskId) ?? { ...task, status: "dispatched" })
     : tasks.filter((task) => task.conversationId && task.conversationId === conversationId);
-  const current = threadTasks.at(-1) ?? (conversationId === null ? undefined : tasks[0]);
+  const current = threadTasks.at(-1);
   const steps = PROGRESS[current?.status ?? "dispatched"] ?? PROGRESS.dispatched;
   const activeMode = MODES.find((item) => item.id === mode) ?? MODES[0];
   const disconnected = github?.connected === false;
@@ -237,7 +218,7 @@ export function BuildSection() {
         </div> : <div className="message-stream">
           {(thread?.messages ?? []).map((item) => item.role === "user"
             ? <div className="user-message" key={item.id}><p>{item.content}</p></div>
-            : <div className="atlas-message" key={item.id}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p>{item.content}</p></div></div>)}
+            : <div className="atlas-message" key={item.id}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p style={{ whiteSpace: "pre-wrap" }}>{item.content}</p></div></div>)}
           {!thread?.messages?.length && current && <div className="user-message"><p>{current.objective}</p></div>}
           {current && <div className="atlas-message">
             <div className="assistant-avatar"><AtlasMark /></div>
@@ -295,7 +276,7 @@ export function BuildSection() {
           </div>
           <small>LIVE WORK</small>
           {(thread?.events?.length ? thread.events.map((event) => event.label) : steps).map((item) => <div className="panel-event" key={item}><i />{item}</div>)}
-          <p className="panel-note">Atlas reports the run&rsquo;s state, not its intermediate reasoning. Step-by-step progress from inside a run is not wired up yet.</p>
+          <p className="panel-note">Run status comes from GitHub. The runner sends its findings here after execution; missing findings do not mean validation passed.</p>
           {current.run?.url && <a className="result-link" href={current.run.url} target="_blank" rel="noreferrer">Open the run log ↗</a>}
         </> : <div className="panel-empty">
           <span aria-hidden="true">◌</span>

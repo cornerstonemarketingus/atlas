@@ -8,17 +8,17 @@ function request(headers) {
 }
 
 test("prefers the platform-injected header when present", async () => {
-  const id = await authenticatedUserId(request({ "oai-authenticated-user-id": "platform-user" }), { ATLAS_OPERATOR_TOKEN: "secret" });
+  const id = await authenticatedUserId(request({ "oai-authenticated-user-id": "platform-user" }), { ATLAS_TRUST_PLATFORM_HEADERS: "true", ATLAS_OPERATOR_TOKEN: "secret" });
   assert.equal(id, "platform-user");
 });
 
 test("accepts a matching bearer token when no platform header is set", async () => {
-  const id = await authenticatedUserId(request({ authorization: "Bearer secret" }), { ATLAS_OPERATOR_TOKEN: "secret" });
+  const id = await authenticatedUserId(request({ authorization: "Bearer secret" }), { ATLAS_TRUST_PLATFORM_HEADERS: "true", ATLAS_OPERATOR_TOKEN: "secret" });
   assert.equal(id, "operator");
 });
 
 test("rejects a missing, mismatched, or malformed bearer token", async () => {
-  const environment = { ATLAS_OPERATOR_TOKEN: "secret" };
+  const environment = { ATLAS_TRUST_PLATFORM_HEADERS: "true", ATLAS_OPERATOR_TOKEN: "secret" };
   assert.equal(await authenticatedUserId(request({}), environment), null);
   assert.equal(await authenticatedUserId(request({ authorization: "Bearer wrong" }), environment), null);
   assert.equal(await authenticatedUserId(request({ authorization: "secret" }), environment), null);
@@ -30,7 +30,7 @@ test("rejects every request when neither an operator token nor a session secret 
 });
 
 test("platform and operator paths carry no billable dbUserId", async () => {
-  const environment = { ATLAS_OPERATOR_TOKEN: "secret" };
+  const environment = { ATLAS_TRUST_PLATFORM_HEADERS: "true", ATLAS_OPERATOR_TOKEN: "secret" };
   const platform = await authenticatedAccount(request({ "oai-authenticated-user-id": "platform-user" }), environment);
   assert.deepEqual(platform, { userId: "platform-user", dbUserId: null });
   const operator = await authenticatedAccount(request({ authorization: "Bearer secret" }), environment);
@@ -61,4 +61,13 @@ test("rejects a session cookie when no session secret is configured", async () =
   const token = await signSession({ uid: 42, gh: "octocat" }, "session-secret");
   const account = await authenticatedAccount(request({ cookie: sessionCookieHeader(token).split(";")[0] }), {});
   assert.equal(account, null);
+});
+
+test("public callers cannot forge platform, GitHub, or operator identities", async () => {
+  for (const id of ["operator", "github:owner", "platform-user"]) {
+    assert.equal(await authenticatedAccount(request({ "oai-authenticated-user-id": id }), { ATLAS_OPERATOR_TOKEN: "secret" }), null);
+  }
+  for (const id of ["operator", "github:owner"]) {
+    assert.equal(await authenticatedAccount(request({ "oai-authenticated-user-id": id }), { ATLAS_TRUST_PLATFORM_HEADERS: "true" }), null);
+  }
 });

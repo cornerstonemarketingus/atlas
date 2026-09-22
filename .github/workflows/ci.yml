@@ -196,7 +196,7 @@ jobs:
       # packages/atlas-cli and apps/web. A test that never executes asserts a
       # confidence it has not earned.
       - name: Test runner scripts
-        run: node --test scripts/runner/*.test.mjs
+        run: node --test scripts/runner/*.test.mjs scripts/local/*.test.mjs
 
   workflows:
     name: workflow syntax

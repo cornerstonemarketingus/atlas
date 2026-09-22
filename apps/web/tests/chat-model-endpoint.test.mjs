@@ -2,6 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { completionsUrl, replyText, resolveChatModel, threadTitle } from "../app/api/chat/model-endpoint.mjs";
 
+test("a provider fallback key never leaks to a different model host", () => {
+  const env = { ATLAS_CHAT_MODEL: "model", GROQ_API_KEY: "provider-secret" };
+  assert.equal(resolveChatModel({ ...env, ATLAS_CHAT_BASE_URL: "https://api.groq.com/openai/v1" }).apiKey, "provider-secret");
+  assert.equal(resolveChatModel({ ...env, ATLAS_CHAT_BASE_URL: "https://model.example/v1" }).apiKey, null);
+  for (const url of ["ftp://localhost/v1", "file://localhost/v1", "https://model.example/v1?token=x", "https://model.example/v1#secret"]) {
+    assert.equal(resolveChatModel({ ...env, ATLAS_CHAT_BASE_URL: url }).configured, false);
+  }
+});
+
 test("reports chat as unconfigured, with a reason, when no endpoint is set", () => {
   const result = resolveChatModel({});
   assert.equal(result.configured, false);
