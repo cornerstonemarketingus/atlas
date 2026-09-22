@@ -129,7 +129,7 @@ test("builds run URLs and the coder head branch deterministically", () => {
 });
 
 test("keys task ownership on the principal, not the nullable database user id", async () => {
-  const environment = { ATLAS_OPERATOR_TOKEN: "secret", ATLAS_SESSION_SECRET: "session-secret" };
+  const environment = { ATLAS_TRUST_PLATFORM_HEADERS: "true", ATLAS_OPERATOR_TOKEN: "secret", ATLAS_SESSION_SECRET: "session-secret" };
   const url = "http://localhost/api/tasks";
   const alice = await authenticatedAccount(new Request(url, { headers: { "oai-authenticated-user-id": "platform-alice" } }), environment);
   const bob = await authenticatedAccount(new Request(url, { headers: { "oai-authenticated-user-id": "platform-bob" } }), environment);
@@ -148,7 +148,7 @@ test("keys task ownership on the principal, not the nullable database user id", 
 });
 
 test("shows a caller only their own task rows", async () => {
-  const environment = { ATLAS_OPERATOR_TOKEN: "secret" };
+  const environment = { ATLAS_TRUST_PLATFORM_HEADERS: "true", ATLAS_OPERATOR_TOKEN: "secret" };
   const url = "http://localhost/api/tasks";
   const alice = await authenticatedAccount(new Request(url, { headers: { "oai-authenticated-user-id": "platform-alice" } }), environment);
   const bob = await authenticatedAccount(new Request(url, { headers: { "oai-authenticated-user-id": "platform-bob" } }), environment);

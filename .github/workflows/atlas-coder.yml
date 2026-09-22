@@ -109,6 +109,10 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
+      - name: Install target validation dependencies
+        working-directory: target/packages/atlas-cli
+        run: npm ci --ignore-scripts
+
       # Runs a model on the runner itself instead of calling a vendor. Opt-in:
       # with ATLAS_SELF_HOSTED_MODEL unset this step is skipped entirely and
       # nothing about the job changes. See LOCAL-MODEL.md for the trade-offs —
@@ -227,7 +231,7 @@ jobs:
           # Self-verification: which directory declares the scripts to run
           # (a monorepo usually declares none at its root), and how many
           # repair passes the agent gets when it breaks something.
-          ATLAS_VERIFY_DIR: ${{ vars.ATLAS_VERIFY_DIR }}
+          ATLAS_VERIFY_DIR: ${{ vars.ATLAS_VERIFY_DIR || 'packages/atlas-cli' }}
           ATLAS_MAX_REPAIR_ATTEMPTS: ${{ vars.ATLAS_MAX_REPAIR_ATTEMPTS }}
         run: |
           set -euo pipefail
@@ -270,3 +274,40 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           compression-level: 9
+
+  report:
+    name: Return results to Atlas
+    needs: run
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      # A separate job: target repository commands never get an OIDC token.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: cornerstonemarketingus/atlas
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Build trusted credential scanner
+        working-directory: packages/atlas-cli
+        run: npm ci --ignore-scripts && npm run build
+      - name: Download result data
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: atlas-${{ github.run_id }}-${{ github.run_attempt }}
+          path: atlas-output
+      - name: Deliver redacted findings
+        env:
+          ATLAS_TASK_ID: ${{ inputs.task_id }}
+          ATLAS_OUTPUT_DIR: atlas-output
+          ATLAS_JOB_RESULT: ${{ needs.run.result }}
+          ATLAS_RESULT_URL: ${{ vars.ATLAS_RESULT_URL }}
+        run: node scripts/runner/report-result.mjs

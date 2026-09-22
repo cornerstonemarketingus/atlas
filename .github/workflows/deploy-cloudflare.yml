@@ -74,6 +74,7 @@ jobs:
           ATLAS_CHAT_BASE_URL: ${{ secrets.ATLAS_CHAT_BASE_URL }}
           ATLAS_CHAT_MODEL: ${{ secrets.ATLAS_CHAT_MODEL }}
           ATLAS_MODEL_API_KEY: ${{ secrets.ATLAS_MODEL_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           # Billing
           ATLAS_STRIPE_SECRET_KEY: ${{ secrets.ATLAS_STRIPE_SECRET_KEY }}
           ATLAS_STRIPE_WEBHOOK_SECRET: ${{ secrets.ATLAS_STRIPE_WEBHOOK_SECRET }}
@@ -86,6 +87,11 @@ jobs:
           ATLAS_GITHUB_APP_SLUG: ${{ secrets.ATLAS_GITHUB_APP_SLUG }}
         run: |
           set -euo pipefail
+          # Reuse the existing provider key only for its exact trusted origin.
+          # Never send it to a user-configured local/tunnel endpoint.
+          if [ -z "${ATLAS_MODEL_API_KEY:-}" ] && [ "${ATLAS_CHAT_BASE_URL%/}" = "https://api.groq.com/openai/v1" ]; then
+            export ATLAS_MODEL_API_KEY="$GROQ_API_KEY"
+          fi
           uploaded=0
           skipped=""
           for name in \

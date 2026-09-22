@@ -11,7 +11,12 @@ const BEARER_PREFIX = "Bearer ";
  */
 export async function authenticatedAccount(request, environment = process.env) {
   const platformUserId = request.headers.get("oai-authenticated-user-id");
-  if (platformUserId) return { userId: platformUserId, dbUserId: null };
+  // Only opt in behind an ingress that strips/replaces client-supplied headers.
+  // Public workers.dev requests are not a trusted identity provider.
+  if (environment.ATLAS_TRUST_PLATFORM_HEADERS === "true" && platformUserId
+    && platformUserId !== "operator" && !platformUserId.startsWith("github:")) {
+    return { userId: platformUserId, dbUserId: null };
+  }
 
   const operatorToken = environment.ATLAS_OPERATOR_TOKEN;
   if (operatorToken) {
