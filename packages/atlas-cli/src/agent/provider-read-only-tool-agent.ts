@@ -48,6 +48,7 @@ export class ProviderReadOnlyToolAgent {
     const messages: ModelMessage[] = initialMessages(request.objective, request.evidence, this.options.systemPrompt);
     let turns = 0;
     let toolCalls = 0;
+    let recoveredEmptyResponse = false;
     let usage = EMPTY_USAGE;
     const trace = (): ReadOnlyToolAgentTrace => ({
       turns,
@@ -102,6 +103,15 @@ export class ProviderReadOnlyToolAgent {
             .map((item) => item.type === "text" ? item.text.trim() : "")
             .filter(Boolean)
             .join("\n");
+          if (response.finishReason === "stop" && text.length === 0 && !recoveredEmptyResponse && turns < this.#maximumTurns) {
+            // Some compatible providers return an empty stop after a tool
+            // result. Give one bounded continuation, preserving the executed
+            // tool history and the same usage ledger. Never expose reasoning
+            // fields as a substitute for a real answer or replay tool calls.
+            recoveredEmptyResponse = true;
+            messages.push({ role: "user", content: [{ type: "text", text: "Your last response contained no tool call or final answer. Continue the original objective using the available tools, or give a factual final response explaining the outcome or blocker. Do not repeat actions that already succeeded." }] });
+            continue;
+          }
           if (response.finishReason !== "stop" || text.length === 0) {
             return this.block(request.sessionId, `Model stopped with '${response.finishReason}' without a final response.`, trace());
           }
