@@ -12,6 +12,8 @@ export interface ReadOnlyToolAgentOptions {
   readonly maximumTurns?: number;
   readonly maximumToolCalls?: number;
   readonly maximumToolResultCharacters?: number;
+  /** Optional serialized request byte ceiling, including tool schemas. */
+  readonly maximumRequestBytes?: number;
   /**
    * Caps `max_tokens` on every individual model request. Without this, a
    * provider that reports a large remaining output-token budget (see
