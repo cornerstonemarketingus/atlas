@@ -17,6 +17,11 @@ if (mode === "chat") {
   if (!reply.reply?.content?.trim() || !reply.stored) throw new Error("Chat did not return and persist a reply");
   console.log(`Chat replied and persisted conversation ${reply.conversationId}.`);
 } else {
+  if (mode === "coder") {
+    const settings = await api("/api/settings/repositories");
+    const repository = settings.repositories.find(item => item.owner === "cornerstonemarketingus" && item.name === "atlas");
+    if (repository && repository.mergePolicy !== "manual") throw new Error("Coding smoke check requires manual PR review policy");
+  }
   const objective = mode === "coder"
     ? "Create docs/ATLAS-SMOKE-CHECK.md containing exactly one line: Atlas coding smoke check. Do not modify any other file. Use the repository write tools to create it, then finish."
     : "Inspect Atlas and report its detected languages, frameworks, and manifests.";

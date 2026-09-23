@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+
 import { ProviderReadOnlyToolAgent } from "../src/agent/provider-read-only-tool-agent.js";
 import { InMemorySessionAuditLog } from "../src/infrastructure/in-memory-session-audit-log.js";
 import { MockModelProvider } from "../src/infrastructure/mock-model-provider.js";
@@ -197,4 +198,31 @@ test("still ends the session when policy denies a tool", async () => {
     scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" },
   });
   assert.equal(result.status, "failed");
+});
+
+test("one empty stop can recover without replaying an executed tool", async () => {
+  let executions = 0;
+  const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
+  target.register({ name: tool.name, description: "Inspect", risk: "low", validateInput: input => input, execute: async () => { executions++; return { found: true }; } });
+  const provider = new MockModelProvider({ metadata, responses: [
+    response("one", [{ type: "tool-call", id: "call-1", name: tool.name, arguments: {} }], "tool-calls"),
+    response("two", [], "stop"),
+    response("three", [{ type: "text", text: "Inspection finished." }], "stop"),
+  ] });
+  const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: target, tools: [tool], audit: new InMemorySessionAuditLog() });
+  const result = await agent.run({ sessionId: "session", objective: "Inspect", evidence: [], scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" } });
+  assert.equal(result.status, "completed");
+  assert.equal(result.trace.turns, 3);
+  assert.equal(executions, 1);
+  assert.equal(provider.requests[2]?.messages.at(-1)?.role, "user");
+});
+
+test("empty-stop recovery remains bounded by one retry and the turn limit", async () => {
+  for (const maximumTurns of [1, 4]) {
+    const provider = new MockModelProvider({ metadata, responses: [response("one", [], "stop"), response("two", [], "stop"), response("three", [{ type: "text", text: "Must not run" }], "stop")] });
+    const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", maximumTurns, registry: registry("allow"), tools: [tool], audit: new InMemorySessionAuditLog() });
+    const result = await agent.run({ sessionId: "session", objective: "Inspect", evidence: [], scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" } });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.trace.turns, Math.min(maximumTurns, 2));
+  }
 });
