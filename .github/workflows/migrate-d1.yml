@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       database_name:
-        description: D1 database name (must match ATLAS_D1_DATABASE_NAME)
+        description: D1 database name, or configured to use ATLAS_D1_DATABASE_NAME
         required: true
-        default: atlas-db
+        default: configured
         type: string
       from_migration:
         description: Apply every migration whose filename sorts at or after this prefix
@@ -85,14 +85,25 @@ jobs:
             cat "$file"
           done
 
+      - name: Inspect existing schema without reading user data
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DATABASE_NAME: ${{ github.event.inputs.database_name == 'configured' && secrets.ATLAS_D1_DATABASE_NAME || github.event.inputs.database_name }}
+        run: |
+          set -euo pipefail
+          if [ "$DATABASE_NAME" = "configured" ]; then echo "ATLAS_D1_DATABASE_NAME is missing." >&2; exit 1; fi
+          npx wrangler d1 execute "$DATABASE_NAME" --remote --command "SELECT name FROM sqlite_master WHERE type='table'; PRAGMA table_info(repositories);"
+
       - name: Apply migrations
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          DATABASE_NAME: ${{ github.event.inputs.database_name }}
+          DATABASE_NAME: ${{ github.event.inputs.database_name == 'configured' && secrets.ATLAS_D1_DATABASE_NAME || github.event.inputs.database_name }}
         run: |
           set -euo pipefail
+          if [ "$DATABASE_NAME" = "configured" ]; then echo "ATLAS_D1_DATABASE_NAME is missing." >&2; exit 1; fi
           # Applied in filename order, stopping at the first failure so a later
           # migration never lands on a schema an earlier one failed to create.
           for file in ${{ steps.select.outputs.files }}; do

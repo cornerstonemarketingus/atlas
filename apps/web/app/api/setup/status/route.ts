@@ -14,6 +14,11 @@ async function databaseReadiness() {
     await db.run(sql`SELECT 1 FROM subscriptions LIMIT 1`);
     await db.run(sql`SELECT 1 FROM task_usage LIMIT 1`);
     await db.run(sql`SELECT 1 FROM tasks LIMIT 1`);
+    await db.run(sql`SELECT id, installation_id, owner, name, merge_policy, created_at, updated_at FROM repositories LIMIT 1`);
+    await db.run(sql`SELECT id FROM installations LIMIT 1`);
+    await db.run(sql`SELECT id FROM conversations LIMIT 1`);
+    await db.run(sql`SELECT id FROM conversation_messages LIMIT 1`);
+    await db.run(sql`SELECT id FROM run_events LIMIT 1`);
     return { binding: true, migrations: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Database readiness check failed.";
