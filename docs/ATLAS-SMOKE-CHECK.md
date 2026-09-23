@@ -1,0 +1,1 @@
+Atlas coding smoke check
