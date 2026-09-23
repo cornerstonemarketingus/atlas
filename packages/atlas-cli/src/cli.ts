@@ -560,6 +560,9 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     audit,
     maximumTurns,
     maximumOutputTokensPerTurn: maxOutputTokensPerTurn,
+    // Free-tier TPM can be much smaller than the model context window. Keep
+    // room for tokenization overhead and output; preserve exact edit history.
+    ...(profile.providerId === "groq" && endpoint === undefined ? { maximumRequestBytes: 18_000 } : {}),
     systemPrompt: CODE_SYSTEM_PROMPT,
   });
 

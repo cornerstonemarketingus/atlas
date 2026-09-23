@@ -42,11 +42,9 @@ const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
     // The conservative figure across the models in DEFAULT_ANTHROPIC_MODELS,
     // so a smaller model is never handed a request its window cannot hold.
     contextWindowTokens: 200_000,
-    // Anthropic bills per token and has no per-minute cap that a large
-    // max_tokens trips, so the limit here is about the coder loop rather than
-    // the vendor: one turn should not be able to consume a whole session
-    // budget, and a proposed file edit that needs more than this is a sign
-    // the change wants splitting.
+    // This is a per-turn output ceiling, not an exemption from Anthropic's
+    // account-specific request/input/output rate limits. Large edits should
+    // still be split to leave room in the session budget.
     maxOutputTokensPerTurn: 8_192,
   },
 };

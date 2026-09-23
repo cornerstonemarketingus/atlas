@@ -7,6 +7,7 @@ import type {
 import { ReadOnlyToolRegistryError } from "../domain/read-only-tool-registry.js";
 import { ModelProviderError, type ModelMessage, type ModelUsage } from "../model/model-provider.js";
 import { validateModelResponse } from "../model/model-contract-validation.js";
+import { boundCoderContext } from "../model/bounded-coder-context.js";
 
 const EMPTY_USAGE: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
@@ -25,6 +26,7 @@ export class ProviderReadOnlyToolAgent {
     assertBound("maximumToolCalls", this.#maximumToolCalls, 128);
     assertBound("maximumToolResultCharacters", this.#maximumToolResultCharacters, 1_000_000);
     assertBound("maximumOutputTokensPerTurn", this.#maximumOutputTokensPerTurn, 1_000_000);
+    if (options.maximumRequestBytes !== undefined) assertBound("maximumRequestBytes", options.maximumRequestBytes, 4_000_000);
     const registered = new Set(options.registry.list().map((tool) => tool.name));
     const offered = new Set<string>();
     for (const tool of options.tools) {
@@ -67,21 +69,27 @@ export class ProviderReadOnlyToolAgent {
         return { status: "cancelled", message: "Agent execution was cancelled.", trace: trace() };
       }
       const requestId = `${request.sessionId}:model:${turns + 1}`;
+      const fullRequest = {
+        model: this.options.model,
+        messages,
+        tools: this.options.tools,
+        maxOutputTokens: this.#maximumOutputTokensPerTurn,
+      };
+      const modelRequest = this.options.maximumRequestBytes === undefined
+        ? fullRequest : boundCoderContext(fullRequest, this.options.maximumRequestBytes);
+      if (modelRequest === undefined) {
+        return this.block(request.sessionId, "Request budget exceeded after removing rereadable context. Split the task into a smaller change or configure a provider with a higher request allowance.", trace());
+      }
       this.options.audit.append("model.requested", {
         requestId,
         providerId: this.options.provider.metadata.id,
         modelId: this.options.model,
         messageCount: messages.length,
-        inputCharacters: countMessageCharacters(messages),
+        inputCharacters: countMessageCharacters(modelRequest.messages),
         toolsOffered: this.options.tools.length,
       });
       try {
-        const response = validateModelResponse(await this.options.provider.complete({
-          model: this.options.model,
-          messages,
-          tools: this.options.tools,
-          maxOutputTokens: this.#maximumOutputTokensPerTurn,
-        }, request.signal === undefined ? {} : { signal: request.signal }));
+        const response = validateModelResponse(await this.options.provider.complete(modelRequest, request.signal === undefined ? {} : { signal: request.signal }));
         turns += 1;
         usage = addUsage(usage, response.usage);
         messages.push(response.message);

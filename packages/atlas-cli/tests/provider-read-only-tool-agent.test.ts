@@ -17,6 +17,34 @@ const tool: ModelToolDefinition = {
   inputSchema: { type: "object", additionalProperties: false },
 };
 
+test("bounds outgoing read context but keeps full audit evidence", async () => {
+  const provider = new MockModelProvider({ metadata, responses: [
+    response("one", [{ type: "tool-call", id: "read", name: tool.name, arguments: {} }], "tool-calls"),
+    response("two", [{ type: "text", text: "Need a narrower read." }], "stop"),
+  ] });
+  const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
+  target.register({ name: tool.name, description: "Inspect.", risk: "low", validateInput: (input) => input,
+    execute: async () => ({ source: "x".repeat(8000) }) });
+  const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: target, tools: [tool],
+    audit: new InMemorySessionAuditLog(), maximumRequestBytes: 2000 });
+  const result = await agent.run({ sessionId: "session", objective: "Inspect", evidence: [],
+    scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" } });
+  assert.equal(result.status, "completed");
+  assert.match(JSON.stringify(provider.requests[1]), /Read result omitted/);
+  assert.match(JSON.stringify(result.trace.messages), /x{8000}/);
+});
+
+test("blocks an oversized objective before any model request without clipping it", async () => {
+  const provider = new MockModelProvider({ metadata, responses: [] });
+  const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: registry("allow"), tools: [tool],
+    audit: new InMemorySessionAuditLog(), maximumRequestBytes: 2000 });
+  const result = await agent.run({ sessionId: "session", objective: "x".repeat(3000), evidence: [],
+    scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" } });
+  assert.equal(result.status, "blocked");
+  assert.equal(provider.requests.length, 0);
+  assert.match(result.status === "blocked" ? result.message : "", /Split the task/);
+});
+
 function response(id: string, content: ModelResponse["message"]["content"], finishReason: ModelResponse["finishReason"]): ModelResponse {
   return {
     id, providerId: "mock", model: "test", message: { role: "assistant", content }, finishReason,
