@@ -3,7 +3,12 @@ const base = "https://atlas-web.cornerstonemarketingus.workers.dev";
 const headers = { authorization: `Bearer ${process.env.ATLAS_OPERATOR_TOKEN}`, "content-type": "application/json" };
 async function api(route, body) {
   const response = await fetch(`${base}${route}`, { method: body ? "POST" : "GET", headers, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(190000) });
-  if (!response.ok) throw new Error(`${route}: HTTP ${response.status}`);
+  if (!response.ok) {
+    // A repository-settings error carries a schema diagnostic, not model or
+    // user content. Preserve only that bounded message for setup diagnosis.
+    const detail = route === "/api/settings/repositories" ? await response.json().catch(() => ({})) : {};
+    throw new Error(`${route}: HTTP ${response.status}${typeof detail.message === "string" ? ` (${detail.message.slice(0, 500)})` : ""}`);
+  }
   return response.json();
 }
 const mode = process.env.ATLAS_SMOKE_MODE || "inspect";
