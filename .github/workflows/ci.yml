@@ -99,6 +99,54 @@ jobs:
       - name: Test sovereign control plane
         run: npm test
 
+  contracts:
+    name: packages/atlas-contracts
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/atlas-contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The contracts are shared by every plane and carry no dependencies, so
+      # there is nothing to install: a contract that needs a library to be
+      # read is one two planes can disagree about.
+      - name: Test platform contracts
+        run: npm test
+
+  browser-worker:
+    name: apps/browser-worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/browser-worker
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/browser-worker/package-lock.json
+
+      - run: npm ci --ignore-scripts
+
+      # The worker drives a real Chromium against a local fixture site; the
+      # browser is fetched explicitly rather than by an install script.
+      - name: Install Chromium
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Test browser worker
+        run: npm test
+
   windows-companion:
     name: apps/windows-companion
     runs-on: windows-latest
