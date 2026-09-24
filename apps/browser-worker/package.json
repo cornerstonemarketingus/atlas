@@ -1,0 +1,19 @@
+{
+  "name": "@atlas/browser-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Atlas execution-plane browser worker: disposable, origin-confined Playwright sessions exposed as typed tools.",
+  "engines": { "node": ">=22.13.0" },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./tools": "./src/tools.mjs",
+    "./verify": "./src/verify.mjs"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.56.1"
+  }
+}
