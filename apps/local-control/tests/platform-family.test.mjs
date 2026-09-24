@@ -307,29 +307,28 @@ test("seedFamilies builds the default tree through the policy path and familyTre
   const tree = r.familyTree(T, rootId);
   assert.equal(tree.name, "Atlas Root");
   assert.deepEqual(tree.children.map((c) => c.name), [
-    "Engineering Parent", "Construction Parent", "Computer Operations Parent", "Business Parent", "Research Parent",
+    "Engineering Parent", "Computer Operations Parent", "Business Parent", "Research Parent",
     "Reviewer", "Guardian", "Mentor",
   ]);
   const byName = Object.fromEntries(tree.children.map((c) => [c.name, c]));
   assert.deepEqual(byName["Engineering Parent"].children.map((c) => c.name), ["Frontend Agent", "Backend Agent", "Database Agent", "Testing Agent", "Security Agent", "Deployment Agent"]);
-  assert.deepEqual(byName["Construction Parent"].children.map((c) => c.name), ["Drawing Analysis Agent", "Takeoff Agent", "Pricing Agent", "Bid Draft Agent", "Estimate Review Agent"]);
   assert.deepEqual(byName["Computer Operations Parent"].children.map((c) => c.name), ["Browser Agent", "Desktop Agent", "Terminal Agent", "Recovery Agent"]);
   assert.deepEqual(byName["Business Parent"].children.map((c) => c.name), ["Sales Agent", "Marketing Agent", "Customer Support Agent"]);
   assert.deepEqual(byName["Research Parent"].children.map((c) => c.name), ["Web Research Agent", "Document Analysis Agent", "Fact Checking Agent"]);
-  assert.equal(byName.Guardian.relationships.filter((e) => e.type === "guards").length, 5);
-  assert.equal(byName.Reviewer.relationships.filter((e) => e.type === "reviews").length, 5);
-  assert.equal(byName.Mentor.relationships.filter((e) => e.type === "mentors").length, 5);
-  assert.equal(Object.keys(agents).length, 30);
+  assert.equal(byName.Guardian.relationships.filter((e) => e.type === "guards").length, 4);
+  assert.equal(byName.Reviewer.relationships.filter((e) => e.type === "reviews").length, 4);
+  assert.equal(byName.Mentor.relationships.filter((e) => e.type === "mentors").length, 4);
+  assert.equal(Object.keys(agents).length, 24);
   assert.ok(r.listAgents(T).every((a) => a.state === "authorized" && a.authorizedBy === "atlas.seed"));
   // conservative: nothing can deploy/send/pay directly
   assert.ok(!r.getAgent(T, rootId).permissions.some((p) => p === "*" || /^(deploy\.execute|email\.send|payment\.)/.test(p)));
   // idempotent
   assert.equal(seedFamilies(r, T).rootId, rootId);
-  assert.equal(r.listAgents(T).length, 30);
+  assert.equal(r.listAgents(T).length, 24);
   // cousins across families
   assert.ok(r.cousins(T, agents["Frontend Agent"]).some((c) => c.id === agents["Web Research Agent"]));
   // seeding with a policy that denies a needed permission fails atomically
   assert.throws(() => seedFamilies(r, U, { policy: { deny: ["deploy.propose"] } }), (e) => e.code === "POLICY_DENIED");
   assert.equal(r.listAgents(U).filter((a) => a.state !== "rejected").length, 0);
-  assert.ok(DEFAULT_FAMILY_TREE.families.length === 5);
+  assert.ok(DEFAULT_FAMILY_TREE.families.length === 4);
 });

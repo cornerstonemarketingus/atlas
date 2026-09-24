@@ -32,16 +32,6 @@ export const DEFAULT_FAMILY_TREE = Object.freeze({
       ],
     },
     {
-      name: "Construction Parent", role: "parent", family: "construction",
-      children: [
-        child("Drawing Analysis Agent", "drawing_analysis", ["document.read", "drawing.analyze"]),
-        child("Takeoff Agent", "takeoff", ["document.read", "estimate.takeoff"]),
-        child("Pricing Agent", "pricing", ["estimate.read", "pricing.lookup"]),
-        child("Bid Draft Agent", "bid_draft", ["estimate.read", "bid.draft"]),
-        child("Estimate Review Agent", "estimate_review", ["estimate.read", "document.read"]),
-      ],
-    },
-    {
       name: "Computer Operations Parent", role: "parent", family: "computer_operations",
       children: [
         child("Browser Agent", "browser", ["browser.navigate", "browser.read"]),
@@ -68,7 +58,7 @@ export const DEFAULT_FAMILY_TREE = Object.freeze({
     },
   ],
   oversight: [
-    { name: "Reviewer", role: "reviewer", relationship: "reviews", permissions: ["repo.read", "document.read", "estimate.read"] },
+    { name: "Reviewer", role: "reviewer", relationship: "reviews", permissions: ["repo.read", "document.read"] },
     { name: "Guardian", role: "guardian", relationship: "guards", permissions: ["audit.read", "policy.read"] },
     { name: "Mentor", role: "mentor", relationship: "mentors", permissions: ["memory.read"] },
   ],

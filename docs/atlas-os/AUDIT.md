@@ -181,7 +181,7 @@ Paths are relative to the repository root. `lc/` = `apps/local-control/src/`,
 
 | Capability | Status | Evidence | Notes |
 |---|---|---|---|
-| "Cortex" construction subsystem | missing | no file or identifier named Cortex found | Blueprint Phase 8 |
+| "Cortex" construction subsystem | out of scope | — | Owner decision: Cortex belongs to a different repository and is not built here |
 | Visual app builder | missing (roadmap only) | `docs/OPERATOR-QUALITY-ROADMAP.md` §8 | |
 | Build page (task composer for coder mode) | implemented-untested | `web/app/build/BuildSection.tsx`, `web/app/build/task-presentation.mjs` | UI over `/api/tasks` |
 

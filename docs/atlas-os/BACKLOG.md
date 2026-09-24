@@ -78,11 +78,12 @@ Security gap numbers (`SEC-n`) refer to `SECURITY-REVIEW.md` §2.
 | P7-4 | Prompt-injection regression corpus | Fixture pages/repos with injected instructions; operator + conversation tests assert no gated action runs (SEC-11) | P1-3 | M | `apps/windows-companion/src/operator/scenarios.mjs`, `apps/local-control/tests/conversation.test.mjs` | |
 | P7-5 | Time-based scheduler | Local cron-like schedules create tasks through intake + policy; Actions-minutes status surfaced (SEC-15) | P1-1 | M | new `src/platform/`; `scripts/runner/actions-budget.mjs` | |
 
-## Phase 8 — Cortex construction
+## Phase 8 — Cortex construction (out of scope)
+
+The owner confirmed Cortex belongs to a different repository, so no construction family, tools or bid workflow are built in Atlas. The default family seed no longer includes a Construction parent.
 
 | ID | Title | Acceptance criteria | Deps | Size | Touches | Branch |
 |---|---|---|---|---|---|---|
-| P8-1 | Cortex spec | Written spec of the construction subsystem mapped to family graph + verification | P4-1, P7-1 | M | `docs/atlas-os/` | |
 | P8-2 | Visual builder MVP | Build page produces a verified change set via the coder loop | P8-1 | L | `apps/web/app/build/*`, `packages/atlas-cli` | |
 
 ## Phase 9 — Multi-tenant hardening, marketplace, billing
