@@ -14,10 +14,22 @@ import {
   workflowRunsRequest,
 } from "./github-runs.mjs";
 import { authenticatedAccount } from "./operator-auth.mjs";
+import { CORRELATION_HEADER, correlationIdFromRequest } from "./correlation.mjs";
 import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun, visibleTasks } from "./run-status.mjs";
 import { selfModificationDecision } from "./self-protection.mjs";
 
 export async function POST(request: Request) {
+  // A caller-supplied x-atlas-correlation-id is honoured only when it is
+  // exactly the `cor_<32 hex>` shape; anything else is replaced. Every response
+  // from this handler carries the id back in the same header.
+  const correlationId = correlationIdFromRequest(request);
+  const response = await dispatchTask(request, correlationId);
+  const headers = new Headers(response.headers);
+  headers.set(CORRELATION_HEADER, correlationId);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function dispatchTask(request: Request, correlationId: string): Promise<Response> {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required to create a task." }, { status: 401 });
   let body: unknown;
@@ -65,10 +77,10 @@ export async function POST(request: Request) {
   if (githubToken) {
     try {
       const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
-      const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy });
+      const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy, correlationId });
       if (!response.ok) return Response.json({ message: "GitHub Actions rejected the task dispatch." }, { status: 502 });
-      const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "managed");
-      return Response.json({ taskId, conversationId, status: "dispatched", runner: "managed", recorded }, { status: 202 });
+      const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "managed", correlationId);
+      return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "managed", recorded }, { status: 202 });
     } catch {
       return Response.json({ message: "GitHub Actions is temporarily unavailable." }, { status: 502 });
     }
@@ -77,14 +89,14 @@ export async function POST(request: Request) {
   const token = process.env.ATLAS_AGENT_DISPATCH_TOKEN;
   if (!endpoint || !token) return Response.json({ message: "The autonomous task dispatcher has not been configured." }, { status: 503 });
   try {
-    const response = await fetch(endpoint, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ taskId, ...task, requestedBy: account.userId, commitMode: "approval-required" }) });
+    const response = await fetch(endpoint, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", [CORRELATION_HEADER]: correlationId }, body: JSON.stringify({ taskId, ...task, requestedBy: account.userId, commitMode: "approval-required" }) });
     if (!response.ok) return Response.json({ message: "The autonomous task dispatcher rejected the task." }, { status: 502 });
     // Not recorded on purpose: the custom dispatcher produces no GitHub Actions
     // run, so a row for it could only ever be matched against — and could steal
     // the run id of — a real Actions dispatch of the same workflow. Custom-runner
     // deployments get no task history until they report runs of their own.
-    const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "private");
-    return Response.json({ taskId, conversationId, status: "dispatched", runner: "private", recorded }, { status: 202 });
+    const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "private", correlationId);
+    return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "private", recorded }, { status: 202 });
   } catch {
     return Response.json({ message: "The autonomous task dispatcher is temporarily unavailable." }, { status: 502 });
   }
@@ -104,6 +116,7 @@ async function recordDispatchedTask(
   mergePolicy: string,
   conversationId: string,
   executionProvider: string,
+  correlationId: string,
 ): Promise<boolean> {
   try {
     const db = getDb();
@@ -123,6 +136,7 @@ async function recordDispatchedTask(
       mergePolicy,
       conversationId,
       executionProvider,
+      correlationId,
       // Written explicitly rather than left to CURRENT_TIMESTAMP so the run-id
       // heuristic has an unambiguous, zone-marked dispatch time to match on.
       createdAt: now,
@@ -293,6 +307,7 @@ function taskView(row: TaskRow, runId: number | null, run: Run | null, pullReque
   return {
     taskId: row.taskId,
     conversationId: row.conversationId,
+    correlationId: row.correlationId ?? null,
     repository: row.repository,
     branch: row.branch,
     mode: row.mode,

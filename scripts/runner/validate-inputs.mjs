@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { correlationLogSuffix, correlationIdFromEnv } from "./correlation.mjs";
 
 const ALLOWED_REPOSITORY = "cornerstonemarketingus/atlas";
 const allowedModes = new Set(["inspect", "debug", "coder"]);
@@ -50,4 +51,9 @@ if (!objective.trim() || Buffer.byteLength(objective, "utf8") > 4096) reject("ob
 const mergePolicy = process.env.ATLAS_MERGE_POLICY ?? "manual";
 if (mode === "coder" && !allowedMergePolicies.has(mergePolicy)) reject("invalid merge_policy");
 
-console.log(`Validated Atlas task ${taskId} for ${ALLOWED_REPOSITORY} (${mode}).`);
+// correlation_id is optional: a malformed value is dropped, not rejected, so
+// it can never fail a run that would otherwise have been valid.
+const correlationId = correlationIdFromEnv();
+if (!correlationId && process.env.ATLAS_CORRELATION_ID) console.log("Ignoring malformed correlation_id input.");
+
+console.log(`Validated Atlas task ${taskId} for ${ALLOWED_REPOSITORY} (${mode}).${correlationLogSuffix(correlationId)}`);

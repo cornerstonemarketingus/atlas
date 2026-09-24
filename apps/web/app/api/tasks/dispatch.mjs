@@ -1,3 +1,5 @@
+import { isCorrelationId } from "./correlation.mjs";
+
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const branchPattern = /^(?!\/|.*(?:\.\.|\/\/|@\{|\\|\s|[\x5b~^:?*]))[A-Za-z0-9._/-]{1,255}$/;
 const workflowPattern = /^(?:[A-Za-z0-9_.-]{1,128}|[1-9][0-9]{0,18})$/;
@@ -30,7 +32,14 @@ export function workflowForMode(mode, overrides = {}) {
   return overrides.defaultWorkflow || "atlas-runner.yml";
 }
 
-export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", workflowRef = "main", task, taskId, mergePolicy = "manual" }) {
+/**
+ * Workflows known to declare the optional `correlation_id` input. GitHub's
+ * dispatch API rejects inputs a workflow does not declare, so a custom
+ * ATLAS_GITHUB_WORKFLOW / ATLAS_CODER_WORKFLOW override is never sent one.
+ */
+const CORRELATION_AWARE_WORKFLOWS = new Set(["atlas-runner.yml", "atlas-coder.yml"]);
+
+export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", workflowRef = "main", task, taskId, mergePolicy = "manual", correlationId }) {
   if (!workflowPattern.test(workflow)) throw new Error("ATLAS_GITHUB_WORKFLOW is invalid.");
   if (workflowRef !== "main") throw new Error("ATLAS_RUNNER_WORKFLOW_REF must be 'main'.");
   const [owner, repo] = task.repository.split("/");
@@ -60,6 +69,9 @@ export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", wo
           // undeclared input key rather than rejecting the whole call — only
           // send it for coder, the one workflow that declares and uses it.
           ...(task.mode === "coder" ? { merge_policy: mergePolicy } : {}),
+          // Only a well-formed id, and only to a workflow that declares the
+          // input; otherwise it is omitted and the workflow's '' default applies.
+          ...(isCorrelationId(correlationId) && CORRELATION_AWARE_WORKFLOWS.has(workflow) ? { correlation_id: correlationId } : {}),
         },
       }),
     },

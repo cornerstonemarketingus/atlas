@@ -142,9 +142,13 @@ export const tasks = sqliteTable("tasks", {
   githubRunId: integer("github_run_id"),
   conversationId: text("conversation_id"),
   executionProvider: text("execution_provider").notNull().default("managed"),
+  // `cor_` + 32 lowercase hex; nullable because rows dispatched before
+  // correlation ids existed have none (migration 0013).
+  correlationId: text("correlation_id"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
   taskIdIndex: uniqueIndex("tasks_task_id_idx").on(table.taskId),
+  correlationIndex: index("tasks_correlation_id_idx").on(table.correlationId),
   requestedByIndex: index("tasks_requested_by_created_at_idx").on(table.requestedBy, table.createdAt),
   conversationIndex: index("tasks_conversation_idx").on(table.conversationId, table.createdAt),
 }));

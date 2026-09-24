@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { decideMergeAction } from "./merge-decision.mjs";
+import { correlationFooter, correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
 
 const outputDirectory = process.env.ATLAS_OUTPUT_DIR;
 if (!outputDirectory) throw new Error("ATLAS_OUTPUT_DIR is required");
@@ -15,6 +16,7 @@ if (!repository || !baseBranch || !taskId || !githubToken) {
   throw new Error("ATLAS_REPOSITORY, ATLAS_BRANCH, ATLAS_TASK_ID, and GITHUB_TOKEN are all required");
 }
 const mergePolicy = process.env.ATLAS_MERGE_POLICY ?? "manual";
+const correlationId = correlationIdFromEnv();
 
 // How long ci-gated polls the head commit's check-runs before giving up and
 // leaving the PR open. Comfortably inside the job's own 25-minute timeout,
@@ -33,7 +35,7 @@ function readJson(filename) {
 function writeStatus(status, message, extra = {}) {
   fs.writeFileSync(
     path.join(outputDirectory, "status.json"),
-    `${JSON.stringify({ schema_version: 1, status, message, task_id: taskId, ...extra }, null, 2)}\n`,
+    `${JSON.stringify({ schema_version: 1, status, message, task_id: taskId, ...(correlationId ? { correlation_id: correlationId } : {}), ...extra }, null, 2)}\n`,
     { mode: 0o600 },
   );
 }
@@ -103,6 +105,7 @@ const body = [
   ...verificationSection,
   "",
   "_Opened automatically by Atlas._",
+  ...correlationFooter(correlationId),
 ].join("\n");
 
 run("git commit", "git", ["commit", "-m", title, "-m", summary]);
@@ -131,7 +134,7 @@ if (!createResponse.ok) {
 }
 
 const pullRequest = await createResponse.json();
-console.log(`Opened pull request: ${pullRequest.html_url ?? "(no URL returned)"}`);
+console.log(`Opened pull request: ${pullRequest.html_url ?? "(no URL returned)"}${correlationLogSuffix(correlationId)}`);
 
 async function fetchCheckRuns(ref) {
   const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${ref}/check-runs`, {

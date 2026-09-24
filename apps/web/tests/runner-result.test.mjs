@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPair, SignJWT } from "jose";
-import { RUNNER_AUDIENCE, verifyRunnerIdentity, resultBelongsToTask, validateRunnerResult } from "../app/api/tasks/runner-result.mjs";
+import { RUNNER_AUDIENCE, verifyRunnerIdentity, resultBelongsToTask, validateRunnerResult, correlationMatchesTask } from "../app/api/tasks/runner-result.mjs";
 import { statusLine } from "../app/build/task-presentation.mjs";
 
 const task = { taskId: "2cb4e27b-536c-476b-93a2-8db3f3a3ba72", repository: "cornerstonemarketingus/atlas", mode: "coder", executionProvider: "managed", githubRunId: null };
@@ -38,4 +38,24 @@ test("a green workflow without a PR never asserts successful changes or validati
   assert.doesNotMatch(text, /nothing.*changed|passed validation|change completed/i);
   assert.match(statusLine({ mode: "coder", status: "succeeded", pullRequest: { url: "https://github.com/a/b/pull/1" } }), /validation evidence/);
   assert.match(statusLine({ status: "failed" }), /failing step/);
+});
+
+test("optional correlation id is validated and a mismatch with the stored task is refused", () => {
+  const correlationId = `cor_${"5a".repeat(16)}`;
+  const other = `cor_${"b7".repeat(16)}`;
+  // Backward compatible: a result without a correlation id is still accepted.
+  const legacy = validateRunnerResult({ taskId: task.taskId, summary: "done" });
+  assert.deepEqual(legacy, { taskId: task.taskId, summary: "done" });
+  assert.equal(correlationMatchesTask(legacy, { ...task, correlationId }), true);
+  assert.deepEqual(validateRunnerResult({ taskId: task.taskId, summary: "done", correlationId: null }), { taskId: task.taskId, summary: "done" });
+  const tagged = validateRunnerResult({ taskId: task.taskId, summary: "done", correlationId });
+  assert.equal(tagged.correlationId, correlationId);
+  assert.equal(correlationMatchesTask(tagged, { ...task, correlationId }), true);
+  // Task rows from before migration 0013 carry no id; the result is accepted.
+  assert.equal(correlationMatchesTask(tagged, { ...task, correlationId: null }), true);
+  assert.equal(correlationMatchesTask(tagged, task), true);
+  assert.equal(correlationMatchesTask(tagged, { ...task, correlationId: other }), false);
+  for (const bad of ["cor_short", `${correlationId}x`, correlationId.toUpperCase(), 12, ""]) {
+    assert.throws(() => validateRunnerResult({ taskId: task.taskId, summary: "done", correlationId: bad }), undefined, String(bad));
+  }
 });

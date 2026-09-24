@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { conversationMessages, conversations, runEvents, tasks } from "../../../../db/schema";
 import { createInstallationToken, githubAppConfiguration } from "../github-app.mjs";
-import { resultBelongsToTask, validateRunnerResult, verifyRunnerIdentity } from "../runner-result.mjs";
+import { correlationMatchesTask, resultBelongsToTask, validateRunnerResult, verifyRunnerIdentity } from "../runner-result.mjs";
 
 export async function POST(request: Request) {
   let identity;
@@ -34,6 +34,9 @@ export async function POST(request: Request) {
     const db = getDb();
     const [task] = await db.select().from(tasks).where(eq(tasks.taskId, body.taskId)).limit(1);
     if (!task?.conversationId || identity.repository !== task.repository) return Response.json({ message: "Dispatch not found." }, { status: 404 });
+    // Checked before the GitHub round-trip: a positive mismatch can never be
+    // this task's result, whatever the run verification would say.
+    if (!correlationMatchesTask(body, task)) return Response.json({ message: "Result correlation id does not match dispatch." }, { status: 409 });
     const app = githubAppConfiguration();
     const token = app.configured ? await createInstallationToken(app) : process.env.ATLAS_GITHUB_TOKEN;
     if (!token) return Response.json({ message: "Run verification unavailable." }, { status: 503 });
@@ -54,6 +57,7 @@ export async function POST(request: Request) {
       db.update(tasks).set({ githubRunId: Number(identity.run_id) }).where(and(eq(tasks.taskId, task.taskId), eq(tasks.requestedBy, task.requestedBy))),
       db.update(conversations).set({ updatedAt: now }).where(and(eq(conversations.id, task.conversationId), eq(conversations.requestedBy, task.requestedBy))),
     ]);
-    return Response.json({ received: true });
+    const correlationId = task.correlationId ?? body.correlationId ?? null;
+    return Response.json({ received: true, ...(correlationId ? { correlationId } : {}) }, correlationId ? { headers: { "x-atlas-correlation-id": correlationId } } : undefined);
   } catch { return Response.json({ message: "Result storage temporarily unavailable." }, { status: 503 }); }
 }

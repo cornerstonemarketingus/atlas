@@ -71,3 +71,31 @@ test("dispatch helper accepts an injected fetch implementation", async () => {
   assert.equal(called, true);
   assert.equal(response.status, 204);
 });
+
+test("sends a valid correlation_id to both Atlas workflows, and never a malformed one", () => {
+  const correlationId = `cor_${"9e".repeat(16)}`;
+  const inspectTask = validateTask(valid, allowedRepositories()).task;
+  const coderTask = validateTask({ ...valid, mode: "coder" }, allowedRepositories()).task;
+  const inspect = JSON.parse(githubDispatchRequest({ token: "t", workflow: "atlas-runner.yml", task: inspectTask, taskId: "task-123", correlationId }).init.body);
+  assert.equal(inspect.inputs.correlation_id, correlationId);
+  const coder = JSON.parse(githubDispatchRequest({ token: "t", workflow: "atlas-coder.yml", task: coderTask, taskId: "task-123", correlationId }).init.body);
+  assert.equal(coder.inputs.correlation_id, correlationId);
+  for (const bad of ["cor_short", `${correlationId}\n`, 7]) {
+    const body = JSON.parse(githubDispatchRequest({ token: "t", workflow: "atlas-runner.yml", task: inspectTask, taskId: "task-123", correlationId: bad }).init.body);
+    assert.equal("correlation_id" in body.inputs, false);
+  }
+  // A custom workflow override may not declare the input; GitHub would reject it.
+  const custom = JSON.parse(githubDispatchRequest({ token: "t", workflow: "custom-runner.yml", task: inspectTask, taskId: "task-123", correlationId }).init.body);
+  assert.equal("correlation_id" in custom.inputs, false);
+});
+
+test("both Atlas workflows declare correlation_id as optional and pass it only through env", async () => {
+  const fs = await import("node:fs");
+  for (const name of ["atlas-runner.yml", "atlas-coder.yml"]) {
+    const text = fs.readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), "utf8");
+    assert.match(text, /\n {6}correlation_id:\n(?: {8}#.*\n)* {8}description: .*\n {8}required: false\n {8}default: ""\n {8}type: string\n/, name);
+    for (const line of text.split("\n").filter((entry) => entry.includes("correlation_id }}"))) {
+      assert.match(line, /^\s+ATLAS_CORRELATION_ID: \$\{\{ (?:github\.event\.)?inputs\.correlation_id \}\}$/, `${name}: ${line}`);
+    }
+  }
+});
