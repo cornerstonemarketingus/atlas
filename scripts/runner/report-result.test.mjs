@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderResult, deliverResult } from "./report-result.mjs";
+import { renderResult, deliverResult, buildResultPayload } from "./report-result.mjs";
 
 test("inspection returns useful bounded findings without claiming a generated plan", () => {
   const text = renderResult({ inspection: { fileCount: 42, languages: [{ name: "TypeScript", fileCount: 30 }], frameworks: [], manifests: [{ path: "package.json" }] }, conclusion: "success" });
@@ -24,4 +24,14 @@ test("delivery retries server errors with the same body and fails visibly on rej
   assert.equal(calls.length, 2);
   assert.equal(calls[0], calls[1]);
   await assert.rejects(deliverResult({ endpoint: "https://example.test", token: "test", payload: {} }, async () => new Response(null, { status: 403 })), /403/);
+});
+
+test("result payload carries a valid correlation id and omits a missing or forged one", async () => {
+  const id = `cor_${"0f".repeat(16)}`;
+  assert.deepEqual(buildResultPayload({ taskId: "one", summary: "result", correlationId: id }), { taskId: "one", summary: "result", correlationId: id });
+  assert.deepEqual(buildResultPayload({ taskId: "one", summary: "result", correlationId: null }), { taskId: "one", summary: "result" });
+  assert.deepEqual(buildResultPayload({ taskId: "one", summary: "result", correlationId: "cor_x\ninjected" }), { taskId: "one", summary: "result" });
+  let sent;
+  await deliverResult({ endpoint: "https://example.test/result", token: "test", payload: buildResultPayload({ taskId: "one", summary: "result", correlationId: id }) }, async (_, init) => { sent = JSON.parse(init.body); return new Response(null, { status: 200 }); });
+  assert.equal(sent.correlationId, id);
 });

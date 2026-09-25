@@ -1,0 +1,12 @@
+{
+  "name": "@atlas/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Versioned, dependency-free contracts shared by the Atlas control and execution planes.",
+  "engines": { "node": ">=22.13.0" },
+  "exports": { ".": "./src/index.mjs" },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}

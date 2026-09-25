@@ -21,9 +21,9 @@ export type Section = "chat" | "build" | "automation" | "connections" | "setting
 type NavItem = { id: Section; href: string; label: string; hint: string; glyph: string };
 
 export const PRIMARY_SECTIONS: readonly NavItem[] = [
-  { id: "chat", href: "/", label: "Chat", hint: "Think it through first", glyph: "◇" },
-  { id: "build", href: "/build", label: "Build", hint: "Apps, sites, and code", glyph: "⬢" },
-  { id: "automation", href: "/automation", label: "Automation", hint: "Atlas works your computer", glyph: "◈" },
+  { id: "chat", href: "/", label: "Chat", hint: "Ask Atlas for help", glyph: "◇" },
+  { id: "build", href: "/build", label: "Projects", hint: "Code and project work", glyph: "⬢" },
+  { id: "automation", href: "/automation", label: "Tasks", hint: "Work in progress", glyph: "◈" },
 ];
 
 const UTILITY_SECTIONS: readonly NavItem[] = [

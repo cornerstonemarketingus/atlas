@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { subscriptions, users } from "../../../../../db/schema";
-import { exchangeCodeForToken, fetchGitHubProfile, githubOAuthConfiguration, clearStateCookieHeader, isOwnerGitHubLogin, readStateCookie } from "../../github-oauth.mjs";
+import { exchangeCodeForToken, fetchGitHubProfile, githubOAuthConfiguration, clearStateCookieHeader, isOwnerGitHubLogin, readStateCookie, publicOrigin } from "../../github-oauth.mjs";
 import { signSession, sessionCookieHeader } from "../../session.mjs";
 
 export async function GET(request: Request) {
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const accessToken = await exchangeCodeForToken(configuration, { code, redirectUri: `${url.origin}/api/auth/github/callback` });
+    const accessToken = await exchangeCodeForToken(configuration, { code, redirectUri: `${publicOrigin(request)}/api/auth/github/callback` });
     const profile = await fetchGitHubProfile(accessToken);
 
     const db = getDb();
@@ -49,7 +49,7 @@ export async function GET(request: Request) {
       sessionSecret,
     );
 
-    const headers = new Headers({ location: "/" });
+    const headers = new Headers({ location: `${publicOrigin(request)}/` });
     headers.append("set-cookie", clearState);
     headers.append("set-cookie", sessionCookieHeader(token));
     return new Response(null, { status: 302, headers });

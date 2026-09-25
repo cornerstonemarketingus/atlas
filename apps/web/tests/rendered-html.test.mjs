@@ -6,7 +6,7 @@ test("server-renders the Atlas control plane", async () => {
   const response = await worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /Give Atlas a goal/);
+  assert.match(html, /Tell Atlas what you need/);
   assert.match(html, /computer operator/i);
   assert.match(html, /Continue securely/);
   assert.match(html, /access code/i);

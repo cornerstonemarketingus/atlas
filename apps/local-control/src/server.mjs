@@ -6,16 +6,18 @@ import { publishChange } from "./publish-adapters.mjs";
 import { discoverLocalModels } from "./model-discovery.mjs";
 import { createAgentRoutes } from "./agent/routes.mjs";
 import { createMissionRoutes } from "./agent/mission-routes.mjs";
+import { createPlatformRoutes } from "./platform/dashboard.mjs";
 import { createRateLimiter, LIMITS } from "./rate-limit.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
   const missionRoutes = missionService ? createMissionRoutes({ missionService }) : null;
+  const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore }) : null;
 
   async function startTask(taskId) {
     store.markRunning(taskId);
@@ -29,6 +31,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (request.method === "GET" && request.url === "/") return sendText(response, 200, "text/html; charset=utf-8", LOCAL_UI_HTML);
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
     if (request.method === "GET" && request.url === "/app.js") return sendText(response, 200, "text/javascript; charset=utf-8", LOCAL_UI_JS);
+    if (platformRoutes?.handlePage(request, response)) return;
     response.setHeader("content-type", "application/json; charset=utf-8");
     if (request.method === "GET" && request.url === "/health") return send(response, 200, { status: "ok", mode: "sovereign", model, license, runtime: runtime ? { running: true, executors: runtime.executorIds() } : { running: false, executors: [] } });
     if (request.method === "POST" && request.url === "/v1/pair/claim") {
@@ -47,6 +50,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     const identity = authenticate(request.headers.authorization, expected, store);
     if (!identity) return send(response, 401, { message: "A valid local Atlas or paired-device token is required." });
 
+    if (platformRoutes && platformRoutes.handle(request, response, identity)) return;
+    if (!platformRoutes && (request.url ?? "").startsWith("/v1/platform/")) return send(response, 503, { message: "The Atlas platform task store is not running in this process." });
     if (missionRoutes && (request.url ?? "").startsWith("/v1/missions")) { if (await missionRoutes.handle(request, response, identity)) return; }
     if (!missionService && (request.url ?? "").startsWith("/v1/missions")) return send(response, 503, { message: "The Atlas mission service is not running in this process." });
     if (agentRoutes && (request.url ?? "").startsWith("/v1/sessions")) { if (await agentRoutes.handle(request, response, identity)) return; }

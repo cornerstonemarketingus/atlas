@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { isCorrelationId } from "./correlation.mjs";
 
 export const RUNNER_AUDIENCE = "atlas-runner-results";
 const keys = createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"));
@@ -23,7 +24,26 @@ export function validateRunnerResult(body) {
     || typeof body.summary !== "string" || !body.summary.trim() || body.summary.length > 16000) {
     throw new Error("Invalid runner result");
   }
-  return { taskId: body.taskId, summary: body.summary };
+  // Optional for backward compatibility with runners that predate correlation
+  // ids; when present it must be exactly the shape Atlas issues.
+  if (body.correlationId !== undefined && body.correlationId !== null && !isCorrelationId(body.correlationId)) {
+    throw new Error("Invalid runner result");
+  }
+  return isCorrelationId(body.correlationId)
+    ? { taskId: body.taskId, summary: body.summary, correlationId: body.correlationId }
+    : { taskId: body.taskId, summary: body.summary };
+}
+
+/**
+ * A result that names a correlation id must name the one stored with its
+ * task. Either side missing (older task rows, older runners) is accepted, so
+ * this only ever refuses a positive mismatch.
+ */
+export function correlationMatchesTask(result, task) {
+  const reported = result?.correlationId ?? null;
+  const stored = task?.correlationId ?? null;
+  if (!reported || !stored) return true;
+  return reported === stored;
 }
 
 /** Bind the signed identity to an exact dispatch, never a time-based guess. */

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { renderRunSummary } from "./run-summary.mjs";
+import { correlationIdFromEnv, correlationLogSuffix, withCorrelationId } from "./correlation.mjs";
 
 const limit = 16000;
 function read(directory, name) {
@@ -33,6 +34,11 @@ export function renderResult({ task, status, code, inspection, debug, conclusion
   if (status?.pull_request_url) lines.push(`Pull request: ${status.pull_request_url}`);
   if (!status) lines.push("The runner did not produce a final result. Open the run log for the failure.");
   return lines.join("\n\n").slice(0, limit - 100);
+}
+
+/** The callback body; `correlationId` is included only when well-formed. */
+export function buildResultPayload({ taskId, summary, correlationId }) {
+  return withCorrelationId({ taskId, summary }, correlationId);
 }
 
 export async function deliverResult({ endpoint, token, payload }, fetcher = fetch) {
@@ -71,7 +77,9 @@ async function main() {
   const { value: token } = await identity.json();
   const endpoint = process.env.ATLAS_RESULT_URL || "https://atlas-web.cornerstonemarketingus.workers.dev/api/tasks/result";
   if (new URL(endpoint).protocol !== "https:") throw new Error("Result endpoint must use HTTPS");
-  await deliverResult({ endpoint, token, payload: { taskId, summary } });
+  const correlationId = correlationIdFromEnv();
+  await deliverResult({ endpoint, token, payload: buildResultPayload({ taskId, summary, correlationId }) });
+  console.log(`Delivered result for task ${taskId}.${correlationLogSuffix(correlationId)}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Your Quote</title></head>
+<body>
+  <main>
+    <h1>Quote</h1>
+    <p>Total: <output data-testid="quote-total">1,234.56</output></p>
+    <form action="/thanks.html" method="get">
+      <label>Email <input type="email" name="email"></label>
+      <label>Password <input type="password" name="password"></label>
+      <label>Plan
+        <select name="plan">
+          <option value="basic">Basic</option>
+          <option value="pro">Pro</option>
+        </select>
+      </label>
+      <button type="submit">Place order</button>
+    </form>
+  </main>
+</body>
+</html>

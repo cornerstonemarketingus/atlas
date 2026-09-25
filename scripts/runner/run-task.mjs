@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const outputDirectory = process.env.ATLAS_OUTPUT_DIR;
@@ -20,6 +21,7 @@ if (commitResult.error || commitResult.status !== 0) throw new Error("Unable to 
 const metadata = {
   schema_version: 1,
   task_id: process.env.ATLAS_TASK_ID,
+  correlation_id: correlationIdFromEnv(),
   repository: "cornerstonemarketingus/atlas",
   branch: process.env.ATLAS_BRANCH,
   mode: process.env.ATLAS_MODE,
@@ -28,6 +30,7 @@ const metadata = {
   run_id: process.env.GITHUB_RUN_ID ?? null,
 };
 fs.writeFileSync(path.join(outputDirectory, "task.json"), `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
+console.log(`Atlas task ${metadata.task_id} (${metadata.mode}) starting.${correlationLogSuffix(metadata.correlation_id)}`);
 
 function writeStatus(status, message, extra = {}) {
   fs.writeFileSync(

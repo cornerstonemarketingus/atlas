@@ -35,6 +35,14 @@ on:
         description: Human-readable task objective
         required: true
         type: string
+      correlation_id:
+        # Optional so dispatches from before correlation ids existed, and
+        # manual runs from the GitHub UI, still validate. Scripts drop any
+        # value that is not exactly `cor_` + 32 lowercase hex.
+        description: Atlas correlation id (cor_ + 32 lowercase hex), optional
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -55,6 +63,7 @@ jobs:
       ATLAS_BRANCH: ${{ github.event.inputs.branch }}
       ATLAS_MODE: ${{ github.event.inputs.mode }}
       ATLAS_OBJECTIVE: ${{ github.event.inputs.objective }}
+      ATLAS_CORRELATION_ID: ${{ github.event.inputs.correlation_id }}
       ATLAS_OUTPUT_DIR: ${{ github.workspace }}/atlas-output
       ATLAS_REPOSITORY_ROOT: ${{ github.workspace }}/target
     steps:
@@ -134,6 +143,7 @@ jobs:
       - name: Deliver redacted findings
         env:
           ATLAS_TASK_ID: ${{ inputs.task_id }}
+          ATLAS_CORRELATION_ID: ${{ inputs.correlation_id }}
           ATLAS_OUTPUT_DIR: atlas-output
           ATLAS_JOB_RESULT: ${{ needs.run.result }}
           ATLAS_RESULT_URL: ${{ vars.ATLAS_RESULT_URL }}

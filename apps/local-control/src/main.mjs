@@ -8,6 +8,7 @@ import { LocalTaskStore } from "./store.mjs";
 import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
+import { PlatformTaskStore } from "./platform/task-store.mjs";
 import { createGitHubActionsExecutor, createLocalExecutor } from "./agent/executors.mjs";
 import { createGitHubActionsClient } from "./agent/github-actions-client.mjs";
 import { createConversationExecutor } from "./agent/conversation-executor.mjs";
@@ -46,6 +47,7 @@ if (!token) {
 
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
 const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
+const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
 const vault = createCredentialVault({ filePath: join(dataDirectory, "credentials.vault.json") });
 const license = loadLicense();
 const runtime = new AgentRuntime({
@@ -70,6 +72,7 @@ const server = createLocalControlServer({
   license,
   runtime,
   missionService,
+  platformStore,
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });

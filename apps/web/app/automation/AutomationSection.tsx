@@ -17,7 +17,7 @@ const WORKFLOWS: Array<{ id: Workflow; eyebrow: string; title: string; summary: 
   { id: "custom", eyebrow: "GENERAL", title: "Run a browser task", summary: "Research, enter data, manage portals, and complete repeatable browser work.", startUrl: "", objective: "", guardrail: "Sensitive actions always pause" },
 ];
 
-/** Automation: Atlas working a browser on a computer you paired, pausing before anything consequential. */
+/** Tasks: supervised browser work on a paired computer or an entitled hosted browser. */
 export function AutomationSection() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -122,9 +122,9 @@ export function AutomationSection() {
     <div className="section-scroll">
       <div className="section-page">
         <header className="page-head">
-          <p className="kicker">AUTOMATION</p>
-          <h1>Atlas works your computer.</h1>
-          <p>Atlas drives a browser on a computer you paired — or a hosted browser on paid plans. It researches, prepares, and fills the work in, then stops at every step that carries consequence.</p>
+          <p className="kicker">TASKS</p>
+          <h1>Let Atlas handle browser work.</h1>
+          <p>Choose a task, select where it should run, and review the result. Atlas can research and prepare browser work, then pauses before anything consequential.</p>
         </header>
 
         {notice && <p className="page-notice" role="status">{notice}</p>}
@@ -138,8 +138,8 @@ export function AutomationSection() {
         </section>}
 
         <section className="page-block">
-          <h2><span>01</span>Choose the outcome</h2>
-          <p className="block-hint">Each playbook gives Atlas explicit boundaries before it starts.</p>
+          <h2><span>01</span>Choose a task</h2>
+          <p className="block-hint">Each option gives Atlas a clear goal and a review point before it starts.</p>
           <div className="workflow-grid">
             {WORKFLOWS.map((item) => <button key={item.id} className={workflow === item.id ? "active" : ""} onClick={() => choose(item.id)}>
               <small>{item.eyebrow}</small><strong>{item.title}</strong><span>{item.summary}</span><em>{item.guardrail}</em>
@@ -148,7 +148,7 @@ export function AutomationSection() {
         </section>
 
         <section className="page-block">
-          <h2><span>02</span>Set the mission</h2>
+          <h2><span>02</span>Set up the task</h2>
           <form className="mission-form" onSubmit={queue}>
             <div className="field-row">
               <label>Runs on
@@ -174,14 +174,14 @@ export function AutomationSection() {
               <p><b>Approval policy</b><br />{active.guardrail}. Atlas also pauses for purchases, sensitive uploads, and account or security changes.</p>
               <div className="mission-send">
                 {blocker && <small className="blocker" role="status">{blocker}</small>}
-                <button disabled={busy || blocker !== "" || !objective.trim()}>{busy ? "Queueing…" : "Start operator"}</button>
+                <button disabled={busy || blocker !== "" || !objective.trim()}>{busy ? "Starting…" : "Start task"}</button>
               </div>
             </div>
           </form>
         </section>
 
         <section className="page-block">
-          <h2><span>03</span>Pair a computer</h2>
+          <h2><span>03</span>Connect a computer</h2>
           <div className="pair-grid">
             <article className="pair-card">
               <p>Name this PC, download its pairing file, and open that file during companion setup. No credential typing required. Atlas stores only its fingerprint.</p>
@@ -216,8 +216,8 @@ export function AutomationSection() {
         </section>
 
         <section className="page-block">
-          <h2><span>04</span>Recent runs</h2>
-          {tasks.length === 0 ? <p className="block-hint">No computer tasks yet.</p> : tasks.map((task) => <article className="run-row" key={task.id}>
+          <h2><span>04</span>Recent tasks</h2>
+          {tasks.length === 0 ? <p className="block-hint">No browser tasks yet.</p> : tasks.map((task) => <article className="run-row" key={task.id}>
             <span className={`run-state ${task.status}`}>{task.status}</span>
             <div>
               <small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Browser task"}</small>
