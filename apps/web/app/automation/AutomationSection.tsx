@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AtlasShell } from "../AtlasShell.js";
 
 type Workflow = "custom" | "job-application" | "sales-outreach" | "marketing";
@@ -32,6 +32,8 @@ export function AutomationSection() {
   const [workflow, setWorkflow] = useState<Workflow>("job-application");
   const [objective, setObjective] = useState(WORKFLOWS[0].objective);
   const [startUrl, setStartUrl] = useState(WORKFLOWS[0].startUrl);
+  const [tab, setTab] = useState<"attention" | "running" | "history">("attention");
+  const taskComposerRef = useRef<HTMLElement>(null);
 
   const refresh = useCallback(async () => {
     const [deviceResponse, taskResponse] = await Promise.all([
@@ -114,6 +116,14 @@ export function AutomationSection() {
     : (!capabilities?.providers.cloudflare.entitled ? "A hosted browser needs a Pro or Team plan."
       : !capabilities?.providers.cloudflare.configured ? "Hosted browsing is included with your plan but is not active on this deployment yet."
         : "");
+  const runningTasks = tasks.filter((item) => ["queued", "running"].includes(item.status));
+  const historyTasks = tasks.filter((item) => !["queued", "running"].includes(item.status));
+  const attention = approvals.length > 0;
+  const visibleTasks = tab === "running" ? runningTasks : tab === "history" ? historyTasks : tasks.filter((item) => item.status === "paused" || item.status === "awaiting_approval");
+  function startTask() {
+    taskComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("[aria-label='What should Atlas accomplish?']")?.focus(), 250);
+  }
 
   return <AtlasShell
     section="automation"
@@ -123,23 +133,40 @@ export function AutomationSection() {
       <div className="section-page">
         <header className="page-head">
           <p className="kicker">TASKS</p>
-          <h1>Let Atlas handle browser work.</h1>
-          <p>Choose a task, select where it should run, and review the result. Atlas can research and prepare browser work, then pauses before anything consequential.</p>
+          <h1>See what Atlas is working on.</h1>
+          <p>Review active work, respond when Atlas needs you, and open the evidence when a task is complete.</p>
+          <button className="page-action task-primary" type="button" onClick={startTask}>＋ New task</button>
         </header>
 
         {notice && <p className="page-notice" role="status">{notice}</p>}
 
         {approvals.length > 0 && <section className="approval-panel">
-          <p className="kicker">ATLAS IS PAUSED · YOUR MOVE</p>
+          <p className="kicker">NEEDS YOUR ATTENTION</p>
           {approvals.map((approval) => <article key={approval.id}>
-            <div><strong>{approval.summary}</strong><small>{approval.domain ?? "Local browser"} · expires {new Date(approval.expiresAt).toLocaleTimeString()}</small></div>
-            <div><button className="quiet" onClick={() => void decide(approval.id, "rejected")}>Reject</button><button onClick={() => void decide(approval.id, "approved")}>Approve once</button></div>
+            <div><strong>{approval.summary}</strong><small>{approval.domain ?? "Browser task"} · expires {new Date(approval.expiresAt).toLocaleTimeString()}</small><p>Atlas is ready for the next action and will continue only after you approve it.</p></div>
+            <div><button className="quiet" onClick={() => void decide(approval.id, "rejected")}>Reject</button><button onClick={() => void decide(approval.id, "approved")}>Review and approve</button></div>
           </article>)}
         </section>}
 
-        <section className="page-block">
-          <h2><span>01</span>Choose a task</h2>
-          <p className="block-hint">Each option gives Atlas a clear goal and a review point before it starts.</p>
+        <nav className="task-tabs" aria-label="Task views">
+          <button className={tab === "attention" ? "active" : ""} onClick={() => setTab("attention")}>Needs your attention{attention ? ` · ${approvals.length}` : ""}</button>
+          <button className={tab === "running" ? "active" : ""} onClick={() => setTab("running")}>Running{runningTasks.length ? ` · ${runningTasks.length}` : ""}</button>
+          <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>History</button>
+        </nav>
+
+        <section className="task-inbox">
+          {visibleTasks.length === 0
+            ? <div className="task-empty"><strong>{tab === "attention" ? "Nothing needs you right now." : tab === "running" ? "Atlas is not running any tasks." : "No completed tasks yet."}</strong><p>{tab === "attention" ? "Atlas will show approvals here when a consequential action is ready." : "Start a task when you have something you want Atlas to handle."}</p></div>
+            : visibleTasks.map((task) => <article className="task-card" key={task.id}>
+              <div className={`run-state ${task.status}`}>{task.status === "completed" ? "Completed" : task.status}</div>
+              <div className="task-card-main"><small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Browser task"}</small><h2>{task.objective}</h2>{(task.result || task.error) && <p>{task.result ?? task.error}</p>}<button className="task-detail" type="button" onClick={() => document.getElementById(`task-${task.id}`)?.scrollIntoView({ behavior: "smooth" })}>View task</button></div>
+              <time>{new Date(task.createdAt).toLocaleString()}</time>
+            </article>)}
+        </section>
+
+        <section className="page-block task-composer" ref={taskComposerRef}>
+          <h2>New task</h2>
+          <p className="block-hint">Describe the result you want. Atlas will use the selected workflow and pause before consequential actions.</p>
           <div className="workflow-grid">
             {WORKFLOWS.map((item) => <button key={item.id} className={workflow === item.id ? "active" : ""} onClick={() => choose(item.id)}>
               <small>{item.eyebrow}</small><strong>{item.title}</strong><span>{item.summary}</span><em>{item.guardrail}</em>
@@ -148,7 +175,7 @@ export function AutomationSection() {
         </section>
 
         <section className="page-block">
-          <h2><span>02</span>Set up the task</h2>
+          <h2>Task details</h2>
           <form className="mission-form" onSubmit={queue}>
             <div className="field-row">
               <label>Runs on
@@ -181,7 +208,7 @@ export function AutomationSection() {
         </section>
 
         <section className="page-block">
-          <h2><span>03</span>Connect a computer</h2>
+          <h2>Computer access</h2>
           <div className="pair-grid">
             <article className="pair-card">
               <p>Name this PC, download its pairing file, and open that file during companion setup. No credential typing required. Atlas stores only its fingerprint.</p>
@@ -215,9 +242,9 @@ export function AutomationSection() {
           </div>
         </section>
 
-        <section className="page-block">
-          <h2><span>04</span>Recent tasks</h2>
-          {tasks.length === 0 ? <p className="block-hint">No browser tasks yet.</p> : tasks.map((task) => <article className="run-row" key={task.id}>
+        <section className="page-block task-history-detail">
+          <h2>Task details</h2>
+          {tasks.length === 0 ? <p className="block-hint">No browser tasks yet.</p> : tasks.map((task) => <article className="run-row" id={`task-${task.id}`} key={task.id}>
             <span className={`run-state ${task.status}`}>{task.status}</span>
             <div>
               <small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Browser task"}</small>

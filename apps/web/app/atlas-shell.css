@@ -22,13 +22,15 @@
 .rail-link.active .rail-glyph{background:var(--ws-accent);border-color:var(--ws-accent);color:#10150d}
 .rail-text{display:grid;min-width:0}
 .rail-text b{font-size:13px;font-weight:650}
-.rail-text small{color:#69726c;font-size:10px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail-text small{display:none}
 .rail-threads{display:flex;flex-direction:column;min-height:0;margin-top:22px;flex:1}
 .rail-bottom{margin-top:auto;display:grid;gap:2px;border-top:1px solid var(--ws-line);padding-top:10px}
 .rail-utility{color:#879089;font-size:12px;padding:9px 10px}
 .rail-utility.active{color:#fff;background:#151917}
 .rail-utility>span{width:18px;text-align:center;color:#69726c;font-size:11px}
 .thread-empty{margin:4px 10px;color:#5c655f;font-size:11px;line-height:1.5}
+.thread-search{display:block;margin:14px 0 0}.thread-search input{width:100%;border:1px solid var(--ws-line);border-radius:8px;background:#151917;color:var(--ws-text);padding:9px 10px;font:450 12px var(--font-geist-sans)}.thread-search input::placeholder{color:#69726c}.thread-search input:focus{outline:2px solid var(--ws-accent);outline-offset:1px}
+.settings-choice{display:grid;gap:8px;max-width:280px;color:#7b857e;font:650 10px var(--font-geist-mono);text-transform:uppercase}.settings-choice select{border:1px solid #2f3632;border-radius:9px;background:#0f1210;color:var(--ws-text);padding:11px 12px;font:450 14px var(--font-geist-sans)}
 
 /* --- body --------------------------------------------------------------- */
 .shell-body{min-width:0;display:grid;grid-template-rows:58px minmax(0,1fr) auto;background:radial-gradient(circle at 50% 18%,#151a16 0,transparent 45%),var(--ws-bg)}
@@ -215,3 +217,6 @@ html[data-atlas-theme="light"] .shell-rail{background:#e9e6dc}html[data-atlas-th
    log is the evidence — and when there is no pull request the log is the only
    thing that explains why. */
 .result-links{display:flex;flex-wrap:wrap;gap:16px;margin-top:4px}
+.task-primary{margin-top:18px}.task-tabs{display:flex;gap:22px;border-bottom:1px solid var(--ws-line);margin-top:34px}.task-tabs button{border:0;border-bottom:2px solid transparent;background:none;color:#7f8982;padding:12px 0;font-size:12px}.task-tabs button.active{border-color:var(--ws-accent);color:var(--ws-text)}
+.task-inbox{display:grid;gap:10px;margin-top:14px}.task-empty{border:1px dashed var(--ws-line);border-radius:12px;padding:28px;color:var(--ws-muted)}.task-empty strong{display:block;color:var(--ws-text);font-size:14px}.task-empty p{margin:7px 0 0;font-size:12px}.task-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:16px;align-items:start;border:1px solid var(--ws-line);border-radius:12px;background:#111412;padding:16px}.task-card-main small{color:#69726c;font:650 9px var(--font-geist-mono);letter-spacing:.1em;text-transform:uppercase}.task-card-main h2{font-size:15px;margin:7px 0}.task-card-main p{color:var(--ws-muted);font-size:12px;line-height:1.5;margin:0}.task-card time{color:#69726c;font:550 10px var(--font-geist-mono);white-space:nowrap}.task-detail{border:0;background:none;color:var(--ws-accent);padding:0;margin-top:10px;font-size:12px;text-decoration:underline;text-underline-offset:3px}
+@media(max-width:760px){.task-card{grid-template-columns:1fr}.task-card time{grid-row:1}.task-tabs{gap:14px;overflow:auto;white-space:nowrap}}

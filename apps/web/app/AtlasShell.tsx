@@ -2,7 +2,6 @@
 import Link from "next/link";
 import { ReactNode, useEffect, useState } from "react";
 import { AtlasMark } from "./AtlasMark.js";
-import { ProjectSwitcher } from "./ProjectSwitcher.js";
 
 /**
  * The one navigation every signed-in surface uses.
@@ -18,17 +17,17 @@ import { ProjectSwitcher } from "./ProjectSwitcher.js";
 
 export type Section = "chat" | "build" | "automation" | "connections" | "settings";
 
-type NavItem = { id: Section; href: string; label: string; hint: string; glyph: string };
+type NavItem = { id: Section; href: string; label: string; glyph: string };
 
 export const PRIMARY_SECTIONS: readonly NavItem[] = [
-  { id: "chat", href: "/", label: "Chat", hint: "Ask Atlas for help", glyph: "◇" },
-  { id: "build", href: "/build", label: "Projects", hint: "Code and project work", glyph: "⬢" },
-  { id: "automation", href: "/automation", label: "Tasks", hint: "Work in progress", glyph: "◈" },
+  { id: "chat", href: "/", label: "Chat", glyph: "◇" },
+  { id: "build", href: "/build", label: "Projects", glyph: "⬢" },
+  { id: "automation", href: "/automation", label: "Tasks", glyph: "◈" },
 ];
 
 const UTILITY_SECTIONS: readonly NavItem[] = [
-  { id: "connections", href: "/setup", label: "Connections", hint: "GitHub, devices, deployment", glyph: "⟐" },
-  { id: "settings", href: "/account", label: "Settings", hint: "Plan, privacy, your data", glyph: "⚙" },
+  { id: "connections", href: "/setup", label: "Connections", glyph: "⟐" },
+  { id: "settings", href: "/account", label: "Settings", glyph: "⚙" },
 ];
 
 type ShellProps = {
@@ -45,7 +44,6 @@ type ShellProps = {
 export function AtlasShell({ section, rail, headerContext, children, wide = false }: ShellProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [account, setAccount] = useState<{ signedIn: boolean; githubLogin?: string | null } | null>(null);
-  const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
 
   useEffect(() => {
     let active = true;
@@ -55,18 +53,6 @@ export function AtlasShell({ section, rail, headerContext, children, wide = fals
       .catch(() => undefined);
     return () => { active = false; };
   }, []);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem("atlas-theme");
-    const selected = saved === "light" || saved === "dark" ? saved : "system";
-    document.documentElement.dataset.atlasTheme = selected;
-    const timer = window.setTimeout(() => setTheme(selected), 0);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  function changeTheme(next: "system" | "light" | "dark") {
-    setTheme(next); window.localStorage.setItem("atlas-theme", next); document.documentElement.dataset.atlasTheme = next;
-  }
 
   // Route changes are full navigations here, but the drawer is also closed on
   // every click inside it so a mis-tap never leaves it covering the page.
@@ -89,7 +75,7 @@ export function AtlasShell({ section, rail, headerContext, children, wide = fals
           <Link key={item.id} href={item.href} aria-current={item.id === section ? "page" : undefined}
             className={item.id === section ? "rail-link active" : "rail-link"} onClick={() => setMenuOpen(false)}>
             <span className="rail-glyph" aria-hidden="true">{item.glyph}</span>
-            <span className="rail-text"><b>{item.label}</b><small>{item.hint}</small></span>
+            <span className="rail-text"><b>{item.label}</b></span>
           </Link>
         ))}
       </nav>
@@ -112,7 +98,7 @@ export function AtlasShell({ section, rail, headerContext, children, wide = fals
           <button className="shell-menu" aria-label="Open navigation" onClick={() => setMenuOpen(true)}>☰</button>
           <span className="shell-where"><span className="privacy-dot" />{current?.label ?? "Atlas"}</span>
         </div>
-        <div className="shell-header-context"><ProjectSwitcher />{headerContext}<label className="theme-switcher"><span className="sr-only">Theme</span><select aria-label="Theme" value={theme} onChange={(event) => changeTheme(event.target.value as "system" | "light" | "dark")}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div>
+        <div className="shell-header-context">{headerContext}</div>
       </header>
       {children}
     </section>

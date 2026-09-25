@@ -260,6 +260,8 @@ into `atlas-coder.yml` as the `merge_policy` dispatch input, which
 the PR:
 
 - `manual` — opens the PR and stops there.
+- Manual-policy coder proposals are opened as draft pull requests so a person
+  can inspect the evidence and mark them ready for review deliberately.
 - `none` — merges (squash) immediately after opening it.
 - `ci-gated` — polls the head commit's check-runs (GitHub's Checks API;
   classic commit statuses from non-Actions CI aren't read) for up to 8
