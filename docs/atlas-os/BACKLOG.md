@@ -39,7 +39,7 @@ Security gap numbers (`SEC-n`) refer to `SECURITY-REVIEW.md` §2.
 | ID | Title | Acceptance criteria | Deps | Size | Touches | Branch |
 |---|---|---|---|---|---|---|
 | P3-1 | Terminal sandbox controller | Sessions with cwd confinement, env allowlist, timeouts, output caps, kill-on-cancel; commands evaluated by policy engine; transcript persisted as events | P1-1, P1-3 | L | new `src/platform/`; reuse `src/agent/tools/process.mjs`, `tools/path-confinement.mjs` | ✅ |
-| P3-2 | Scrub local coder environment | `runLocalCoder` and `run-coder.mjs` pass `safeEnvironment()` + model key only; test asserts `ATLAS_GITHUB_TOKEN` absent in child (SEC-4) | — | S | `src/runner.mjs:15`, `scripts/local/run-coder.mjs:84` | |
+| P3-2 | Scrub local coder environment | `runLocalCoder` and `run-coder.mjs` pass `safeEnvironment()` + model key only; test asserts `ATLAS_GITHUB_TOKEN` absent in child (SEC-4) | — | S | `src/runner.mjs`, `scripts/local/run-coder.mjs`, `tests/agent-worktree.test.mjs` | ✅ (focused regression passes; full suite still has unrelated Windows-host failures) |
 | P3-3 | OS-level isolation option | Optional container/namespace runner (network off by default) for untrusted repos | P3-1 | L | new; `docs/` | |
 
 ## Phase 4 — Agent family graph + UI

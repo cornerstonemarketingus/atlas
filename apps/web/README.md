@@ -197,6 +197,13 @@ dashboard's sign-in button does nothing useful. Session cookies are
 cookie immediately (`/api/auth/logout`, wired to the dashboard's "Sign out"
 link).
 
+If the deployment is reachable through more than one hostname, set
+`ATLAS_PUBLIC_URL` to the exact canonical origin registered in the GitHub OAuth
+App, for example `https://atlas-web.cornerstonemarketingus.workers.dev`.
+Atlas uses that origin for both the GitHub redirect and token exchange, so a
+mobile browser entering through another alias does not produce a redirect URL
+mismatch.
+
 ### Stripe billing
 
 1. In your [Stripe dashboard](https://dashboard.stripe.com), create two

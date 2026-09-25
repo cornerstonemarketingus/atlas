@@ -9,7 +9,7 @@ import test from "node:test";
 import { AgentSessionStore } from "../src/agent/session-store.mjs";
 import { AgentRuntime } from "../src/agent/runtime.mjs";
 import { createLocalExecutor } from "../src/agent/executors.mjs";
-import { runIsolatedLocalCoder } from "../src/runner.mjs";
+import { localCoderEnvironment, runIsolatedLocalCoder } from "../src/runner.mjs";
 
 const git = (cwd, ...args) => {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
@@ -61,6 +61,29 @@ test("a real run happens in an isolated worktree and leaves the checkout untouch
   assert.match(patch, /NOTES\.md/u);
   assert.match(patch, /Written by Atlas\./u);
   assert.ok(result.patchBytes > 0);
+});
+
+test("local coder subprocesses cannot inherit daemon credentials", () => {
+  const previous = {
+    ATLAS_GITHUB_TOKEN: process.env.ATLAS_GITHUB_TOKEN,
+    ATLAS_CLOUDFLARE_TOKEN: process.env.ATLAS_CLOUDFLARE_TOKEN,
+    ATLAS_VERCEL_TOKEN: process.env.ATLAS_VERCEL_TOKEN,
+  };
+  process.env.ATLAS_GITHUB_TOKEN = "github-secret";
+  process.env.ATLAS_CLOUDFLARE_TOKEN = "cloudflare-secret";
+  process.env.ATLAS_VERCEL_TOKEN = "vercel-secret";
+  try {
+    const environment = localCoderEnvironment();
+    assert.equal(environment.ATLAS_LOCAL_MODEL_KEY, "local-only-no-credential");
+    assert.equal("ATLAS_GITHUB_TOKEN" in environment, false);
+    assert.equal("ATLAS_CLOUDFLARE_TOKEN" in environment, false);
+    assert.equal("ATLAS_VERCEL_TOKEN" in environment, false);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test("the runtime drives a real worktree run and records the patch as an artifact", async (t) => {

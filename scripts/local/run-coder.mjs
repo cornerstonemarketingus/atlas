@@ -5,6 +5,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { safeEnvironment } from "../../apps/local-control/src/agent/tools/process.mjs";
+
 const atlasRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function option(name, fallback) {
@@ -81,7 +83,7 @@ console.log(`Atlas local-only run\nModel: ${model}\nRepository: ${resolve(reposi
 const run = spawnSync(process.execPath, args, {
   cwd: atlasRoot,
   stdio: "inherit",
-  env: { ...process.env, ATLAS_LOCAL_MODEL_KEY: "local-only-no-credential" },
+  env: safeEnvironment({ ATLAS_LOCAL_MODEL_KEY: "local-only-no-credential" }),
   timeout: 18_000_000,
 });
 if (run.error) throw run.error;

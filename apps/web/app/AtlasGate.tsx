@@ -44,16 +44,16 @@ export function AtlasGate({ children }: { readonly children: ReactNode }) {
   return <main id="top"><MarketingNav /><div className="signin-shell"><section className="signin-story">
     <div className="workspace-brand"><span><AtlasMark /></span>ATLAS</div>
     <div>
-      <p className="signin-kicker">AI COMPUTER OPERATOR + AUTONOMOUS BUILDER</p>
-      <h1>Give Atlas a goal.<br />It builds—and operates—the result.</h1>
-      <p>Atlas writes and verifies software, then works across websites and business tools to help launch, sell, market, and operate what you built—with approval before consequential actions.</p>
+      <p className="signin-kicker">YOUR PRIVATE AI ASSISTANT</p>
+      <h1>Tell Atlas what you need.<br />Keep the final say.</h1>
+      <p>Ask questions, work on a project, or start a task. Atlas can review code, make proposed changes, and help with approved computer work while keeping you in control.</p>
       <p className="signin-demo-link"><a href="/computer">Explore the computer operator →</a></p>
     </div>
     <div className="signin-proof"><span>Build real software</span><span>Operate websites and tools</span><span>Approve every consequence</span></div>
   </section><section className="signin-access"><div>
     <p className="signin-kicker">START FREE</p>
-    <h2>Your product team and computer operator.</h2>
-    <p>Connect GitHub to start building. Verified owners receive unrestricted personal access automatically; the private access code remains available as a fallback.</p>
+    <h2>A clearer way to get work done.</h2>
+    <p>Sign in with GitHub to chat with Atlas and connect the projects you want help with. You can review important actions before they happen.</p>
     <div className="signin-actions">
       <a href="/api/auth/github/start" className="signin-primary">Continue securely <span>→</span></a>
       {!showAccessCode && <button type="button" onClick={() => setShowAccessCode(true)} className="signin-secondary">Owner access code</button>}

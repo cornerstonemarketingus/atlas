@@ -10,6 +10,7 @@ import {
   clearStateCookieHeader,
   readStateCookie,
   isOwnerGitHubLogin,
+  publicOrigin,
 } from "../app/api/auth/github-oauth.mjs";
 
 test("reports unconfigured when either client credential is missing", () => {
@@ -35,6 +36,12 @@ test("builds an authorize URL carrying state and redirect_uri", () => {
   assert.equal(url.searchParams.get("redirect_uri"), "https://example.com/api/auth/github/callback");
 });
 
+test("uses one configured public origin across browser hostnames", () => {
+  const request = new Request("https://mobile.example.test/api/auth/github/start");
+  assert.equal(publicOrigin(request, { ATLAS_PUBLIC_URL: "https://atlas.example.test/" }), "https://atlas.example.test");
+  assert.equal(publicOrigin(request, {}), "https://mobile.example.test");
+});
+
 test("exchanges a code for an access token", async () => {
   let observedBody;
   const fetcher = async (_url, init) => {
@@ -50,6 +57,11 @@ test("exchanges a code for an access token", async () => {
 test("rejects a token exchange that returns no access token", async () => {
   const fetcher = async () => new Response(JSON.stringify({ error: "bad_verification_code", error_description: "expired" }), { status: 200 });
   await assert.rejects(exchangeCodeForToken({ clientId: "id", clientSecret: "secret" }, { code: "abc", redirectUri: "https://example.com/cb" }, fetcher), /expired/u);
+});
+
+test("includes GitHub's safe exchange error detail", async () => {
+  const fetcher = async () => new Response(JSON.stringify({ error: "bad_verification_code", error_description: "redirect_uri mismatch" }), { status: 400 });
+  await assert.rejects(exchangeCodeForToken({ clientId: "id", clientSecret: "secret" }, { code: "abc", redirectUri: "https://example.com/cb" }, fetcher), /redirect_uri mismatch/u);
 });
 
 test("fetches a profile and falls back to the primary verified email", async () => {

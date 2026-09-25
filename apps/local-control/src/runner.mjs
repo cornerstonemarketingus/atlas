@@ -3,7 +3,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { safeEnvironment } from "./agent/tools/process.mjs";
+
 const atlasRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+
+export function localCoderEnvironment() {
+  return safeEnvironment({ ATLAS_LOCAL_MODEL_KEY: "local-only-no-credential" });
+}
 
 export function runLocalCoder(task, options = {}) {
   const script = resolve(atlasRoot, "scripts", "local", "run-coder.mjs");
@@ -12,7 +18,12 @@ export function runLocalCoder(task, options = {}) {
   const { signal } = options;
   if (signal?.aborted) return Promise.resolve({ ok: false, cancelled: true, message: "Cancelled before the coder started." });
   return new Promise((resolveRun) => {
-    const child = spawn(process.execPath, args, { cwd: atlasRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, args, {
+      cwd: atlasRoot,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: localCoderEnvironment(),
+    });
     let summary = "";
     let cancelled = false;
     // SIGTERM rather than SIGKILL: the coder writes its audit tail on the way

@@ -40,9 +40,9 @@ const PROGRESS: Record<string, string[]> = {
 };
 
 const MODES = [
-  { id: "inspect", label: "Plan", hint: "Inspect the project structure and report findings. Changes nothing." },
+  { id: "inspect", label: "Review", hint: "Read the project and report findings. Changes nothing." },
   { id: "debug", label: "Debug", hint: "Build and run the tests to find what is actually broken." },
-  { id: "coder", label: "Build", hint: "Write the change and open a pull request for review." },
+  { id: "coder", label: "Make changes", hint: "Write the change and open a pull request for review." },
 ];
 
 const STARTERS = [
@@ -51,7 +51,7 @@ const STARTERS = [
   { title: "Fix what's broken", detail: "Debug & validate", prompt: "Diagnose the currently failing tests and fix the root cause, not the symptom." },
 ];
 
-/** Build: the section where Atlas writes code, sites, and apps against a repository. */
+/** Projects: the advanced workspace for review, debugging, and code changes. */
 export function BuildSection() {
   const [repository, setRepository] = useState("cornerstonemarketingus/atlas");
   const [repositoryOptions, setRepositoryOptions] = useState(["cornerstonemarketingus/atlas"]);
@@ -159,7 +159,10 @@ export function BuildSection() {
       if (!response.ok) { setNotice(result.message ?? "Atlas could not start this build."); return; }
       setNotice(`Sent. Atlas is working on it${result.taskId ? ` · ${result.taskId.slice(0, 8)}` : ""}.`);
       setObjective("");
-      if (result.conversationId) { setConversationId(result.conversationId); void openThread(result.conversationId); }
+      if (result.conversationId) {
+        window.location.href = `/?conversation=${encodeURIComponent(result.conversationId)}`;
+        return;
+      }
       setVersion((value) => value + 1);
       void refreshTasks();
     } catch {
@@ -195,7 +198,7 @@ export function BuildSection() {
   return <AtlasShell
     section="build"
     wide={panelOpen}
-    rail={<ThreadRail threads={threads} activeId={conversationId} newLabel="New build" emptyLabel="No builds yet. Describe one below."
+    rail={<ThreadRail threads={threads} activeId={conversationId} newLabel="New project task" emptyLabel="No project tasks yet."
       onNew={startNew} onOpen={(id) => void openThread(id)} onClose={(id) => void close(id).then((done) => { if (done && id === conversationId) startNew(); })} />}
     headerContext={<>
       <span className="context-chip">{repository}</span>
@@ -207,9 +210,9 @@ export function BuildSection() {
       <div className="section-scroll">
         {!current && !thread ? <div className="section-empty">
           <div className="empty-mark"><AtlasMark /></div>
-          <p className="kicker">BUILD</p>
-          <h1>What should we build?</h1>
-          <p>Describe an outcome for a site, an app, or a change to this codebase. Atlas reads the project, does the work, validates it, and opens a pull request you review.</p>
+          <p className="kicker">PROJECTS</p>
+          <h1>What should Atlas work on?</h1>
+          <p>Choose a project and describe the outcome. Atlas reads the code, reviews or changes it, runs the requested checks, and returns a report or pull request for you to review.</p>
           <div className="starter-grid">
             {STARTERS.map((item) => <button key={item.title} onClick={() => setObjective(item.prompt)}>
               {item.title}<span>{item.detail}</span>
@@ -241,17 +244,17 @@ export function BuildSection() {
         {disconnected && <p className="composer-blocked">
           GitHub is not connected, so Atlas has nothing to build against. <Link href="/setup">Open Connections →</Link>
         </p>}
-        <textarea aria-label="Describe the build" value={objective} rows={3} onChange={(event) => setObjective(event.target.value)}
-          placeholder="Describe the site, app, or change you want Atlas to build…" />
+        <textarea aria-label="Describe the project task" value={objective} rows={3} onChange={(event) => setObjective(event.target.value)}
+          placeholder="Describe what you want Atlas to review, fix, or change…" />
         <div className="composer-actions">
           <div>
             <button type="button" title="Dictate" aria-label="Dictate" className={listening ? "listening" : ""} onClick={dictate}>⌁</button>
-            <select aria-label="Build mode" value={mode} onChange={(event) => setMode(event.target.value)}>
+            <select aria-label="Task type" value={mode} onChange={(event) => setMode(event.target.value)}>
               {MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
             </select>
             <span className="composer-hint">{activeMode.hint}</span>
           </div>
-          <button className="send" disabled={submitting || !objective.trim() || disconnected}>{submitting ? "…" : "↑"}</button>
+          <button className="send" disabled={submitting || !objective.trim() || disconnected}>{submitting ? "Starting…" : "Start task"}</button>
         </div>
         <div className="composer-context">
           <label>Project<select aria-label="Project" value={repository} onChange={(event) => setRepository(event.target.value)}>{repositoryOptions.map((value) => <option key={value}>{value}</option>)}</select></label>

@@ -4,6 +4,11 @@ const API_BASE = "https://api.github.com";
 const STATE_COOKIE_NAME = "atlas_oauth_state";
 const STATE_TTL_SECONDS = 600; // 10 minutes: only needs to outlive the round trip to GitHub and back
 
+export function publicOrigin(request, environment = process.env) {
+  const configured = typeof environment.ATLAS_PUBLIC_URL === "string" ? environment.ATLAS_PUBLIC_URL.trim() : "";
+  return configured ? new URL(configured).origin : new URL(request.url).origin;
+}
+
 export function githubOAuthConfiguration(environment = process.env) {
   const clientId = environment.ATLAS_GITHUB_OAUTH_CLIENT_ID;
   const clientSecret = environment.ATLAS_GITHUB_OAUTH_CLIENT_SECRET;
@@ -59,8 +64,11 @@ export async function exchangeCodeForToken(configuration, { code, redirectUri },
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ client_id: configuration.clientId, client_secret: configuration.clientSecret, code, redirect_uri: redirectUri }),
   });
-  if (!response.ok) throw new Error("GitHub OAuth token exchange failed.");
-  const value = await response.json();
+  const value = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = value && typeof value.error_description === "string" ? `: ${value.error_description}` : "";
+    throw new Error(`GitHub OAuth token exchange failed${detail}.`);
+  }
   if (!value || typeof value.access_token !== "string" || value.access_token.length === 0) {
     throw new Error(value && value.error_description ? `GitHub OAuth token exchange failed: ${value.error_description}` : "GitHub OAuth token exchange returned no access token.");
   }
