@@ -25,6 +25,7 @@ import { registerRepositoryTools } from "./agent/tools/repository-tools.mjs";
 import { registerRepositoryWriteTools } from "./agent/tools/repository-write-tools.mjs";
 import { registerFilesystemTools } from "./agent/tools/filesystem-tools.mjs";
 import { registerBrowserTools } from "./agent/tools/browser-tools.mjs";
+import { registerDesktopTools } from "./agent/tools/desktop-tools.mjs";
 import { registerCommunicationsTools } from "./agent/tools/communications-tools.mjs";
 import { registerWorkflowTools } from "./agent/tools/workflow-tools.mjs";
 import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.mjs";
@@ -168,6 +169,9 @@ function buildToolRegistry() {
   // its tools then fail closed with "no browser on this machine", which is a
   // better answer than the model never learning the capability exists.
   registerBrowserTools(registry, { session: buildBrowserSession, uploadRoot: join(dataDirectory, "workspace") });
+  // Desktop control: same companion runtime and rules; fails closed with a
+  // structured reason on machines without a supported desktop.
+  registerDesktopTools(registry, { session: buildDesktopSession });
   registerInfrastructureTools(registry, { providers: buildInfrastructureProviders(), vault });
   return registry;
 }
@@ -204,6 +208,28 @@ async function buildBrowserSession() {
         store.createApproval({ capability: "computer.high_risk", summary, actionDigest: digest });
         return store.consumeApprovedDigest(digest);
       },
+    },
+  });
+}
+
+/**
+ * Builds the desktop operating session on first use, from the companion's
+ * driver and rules. Approvals for consequential desktop actions land in the
+ * local approvals inbox, bound to the exact action's digest.
+ */
+async function buildDesktopSession() {
+  const [{ createDesktopDriver, DesktopSession }, { createHash }] = await Promise.all([
+    import("../../windows-companion/src/desktop/index.mjs"),
+    import("node:crypto"),
+  ]);
+  return new DesktopSession({
+    driver: createDesktopDriver(),
+    evidenceDir: join(dataDirectory, "screenshots", "desktop"),
+    approve: async ({ action, risk, window }) => {
+      const digest = createHash("sha256").update(JSON.stringify(action)).digest("hex");
+      if (store.consumeApprovedDigest(digest)) return;
+      store.createApproval({ capability: "desktop.control", summary: `${risk.reason}${window ? ` (${window})` : ""}`, actionDigest: digest });
+      throw Object.assign(new Error("This desktop action needs your approval. Approve it in Atlas, then ask again."), { code: "APPROVAL_REQUIRED" });
     },
   });
 }

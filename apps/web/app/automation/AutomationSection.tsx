@@ -14,10 +14,17 @@ const WORKFLOWS: Array<{ id: Workflow; eyebrow: string; title: string; summary: 
   { id: "job-application", eyebrow: "CAREER", title: "Apply for roles", summary: "Find strong-fit roles, prepare tailored answers, and complete forms.", startUrl: "https://www.linkedin.com/jobs/", objective: "Find roles matching my profile and preferences. For each strong match, summarize why it fits, prepare accurate tailored application answers, fill the form, and pause before every final submission.", guardrail: "You approve every application" },
   { id: "sales-outreach", eyebrow: "SALES", title: "Build qualified pipeline", summary: "Research prospects and prepare personal, evidence-based outreach.", startUrl: "https://www.linkedin.com/", objective: "Research qualified prospects for my offer, capture the source for each personalization detail, draft one-to-one outreach, and pause before sending or enrolling anyone in a sequence. Do not send bulk unsolicited messages.", guardrail: "You approve every send" },
   { id: "marketing", eyebrow: "GROWTH", title: "Operate campaigns", summary: "Draft posts, update listings, and prepare campaign changes across the web.", startUrl: "", objective: "Prepare the requested marketing work, verify claims against the provided source material, and pause before publishing, launching a campaign, or changing any spend.", guardrail: "You approve publish and spend" },
-  { id: "custom", eyebrow: "GENERAL", title: "Run a browser task", summary: "Research, enter data, manage portals, and complete repeatable browser work.", startUrl: "", objective: "", guardrail: "Sensitive actions always pause" },
+  { id: "custom", eyebrow: "GENERAL", title: "Run a computer task", summary: "Research, enter data, manage portals, and operate apps on your PC — in the browser or on the desktop.", startUrl: "", objective: "", guardrail: "Sensitive actions always pause" },
 ];
 
-/** Tasks: supervised browser work on a paired computer or an entitled hosted browser. */
+/** The most recent step the companion reported, for the "Now:" line on a running task. */
+function latestStep(task: Task) {
+  // Events arrive newest first.
+  const step = task.events?.find((event) => event.kind === "progress") ?? null;
+  return step ? step.summary : null;
+}
+
+/** Operate: supervised browser and desktop work on a paired computer, or an entitled hosted browser. */
 export function AutomationSection() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -110,7 +117,7 @@ export function AutomationSection() {
   // Stated rather than implied: a disabled button with no reason beside it is
   // the single most common way this interface looked broken.
   const blocker = provider === "windows"
-    ? (available.length === 0 ? "Pair a computer below before Atlas can run a browser task."
+    ? (available.length === 0 ? "Pair a computer below before Atlas can operate it."
       : !deviceId ? "Choose which paired computer should run this."
         : "")
     : (!capabilities?.providers.cloudflare.entitled ? "A hosted browser needs a Pro or Team plan."
@@ -143,7 +150,7 @@ export function AutomationSection() {
         {approvals.length > 0 && <section className="approval-panel">
           <p className="kicker">NEEDS YOUR ATTENTION</p>
           {approvals.map((approval) => <article key={approval.id}>
-            <div><strong>{approval.summary}</strong><small>{approval.domain ?? "Browser task"} · expires {new Date(approval.expiresAt).toLocaleTimeString()}</small><p>Atlas is ready for the next action and will continue only after you approve it.</p></div>
+            <div><strong>{approval.summary}</strong><small>{approval.domain === "desktop" ? "Desktop action" : approval.domain ?? "Computer task"} · expires {new Date(approval.expiresAt).toLocaleTimeString()}</small><p>Atlas is ready for the next action and will continue only after you approve it.</p></div>
             <div><button className="quiet" onClick={() => void decide(approval.id, "rejected")}>Reject</button><button onClick={() => void decide(approval.id, "approved")}>Review and approve</button></div>
           </article>)}
         </section>}
@@ -159,7 +166,7 @@ export function AutomationSection() {
             ? <div className="task-empty"><strong>{tab === "attention" ? "Nothing needs you right now." : tab === "running" ? "Atlas is not running any tasks." : "No completed tasks yet."}</strong><p>{tab === "attention" ? "Atlas will show approvals here when a consequential action is ready." : "Start a task when you have something you want Atlas to handle."}</p></div>
             : visibleTasks.map((task) => <article className="task-card" key={task.id}>
               <div className={`run-state ${task.status}`}>{task.status === "completed" ? "Completed" : task.status}</div>
-              <div className="task-card-main"><small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Browser task"}</small><h2>{task.objective}</h2>{(task.result || task.error) && <p>{task.result ?? task.error}</p>}<button className="task-detail" type="button" onClick={() => document.getElementById(`task-${task.id}`)?.scrollIntoView({ behavior: "smooth" })}>View task</button></div>
+              <div className="task-card-main"><small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Computer task"}</small><h2>{task.objective}</h2>{task.status === "running" && latestStep(task) && <p className="task-now">Now: {latestStep(task)}</p>}{(task.result || task.error) && <p>{task.result ?? task.error}</p>}<button className="task-detail" type="button" onClick={() => document.getElementById(`task-${task.id}`)?.scrollIntoView({ behavior: "smooth" })}>View task</button></div>
               <time>{new Date(task.createdAt).toLocaleString()}</time>
             </article>)}
         </section>
@@ -230,7 +237,7 @@ export function AutomationSection() {
             </article>
             <article className="pair-card muted">
               <h3>Your session stays yours.</h3>
-              <p>The Windows companion uses a separate browser profile on your PC. Atlas receives only the task state and approval requests needed to coordinate the work.</p>
+              <p>The companion operates your PC through a separate browser profile and, for desktop apps, through the same input and accessibility interfaces you use. Screenshots stay on your computer; Atlas receives only task progress, evidence digests and approval requests.</p>
               <ol>
                 <li>Download one pairing file—no credential typing.</li>
                 <li>Send work from desktop or phone.</li>
@@ -247,7 +254,7 @@ export function AutomationSection() {
           {tasks.length === 0 ? <p className="block-hint">No browser tasks yet.</p> : tasks.map((task) => <article className="run-row" id={`task-${task.id}`} key={task.id}>
             <span className={`run-state ${task.status}`}>{task.status}</span>
             <div>
-              <small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Browser task"}</small>
+              <small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Computer task"}</small>
               <strong>{task.objective}</strong>
               {(task.result || task.error) && <p>{task.result ?? task.error}</p>}
               {task.events?.length > 0 && <details className="task-timeline">
