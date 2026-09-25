@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { decideMergeAction } from "./merge-decision.mjs";
 import { correlationFooter, correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
+import { isDraftPullRequest } from "./pull-request-policy.mjs";
 
 const outputDirectory = process.env.ATLAS_OUTPUT_DIR;
 if (!outputDirectory) throw new Error("ATLAS_OUTPUT_DIR is required");
@@ -17,6 +18,7 @@ if (!repository || !baseBranch || !taskId || !githubToken) {
 }
 const mergePolicy = process.env.ATLAS_MERGE_POLICY ?? "manual";
 const correlationId = correlationIdFromEnv();
+const draftPullRequest = isDraftPullRequest(mergePolicy);
 
 // How long ci-gated polls the head commit's check-runs before giving up and
 // leaving the PR open. Comfortably inside the job's own 25-minute timeout,
@@ -124,7 +126,7 @@ const githubApiHeaders = {
 const createResponse = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`, {
   method: "POST",
   headers: { ...githubApiHeaders, "content-type": "application/json" },
-  body: JSON.stringify({ title, head: branchName, base: baseBranch, body }),
+  body: JSON.stringify({ title, head: branchName, base: baseBranch, body, draft: draftPullRequest }),
 });
 
 if (!createResponse.ok) {
@@ -134,7 +136,7 @@ if (!createResponse.ok) {
 }
 
 const pullRequest = await createResponse.json();
-console.log(`Opened pull request: ${pullRequest.html_url ?? "(no URL returned)"}${correlationLogSuffix(correlationId)}`);
+console.log(`Opened ${draftPullRequest ? "draft " : ""}pull request: ${pullRequest.html_url ?? "(no URL returned)"}${correlationLogSuffix(correlationId)}`);
 
 async function fetchCheckRuns(ref) {
   const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${ref}/check-runs`, {
@@ -214,5 +216,7 @@ if (verification?.status === "regressed" && mergePolicy !== "manual") {
     console.log(message);
   }
 } else {
-  writeStatus("completed", "Opened a pull request for review. Nothing has been merged.", { pull_request_url: pullRequest.html_url ?? null, merged: false, ...(verification ? { verification } : {}) });
+  const message = `${draftPullRequest ? "Opened a draft pull request for review." : "Opened a pull request for review."} Nothing has been merged.`;
+  writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: false, draft: draftPullRequest, ...(verification ? { verification } : {}) });
+  console.log(message);
 }
