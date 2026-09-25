@@ -13,6 +13,11 @@ const TIER_LABELS: Record<string, string> = { free: "Free", pro: "Pro", team: "T
 
 /** Settings: the plan, the privacy controls, and the way out. */
 export function AccountPrivacy() {
+  const [theme, setTheme] = useState<"system" | "light" | "dark">(() => {
+    if (typeof window === "undefined") return "system";
+    const saved = window.localStorage.getItem("atlas-theme");
+    return saved === "light" || saved === "dark" ? saved : "system";
+  });
   const [account, setAccount] = useState<Account | null>(null);
   const [request, setRequest] = useState<DeletionRequest | null>(null);
   const [confirmation, setConfirmation] = useState("");
@@ -21,6 +26,7 @@ export function AccountPrivacy() {
   const [billingBusy, setBillingBusy] = useState(false);
 
   useEffect(() => {
+    document.documentElement.dataset.atlasTheme = theme;
     const timer = window.setTimeout(() => {
       void fetch("/api/account").then((response) => (response.ok ? response.json() : null))
         .then((value) => { if (value) setAccount(value as Account); }).catch(() => undefined);
@@ -30,7 +36,11 @@ export function AccountPrivacy() {
       }).catch(() => undefined);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [theme]);
+
+  function changeTheme(next: "system" | "light" | "dark") {
+    setTheme(next); window.localStorage.setItem("atlas-theme", next); document.documentElement.dataset.atlasTheme = next;
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -75,8 +85,14 @@ export function AccountPrivacy() {
           <p>What you are on, what you have used, and how to take your data back out.</p>
         </header>
 
+        <section className="page-block">
+          <h2><span>01</span>Appearance</h2>
+          <p className="block-hint">Choose how Atlas looks on this device.</p>
+          <label className="settings-choice">Theme<select aria-label="Theme" value={theme} onChange={(event) => changeTheme(event.target.value as "system" | "light" | "dark")}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        </section>
+
         {!account?.unrestricted && <section className="page-block">
-          <h2><span>01</span>Plan</h2>
+          <h2><span>02</span>Plan</h2>
           <div className="plan-card">
             <div>
               <strong>{TIER_LABELS[tier] ?? "Free"}{account?.status === "past_due" ? " — payment past due" : ""}</strong>
