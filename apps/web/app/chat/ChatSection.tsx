@@ -45,7 +45,7 @@ export function ChatSection() {
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [repository, setRepository] = useState("");
+  const [repository, setRepository] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(PROJECT_STORAGE_KEY) ?? "");
   const [branch, setBranch] = useState("main");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [ready, setReady] = useState<{ configured: boolean; reason: string | null } | null>(null);
@@ -63,8 +63,6 @@ export function ChatSection() {
   }, []);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(PROJECT_STORAGE_KEY);
-    if (stored) setRepository(stored);
     const update = (event: Event) => setRepository((event as CustomEvent<string>).detail);
     window.addEventListener(PROJECT_CHANGE_EVENT, update);
     void fetch("/api/github/options", { cache: "no-store" }).then((response) => response.ok ? response.json() : null)
@@ -82,11 +80,11 @@ export function ChatSection() {
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("conversation");
     if (!requested || !/^[0-9a-f-]{36}$/u.test(requested)) return;
-    setConversationId(requested);
     void fetch(`/api/conversations/${encodeURIComponent(requested)}`, { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
       .then(async (detail: Detail | null) => {
         if (!detail) return;
+        setConversationId(requested);
         setMessages(detail.messages ?? []);
         setTasks(await withLiveTaskStatus(detail.tasks ?? []));
       })
