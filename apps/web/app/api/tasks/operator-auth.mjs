@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import { readSessionCookie, verifySession } from "../auth/session.mjs";
 
 const BEARER_PREFIX = "Bearer ";
@@ -21,7 +23,7 @@ export async function authenticatedAccount(request, environment = process.env) {
   const operatorToken = environment.ATLAS_OPERATOR_TOKEN;
   if (operatorToken) {
     const header = request.headers.get("authorization");
-    if (header === `${BEARER_PREFIX}${operatorToken}`) return { userId: "operator", dbUserId: null };
+    if (typeof header === "string" && constantTimeEqual(header, `${BEARER_PREFIX}${operatorToken}`)) return { userId: "operator", dbUserId: null };
   }
 
   const sessionSecret = environment.ATLAS_SESSION_SECRET;
@@ -37,6 +39,16 @@ export async function authenticatedAccount(request, environment = process.env) {
   }
 
   return null;
+}
+
+/**
+ * Compares secrets without leaking, through timing, how long a matching
+ * prefix was. Hashing first gives both sides the same length.
+ */
+function constantTimeEqual(actual, expected) {
+  const a = createHash("sha256").update(actual).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
 }
 
 export async function authenticatedUserId(request, environment = process.env) {

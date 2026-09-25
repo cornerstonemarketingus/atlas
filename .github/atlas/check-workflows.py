@@ -130,6 +130,18 @@ def check_expressions(path: pathlib.Path) -> list[str]:
     return failures
 
 
+def check_permissions(path: pathlib.Path, document: dict) -> list[str]:
+    """Every workflow declares a top-level permissions block.
+
+    Without one, the job token inherits the repository default, which may be
+    read/write on every scope. Declaring it keeps least privilege explicit and
+    reviewable (SECURITY-REVIEW SEC-14).
+    """
+    if "permissions" not in document:
+        return [f"{path.name}: no top-level 'permissions:' block; declare the least privilege the jobs need (e.g. contents: read)."]
+    return []
+
+
 def main() -> int:
     paths = sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml"))
     if not paths:
@@ -145,6 +157,7 @@ def main() -> int:
         failures.extend(check_expressions(path))
         if isinstance(document, dict):
             failures.extend(check_shell(path, document))
+            failures.extend(check_permissions(path, document))
         if not problems:
             print(f"ok  {path.name}")
 
