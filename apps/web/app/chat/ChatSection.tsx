@@ -1,6 +1,9 @@
 "use client";
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { classifyIntent } from "./intent.mjs";
+import { MessageBody } from "./MessageBody.js";
+import { createEventParser } from "../api/chat/stream.mjs";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
 import { PROJECT_CHANGE_EVENT, PROJECT_STORAGE_KEY } from "../ProjectSwitcher.js";
@@ -16,16 +19,8 @@ const STARTERS = [
   { title: "Plan my next step", prompt: "Help me decide what to build next and explain the simplest useful version." },
 ];
 
-const TASK_WORDS = /\b(build|fix|implement|add|change|update|review|inspect|debug|test|refactor|create|write)\b/iu;
-const READ_ONLY_WORDS = /\b(review|inspect|analy[sz]e|understand|explain|map)\b/iu;
-const DEBUG_WORDS = /\b(debug|test|failing|broken|error|regression)\b/iu;
-
-function taskMode(message: string) {
-  if (!TASK_WORDS.test(message)) return null;
-  if (DEBUG_WORDS.test(message)) return "debug";
-  if (READ_ONLY_WORDS.test(message) && !/\b(fix|change|implement|add|write|create)\b/iu.test(message)) return "inspect";
-  return "coder";
-}
+type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
+type Device = { id: string; name: string; status: string; revokedAt: string | null };
 
 function taskStatusLabel(task: Task) {
   const status = task.status ?? "dispatched";
@@ -51,6 +46,9 @@ export function ChatSection() {
   const [ready, setReady] = useState<{ configured: boolean; reason: string | null } | null>(null);
   const [version, setVersion] = useState(0);
   const { threads, close } = useThreads(version);
+  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  const [streaming, setStreaming] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -75,7 +73,7 @@ export function ChatSection() {
     return () => window.removeEventListener(PROJECT_CHANGE_EVENT, update);
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [messages, sending]);
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [messages, sending, streaming, suggestion]);
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("conversation");
@@ -120,7 +118,7 @@ export function ChatSection() {
     }
   }
 
-  function startNew() { setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); }
+  function startNew() { abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); }
 
   useEffect(() => {
     if (!conversationId) return;
@@ -140,45 +138,116 @@ export function ChatSection() {
     return () => { active = false; clearInterval(timer); };
   }, [conversationId]);
 
+  function showLocal(text: string) {
+    setMessages((items) => [...items, { id: `local-${Date.now()}`, role: "user", content: text, createdAt: new Date().toISOString() }]);
+  }
+
+  /**
+   * Questions are always answered. A clear request for work is offered as a
+   * task to confirm — never started just because a message contained a verb.
+   */
   async function send(event: FormEvent) {
     event.preventDefault();
     const text = draft.trim();
     if (!text || sending) return;
     setDraft("");
-    setSending(true);
     setNotice("");
+    const intent = classifyIntent(text, { hasProject: Boolean(repository) });
+    if (intent.kind === "project_task" || intent.kind === "computer_task") {
+      showLocal(text);
+      setSuggestion({ text, kind: intent.kind, mode: "mode" in intent ? intent.mode : undefined, reason: intent.reason });
+      return;
+    }
+    showLocal(text);
+    await ask(text);
+  }
+
+  async function ask(text: string) {
+    setSuggestion(null);
+    setSending(true);
+    setStreaming("");
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const mode = taskMode(text);
-      if (mode && repository) {
-        const response = await fetch("/api/tasks", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ repository, branch, mode, objective: text, conversationId }),
-        });
-        const result = await response.json() as { conversationId?: string; message?: string };
-        if (!response.ok) { setNotice(result.message ?? "Atlas could not start that task."); return; }
-        if (result.conversationId) { setConversationId(result.conversationId); await openThread(result.conversationId); }
-        setVersion((value) => value + 1);
-        return;
-      }
-      const localId = `local-${Date.now()}`;
-      setMessages((items) => [...items, { id: localId, role: "user", content: text, createdAt: new Date().toISOString() }]);
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text }),
+        body: JSON.stringify({ conversationId, message: text, stream: true }),
+        signal: controller.signal,
       });
-      const result = await response.json() as { conversationId?: string; reply?: Message; message?: string; needsModelEndpoint?: boolean };
-      if (!response.ok) {
+      if (!response.ok || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
+        const result = await response.json().catch(() => ({})) as { message?: string; needsModelEndpoint?: boolean; conversationId?: string };
         setNotice(result.message ?? "Atlas could not answer.");
         if (result.needsModelEndpoint) setReady({ configured: false, reason: result.message ?? null });
         return;
       }
-      if (result.conversationId) setConversationId(result.conversationId);
-      if (result.reply) setMessages((items) => [...items, result.reply!]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const parser = createEventParser();
+      let partial = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        for (const item of parser.push(decoder.decode(value, { stream: true }))) {
+          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message } | null;
+          if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
+          else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
+          else if (item.type === "error") setNotice(data?.message ?? "Atlas could not finish that reply.");
+          else if (item.type === "done" && data?.reply) setMessages((items) => [...items, data.reply!]);
+        }
+      }
+      setVersion((value) => value + 1);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) setNotice("Chat is temporarily unavailable. Your message was kept above; try again in a moment.");
+    } finally {
+      abortRef.current = null;
+      setStreaming(null);
+      setSending(false);
+    }
+  }
+
+  function stop() { abortRef.current?.abort(); }
+
+  async function startProjectTask(item: Suggestion) {
+    setSuggestion(null);
+    setSending(true);
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ repository, branch, mode: item.mode ?? "coder", objective: item.text, conversationId }),
+      });
+      const result = await response.json() as { conversationId?: string; message?: string };
+      if (!response.ok) { setNotice(result.message ?? "Atlas could not start that task."); return; }
+      if (result.conversationId) { setConversationId(result.conversationId); await openThread(result.conversationId); }
       setVersion((value) => value + 1);
     } catch {
-      setNotice("Chat is temporarily unavailable.");
+      setNotice("Atlas could not reach the task service. Nothing was started.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function startComputerTask(item: Suggestion) {
+    setSuggestion(null);
+    setSending(true);
+    try {
+      const listed = await fetch("/api/computer/devices", { cache: "no-store" });
+      const devices = listed.ok ? ((await listed.json()) as { devices?: Device[] }).devices ?? [] : [];
+      const usable = devices.filter((device) => !device.revokedAt);
+      const device = usable.find((candidate) => candidate.status === "online") ?? usable[0];
+      if (!device) { setNotice("No computer is paired yet. Open Operate to pair your PC, then send this again."); return; }
+      const response = await fetch("/api/computer/tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ deviceId: device.id, executionProvider: "windows", objective: item.text }),
+      });
+      const result = await response.json() as { message?: string };
+      if (!response.ok) { setNotice(result.message ?? "Atlas could not start that computer task."); return; }
+      setMessages((items) => [...items, { id: `local-${Date.now()}-task`, role: "assistant", createdAt: new Date().toISOString(),
+        content: `Started on **${device.name}**${device.status === "online" ? "" : " (it will begin when that computer comes online)"}. I will pause for your approval before anything consequential. Follow it in [Operate](/automation).` }]);
+    } catch {
+      setNotice("Atlas could not reach the computer service. Nothing was started.");
     } finally {
       setSending(false);
     }
@@ -201,7 +270,7 @@ export function ChatSection() {
         <div className="empty-mark"><AtlasMark /></div>
         <p className="kicker">CHAT</p>
         <h1>What can I help you get done?</h1>
-        <p>Ask a question, describe a project, or tell Atlas what you want done. Atlas will answer here or start an approved task for the selected project.</p>
+        <p>Ask a question, describe something to build, or tell Atlas what to do on your computer. Atlas answers here, and offers to start a task — you confirm before anything runs.</p>
         <div className="starter-grid">
           {STARTERS.map((item) => <button key={item.title} onClick={() => setDraft(item.prompt)}>
             {item.title}<span>Fills the box below</span>
@@ -210,22 +279,35 @@ export function ChatSection() {
       </div> : <div className="message-stream">
         {messages.map((item) => item.role === "user"
           ? <div className="user-message" key={item.id}><p>{item.content}</p></div>
-          : <div className="atlas-message" key={item.id}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p>{item.content}</p></div></div>)}
-        {sending && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Thinking…</p></div></div>}
+          : <div className="atlas-message" key={item.id}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><MessageBody text={item.content} /></div></div>)}
+        {streaming !== null && <div className="atlas-message" aria-live="polite"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>{streaming ? <MessageBody text={streaming} /> : <p className="thinking">Thinking…</p>}</div></div>}
+        {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Starting…</p></div></div>}
+        {suggestion && <div className="atlas-message suggestion-card"><div className="assistant-avatar"><AtlasMark /></div><div>
+          <b>Atlas</b>
+          <p>{suggestion.reason} {suggestion.kind === "project_task" ? <>It will run on <strong>{repository}</strong> ({branch}).</> : <>It will run on your paired computer and pause before anything consequential.</>}</p>
+          <div className="suggestion-actions">
+            <button type="button" className="primary" onClick={() => void (suggestion.kind === "project_task" ? startProjectTask(suggestion) : startComputerTask(suggestion))}>
+              {suggestion.kind === "project_task" ? (suggestion.mode === "inspect" ? "Start review" : suggestion.mode === "debug" ? "Start debugging" : "Start task") : "Start on my computer"}
+            </button>
+            <button type="button" className="secondary" onClick={() => void ask(suggestion.text)}>Just answer in chat</button>
+          </div>
+        </div></div>}
         {tasks.map((task) => <div className="atlas-message task-update" key={task.taskId}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p>{taskStatusLabel(task)}</p><small>{task.mode === "coder" ? "I will return a pull request for your review." : "I will return a report when the task finishes."}</small><div className="result-links">{task.pullRequest?.url && <a className="result-link" href={task.pullRequest.url} target="_blank" rel="noreferrer">Review the pull request ↗</a>}{task.run?.url && <a className="result-link" href={task.run.url} target="_blank" rel="noreferrer">Open task details ↗</a>}</div></div></div>)}
       </div>}
       <div ref={endRef} />
     </div>
     <form className="chat-composer" onSubmit={send}>
       {blocked && <p className="composer-blocked">
-        Questions need an AI model connection. Project tasks can still start when a project is connected. {ready?.reason} <Link href="/setup">Open Connections →</Link>
+        Questions need an AI model connection. Project and computer tasks can still start. {ready?.reason} <Link href="/setup">Open Connections →</Link>
       </p>}
       <textarea aria-label="Message Atlas" value={draft} rows={3} onKeyDown={keyDown}
         onChange={(event) => setDraft(event.target.value)}
       placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything, or describe what you want to get done…"} />
       <div className="composer-actions">
         <div><span className="composer-hint">Enter sends · Shift+Enter for a new line</span></div>
-        <button className="send" disabled={sending || !draft.trim()}>{sending ? "…" : "↑"}</button>
+        {streaming !== null
+          ? <button type="button" className="send" onClick={stop} aria-label="Stop the reply">■</button>
+          : <button className="send" aria-label="Send" disabled={sending || !draft.trim()}>{sending ? "…" : "↑"}</button>}
       </div>
       {notice && <p className="composer-notice" role="status">{notice}</p>}
     </form>
