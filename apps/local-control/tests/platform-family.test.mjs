@@ -9,6 +9,7 @@ import {
   DEFAULT_FAMILY_TREE,
   FamilyError,
   MessageBus,
+  PEER_ORGANIZATIONS,
   TaskDelegation,
   permissionCovers,
   seedFamilies,
@@ -307,28 +308,63 @@ test("seedFamilies builds the default tree through the policy path and familyTre
   const tree = r.familyTree(T, rootId);
   assert.equal(tree.name, "Atlas Root");
   assert.deepEqual(tree.children.map((c) => c.name), [
-    "Engineering Parent", "Computer Operations Parent", "Business Parent", "Research Parent",
+    "Business Development Executive", "Engineering Parent", "Design Parent", "Computer Operations Parent", "Research Parent",
     "Reviewer", "Guardian", "Mentor",
   ]);
   const byName = Object.fromEntries(tree.children.map((c) => [c.name, c]));
-  assert.deepEqual(byName["Engineering Parent"].children.map((c) => c.name), ["Frontend Agent", "Backend Agent", "Database Agent", "Testing Agent", "Security Agent", "Deployment Agent"]);
+  // Business Development Executive → Product Executive → specialists.
+  const bde = byName["Business Development Executive"];
+  assert.deepEqual(bde.children.map((c) => c.name), ["Product Executive"]);
+  assert.deepEqual(bde.children[0].children.map((c) => c.name), [
+    "Market Research Agent", "Competitive Intelligence Agent", "Marketing Agent", "Sales Agent",
+    "Analytics Agent", "Customer Success Agent", "Finance Agent",
+  ]);
+  assert.ok(bde.children[0].children.every((c) => c.family === "business" && c.depth === 3));
+  assert.deepEqual(byName["Engineering Parent"].children.map((c) => c.name), ["Architecture Agent", "Frontend Agent", "Backend Agent", "Database Agent", "Testing Agent", "Security Agent", "Deployment Agent"]);
+  assert.deepEqual(byName["Design Parent"].children.map((c) => c.name), ["Product Design Agent", "UI Agent", "UX Agent", "Accessibility Agent", "Visual QA Agent"]);
   assert.deepEqual(byName["Computer Operations Parent"].children.map((c) => c.name), ["Browser Agent", "Desktop Agent", "Terminal Agent", "Recovery Agent"]);
-  assert.deepEqual(byName["Business Parent"].children.map((c) => c.name), ["Sales Agent", "Marketing Agent", "Customer Support Agent"]);
   assert.deepEqual(byName["Research Parent"].children.map((c) => c.name), ["Web Research Agent", "Document Analysis Agent", "Fact Checking Agent"]);
-  assert.equal(byName.Guardian.relationships.filter((e) => e.type === "guards").length, 4);
-  assert.equal(byName.Reviewer.relationships.filter((e) => e.type === "reviews").length, 4);
-  assert.equal(byName.Mentor.relationships.filter((e) => e.type === "mentors").length, 4);
-  assert.equal(Object.keys(agents).length, 24);
+  assert.equal(byName.Guardian.relationships.filter((e) => e.type === "guards").length, 5);
+  assert.equal(byName.Reviewer.relationships.filter((e) => e.type === "reviews").length, 5);
+  assert.equal(byName.Mentor.relationships.filter((e) => e.type === "mentors").length, 5);
+  assert.equal(Object.keys(agents).length, 36);
   assert.ok(r.listAgents(T).every((a) => a.state === "authorized" && a.authorizedBy === "atlas.seed"));
-  // conservative: nothing can deploy/send/pay directly
-  assert.ok(!r.getAgent(T, rootId).permissions.some((p) => p === "*" || /^(deploy\.execute|email\.send|payment\.)/.test(p)));
+  // conservative: nothing can deploy/send/pay directly, and no agent can approve its own build
+  assert.ok(!r.getAgent(T, rootId).permissions.some((p) => p === "*" || /^(deploy\.execute|email\.send|payment\.|opportunity\.approve|innovation\.approve)/.test(p)));
   // idempotent
   assert.equal(seedFamilies(r, T).rootId, rootId);
-  assert.equal(r.listAgents(T).length, 24);
+  assert.equal(r.listAgents(T).length, 36);
   // cousins across families
   assert.ok(r.cousins(T, agents["Frontend Agent"]).some((c) => c.id === agents["Web Research Agent"]));
   // seeding with a policy that denies a needed permission fails atomically
   assert.throws(() => seedFamilies(r, U, { policy: { deny: ["deploy.propose"] } }), (e) => e.code === "POLICY_DENIED");
   assert.equal(r.listAgents(U).filter((a) => a.state !== "rejected").length, 0);
-  assert.ok(DEFAULT_FAMILY_TREE.families.length === 4);
+  assert.equal(DEFAULT_FAMILY_TREE.families.length, 5);
+  assert.deepEqual(PEER_ORGANIZATIONS.map((p) => p.family), ["engineering", "design", "computer_operations", "research"]);
+});
+
+test("the Product Executive commissions peer organizations without lending them authority", () => {
+  const r = new AgentFamilyRegistry();
+  const delegation = new TaskDelegation(r);
+  const { agents } = seedFamilies(r, T);
+  const pe = agents["Product Executive"];
+  delegation.assignTask({ tenantId: T, agentId: pe, taskId: "opp-build" });
+  for (const peer of PEER_ORGANIZATIONS) {
+    const { helper, assignment } = delegation.requestCrossFamilyHelp({
+      tenantId: T, fromAgentId: pe, toAgentId: agents[peer.parent], taskId: "opp-build",
+      subtaskId: `opp-build-${peer.family}`, scope: { objective: `Discovery for ${peer.family}` },
+    });
+    assert.equal(helper.family, peer.family);
+    assert.equal(assignment.ownerAgentId, agents[peer.parent]);
+    // The peer is not in the business subtree: commissioning is a request, not a reparenting.
+    assert.ok(!r.isDescendant(T, helper.id, agents["Business Development Executive"]));
+  }
+  assert.throws(() => delegation.requestCrossFamilyHelp({
+    tenantId: T, fromAgentId: pe, toAgentId: agents["Engineering Parent"], taskId: "opp-build",
+    scope: { objective: "x", apiKey: "leak" },
+  }), code("SCOPE_LEAKS_AUTHORITY"));
+  // The business org cannot commission itself as a "peer".
+  assert.throws(() => delegation.requestCrossFamilyHelp({
+    tenantId: T, fromAgentId: pe, toAgentId: agents["Sales Agent"], taskId: "opp-build", scope: { objective: "x" },
+  }), code("SAME_FAMILY"));
 });

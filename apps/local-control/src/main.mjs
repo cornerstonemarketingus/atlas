@@ -9,6 +9,7 @@ import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { PlatformTaskStore } from "./platform/task-store.mjs";
+import { bootstrapInnovation } from "./platform/innovation/bootstrap.mjs";
 import { createGitHubActionsExecutor, createLocalExecutor } from "./agent/executors.mjs";
 import { createGitHubActionsClient } from "./agent/github-actions-client.mjs";
 import { createConversationExecutor } from "./agent/conversation-executor.mjs";
@@ -48,6 +49,10 @@ if (!token) {
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
 const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
 const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
+// The agent organization (Business Development Executive → Product Executive →
+// specialists, plus the Engineering, Design, Computer Operations and Research
+// peers) and the Innovation Backlog it works from.
+const innovation = bootstrapInnovation({ filename: join(dataDirectory, "organization.sqlite"), store, platformStore });
 const vault = createCredentialVault({ filePath: join(dataDirectory, "credentials.vault.json") });
 const license = loadLicense();
 const runtime = new AgentRuntime({
@@ -73,6 +78,7 @@ const server = createLocalControlServer({
   runtime,
   missionService,
   platformStore,
+  innovation,
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
@@ -103,6 +109,8 @@ function shutdown() {
   server.close(async () => {
     await runtime.stop();
     sessions.close();
+    innovation.close();
+    platformStore.close();
     store.close();
     process.exit(0);
   });
