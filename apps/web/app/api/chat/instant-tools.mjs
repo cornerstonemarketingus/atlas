@@ -419,7 +419,7 @@ function summarizeWorkflowRuns(payload) {
   summary.overall = summary.failed > 0 ? "failed"
     : summary.running > 0 ? "running"
       : summary.pending > 0 ? "pending"
-        : summary.total > 0 && summary.passed === summary.total ? "passed"
+        : summary.total > 0 && summary.passed === summary.total && summary.cancelled === 0 ? "passed"
           : summary.total > 0 ? "mixed"
             : "missing";
   return {
