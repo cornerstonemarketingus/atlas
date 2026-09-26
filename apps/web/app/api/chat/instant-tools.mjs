@@ -1,3 +1,17 @@
+import { setTaskRunId } from "../../../db/tenancy.mjs";
+import { workflowForMode } from "../tasks/dispatch.mjs";
+import {
+  fetchGitHubJson,
+  githubReadHeaders,
+  normalizePullRequest,
+  normalizeRun,
+  pullRequestForBranchRequest,
+  workflowRunRequest,
+  workflowRunsRequest,
+} from "../tasks/github-runs.mjs";
+import { activityFromRun } from "../tasks/run-activity.mjs";
+import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun } from "../tasks/run-status.mjs";
+
 /**
  * Tools Atlas uses inside a chat reply, before it answers.
  *
@@ -17,13 +31,24 @@
  * can change anything anywhere.
  */
 
-export const INSTANT_TOOL_NAMES = Object.freeze(["read_web_page", "web_search", "read_repository_file", "search_repository_code"]);
+export const INSTANT_TOOL_NAMES = Object.freeze([
+  "read_web_page",
+  "web_search",
+  "read_repository_file",
+  "search_repository_code",
+  "get_task_status",
+  "list_pull_requests",
+  "read_pull_request",
+  "read_ci_logs",
+]);
 
 const MAX_PAGE_BYTES = 600_000;
 const MAX_TOOL_CHARS = 12_000;
 const MAX_FILE_CHARS = 20_000;
+const MAX_LOG_CHARS = 15_000;
 const TOOL_TIMEOUT_MS = 12_000;
 const REPOSITORY_PATTERN = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/u;
+const TASK_ID_PATTERN = /^[0-9a-f-]{36}$/u;
 
 const definition = (name, description, properties, required) => ({
   type: "function",
@@ -61,10 +86,55 @@ const SEARCH_REPOSITORY_CODE = definition(
   },
   ["repository", "query"],
 );
+const GET_TASK_STATUS = definition(
+  "get_task_status",
+  "Read the live status of one Atlas task in this workspace, including its GitHub run, pull request, and current step when available. Read-only.",
+  {
+    taskId: { type: "string", description: "The Atlas task id." },
+  },
+  ["taskId"],
+);
+const LIST_PULL_REQUESTS = definition(
+  "list_pull_requests",
+  "List up to 20 pull requests in a connected GitHub repository, including authors, checks summaries and mergeability. Read-only.",
+  {
+    repository: { type: "string", description: "owner/name" },
+    state: { type: "string", enum: ["open", "closed", "all"], description: "Defaults to open." },
+  },
+  ["repository"],
+);
+const READ_PULL_REQUEST = definition(
+  "read_pull_request",
+  "Read one pull request in a connected GitHub repository: description, changed files, checks and unresolved review comments. Read-only.",
+  {
+    repository: { type: "string", description: "owner/name" },
+    number: { type: "integer", description: "Pull request number." },
+  },
+  ["repository", "number"],
+);
+const READ_CI_LOGS = definition(
+  "read_ci_logs",
+  "Read the failed CI log for a connected repository by workflow run id or job id, following GitHub's job-log redirect and redacting token-like strings. Read-only.",
+  {
+    repository: { type: "string", description: "owner/name" },
+    runId: { type: "integer", description: "GitHub Actions workflow run id." },
+    jobId: { type: "integer", description: "GitHub Actions workflow job id." },
+  },
+  ["repository"],
+);
 
 /** The instant tools offered to the model; web search only when a search key is configured. */
 export function instantToolDefinitions(environment = {}) {
-  return [READ_WEB_PAGE, ...(searchKey(environment) ? [WEB_SEARCH] : []), READ_REPOSITORY_FILE, SEARCH_REPOSITORY_CODE];
+  return [
+    READ_WEB_PAGE,
+    ...(searchKey(environment) ? [WEB_SEARCH] : []),
+    READ_REPOSITORY_FILE,
+    SEARCH_REPOSITORY_CODE,
+    GET_TASK_STATUS,
+    LIST_PULL_REQUESTS,
+    READ_PULL_REQUEST,
+    READ_CI_LOGS,
+  ];
 }
 
 export function isInstantTool(name) {
@@ -168,7 +238,7 @@ function parseArguments(call) {
  * message the model can read and recover from.
  *
  * @param {{ function?: { name?: string, arguments?: unknown } }} call
- * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined> }} context
+ * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined>, d1?: any, taskScope?: { tenantId: number, principal: string } | null }} context
  * @returns {Promise<{ ok: boolean, label: string, content: string }>}
  */
 export async function runInstantTool(call, context = {}) {
@@ -181,6 +251,10 @@ export async function runInstantTool(call, context = {}) {
     if (name === "web_search") return await webSearch(args, fetcher, context.environment ?? {});
     if (name === "read_repository_file") return await readRepositoryFile(args, fetcher, context);
     if (name === "search_repository_code") return await searchRepositoryCode(args, fetcher, context);
+    if (name === "get_task_status") return await getTaskStatus(args, fetcher, context);
+    if (name === "list_pull_requests") return await listPullRequests(args, fetcher, context);
+    if (name === "read_pull_request") return await readPullRequest(args, fetcher, context);
+    if (name === "read_ci_logs") return await readCiLogs(args, fetcher, context);
     return { ok: false, label: `Unknown tool ${name}`, content: `There is no tool named '${name}'.` };
   } catch (error) {
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
@@ -225,13 +299,21 @@ async function webSearch(args, fetcher, environment) {
   return { ok: true, label: `Searched the web for “${query.slice(0, 60)}” (${results.length} results)`, content: asData(`web search: ${query}`, lines.join("\n") || "No results.") };
 }
 
-async function repositoryAccess(args, context) {
-  const repository = typeof args.repository === "string" ? args.repository.trim().toLowerCase().replace(/^https:\/\/github\.com\//u, "").replace(/\.git$/u, "") : "";
+function normalizeRepository(value) {
+  return typeof value === "string" ? value.trim().toLowerCase().replace(/^https:\/\/github\.com\//u, "").replace(/\.git$/u, "") : "";
+}
+
+async function githubAccessForRepository(repositoryValue, context) {
+  const repository = normalizeRepository(repositoryValue);
   if (!REPOSITORY_PATTERN.test(repository)) return { error: { ok: false, label: "Invalid repository", content: "Use the owner/name form." } };
   if (!context.allowlist?.has(repository)) return { error: { ok: false, label: `${repository} is not connected`, content: `${repository} is not on this workspace's allowlist, so Atlas cannot read it.` } };
   const token = await context.githubToken?.();
   if (!token) return { error: { ok: false, label: "GitHub is not connected", content: "No GitHub credential is configured for the hosted app." } };
   return { repository, token };
+}
+
+async function repositoryAccess(args, context) {
+  return githubAccessForRepository(args.repository, context);
 }
 
 function githubHeaders(token) {
@@ -282,6 +364,395 @@ async function searchRepositoryCode(args, fetcher, context) {
   return { ok: true, label: `Searched ${access.repository} for “${query.slice(0, 60)}” (${paths.length} files)`, content: asData(`code search in ${access.repository}: ${query}`, paths.join("\n") || "No matches.") };
 }
 
+function jsonData(source, value, max = MAX_TOOL_CHARS) {
+  return asData(source, clip(redactSecrets(JSON.stringify(value, null, 2)), max));
+}
+
+function validatePositiveInteger(value) {
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function currentStepFromActivity(activity) {
+  return activity?.steps?.find((step) => step.state === "running")
+    ?? activity?.steps?.find((step) => step.state === "failed")
+    ?? activity?.steps?.find((step) => step.state === "pending")
+    ?? activity?.steps?.at(-1)
+    ?? null;
+}
+
+function stepSummary(step) {
+  return step ? { label: step.label, state: step.state } : null;
+}
+
+function runState(run) {
+  if (!run) return "missing";
+  if (run.status === "completed") {
+    if (run.conclusion === "success") return "passed";
+    if (run.conclusion === "failure" || run.conclusion === "startup_failure" || run.conclusion === "timed_out" || run.conclusion === "action_required") return "failed";
+    if (run.conclusion === "cancelled" || run.conclusion === "stale") return "cancelled";
+    return "completed";
+  }
+  if (run.status === "in_progress") return "running";
+  return "pending";
+}
+
+function summarizeWorkflowRuns(payload) {
+  const listed = Array.isArray(payload?.workflow_runs) ? payload.workflow_runs.map(normalizeRun).filter((run) => run !== null) : [];
+  const unique = [];
+  const seen = new Set();
+  for (const run of listed) {
+    const key = run.name || `${run.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(run);
+  }
+  const summary = { overall: "missing", total: unique.length, passed: 0, failed: 0, running: 0, pending: 0, cancelled: 0 };
+  for (const run of unique) {
+    const state = runState(run);
+    if (state === "passed") summary.passed += 1;
+    else if (state === "failed") summary.failed += 1;
+    else if (state === "running") summary.running += 1;
+    else if (state === "pending") summary.pending += 1;
+    else if (state === "cancelled") summary.cancelled += 1;
+  }
+  summary.overall = summary.failed > 0 ? "failed"
+    : summary.running > 0 ? "running"
+      : summary.pending > 0 ? "pending"
+        : summary.total > 0 && summary.passed === summary.total ? "passed"
+          : summary.total > 0 ? "mixed"
+            : "missing";
+  return {
+    ...summary,
+    runs: unique.map((run) => ({
+      name: run.name,
+      id: run.id,
+      url: run.htmlUrl,
+      status: run.status,
+      conclusion: run.conclusion,
+    })),
+  };
+}
+
+function pullRequestMergeable(detail) {
+  if (detail?.mergeable_state && typeof detail.mergeable_state === "string") return detail.mergeable_state;
+  if (detail?.mergeable === true) return "mergeable";
+  if (detail?.mergeable === false) return "conflicting";
+  return "unknown";
+}
+
+async function fetchGitHubGraphql({ token, query, variables }, fetcher) {
+  const response = await fetcher("https://api.github.com/graphql", {
+    method: "POST",
+    signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
+    headers: { ...githubReadHeaders(token), "content-type": "application/json" },
+    body: JSON.stringify({ query, variables }),
+  });
+  if (!response.ok) return null;
+  const body = await response.json().catch(() => null);
+  if (!body || body.errors) return null;
+  return body.data ?? null;
+}
+
+async function fetchGitHubText(request, fetcher) {
+  const response = await fetcher(request.url, { ...request.init, signal: AbortSignal.timeout(TOOL_TIMEOUT_MS), redirect: "manual" });
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("location");
+    if (!location) return null;
+    const redirected = await fetcher(location, {
+      method: "GET",
+      signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
+      headers: { accept: "text/plain", "user-agent": "atlas-chat" },
+      redirect: "follow",
+    });
+    if (!redirected.ok) return null;
+    return await redirected.text();
+  }
+  if (!response.ok) return null;
+  return await response.text();
+}
+
+function readTaskRequest(scope, taskId) {
+  return scope
+    ? {
+      sql: `SELECT task_id AS taskId, tenant_id AS tenantId, requested_by AS requestedBy, repository, branch, mode, objective, merge_policy AS mergePolicy, github_run_id AS githubRunId, conversation_id AS conversationId, execution_provider AS executionProvider, created_at AS createdAt
+            FROM tasks
+            WHERE task_id = ? AND tenant_id = ? AND requested_by = ?`,
+      params: [taskId, scope.tenantId, scope.principal],
+    }
+    : null;
+}
+
+async function resolveRunForTask(row, repository, token, fetcher, context) {
+  const workflow = workflowForMode(row.mode, {
+    defaultWorkflow: context.environment?.ATLAS_GITHUB_WORKFLOW,
+    coderWorkflow: context.environment?.ATLAS_CODER_WORKFLOW,
+  });
+  let runId = typeof row.githubRunId === "number" ? row.githubRunId : null;
+  const listed = runId === null
+    ? await fetchGitHubJson(workflowRunsRequest({ token, repository, workflow }), fetcher)
+    : null;
+  const candidateRuns = Array.isArray(listed?.workflow_runs) ? listed.workflow_runs.map(normalizeRun).filter((run) => run !== null) : [];
+  if (runId === null) {
+    const assignment = assignRunsToTasks(
+      [{ taskId: row.taskId, createdAt: row.createdAt, workflow, githubRunId: row.githubRunId }],
+      candidateRuns.map((run) => ({ ...run, workflow })),
+    )[0] ?? null;
+    runId = assignment?.runId ?? null;
+    if (runId !== null && context.d1 && context.taskScope) {
+      try { await setTaskRunId(context.d1, context.taskScope, row.taskId, runId); } catch { /* best effort */ }
+    }
+  }
+  const listedRun = runId === null ? null : candidateRuns.find((run) => run.id === runId) ?? null;
+  const runPayload = runId === null
+    ? null
+    : listedRun
+      ? {
+        id: listedRun.id,
+        name: listedRun.name,
+        created_at: listedRun.createdAt,
+        event: listedRun.event,
+        status: listedRun.status,
+        conclusion: listedRun.conclusion,
+        html_url: listedRun.htmlUrl,
+      }
+      : await fetchGitHubJson(workflowRunRequest({ token, repository, runId }), fetcher);
+  return { runId, runPayload, run: normalizeRun(runPayload) };
+}
+
+async function readTaskStatusPayload(taskId, fetcher, context) {
+  if (!TASK_ID_PATTERN.test(taskId)) return { error: { ok: false, label: "Unknown task", content: "Task ids use Atlas's UUID form." } };
+  if (!context.d1 || !context.taskScope) return { error: { ok: false, label: "Task status is unavailable", content: "Task lookups are unavailable in this chat." } };
+  const request = readTaskRequest(context.taskScope, taskId);
+  const row = await context.d1.prepare(request.sql).bind(...request.params).first();
+  if (!row) return { error: { ok: false, label: "Unknown task", content: "That task does not exist in this workspace." } };
+  const access = await githubAccessForRepository(row.repository, context);
+  if (access.error) return access.error;
+  const { runId, runPayload, run } = await resolveRunForTask(row, access.repository, access.token, fetcher, context);
+  const pullRequestPayload = row.mode === "coder"
+    ? await fetchGitHubJson(pullRequestForBranchRequest({ token: access.token, repository: access.repository, branch: coderBranchForTask(row.taskId) }), fetcher)
+    : null;
+  const pullRequest = Array.isArray(pullRequestPayload) ? normalizePullRequest(pullRequestPayload[0]) : null;
+  const jobs = runId === null
+    ? null
+    : await fetchGitHubJson({
+      url: `https://api.github.com/repos/${access.repository}/actions/runs/${runId}/jobs?per_page=10`,
+      init: { method: "GET", headers: githubReadHeaders(access.token) },
+    }, fetcher);
+  const activity = runPayload ? activityFromRun(runPayload, jobs ?? {}) : { steps: [] };
+  return {
+    taskId: row.taskId,
+    repository: access.repository,
+    branch: row.branch,
+    mode: row.mode,
+    objective: row.objective,
+    mergePolicy: row.mergePolicy,
+    status: row.executionProvider === "private" && run === null ? "dispatched" : taskStatusFromRun(run),
+    run: runId === null ? null : { id: runId, url: run?.htmlUrl ?? runUrl(access.repository, runId), status: run?.status ?? null, conclusion: run?.conclusion ?? null },
+    pullRequest: pullRequest ? { number: pullRequest.number, url: pullRequest.url, state: pullRequest.state, merged: pullRequest.merged } : null,
+    currentStep: stepSummary(currentStepFromActivity(activity)),
+  };
+}
+
+async function getTaskStatus(args, fetcher, context) {
+  const taskId = typeof args.taskId === "string" ? args.taskId.trim().toLowerCase() : "";
+  const payload = await readTaskStatusPayload(taskId, fetcher, context);
+  if (payload.error) return payload.error;
+  return { ok: true, label: `Read status for task ${taskId.slice(0, 8)}`, content: jsonData(`task status ${taskId}`, payload) };
+}
+
+function pullsRequest(repository, state) {
+  return {
+    url: `https://api.github.com/repos/${repository}/pulls?state=${encodeURIComponent(state)}&sort=updated&direction=desc&per_page=20`,
+    init: { method: "GET" },
+  };
+}
+
+function pullRequestDetailRequest(repository, number) {
+  return { url: `https://api.github.com/repos/${repository}/pulls/${number}`, init: { method: "GET" } };
+}
+
+function pullRequestFilesRequest(repository, number) {
+  return { url: `https://api.github.com/repos/${repository}/pulls/${number}/files?per_page=100`, init: { method: "GET" } };
+}
+
+function pullRequestRunsRequest(repository, headSha) {
+  return {
+    url: `https://api.github.com/repos/${repository}/actions/runs?event=pull_request&per_page=20&head_sha=${encodeURIComponent(headSha)}`,
+    init: { method: "GET" },
+  };
+}
+
+const REVIEW_THREADS_QUERY = `
+  query AtlasPullRequestThreads($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 50) {
+          nodes {
+            isResolved
+            comments(last: 1) {
+              nodes {
+                body
+                path
+                line
+                originalLine
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+function unresolvedReviewCommentsFrom(data) {
+  const nodes = data?.repository?.pullRequest?.reviewThreads?.nodes;
+  if (!Array.isArray(nodes)) return [];
+  return nodes
+    .filter((thread) => thread && thread.isResolved === false)
+    .map((thread) => thread.comments?.nodes?.at(-1))
+    .filter(Boolean)
+    .map((comment) => ({
+      path: typeof comment.path === "string" ? comment.path : null,
+      line: validatePositiveInteger(comment.line) ?? validatePositiveInteger(comment.originalLine),
+      body: typeof comment.body === "string" ? comment.body : "",
+    }));
+}
+
+async function listPullRequests(args, fetcher, context) {
+  const access = await repositoryAccess(args, context);
+  if (access.error) return access.error;
+  const state = typeof args.state === "string" && ["open", "closed", "all"].includes(args.state) ? args.state : "open";
+  const response = await fetcher(pullsRequest(access.repository, state).url, {
+    signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
+    headers: githubHeaders(access.token),
+  });
+  if (!response.ok) return { ok: false, label: `Could not list pull requests in ${access.repository}`, content: `GitHub answered ${response.status}.` };
+  const listed = await response.json().catch(() => null);
+  const pulls = Array.isArray(listed) ? listed.slice(0, 20) : [];
+  const enriched = await Promise.all(pulls.map(async (pull) => {
+    const [detail, runs] = await Promise.all([
+      fetchGitHubJson({ ...pullRequestDetailRequest(access.repository, pull.number), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher),
+      pull?.head?.sha
+        ? fetchGitHubJson({ ...pullRequestRunsRequest(access.repository, pull.head.sha), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher)
+        : null,
+    ]);
+    return {
+      number: pull.number,
+      title: String(pull.title ?? ""),
+      author: typeof pull?.user?.login === "string" ? pull.user.login : null,
+      url: typeof pull.html_url === "string" ? pull.html_url : null,
+      state: typeof pull.state === "string" ? pull.state : null,
+      checks: summarizeWorkflowRuns(runs),
+      mergeable: pullRequestMergeable(detail),
+    };
+  }));
+  return { ok: true, label: `Listed ${enriched.length} pull requests in ${access.repository}`, content: jsonData(`pull requests in ${access.repository}`, enriched) };
+}
+
+async function readPullRequest(args, fetcher, context) {
+  const access = await repositoryAccess(args, context);
+  if (access.error) return access.error;
+  const number = validatePositiveInteger(args.number);
+  if (number === null) return { ok: false, label: "Invalid pull request number", content: "Use a positive integer pull request number." };
+  const detail = await fetchGitHubJson({ ...pullRequestDetailRequest(access.repository, number), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher);
+  if (!detail) return { ok: false, label: `Could not read PR #${number}`, content: "GitHub did not return that pull request." };
+  const [filesPayload, runsPayload, reviewThreads] = await Promise.all([
+    fetchGitHubJson({ ...pullRequestFilesRequest(access.repository, number), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher),
+    detail?.head?.sha
+      ? fetchGitHubJson({ ...pullRequestRunsRequest(access.repository, detail.head.sha), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher)
+      : null,
+    fetchGitHubGraphql({
+      token: access.token,
+      query: REVIEW_THREADS_QUERY,
+      variables: { owner: access.repository.split("/")[0], name: access.repository.split("/")[1], number },
+    }, fetcher),
+  ]);
+  const files = Array.isArray(filesPayload) ? filesPayload.slice(0, 100).map((file) => ({
+    path: typeof file.filename === "string" ? file.filename : null,
+    status: typeof file.status === "string" ? file.status : null,
+    additions: Number.isInteger(file.additions) ? file.additions : 0,
+    deletions: Number.isInteger(file.deletions) ? file.deletions : 0,
+  })) : [];
+  const payload = {
+    number,
+    title: String(detail.title ?? ""),
+    state: typeof detail.state === "string" ? detail.state : null,
+    mergeable: pullRequestMergeable(detail),
+    url: typeof detail.html_url === "string" ? detail.html_url : null,
+    description: typeof detail.body === "string" ? detail.body : "",
+    changedFiles: files,
+    checks: summarizeWorkflowRuns(runsPayload),
+    unresolvedReviewComments: unresolvedReviewCommentsFrom(reviewThreads),
+  };
+  return { ok: true, label: `Read PR #${number} in ${access.repository}`, content: jsonData(`pull request ${access.repository}#${number}`, payload) };
+}
+
+function actionsJobRequest(repository, jobId, suffix = "") {
+  return { url: `https://api.github.com/repos/${repository}/actions/jobs/${jobId}${suffix}`, init: { method: "GET" } };
+}
+
+function actionsRunJobsRequest(repository, runId) {
+  return { url: `https://api.github.com/repos/${repository}/actions/runs/${runId}/jobs?per_page=100`, init: { method: "GET" } };
+}
+
+function chooseFailedJob(payload) {
+  const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+  return jobs.find((job) => ["failure", "timed_out", "cancelled", "action_required"].includes(String(job?.conclusion ?? ""))) ?? null;
+}
+
+function firstInterestingLogLine(lines) {
+  const patterns = [/##\[error\]/u, /\b(?:FAIL|Error:|AssertionError|Traceback|panic:|npm ERR!|not ok \d+)\b/u];
+  const index = lines.findIndex((line) => patterns.some((pattern) => pattern.test(line)));
+  return index >= 0 ? index : Math.max(lines.length - 80, 0);
+}
+
+function extractLogSnippet(text) {
+  const lines = String(text ?? "").replace(/\r\n/gu, "\n").split("\n");
+  const start = Math.max(firstInterestingLogLine(lines) - 60, 0);
+  const end = Math.min(start + 400, lines.length);
+  return redactSecrets(lines.slice(start, end).join("\n")).slice(0, MAX_LOG_CHARS);
+}
+
+const TOKEN_PATTERNS = [
+  /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/gu,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/gu,
+  /\b(?:Bearer|token)\s+[A-Za-z0-9._=-]{16,}\b/gu,
+  /\b[A-Za-z0-9_\/+=-]{32,}\b/gu,
+];
+
+function redactSecrets(text) {
+  let redacted = String(text ?? "");
+  for (const pattern of TOKEN_PATTERNS) redacted = redacted.replace(pattern, "[REDACTED]");
+  return redacted;
+}
+
+async function readCiLogs(args, fetcher, context) {
+  const access = await repositoryAccess(args, context);
+  if (access.error) return access.error;
+  const runId = validatePositiveInteger(args.runId);
+  const jobId = validatePositiveInteger(args.jobId);
+  if (runId === null && jobId === null) return { ok: false, label: "Missing CI target", content: "Provide a workflow run id or job id." };
+  const job = jobId !== null
+    ? await fetchGitHubJson({ ...actionsJobRequest(access.repository, jobId), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher)
+    : chooseFailedJob(await fetchGitHubJson({ ...actionsRunJobsRequest(access.repository, runId), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher));
+  if (!job) return { ok: false, label: `No failed job found in ${access.repository}`, content: "GitHub did not report a failed job for that run." };
+  const logs = await fetchGitHubText({ ...actionsJobRequest(access.repository, job.id, "/logs"), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher);
+  if (logs === null) return { ok: false, label: `Could not read CI logs for job ${job.id}`, content: "GitHub did not return that job log." };
+  const payload = {
+    repository: access.repository,
+    job: {
+      id: job.id,
+      runId: job.run_id ?? runId,
+      name: job.name ?? null,
+      status: job.status ?? null,
+      conclusion: job.conclusion ?? null,
+      url: job.html_url ?? null,
+    },
+    excerpt: extractLogSnippet(logs),
+  };
+  return { ok: true, label: `Read CI logs for ${payload.job.name ?? `job ${job.id}`}`, content: jsonData(`ci logs ${access.repository} job ${job.id}`, payload, MAX_LOG_CHARS) };
+}
+
 /** What the chat shows while a tool call is running. */
 export function pendingLabel(call) {
   const args = parseArguments(call) ?? {};
@@ -293,5 +764,9 @@ export function pendingLabel(call) {
   if (name === "web_search") return `Searching the web for “${String(args.query ?? "").slice(0, 60)}”…`;
   if (name === "read_repository_file") return `Reading ${String(args.repository ?? "")}/${String(args.path ?? "").replace(/^\/+/u, "")}…`.replace(/\/…$/u, "…");
   if (name === "search_repository_code") return `Searching ${String(args.repository ?? "")} for “${String(args.query ?? "").slice(0, 60)}”…`;
+  if (name === "get_task_status") return `Reading task ${String(args.taskId ?? "").slice(0, 12)}…`;
+  if (name === "list_pull_requests") return `Listing pull requests in ${String(args.repository ?? "")}…`;
+  if (name === "read_pull_request") return `Reading PR #${String(args.number ?? "")} in ${String(args.repository ?? "")}…`;
+  if (name === "read_ci_logs") return `Reading CI logs in ${String(args.repository ?? "")}…`;
   return `Running ${name}…`;
 }
