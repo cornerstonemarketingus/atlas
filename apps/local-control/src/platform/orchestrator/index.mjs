@@ -10,4 +10,6 @@
  */
 export { OrchestratorStore, OrchestratorError, ESCALATION_SOURCES } from "./store.mjs";
 export { TaskDag } from "./dag.mjs";
+export { replayExecution, redactValue } from "./replay.mjs";
 export { TaskControl } from "./control.mjs";
+export { AgentLoop, FINISH_TOOL, ERROR_CLASSES, classifyOutcome } from "./agent-loop.mjs";
