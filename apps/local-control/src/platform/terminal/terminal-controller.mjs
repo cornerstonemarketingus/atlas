@@ -6,6 +6,7 @@ import { newId } from "../../../../../packages/atlas-contracts/src/index.mjs";
 import { confineRealPath } from "../../agent/tools/path-confinement.mjs";
 import { DEFAULT_ALLOWED_EXECUTABLES, TerminalPolicyError, evaluateCommand } from "./command-policy.mjs";
 import { createRedactor, hostSecretValues } from "./redaction.mjs";
+import { containerRunArguments, killContainer, minimalRuntimeEnvironment, resolveContainerSandbox } from "./container-sandbox.mjs";
 
 /**
  * TerminalController — the execution plane's terminal worker (blueprint §6).
@@ -110,6 +111,7 @@ export class TerminalController {
   #pathDirectories;
   #redact;
   #prlimit;
+  #container;
   #workspaces = new Map();
   #commands = new Map();
 
@@ -122,6 +124,7 @@ export class TerminalController {
    * @param {string[]} [options.pathDirectories]  the child's PATH; defaults to node's own bin dir plus system bins
    * @param {string[]} [options.knownSecrets]  exact values to scrub from output (secret-named daemon env values are added)
    * @param {boolean|string} [options.prlimit]  false disables; a path overrides detection
+   * @param {object} [options.container]  run every command in a disposable container (see container-sandbox.mjs)
    */
   constructor({
     rootDirectory,
@@ -137,6 +140,7 @@ export class TerminalController {
     maxOutputBytes = DEFAULTS.maxOutputBytes,
     maxConcurrentPerWorkspace = DEFAULTS.maxConcurrentPerWorkspace,
     rlimits = {},
+    container = undefined,
   } = {}) {
     if (typeof rootDirectory !== "string" || rootDirectory.length === 0) {
       throw new TerminalError("NO_ROOT", "TerminalController needs a rootDirectory for workspaces.");
@@ -154,6 +158,9 @@ export class TerminalController {
       rlimits: { ...DEFAULTS.rlimits, ...rlimits },
     };
     this.#prlimit = detectPrlimit(prlimit);
+    // Resolved last and allowed to throw: asking for a container and getting
+    // the unisolated runner instead would be worse than not starting.
+    this.#container = resolveContainerSandbox(container);
   }
 
   get rootDirectory() {
@@ -166,8 +173,8 @@ export class TerminalController {
       noShell: true,
       processGroup: process.platform !== "win32",
       rlimits: this.#prlimit ? { tool: "prlimit", path: this.#prlimit } : { tool: null, reason: prlimitUnavailableReason() },
-      container: false,
-      networkIsolation: false,
+      container: this.#container ? { runtime: this.#container.runtime, image: this.#container.image } : false,
+      networkIsolation: Boolean(this.#container),
     };
   }
 
@@ -266,7 +273,8 @@ export class TerminalController {
       throw new TerminalError("CONCURRENCY_LIMIT", `This workspace already has ${workspace.running.size} running commands.`);
     }
 
-    const resolvedExecutable = this.#resolveExecutable(decision.executable);
+    // In a container the image provides the executable; the host's copy is irrelevant.
+    const resolvedExecutable = this.#container ? { executablePath: decision.executable, prefixArgs: [] } : this.#resolveExecutable(decision.executable);
     return this.#spawn(workspace, { argv, ...resolvedExecutable, cwd: cwdReal, env: childEnv, timeout, stdin, decision, network: network === true });
   }
 
@@ -372,7 +380,39 @@ export class TerminalController {
     return { args, applied };
   }
 
-  #spawn(workspace, { argv, executablePath, prefixArgs = [], cwd, env, timeout, stdin, decision, network }) {
+  #spawn(workspace, options) {
+    return this.#container ? this.#spawnInContainer(workspace, options) : this.#spawnProcess(workspace, options);
+  }
+
+  #spawnInContainer(workspace, { argv, cwd, env, timeout, stdin, decision, network }) {
+    const id = newId("toolCall");
+    const name = `atlas-${String(id).replace(/[^A-Za-z0-9_.-]/gu, "")}`.slice(0, 120);
+    const sandbox = this.#container;
+    const args = containerRunArguments({
+      sandbox, name, workspaceRoot: realpathSync(workspace.directory), cwd, argv, env, network, interactive: stdin !== undefined,
+    });
+    const isolation = {
+      level: "container",
+      container: { runtime: sandbox.runtime, image: sandbox.image, name },
+      noShell: true,
+      envScrubbed: true,
+      cwdConfined: true,
+      argumentPathPolicy: true,
+      processGroup: process.platform !== "win32",
+      processTreeCleanup: "container removed, then the runtime client signalled",
+      timeoutMs: timeout,
+      maxOutputBytes: this.#options.maxOutputBytes,
+      limits: { cpus: sandbox.cpus, memoryBytes: sandbox.memoryBytes, pidsLimit: sandbox.pidsLimit },
+      network: network ? "enabled (container bridge)" : "none",
+      filesystem: "workspace only, mounted at /workspace; root filesystem read-only",
+    };
+    return this.#run(workspace, {
+      id, file: sandbox.runtime, args, env: minimalRuntimeEnvironment(), cwd, useGroups: process.platform !== "win32", argv, timeout, stdin, decision, isolation,
+      onKill: () => killContainer(sandbox, name),
+    });
+  }
+
+  #spawnProcess(workspace, { argv, executablePath, prefixArgs = [], cwd, env, timeout, stdin, decision, network }) {
     const id = newId("toolCall");
     const useGroups = process.platform !== "win32";
     const rlimits = this.#prlimit ? this.#rlimitArgs() : null;
@@ -400,6 +440,10 @@ export class TerminalController {
       filesystem: "host user permissions (workspace confinement is argv-level only)",
     };
 
+    return this.#run(workspace, { id, file, args, env, cwd, useGroups, argv, timeout, stdin, decision, isolation, onKill: null });
+  }
+
+  #run(workspace, { id, file, args, env, cwd, useGroups, argv, timeout, stdin, decision, isolation, onKill }) {
     const started = Date.now();
     const child = spawn(file, args, {
       cwd,
@@ -413,7 +457,7 @@ export class TerminalController {
     const queue = createEventQueue();
     const record = {
       id, child, workspace, state: "running", timedOut: false, cancelled: false, killTimer: null,
-      done: null,
+      done: null, onKill,
     };
     this.#commands.set(id, record);
     workspace.running.add(id);
@@ -495,6 +539,8 @@ export class TerminalController {
     if (record.state === "running") {
       record.state = "terminating";
       if (reason === "cancelled") record.cancelled = true;
+      // A container outlives its CLI client; remove it by name, then signal.
+      if (record.onKill) record.onKill();
       if (process.platform === "win32") {
         // Node's Windows child.kill(SIGTERM) maps to TerminateProcess and does
         // not reliably clean descendants. Kill only this managed PID tree,

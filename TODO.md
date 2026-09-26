@@ -604,7 +604,11 @@ What still stops Atlas from doing a job end to end, with who owns each item.
 - [ ] Tenant model (SEC-1, P9-1) beyond the per-user GitHub permission
       check — #71.
 - [ ] Container or VM runner so terminal commands are isolated from the
-      operator's account — #72.
+      operator's account — #72. Container runner done: set
+      `ATLAS_TERMINAL_CONTAINER_RUNTIME` (and optionally `_IMAGE`) and every
+      `terminal.run` command runs in a disposable container with only its
+      workspace mounted and no network. Still open: requiring it by policy
+      for untrusted repositories, and the engineering workflow's checks.
 - [ ] Project Genesis: prompt → requirements → plan → new repository →
       deployed preview — #73.
 - [ ] Visual builder: live preview with click-to-edit mapped to source — #74.
