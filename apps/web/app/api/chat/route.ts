@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
 import { getD1, getDb } from "../../../db";
-import { conversationWritable, recallForMemory, tenantAllowlist } from "../../../db/tenancy.mjs";
+import { conversationWritable, memoryPromptContext, recallForMemory, tenantAllowlist } from "../../../db/tenancy.mjs";
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
@@ -48,22 +48,32 @@ export async function POST(request: Request) {
   let memory = "";
   let stored = true;
   let allowlist = new Set<string>();
+  let scope: ReturnType<typeof tenantScope> | null = null;
+  let d1: ReturnType<typeof getD1> | null = null;
   try {
     // Tenancy (#71): threads belong to the caller's tenant; an id owned by another tenant or principal is never written to.
-    const tenant = await resolveTenantContext(request, account, getD1());
-    if (!tenant || !(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) throw new Error("Conversation is not writable in this workspace.");
+    d1 = getD1();
+    const tenant = await resolveTenantContext(request, account, d1);
+    scope = tenant ? tenantScope(tenant) : null;
+    if (!tenant || !scope || !(await conversationWritable(d1, scope, conversationId))) throw new Error("Conversation is not writable in this workspace.");
     await db.insert(conversations)
       .values({ id: conversationId, tenantId: tenant.tenantId, requestedBy: account.userId, title: threadTitle(message), repository, branch, createdAt: now, updatedAt: now })
-      .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now }, setWhere: and(eq(conversations.tenantId, tenant.tenantId), eq(conversations.requestedBy, account.userId)) });
+      .onConflictDoUpdate({ target: conversations.id, set: { repository, branch, updatedAt: now }, setWhere: and(eq(conversations.tenantId, tenant.tenantId), eq(conversations.requestedBy, account.userId)) });
     history = await db.select({ role: conversationMessages.role, content: conversationMessages.content })
       .from(conversationMessages)
       .where(and(eq(conversationMessages.conversationId, conversationId), eq(conversationMessages.requestedBy, account.userId)))
       .orderBy(asc(conversationMessages.createdAt));
     await db.insert(conversationMessages).values({ id: randomUUID(), conversationId, requestedBy: account.userId, role: "user", content: message, createdAt: now });
     // Repositories the chat tools may read: the workspace's allowlist, bounded by the deployment's.
-    try { allowlist = await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)); } catch { allowlist = new Set(); }
+    try { allowlist = await tenantAllowlist(d1, tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)); } catch { allowlist = new Set(); }
     // Memory across conversations: recall is best-effort and never blocks a reply.
-    try { memory = memoryDigest(await recallForMemory(getD1(), tenantScope(tenant), { excludeConversationId: conversationId })); } catch { memory = ""; }
+    try {
+      const [recall, memories] = await Promise.all([
+        recallForMemory(d1, scope, { excludeConversationId: conversationId }),
+        memoryPromptContext(d1, scope, { repository }),
+      ]);
+      memory = memoryDigest({ ...recall, ...memories, repository });
+    } catch { memory = ""; }
   } catch {
     // Same posture as task dispatch: a D1 problem degrades the feature to a
     // single un-remembered turn rather than refusing to answer at all.
@@ -74,13 +84,13 @@ export async function POST(request: Request) {
   const turns = [
     { role: "system", content: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository }) },
     // Earlier conversations are data the person wrote (or Atlas replied), never instructions; the block cannot be closed from inside.
-    ...(memory ? [{ role: "system", content: `<data source="earlier conversations and recent runs in this workspace">\n${memory.replace(/<(\s*\/?\s*)data\b/giu, "&lt;$1data")}\n</data>` }] : []),
+    ...(memory ? [{ role: "system", content: `<data source="saved memories, earlier conversations and recent runs in this workspace">\n${memory.replace(/<(\s*\/?\s*)data\b/giu, "&lt;$1data")}\n</data>` }] : []),
     ...history.slice(-HISTORY_TURNS).map((turn) => ({ role: turn.role === "assistant" ? "assistant" : "user", content: turn.content })),
     { role: "user", content: message },
   ];
 
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
-  const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
+  const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken(), d1: d1 ?? undefined, memoryScope: scope ?? undefined, conversationId };
   const loop = { endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks };
 
   if (body.stream === true) {

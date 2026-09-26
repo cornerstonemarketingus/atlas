@@ -185,7 +185,7 @@ export function ChatSection() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text, stream: true }),
+        body: JSON.stringify({ conversationId, message: text, repository, branch, stream: true }),
         signal: controller.signal,
       });
       if (!response.ok || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {

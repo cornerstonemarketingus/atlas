@@ -15,6 +15,7 @@ test("the system prompt tells the model it is Atlas, where its code lives, and t
   assert.match(prompt, /apps\/web/u);
   assert.match(prompt, /apps\/local-control/u);
   assert.match(prompt, /start_atlas_task/u);
+  assert.match(prompt, /\bremember\b/u);
   assert.match(prompt, /instead of writing a generic plan/u);
   assert.match(prompt, /deployment owner, so you may start work on your own repository/u);
 });
@@ -99,23 +100,31 @@ test("the system prompt tells the model to choose the capability itself and to b
 test("memory digest recalls other conversations and runs, clipped and capped", () => {
   assert.equal(memoryDigest({}), "");
   const digest = memoryDigest({
+    memories: [{ kind: "convention", repository: "cornerstonemarketingus/atlas", content: "We always use pnpm in this repo.", updatedAt: "2026-09-26T12:39:00Z", lastUsedAt: "2026-09-26T12:39:30Z" }],
+    repositoryMemories: [{ kind: "decision", content: "Use D1-backed durable memories for engineering notes.", updatedAt: "2026-09-26T12:39:40Z" }],
+    repository: "cornerstonemarketingus/atlas",
     conversations: [{ title: "GitHub error", repository: "cornerstonemarketingus/atlas", updatedAt: "2026-09-26T12:40:00Z", messages: [
       { role: "user", content: "can you debug yourself" },
       { role: "assistant", content: "I could not start a debug run: GitHub rejected Atlas's credential." },
     ] }],
     tasks: [{ createdAt: "2026-09-26T12:41:00Z", mode: "debug", repository: "cornerstonemarketingus/atlas", objective: "Find the failing test.", githubRunId: null }],
   });
+  assert.match(digest, /Saved memories:/u);
+  assert.match(digest, /We always use pnpm in this repo\./u);
+  assert.match(digest, /Additional saved memories for cornerstonemarketingus\/atlas/u);
   assert.match(digest, /Conversation "GitHub error" \(cornerstonemarketingus\/atlas\)/u);
   assert.match(digest, /Atlas: I could not start a debug run/u);
   assert.match(digest, /debug on cornerstonemarketingus\/atlas: Find the failing test\., no GitHub run recorded/u);
   const huge = memoryDigest({ conversations: Array.from({ length: 50 }, (_, i) => ({ title: `t${i}`, messages: [{ role: "user", content: "x".repeat(5000) }] })) });
-  assert.ok(huge.length <= 6100, String(huge.length));
+  assert.ok(huge.length <= 12100, String(huge.length));
   assert.match(huge, /older history omitted/u);
   assert.ok(!/x{300}/u.test(huge), "each message is clipped");
 });
 
 test("the prompt says Atlas remembers and explains how its GitHub credential is loaded", () => {
   const prompt = atlasSystemPrompt({ isOwner: true });
+  assert.match(prompt, /I'll remember that\./u);
+  assert.match(prompt, /Do not store secrets/u);
   assert.match(prompt, /never claim you cannot remember past conversations/u);
   assert.match(prompt, /Deploy Atlas web to Cloudflare Workers/u);
   assert.match(prompt, /There is no runner to restart/u);

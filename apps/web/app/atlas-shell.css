@@ -104,8 +104,8 @@
 
 .policy-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:12px}
 .policy-row label,.mission-form label,.danger-form label,.field-row label,.pair-card form label{display:grid;gap:7px;color:#7b857e;font:650 10px var(--font-geist-mono);text-transform:uppercase}
-.policy-row select,.mission-form select,.mission-form input,.mission-form textarea,.danger-form input,.pair-card input{width:100%;border:1px solid #2f3632;border-radius:9px;background:#0f1210;color:var(--ws-text);padding:11px 12px;font:450 14px var(--font-geist-sans)}
-.policy-row select:focus,.mission-form textarea:focus,.mission-form input:focus{outline:0;border-color:#54604f}
+.policy-row select,.mission-form select,.mission-form input,.mission-form textarea,.danger-form input,.pair-card input,.memory-search,.memory-card textarea{width:100%;border:1px solid #2f3632;border-radius:9px;background:#0f1210;color:var(--ws-text);padding:11px 12px;font:450 14px var(--font-geist-sans)}
+.policy-row select:focus,.mission-form textarea:focus,.mission-form input:focus,.memory-search:focus,.memory-card textarea:focus{outline:0;border-color:#54604f}
 .mission-form label span{color:#5b655e;text-transform:none}
 
 .check-list{display:grid}
@@ -129,6 +129,16 @@
 .plan-actions .quiet,.approval-panel .quiet{background:transparent;border:1px solid var(--ws-line);color:#c3cbc5}
 .quiet-link{color:#8c968f;font-size:12px;text-decoration:underline;text-underline-offset:3px}
 .danger-form{display:grid;gap:12px;max-width:340px;margin-top:16px}
+.quiet-action{background:transparent}
+.memory-list{display:grid;gap:14px}
+.memory-card{display:grid;gap:12px;border:1px solid var(--ws-line);border-radius:13px;background:#111412;padding:18px}
+.memory-meta{display:grid;gap:4px}
+.memory-meta strong{text-transform:capitalize}
+.memory-meta span,.memory-meta time{color:var(--ws-muted);font-size:12px}
+.memory-card textarea{min-height:110px;resize:vertical}
+.memory-actions{display:flex;gap:10px;flex-wrap:wrap}
+.memory-actions button{border:0;border-radius:9px;background:var(--ws-accent);color:#10150d;padding:11px 15px;font-weight:700;font-size:12px}
+.memory-actions .quiet{background:transparent;border:1px solid var(--ws-line);color:#c3cbc5}
 
 /* --- automation ---------------------------------------------------------- */
 .approval-panel{margin-top:24px;border:1px solid #6b5a2c;border-radius:13px;background:#1d1a0f;padding:18px}

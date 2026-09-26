@@ -180,6 +180,21 @@ export const conversationMessages = sqliteTable("conversation_messages", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({ conversationIndex: index("conversation_messages_conversation_idx").on(table.conversationId, table.createdAt) }));
 
+export const memories = sqliteTable("memories", {
+  id: text("id").primaryKey(),
+  tenantId: integer("tenant_id").notNull().references(() => tenants.id),
+  requestedBy: text("requested_by").notNull(),
+  kind: text("kind").notNull(),
+  repository: text("repository"),
+  content: text("content").notNull(),
+  sourceConversationId: text("source_conversation_id").references(() => conversations.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  lastUsedAt: text("last_used_at"),
+}, (table) => ({
+  ownerUpdatedIndex: index("memories_tenant_requested_by_updated_at_idx").on(table.tenantId, table.requestedBy, table.updatedAt),
+}));
+
 /** Safe user-facing milestones, not private model chain-of-thought. */
 export const runEvents = sqliteTable("run_events", {
   id: text("id").primaryKey(),
@@ -309,6 +324,9 @@ export const sessionRevocations = sqliteTable("session_revocations", {
  */
 export const TENANT_ROLES = ["owner", "admin", "member"] as const;
 export type TenantRole = (typeof TENANT_ROLES)[number];
+
+export const MEMORY_KINDS = ["fact", "preference", "decision", "convention", "failure", "command"] as const;
+export type MemoryKind = (typeof MEMORY_KINDS)[number];
 
 export const tenants = sqliteTable("tenants", {
   id: integer("id").primaryKey({ autoIncrement: true }),

@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { asData, htmlToText, instantToolDefinitions, isInstantTool, pendingLabel, publicPageUrl, runInstantTool } from "../app/api/chat/instant-tools.mjs";
+import { resolveTenant } from "../db/tenancy.mjs";
+import { migratedDatabase } from "./helpers/d1-sqlite.mjs";
 
 const call = (name, args) => ({ id: "c1", type: "function", function: { name, arguments: JSON.stringify(args) } });
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const alice = { userId: "github:alice", dbUserId: 1 };
 
 test("web search is only offered when a search key is configured", () => {
   const names = (environment) => instantToolDefinitions(environment).map((tool) => tool.function.name);
-  assert.deepEqual(names({}), ["read_web_page", "read_repository_file", "search_repository_code"]);
+  assert.deepEqual(names({}), ["read_web_page", "read_repository_file", "search_repository_code", "remember", "recall", "forget"]);
   assert.ok(names({ ATLAS_TAVILY_API_KEY: "tvly-x" }).includes("web_search"));
   assert.equal(isInstantTool("start_atlas_task"), false);
   assert.equal(isInstantTool("read_web_page"), true);
@@ -100,8 +103,33 @@ test("web search sends the query and formats results", async () => {
   assert.equal((await runInstantTool(call("web_search", { query: "x" }), { fetcher, environment: {} })).ok, false);
 });
 
+test("memory tools save, search, refuse secrets and delete durable memories", async () => {
+  const { d1 } = migratedDatabase({ users: [[1, "alice"]] });
+  const tenant = await resolveTenant(d1, alice);
+  const context = { d1, memoryScope: { tenantId: tenant.tenantId, principal: alice.userId } };
+
+  const saved = await runInstantTool(call("remember", { kind: "convention", content: "We always use pnpm in this repo.", repository: "Acme/App" }), context);
+  assert.equal(saved.ok, true);
+  assert.match(saved.content, /content: We always use pnpm in this repo\./u);
+
+  const recalled = await runInstantTool(call("recall", { query: "pnpm", repository: "acme/app" }), context);
+  assert.equal(recalled.ok, true);
+  assert.match(recalled.content, /We always use pnpm in this repo\./u);
+  const id = /([0-9a-f-]{36})/u.exec(recalled.content)?.[1];
+  assert.ok(id);
+
+  const refused = await runInstantTool(call("remember", { kind: "fact", content: "ATLAS_API_KEY=sk-live-1234567890abcdef" }), context);
+  assert.equal(refused.ok, false);
+  assert.match(refused.content, /will not store secrets/u);
+
+  const deleted = await runInstantTool(call("forget", { id }), context);
+  assert.equal(deleted.ok, true);
+  assert.match(deleted.content, new RegExp(id, "u"));
+});
+
 test("pending labels describe what is running", () => {
   assert.equal(pendingLabel(call("read_web_page", { url: "https://example.com/a" })), "Reading example.com/a…");
   assert.equal(pendingLabel(call("read_repository_file", { repository: "o/r", path: "src/x.ts" })), "Reading o/r/src/x.ts…");
   assert.equal(pendingLabel(call("read_repository_file", { repository: "o/r", path: "" })), "Reading o/r…");
+  assert.equal(pendingLabel(call("remember", { kind: "fact", content: "x" })), "Saving that to memory…");
 });
