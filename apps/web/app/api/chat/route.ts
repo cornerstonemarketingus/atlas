@@ -76,7 +76,7 @@ export async function POST(request: Request) {
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
 
   if (body.stream === true) {
-    return streamReply({ endpoint, turns, conversationId, stored, db, userId: account.userId, defaultRepository: repository || SELF_REPOSITORY, startTasks });
+    return streamReply({ endpoint, turns, conversationId, stored, db, userId: account.userId, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks });
   }
 
   let payload: unknown;
@@ -94,7 +94,7 @@ export async function POST(request: Request) {
     return Response.json({ message: timedOut ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.", conversationId }, { status: 504 });
   }
 
-  const started = await startTasks(taskRequestsFrom(payload, { defaultRepository: repository || SELF_REPOSITORY }));
+  const started = await startTasks(taskRequestsFrom(payload, { defaultRepository: repository || SELF_REPOSITORY, userMessage: message }));
   const reply = [replyText(payload), ...started].filter(Boolean).join("\n\n");
   if (!reply) return Response.json({ message: "The model endpoint returned an empty reply.", conversationId }, { status: 502 });
 
@@ -199,9 +199,9 @@ async function startRequestedTasks(request: Request, { requests, errors }: TaskR
  * with a message a person can act on. The reply is persisted once, when the
  * model finishes, while the request is still open.
  */
-function streamReply({ endpoint, turns, conversationId, stored, db, userId, defaultRepository, startTasks }: {
+function streamReply({ endpoint, turns, conversationId, stored, db, userId, defaultRepository, userMessage, startTasks }: {
   endpoint: Endpoint; turns: { role: string; content: string }[]; conversationId: string; stored: boolean;
-  db: ReturnType<typeof getDb>; userId: string; defaultRepository: string;
+  db: ReturnType<typeof getDb>; userId: string; defaultRepository: string; userMessage: string;
   startTasks: (calls: TaskRequests) => Promise<string[]>;
 }) {
   const encoder = new TextEncoder();
@@ -224,7 +224,7 @@ function streamReply({ endpoint, turns, conversationId, stored, db, userId, defa
           const payload = await response.json();
           text = replyText(payload);
           if (text) emit("delta", { text });
-          calls = taskRequestsFrom(payload, { defaultRepository });
+          calls = taskRequestsFrom(payload, { defaultRepository, userMessage });
         } else {
           const parser = createDeltaParser();
           const decoder = new TextDecoder();
@@ -232,12 +232,16 @@ function streamReply({ endpoint, turns, conversationId, stored, db, userId, defa
           for (;;) {
             const { value, done } = await reader.read();
             if (done) break;
-            for (const delta of parser.push(decoder.decode(value, { stream: true }))) {
+            const deltas = parser.push(decoder.decode(value, { stream: true }));
+            // Thinking is streamed as its own event, before the words it led to; it is shown, never stored.
+            const thought = parser.drainReasoning();
+            if (thought) emit("thinking", { text: thought });
+            for (const delta of deltas) {
               text += delta;
               emit("delta", { text: delta });
             }
           }
-          calls = taskRequestsFromCalls(parser.toolCalls, { defaultRepository });
+          calls = taskRequestsFromCalls(parser.toolCalls, { defaultRepository, userMessage });
         }
       } catch (error) {
         const timedOut = error instanceof Error && error.name === "TimeoutError";
