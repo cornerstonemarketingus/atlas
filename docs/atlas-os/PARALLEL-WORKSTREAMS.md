@@ -86,6 +86,71 @@ owned by another active session; shared contracts require an integration PR.
 5. Land O security/tenant controls before widening users or self-improvement.
 6. Build B/J, then C/H/D, then E/K/L/I/M, then N and broader SaaS features.
 
+## Current execution split: this session vs GitHub Copilot
+
+These assignments are deliberately disjoint. Both should work from separate
+branches/worktrees and open PRs. Copilot should not edit the PR #59 desktop,
+team, terminal, auth, or migration files while this session owns their
+integration review.
+
+### This session (owner: current Copilot coding session)
+
+1. **PR #60: strict step verification**, stacked on PR #59. The implementation
+    rejects model-asserted success when an action failed, was denied, or is
+    awaiting approval. Exact-action fingerprints remain in memory only. Focused
+    team mission tests pass 16/16. Next: finish CI, resolve any findings, then
+    ask the owner before merging PR #59/#60 or deploying.
+2. **Windows terminal audit/fix:** own the platform terminal controller and
+    its Windows-specific tests after the verification PR is settled. Replace
+    POSIX-only executable lookup/process assumptions with a safe Windows
+    adapter; do not weaken command policy or label process-only containment a
+    sandbox. Acceptance: focused Windows terminal tests pass on Windows CI,
+    including environment scrubbing, cwd confinement, approvals, cancellation,
+    and explicit unsupported resource-isolation reporting.
+3. **PR #59 integration review:** validate migration `0014`, hosted task
+    credential diagnosis, Windows desktop approval behavior, and the full
+    mission recovery E2E. Owner-only credentials/migrations remain owner
+    actions; do not request, print, or alter secret values.
+
+### GitHub Copilot parallel assignment (mobile-only)
+
+Use a fresh worktree based on the verified PR #59 head, then open a PR targeting
+`claude/atlas-platform-development-o9znpd` (stacked). Own only:
+
+- `mobile/src/**`
+- `mobile/tests/**`
+- `mobile/README.md` and mobile release docs when required
+- A new web API route only if necessary, with a proposal first; do not change
+   `apps/local-control/src/agent/team/**`, terminal, desktop, D1 schema/migrations,
+   auth/session, or `.github/workflows/**` in this parallel slice.
+
+Goal: make the existing Capacitor shell a useful remote companion for
+monitoring real Atlas missions and reviewing/deciding real approvals from a
+phone. Reuse the signed-in web/API session and the existing daemon/web mission
+and approval contracts. Keep credentials in the existing Keychain/Keystore
+bridge; never localStorage. Add accessible mission list/detail, live/polling
+status with reconnect/error/empty states, approval explanation and exact
+single-use decision, push/deep-link routing only when its signing/verification
+contract is present, and biometric re-authentication for high-risk decisions.
+Do not show simulated agent progress or offer remote computer takeover unless
+the current APIs actually implement it.
+
+Acceptance: mobile unit tests cover auth/session expiration, secure storage,
+mission refresh/offline states, approval allow/deny/expiry/replay, deep-link
+validation, and sensitive-action biometric gating. Run the mobile shell tests;
+add a native build/test where available and document the unavailable device
+validation. Return a focused PR; do not merge or deploy.
+
+### Next independent Copilot work after mobile PR
+
+- **Windows execution portability** only after this session freezes the
+   terminal adapter interface; otherwise avoid concurrent edits to the same
+   terminal files.
+- **Web workspace UX** only after PR #59 is merged and its route names/API
+   contracts are stable; own `apps/web/app/**` UI files, not local-console files.
+- **Automations/scheduler** only after the canonical task/outbox contract is
+   settled; use a distinct scheduler package and no second task state machine.
+
 ## Status discipline
 
 - PR #59 has green Linux CI, but is still a draft and not deployed.
