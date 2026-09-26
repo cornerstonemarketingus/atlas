@@ -73,6 +73,8 @@ owned by another active session; shared contracts require an integration PR.
 | N | Controlled self-improvement | `.github/atlas/*`, self-improve workflow and eval packages | A, O, benchmarks | Admin-only activation; isolated branch/worktree; baseline/eval/security review; draft PR; explicit owner merge; rollback. Atlas cannot alter its own approval gates. |
 | O | Auth, tenancy, and governance | `apps/web/db/schema.ts`, migrations, auth/session/repository APIs and security tests | None; coordinate migrations with owner | Tenant/member isolation; session revocation; per-repository authorization; rate limits; audit; migration and restore tests. No broader autonomous access before this. |
 | P | Windows test portability | `apps/local-control/tests/platform-terminal.test.mjs`, MCP env tests, Windows CI | F | **Implemented on `copilot/windows-terminal-portability`**; POSIX command/path assumptions removed from terminal fixtures; only the file-symlink privilege check skips explicitly. |
+| Q | Policy-engine runtime bridge | `apps/local-control/src/platform/legacy-policy-bridge.mjs`, `agent/tool-registry.mjs`, `main.mjs`, bridge tests | A | **Implemented on `copilot/runtime-policy-bridge` (PR #65)**; live ToolRegistry decisions use deterministic PolicyEngine; team decisions link durably to platform tool-call rows; existing exact-action approval consumption is preserved; audit records metadata only. Full AuthorizedToolExecutor consolidation remains a separate follow-up. |
+| R | Canonical authorized tool execution | `apps/local-control/src/agent/tool-registry.mjs`, `platform/adapters.mjs`, `platform/executor.mjs`, team/conversation integration tests | Q, durable task identity and approval UX | Every live agent tool call goes through one durable executor for validation, policy, approval consumption, idempotency, budget, timeout, evidence, and audit. Must not call legacy handlers directly after authorization; add crash/retry and approval-resume E2E. |
 
 ## Immediate sequence
 
@@ -84,7 +86,8 @@ owned by another active session; shared contracts require an integration PR.
    migration `0014`) only with the owner; do not read or print secrets.
 4. Run the recorded E2E journey and hosted verification after recovery.
 5. Land O security/tenant controls before widening users or self-improvement.
-6. Build B/J, then C/H/D, then E/K/L/I/M, then N and broader SaaS features.
+6. Land Q, then complete R (one durable authorized tool path), then B/J, C/H/D,
+   E/K/L/I/M, and N and broader SaaS features.
 
 ## Current execution split: this session vs Claude Code
 

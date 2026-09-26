@@ -200,7 +200,7 @@ export class ToolRegistry {
       return { status: "rejected", code: "INVALID_INPUT", message };
     }
 
-    const decision = this.#policy(tool.capability, tool.risk);
+    const decision = this.#policy(tool.capability, tool.risk, tool, input, { sessionId, ...context });
     if (decision === "deny") {
       return { status: "rejected", code: "POLICY_DENIED", message: `Local policy denies the capability '${tool.capability}'.`, input };
     }

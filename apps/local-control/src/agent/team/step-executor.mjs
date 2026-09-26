@@ -146,7 +146,20 @@ async function runTool({ call, allowedTools, toolRegistry, approvals, platformSt
   if (!allowedTools.has(call.name)) {
     outcome = { status: "rejected", code: "NOT_PERMITTED", message: `${agent.name} is not permitted to use ${call.name}.` };
   } else {
-    const invoke = () => toolRegistry.invoke({ name: call.name, rawArguments: call.arguments, sessionId: meta.rootTaskId, signal, approvals, context: { sessionId: meta.rootTaskId } });
+    const invoke = () => toolRegistry.invoke({
+      name: call.name,
+      rawArguments: call.arguments,
+      sessionId: meta.rootTaskId,
+      signal,
+      approvals,
+      context: {
+        sessionId: meta.rootTaskId,
+        agentId: agent.id,
+        taskId: meta.platformTaskId,
+        toolCallId: recorded?.id ?? null,
+        correlationId: platformStore?.getTask(TENANT, meta.platformTaskId)?.correlationId ?? null,
+      },
+    });
     outcome = await invoke();
     if (outcome.status === "approval-required" && approvals?.request) {
       const request = approvals.request({ digest: outcome.digest, capability: outcome.capability, summary: `${agent.name} wants to use ${call.name}: ${summarizeInput(input)}`, sessionId: meta.rootTaskId });

@@ -45,9 +45,13 @@ observable.
     permissions as the policy subject, and submits results. First consumers:
     the BDE (draft briefs from signals) and the Research agents (validate).
 1.2 ~~Outbox dispatcher~~ — done; next subscriber: agent workers.
-1.3 **One policy path.** Route `ToolRegistry` executions through
-    `AuthorizedToolExecutor`/`PolicyEngine`; keep `allow/ask/deny` as policy
-    rules rather than a parallel mechanism.
+1.3 **One policy path.** The live `ToolRegistry` now uses
+  `PolicyEngine` through `platform/legacy-policy-bridge.mjs`; existing
+  operator allow/ask/deny preferences and digest-bound approvals are
+  preserved. Team tool calls link the durable policy decision to their
+  platform tool-call row. Remaining: move handlers and all conversation/team
+  execution through `AuthorizedToolExecutor` so durable budget, idempotency,
+  approval, and event records share one dispatcher.
 1.4 ~~Model router for conversation turns~~ — done; extend to coding and
     vision tasks and persist the model on each platform tool call.
 
