@@ -1,13 +1,10 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runCommand, safeEnvironment } from "../../apps/local-control/src/agent/tools/process.mjs";
 import { SelfImprovementLoop } from "../../apps/local-control/src/platform/self-improve/loop.mjs";
-import { reviewChange } from "../../apps/local-control/src/platform/self-improve/reviewer.mjs";
+import { assertSafeEndpoint, buildCoderCli, createCoderBuilder, createReviewer, runCheck } from "../../apps/local-control/src/platform/self-improve/runtime.mjs";
 
 /**
  * "Atlas, improve yourself" from a terminal, with no GitHub, Cloudflare or
@@ -62,60 +59,14 @@ const contextWindow = option("--context-window", "16384");
 const maxOutputTokens = option("--max-output-tokens", "2048");
 const home = resolve(option("--home", join(homedir(), ".atlas", "self-improve")));
 
-const endpoint = new URL(baseUrl);
-const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(endpoint.hostname);
-if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && loopback)) throw new Error("Model endpoints must use HTTPS unless they are loopback URLs.");
 const apiKey = apiKeyEnv ? process.env[apiKeyEnv] : "";
 if (apiKeyEnv && !apiKey) throw new Error(`${apiKeyEnv} is not set.`);
+assertSafeEndpoint(baseUrl);
 
-const cliDirectory = join(atlasRoot, "packages", "atlas-cli");
-const cli = join(cliDirectory, "dist", "src", "cli.js");
 console.log("Building the Atlas coder…");
-const build = spawnSync("npm", ["run", "build"], { cwd: cliDirectory, stdio: "inherit", shell: process.platform === "win32" });
-if (build.error || build.status !== 0) process.exit(build.status ?? 1);
-mkdirSync(join(home, "runs"), { recursive: true });
-
-/** The builder: Atlas's own coder, editing the worktree and verifying/repairing its change. */
-async function builder({ worktree, objective, verifyDirectory: verifyDir }) {
-  const auditLog = join(home, "runs", `${new Date().toISOString().replaceAll(":", "-")}.jsonl`);
-  const args = [
-    cli, "code", worktree, objective,
-    "--provider", "groq",
-    "--api-key-env", "ATLAS_SELF_IMPROVE_KEY",
-    "--model", model,
-    "--base-url", baseUrl,
-    ...(loopback ? ["--context-window", contextWindow, "--max-output-tokens", maxOutputTokens] : []),
-    "--audit-log", auditLog,
-    "--verify-dir", verifyDir,
-    "--format", "text",
-  ];
-  const run = spawnSync(process.execPath, args, {
-    cwd: atlasRoot, stdio: "inherit", timeout: 18_000_000,
-    env: safeEnvironment({ ATLAS_SELF_IMPROVE_KEY: apiKey || "local-only-no-credential" }),
-  });
-  return { ok: !run.error && run.status === 0, summary: `coder exited ${run.status ?? "abnormally"}; audit ${auditLog}` };
-}
-
-/**
- * The shell-free runner cannot start npm's .cmd shim on Windows, so `node`
- * and `npm` run through this Node binary and npm's own CLI script instead.
- */
-function resolveCheck([command, ...args]) {
-  if (command === "node") return [process.execPath, args];
-  if (command === "npm" && process.platform === "win32") {
-    const npmCli = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-    if (existsSync(npmCli)) return [process.execPath, [npmCli, ...args]];
-  }
-  return [command, args];
-}
-
-async function runCheck(argv, cwd) {
-  const [command, args] = resolveCheck(argv);
-  const result = await runCommand(command, args, { cwd, timeoutMs: 900_000, maxBytes: 2_000_000, env: safeEnvironment() });
-  return { exitCode: result.status ?? (result.ok ? 0 : 1), stdout: result.stdout, stderr: result.stderr, timedOut: result.timedOut };
-}
-
-const reviewer = ({ objective, diff, checks }) => reviewChange({ endpoint: { baseUrl, model: reviewModel, apiKey }, objective, diff, checks });
+const cli = buildCoderCli(atlasRoot);
+const builder = createCoderBuilder({ atlasRoot, cli, runsDirectory: join(home, "runs"), endpoint: { baseUrl, model, apiKey }, contextWindow, maxOutputTokens });
+const reviewer = createReviewer({ baseUrl, model: reviewModel, apiKey });
 
 const loop = new SelfImprovementLoop({
   repository,

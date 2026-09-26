@@ -106,6 +106,14 @@ Each iteration:
    `~/.atlas/self-improve/patches` for you to merge (`git merge <branch>`),
    or removes a rejected attempt entirely.
 
+You can also do this from the local app: open **Improve Atlas**, press
+**Improve yourself**, watch the progress, and **Merge into my branch** or
+**Reject** each accepted change. In chat, asking Atlas to improve itself calls
+the `atlas.improve_self` tool, which asks your approval before starting (allow
+the `atlas.self_improve` capability to skip that). The daemon reads
+`ATLAS_SELF_IMPROVE_BASE_URL`, `_MODEL`, `_REVIEW_MODEL`, `_API_KEY_ENV` and
+`_VERIFY_DIR`.
+
 Nothing is merged automatically. `~/.atlas/self-improve/ledger.jsonl` records
 every attempt and the streak of consecutive accepted changes. A 7B CPU model
 will struggle with long edits; point `--base-url`/`--model` (and
