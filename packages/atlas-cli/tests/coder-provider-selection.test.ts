@@ -126,4 +126,19 @@ describe("selectCoderProvider", () => {
       assert.equal(result.ok, false, String(tokenBudget));
     }
   });
+
+  it("lets an operator raise the per-turn output ceiling for a paid tier", () => {
+    const groq = expectOk(selectCoderProvider({ model: "openai/gpt-oss-120b", tokenBudget: 200_000, outputTokensPerTurn: 8_192 }));
+    assert.equal(groq.maxOutputTokensPerTurn, 8_192);
+    // Still never more than the whole session budget.
+    const small = expectOk(selectCoderProvider({ model: "openai/gpt-oss-120b", tokenBudget: 2_000, outputTokensPerTurn: 8_192 }));
+    assert.equal(small.maxOutputTokensPerTurn, 2_000);
+  });
+
+  it("refuses a per-turn output ceiling outside its range", () => {
+    for (const outputTokensPerTurn of [0, 255, 32_769, 1.5, Number.NaN]) {
+      const result = selectCoderProvider({ model: "openai/gpt-oss-120b", tokenBudget: 200_000, outputTokensPerTurn });
+      assert.equal(result.ok, false, String(outputTokensPerTurn));
+    }
+  });
 });

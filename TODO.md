@@ -1,6 +1,6 @@
 # Atlas Master Product and Engineering TODO
 
-Last reviewed: 2026-08-17
+Last reviewed: 2026-09-26
 
 This is the authoritative capability backlog for Atlas. It describes the
 long-term product while preserving an incremental build order. A checked item
@@ -544,6 +544,82 @@ measurable quality, and transparent cost control.
 - [ ] Add reproducible local development and test environments.
 - [ ] Add examples for providers, tools, workflows, and extensions.
 - [ ] Keep capability documentation aligned with validated behavior.
+
+## Remaining limitations (reviewed 2026-09-26)
+
+What still stops Atlas from doing a job end to end, with who owns each item.
+"Copilot" items are the scope of work in the GitHub issue titled
+"Copilot scope: hosted rate limiting, audit trail and accessibility";
+"Claude" items are being built on `claude/atlas-implementation-eah694`;
+"Owner" items need a person with repository or account settings access.
+
+### Owner (settings only; no code)
+
+- [ ] Coder model: set `GROQ_API_KEY` (paid tier), `ATLAS_CODER_PROVIDER=groq`,
+      `ATLAS_CODER_MODEL=openai/gpt-oss-120b`, `ATLAS_MAX_TURNS=32`,
+      `ATLAS_TOKEN_BUDGET=200000`, `ATLAS_OUTPUT_TOKENS_PER_TURN=8192`; delete
+      `ATLAS_CODER_FALLBACKS` if it names a provider without a key.
+- [ ] Apply D1 migration 0014 (session revocation) in production.
+- [ ] Enable branch protection on `main` requiring the CI checks, so no
+      automation can merge around them.
+- [ ] Review the About page bio.
+
+### Copilot (hosted web app)
+
+- [ ] Rate limiting on hosted API routes (SEC-6, P1-5): sign-in, owner
+      sign-in, task creation, chat and approval decisions return 429 with
+      `Retry-After` past a per-account/per-IP budget.
+- [ ] Append-only hosted audit trail (SEC-9, P1-2): `audit_events` table and
+      migration; owner sign-ins, sign-outs, repository policy edits, device
+      pairing and approval decisions write a metadata-only row; owner-only
+      read API and a page listing them.
+- [ ] Accessibility pass on the hosted app: keyboard-only use of chat, tasks,
+      projects and approvals; labelled controls; visible focus; WCAG AA
+      contrast; an automated check in the web test suite.
+
+### Claude (local daemon and agent runtime)
+
+- [x] Prompt-injection provenance (SEC-11, P7-4): tool output, memory and
+      earlier-step reports enter daemon model turns as a labelled
+      `<data source>` block they cannot close; instruction-shaped text is
+      flagged; `tests/fixtures/injection-corpus.json` guards regressions.
+      Still open: the Windows companion and hosted chat.
+- [ ] `AuthorizedToolExecutor` as the only execution path for daemon tools,
+      with durable budgets and idempotency keys. Team steps route through it
+      since #66; the conversation loop does not yet.
+- [ ] Connect the platform capability router so tasks, not only chat turns,
+      use `ATLAS_MODEL_ROUTES` fallback.
+- [ ] Browser worker as the daemon's default browser, keeping the origin
+      allowlist.
+- [ ] Memory page in the local dashboard: search, inspect history and
+      delete scoped memory through the existing `GET/DELETE /v1/knowledge`.
+- [ ] Actions-minutes visibility (SEC-15, P7-5): report the budget guard's
+      state, including when it failed open, with the task result.
+- [ ] Finish the six in-progress workstreams and land them on top of main.
+      Done on this branch: planning/voice/workers, MCP over HTTP and the Atlas
+      MCP server, orchestrator adapters, namespace terminal runner, desktop
+      safety layer (not yet registered in `main.mjs`). Remaining: tenancy
+      (#71).
+
+### Queued (larger product work, one GitHub issue each)
+
+- [ ] Tenant model (SEC-1, P9-1) beyond the per-user GitHub permission
+      check — #71.
+- [ ] Container or VM runner so terminal commands are isolated from the
+      operator's account — #72. Container runner done: set
+      `ATLAS_TERMINAL_CONTAINER_RUNTIME` (and optionally `_IMAGE`) and every
+      `terminal.run` command runs in a disposable container with only its
+      workspace mounted and no network. A Linux-namespace runner covers
+      hosts without a container runtime, and callers can require isolation
+      (`requireIsolation`). Still open: git worktrees link to the main
+      repository's `.git` outside the workspace, so git writes inside either
+      sandbox likely fail; the engineering workflow's checks need that fixed
+      before they can run sandboxed.
+- [ ] Project Genesis: prompt → requirements → plan → new repository →
+      deployed preview — #73.
+- [ ] Visual builder: live preview with click-to-edit mapped to source — #74.
+- [ ] Scheduled and event-driven automations — #75.
+- [ ] Script-src CSP with renderer nonces (SEC-13) — #76.
 
 ## Immediate next assignments
 
