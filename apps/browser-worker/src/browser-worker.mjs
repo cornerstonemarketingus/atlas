@@ -151,6 +151,14 @@ export class BrowserWorker {
       playwright: options.playwright ?? null,
       clock: options.clock ?? (() => new Date()),
       onEvent: typeof options.onEvent === "function" ? options.onEvent : null,
+      // Connect-time private-address policy for the egress proxy
+      // (./address-guard.mjs): allowed hostnames may not resolve to
+      // loopback/LAN/metadata addresses unless named explicitly.
+      egress: {
+        allowPrivateNetwork: options.allowPrivateNetwork === true,
+        lookup: typeof options.lookup === "function" ? options.lookup : undefined,
+        allowPrivateHosts: options.allowPrivateHosts,
+      },
     };
   }
 
@@ -220,7 +228,7 @@ export class BrowserWorker {
       blocked.count += 1;
       if (blocked.list.length < MAX_BLOCKED_RECORDS) blocked.list.push({ url: sanitizeUrl(url), resourceType, at: nowIso(this.#options.clock) });
     };
-    const proxy = await startEgressProxy({ allowedOrigins, onBlocked: noteBlocked });
+    const proxy = await startEgressProxy({ allowedOrigins, onBlocked: noteBlocked, ...this.#options.egress });
     let context;
     try {
       context = await browser.newContext({
