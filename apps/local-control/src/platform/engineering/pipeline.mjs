@@ -1,8 +1,7 @@
-import { join, relative, resolve, sep, isAbsolute } from "node:path";
-import { realpathSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { TerminalController } from "../terminal/terminal-controller.mjs";
 import { addedLines, diffStats, git, resolveCommit } from "./git.mjs";
-import { agentBranchName, WorktreeManager } from "./worktrees.mjs";
+import { agentBranchName, isInside, realOrResolved, WorktreeManager } from "./worktrees.mjs";
 import { assignmentFor, checkChangeSet, reconcileChangeSets } from "./ownership.mjs";
 import { DEFAULT_FORBIDDEN_PATHS, forbiddenPathChanges, redactText, scanSecrets, scanSecurityPatterns } from "./review.mjs";
 import { buildPullRequestPayload, evaluateMergePolicy, submitPullRequest } from "./pull-request.mjs";
@@ -82,11 +81,6 @@ export function judgeCheck(kind, outcome) {
 // --------------------------------------------------------------------------
 // Command runners
 
-function isInside(parent, child) {
-  const rel = relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
 /**
  * The default command runner: the platform TerminalController. Worktrees are
  * placed inside controller workspaces (`prepareDirectory`), so checks run
@@ -100,20 +94,20 @@ export function createTerminalCommandRunner({ controller, tenantId = "engineerin
     kind: "terminal-controller",
     prepareDirectory({ taskId, name }) {
       const workspace = controller.createWorkspace({ tenantId, taskId: `${taskId}-${name}` });
-      const directory = realpathSync(workspace.directory);
+      const directory = realOrResolved(workspace.directory);
       workspaces.set(directory, workspace.id);
       return join(directory, "repo");
     },
     async releaseDirectory(path) {
       for (const [directory, id] of workspaces) {
-        if (isInside(directory, resolve(path))) {
+        if (isInside(directory, realOrResolved(path))) {
           workspaces.delete(directory);
           await controller.destroyWorkspace(id).catch(() => {});
         }
       }
     },
     async run({ cwd, argv, timeoutMs = undefined }) {
-      const real = realpathSync(cwd);
+      const real = realOrResolved(cwd);
       const entry = [...workspaces.entries()].find(([directory]) => isInside(directory, real));
       if (!entry) throw new Error("The terminal runner only runs commands inside workspaces it prepared.");
       const [directory, workspaceId] = entry;

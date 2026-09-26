@@ -64,7 +64,7 @@ export function assertAgentBranch(branch) {
   return branch;
 }
 
-function isInside(parent, child) {
+export function isInside(parent, child) {
   // Windows paths are case-insensitive; comparing them case-sensitively lets
   // "C:\Repo\nested" pass as outside "c:/repo".
   const fold = (value) => (process.platform === "win32" ? value.toLowerCase() : value);
@@ -79,7 +79,7 @@ function isInside(parent, child) {
  * this a not-yet-created folder inside the checkout would compare as outside
  * it whenever the two paths were spelled differently.
  */
-function realOrResolved(path) {
+export function realOrResolved(path) {
   const absolute = resolve(path);
   const tail = [];
   let current = absolute;
