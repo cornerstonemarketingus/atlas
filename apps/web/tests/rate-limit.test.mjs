@@ -177,6 +177,11 @@ test("authenticated devices get their own limiter buckets", () => {
   assert.equal(rateLimitSubjectForDevice({ id: "device-123" }), "device:device-123");
 });
 
+test("IP subjects fall back to forwarded headers and skip untrusted unknown callers", () => {
+  assert.equal(rateLimitSubjectForIp(new Request("https://atlas.test", { headers: { "x-forwarded-for": "203.0.113.20, 198.51.100.9" } })), "ip:203.0.113.20");
+  assert.equal(rateLimitSubjectForIp(new Request("https://atlas.test")), null);
+});
+
 test("operator sign-in fails closed when limiter storage is unavailable", async () => {
   const limited = await enforceRateLimit({
     db() { throw new Error("D1 unavailable"); },

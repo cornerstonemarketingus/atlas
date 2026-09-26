@@ -8,10 +8,22 @@ export function rateLimitSubjectForDevice(device) {
   return `device:${device.id}`;
 }
 
+function requesterIp(request) {
+  const cloudflare = request.headers.get("cf-connecting-ip");
+  if (typeof cloudflare === "string" && cloudflare.trim()) return cloudflare.trim();
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    const [first] = forwarded.split(",");
+    if (typeof first === "string" && first.trim()) return first.trim();
+  }
+  const real = request.headers.get("x-real-ip");
+  if (typeof real === "string" && real.trim()) return real.trim();
+  return null;
+}
+
 export function rateLimitSubjectForIp(request) {
-  const forwarded = request.headers.get("cf-connecting-ip");
-  const ip = typeof forwarded === "string" && forwarded.trim() ? forwarded.trim() : "unknown";
-  return `ip:${ip}`;
+  const ip = requesterIp(request);
+  return ip ? `ip:${ip}` : null;
 }
 
 export function rateLimitedResponse(retryAfterSeconds) {
@@ -42,6 +54,7 @@ export async function consumeRateLimit(db, table, { subject, route, limit, windo
 }
 
 export async function enforceRateLimit({ db, table, request, subject, route, limit, windowSeconds, failClosed = false, now = Date.now() }) {
+  if (!subject) return null;
   try {
     const outcome = await consumeRateLimit(typeof db === "function" ? db() : db, table, { subject, route, limit, windowSeconds, now });
     return outcome.allowed ? null : rateLimitedResponse(outcome.retryAfter);
