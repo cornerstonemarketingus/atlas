@@ -120,6 +120,7 @@ try {
 const runtime = new AgentRuntime({
   sessions,
   executors: buildExecutors(),
+  platformStore,
   audit: (category, summary) => store.audit(category, summary),
 });
 // Anything left running by the previous process is reconciled before the
