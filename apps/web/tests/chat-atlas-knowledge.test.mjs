@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  SELF_REPOSITORY, TASK_TOOL, TASK_TOOL_NAME, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom,
+  PROJECT_TOOL, PROJECT_TOOL_NAME, SELF_REPOSITORY, TASK_TOOL, TASK_TOOL_NAME, atlasSystemPrompt, describeStartedTask, memoryDigest, projectRequestsFromCalls, taskRequestsFrom,
 } from "../app/api/chat/atlas-knowledge.mjs";
 
 const toolReply = (...calls) => ({ choices: [{ message: { content: "", tool_calls: calls } }] });
@@ -29,6 +29,11 @@ test("the tool schema only allows the four real modes", () => {
   assert.equal(TASK_TOOL.function.name, TASK_TOOL_NAME);
   assert.deepEqual([...TASK_TOOL.function.parameters.properties.mode.enum], ["coder", "inspect", "debug", "computer"]);
   assert.deepEqual(TASK_TOOL.function.parameters.required, ["mode", "objective"]);
+});
+
+test("the Genesis project tool advertises both starter templates", () => {
+  assert.equal(PROJECT_TOOL.function.name, PROJECT_TOOL_NAME);
+  assert.deepEqual(PROJECT_TOOL.function.parameters.properties.template.enum, ["web-app", "static-site"]);
 });
 
 test("tool calls become task requests, defaulting to the selected project or Atlas itself", () => {
@@ -96,6 +101,13 @@ test("the system prompt tells the model to choose the capability itself and to b
   assert.match(prompt, /every Monday/u);
 });
 
+test("Genesis configuration removes the repo-creation limitation line and explains project creation", () => {
+  const prompt = atlasSystemPrompt({ isOwner: true, genesisConfigured: true });
+  assert.doesNotMatch(prompt, /creating a brand-new repository from scratch/u);
+  assert.match(prompt, /call create_project/u);
+  assert.match(prompt, /confirmation card/u);
+});
+
 test("memory digest recalls other conversations and runs, clipped and capped", () => {
   assert.equal(memoryDigest({}), "");
   const digest = memoryDigest({
@@ -119,4 +131,9 @@ test("the prompt says Atlas remembers and explains how its GitHub credential is 
   assert.match(prompt, /never claim you cannot remember past conversations/u);
   assert.match(prompt, /Deploy Atlas web to Cloudflare Workers/u);
   assert.match(prompt, /There is no runner to restart/u);
+});
+
+test("project creation tool calls become validated proposals", () => {
+  const result = projectRequestsFromCalls([call({ name: "roofing-crm", template: "web-app", description: "CRM for roofing contractors" }, PROJECT_TOOL_NAME)]);
+  assert.deepEqual(result, { requests: [{ name: "roofing-crm", template: "web-app", description: "CRM for roofing contractors" }], errors: [] });
 });

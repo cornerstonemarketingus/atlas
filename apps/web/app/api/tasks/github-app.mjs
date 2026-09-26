@@ -38,14 +38,16 @@ export async function createGitHubAppJwt(configuration, now = Date.now()) {
   return `${unsigned}.${base64Url(new Uint8Array(signature))}`;
 }
 
-export async function createInstallationToken(configuration, fetcher = fetch) {
+export async function createInstallationToken(configuration, fetcher = fetch, options = {}) {
   const jwt = await createGitHubAppJwt(configuration);
+  const repositories = Array.isArray(options.repositories) ? options.repositories : ["atlas"];
+  const permissions = options.permissions && typeof options.permissions === "object" ? options.permissions : { actions: "write" };
   const response = await fetcher(`${githubApi}/app/installations/${configuration.installationId}/access_tokens`, {
     method: "POST",
     headers: { accept: "application/vnd.github+json", authorization: `Bearer ${jwt}`, "content-type": "application/json", "user-agent": "atlas-control-plane", "x-github-api-version": "2022-11-28" },
     // Keep each token limited to the one currently supported repository and
     // the sole permission needed to dispatch and read Actions runs.
-    body: JSON.stringify({ repositories: ["atlas"], permissions: { actions: "write" } }),
+    body: JSON.stringify({ ...(repositories.length ? { repositories } : {}), permissions }),
   });
   if (!response.ok) throw new Error("GitHub App installation token request failed.");
   const value = await response.json();

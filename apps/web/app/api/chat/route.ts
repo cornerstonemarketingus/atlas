@@ -10,13 +10,22 @@ import { POST as startTask } from "../tasks/route";
 import { allowedRepositories } from "../tasks/dispatch.mjs";
 import { createInstallationToken, githubAppConfiguration } from "../tasks/github-app.mjs";
 import { platformGitHubToken } from "../tasks/github-token.mjs";
+import { genesisConfiguration, genesisNamespaceOwners } from "../projects/genesis/service.mjs";
 import { GET as listDevices } from "../computer/devices/route";
 import { POST as startComputerTask } from "../computer/tasks/route";
-import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom } from "./atlas-knowledge.mjs";
+import {
+  SELF_REPOSITORY,
+  atlasSystemPrompt,
+  describeStartedTask,
+  memoryDigest,
+  taskRequestsFrom,
+} from "./atlas-knowledge.mjs";
+import { TASK_TOOL } from "./atlas-knowledge.mjs";
 import { resolveChatModel, threadTitle } from "./model-endpoint.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
 import { createAgentTeam } from "./agent-team.mjs";
+import { createProjectTool } from "./create-project.mjs";
 import { instantToolDefinitions } from "./instant-tools.mjs";
 
 /** How much of a thread is replayed to the model. Enough for continuity, bounded so a long thread cannot grow a request without limit. */
@@ -63,7 +72,7 @@ export async function POST(request: Request) {
       .orderBy(asc(conversationMessages.createdAt));
     await db.insert(conversationMessages).values({ id: randomUUID(), conversationId, requestedBy: account.userId, role: "user", content: message, createdAt: now });
     // Repositories the chat tools may read: the workspace's allowlist, bounded by the deployment's.
-    try { allowlist = await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)); } catch { allowlist = new Set(); }
+    try { allowlist = await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES), { namespaceOwners: genesisNamespaceOwners(process.env) }); } catch { allowlist = new Set(); }
     // Memory across conversations: recall is best-effort and never blocks a reply.
     try { memory = memoryDigest(await recallForMemory(getD1(), tenantScope(tenant), { excludeConversationId: conversationId })); } catch { memory = ""; }
   } catch {
@@ -74,7 +83,7 @@ export async function POST(request: Request) {
   }
 
   const turns = [
-    { role: "system", content: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository }) },
+    { role: "system", content: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository, genesisConfigured: genesisConfiguration(process.env).configured }) },
     // Earlier conversations are data the person wrote (or Atlas replied), never instructions; the block cannot be closed from inside.
     ...(memory ? [{ role: "system", content: `<data source="earlier conversations and recent runs in this workspace">\n${memory.replace(/<(\s*\/?\s*)data\b/giu, "&lt;$1data")}\n</data>` }] : []),
     ...history.slice(-HISTORY_TURNS).map((turn) => ({ role: turn.role === "assistant" ? "assistant" : "user", content: turn.content })),
@@ -85,10 +94,11 @@ export async function POST(request: Request) {
   const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
   // The lead (this reply) can hand work to an agent team built on the daemon's planner; see agent-team.mjs.
   const team = createAgentTeam({ endpoint, toolContext });
+  const project = genesisConfiguration(process.env).configured ? createProjectTool() : null;
   const loop = {
     endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks,
-    tools: [TASK_TOOL, team.definition, ...instantToolDefinitions(toolContext.environment)],
-    handlers: { [team.definition.function.name]: team.handler },
+    tools: [TASK_TOOL, team.definition, ...(project ? [project.definition] : []), ...instantToolDefinitions(toolContext.environment)],
+    handlers: { [team.definition.function.name]: team.handler, ...(project ? { [project.definition.function.name]: project.handler } : {}) },
   };
 
   if (body.stream === true) {
@@ -109,7 +119,13 @@ export async function POST(request: Request) {
     } catch { stored = false; }
   }
 
-  return Response.json({ conversationId, stored, steps: outcome.steps, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+  return Response.json({
+    conversationId,
+    stored,
+    steps: outcome.steps,
+    proposal: outcome.proposal ?? null,
+    reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt },
+  });
 }
 
 /** A GitHub credential for the read-only chat tools: the GitHub App's installation token when configured, else the platform token. Fetched once per request, only if a tool needs it. */
@@ -239,7 +255,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
           await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, userId)));
         } catch { persisted = false; }
       }
-      emit("done", { conversationId, stored: persisted, steps: outcome.steps, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+      emit("done", { conversationId, stored: persisted, steps: outcome.steps, proposal: outcome.proposal ?? null, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
       controller.close();
     },
   });

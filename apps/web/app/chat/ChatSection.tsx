@@ -14,6 +14,7 @@ import { ThreadRail, useThreads } from "../ThreadRail.js";
 type Message = { id: string; role: string; content: string; createdAt: string };
 type Task = { taskId: string; objective: string; mode: string; status?: string; repository?: string; branch?: string; run?: { id?: number; url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
 type Detail = { messages?: Message[]; tasks?: Task[] };
+type GenesisProposal = { kind: "project_genesis"; name: string; template: "web-app" | "static-site"; description: string };
 
 const STARTERS = [
   { title: "Fix a bug in my project", prompt: "Find the most likely bug in my project, fix it, run the tests, and open a pull request." },
@@ -34,7 +35,9 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
   return items;
 }
 
-type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
+type Suggestion =
+  | { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string }
+  | (GenesisProposal & { reason: string });
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
 type Preview = { kind: "file" | "page"; title: string; content: string; url?: string; repository?: string; path?: string };
 const PANEL_KEY = "atlas.workPanel";
@@ -51,6 +54,16 @@ function itemFromPreview(preview: Preview): WorkItem {
 
 function upsert<T extends { id: string }>(list: T[], item: T) {
   return list.some((existing) => existing.id === item.id) ? list.map((existing) => existing.id === item.id ? item : existing) : [...list, item];
+}
+
+function isGenesisProposal(value: unknown): value is GenesisProposal {
+  return Boolean(value)
+    && typeof value === "object"
+    && value !== null
+    && value.kind === "project_genesis"
+    && typeof (value as GenesisProposal).name === "string"
+    && ["web-app", "static-site"].includes(String((value as GenesisProposal).template))
+    && typeof (value as GenesisProposal).description === "string";
 }
 
 /**
@@ -252,7 +265,7 @@ export function ChatSection() {
         const { value, done } = await reader.read();
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
+          const data = item.data as ({ conversationId?: string; text?: string; message?: string; reply?: Message; proposal?: GenesisProposal | null; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode>) | null;
           if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
           else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
@@ -280,6 +293,9 @@ export function ChatSection() {
             if (agents.length) setAgentLogs((items) => ({ ...items, [reply.id]: agents }));
             addLog({ kind: "note", state: "done", who: "Atlas", text: "✓ reply finished" });
             setMessages((items) => [...items, reply]);
+            if (isGenesisProposal(data.proposal)) {
+              setSuggestion({ ...data.proposal, reason: "Atlas picked a starter template and repository name for your new app." });
+            }
           }
         }
       }
@@ -298,7 +314,7 @@ export function ChatSection() {
 
   function stop() { abortRef.current?.abort(); }
 
-  async function startProjectTask(item: Suggestion) {
+  async function startProjectTask(item: Extract<Suggestion, { kind: "project_task" }>) {
     setSuggestion(null);
     setSending(true);
     try {
@@ -318,7 +334,7 @@ export function ChatSection() {
     }
   }
 
-  async function startComputerTask(item: Suggestion) {
+  async function startComputerTask(item: Extract<Suggestion, { kind: "computer_task" }>) {
     setSuggestion(null);
     setSending(true);
     try {
@@ -338,6 +354,35 @@ export function ChatSection() {
         content: `Started on **${device.name}**${device.status === "online" ? "" : " (it will begin when that computer comes online)"}. I will pause for your approval before anything consequential. Follow it in [Computer control](/automation).` }]);
     } catch {
       setNotice("Atlas could not reach the computer service. Nothing was started.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function startGenesisProject(item: Extract<Suggestion, { kind: "project_genesis" }>) {
+    setSuggestion(null);
+    setSending(true);
+    try {
+      const response = await fetch("/api/projects/genesis", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: item.name, template: item.template, description: item.description }),
+      });
+      const result = await response.json() as { message?: string; repository?: string; branch?: string; url?: string; };
+      if (!response.ok || !result.repository) { setNotice(result.message ?? "Atlas could not create that repository."); return; }
+      window.localStorage.setItem(PROJECT_STORAGE_KEY, result.repository);
+      window.dispatchEvent(new CustomEvent(PROJECT_CHANGE_EVENT, { detail: result.repository }));
+      setRepository(result.repository);
+      setBranch(result.branch ?? "main");
+      setVersion((value) => value + 1);
+      setMessages((items) => [...items, {
+        id: `local-${Date.now()}-genesis`,
+        role: "assistant",
+        createdAt: new Date().toISOString(),
+        content: `Created private repository **${result.repository}** from the **${item.template}** template and connected it to this workspace.${result.url ? ` [Open it ↗](${result.url})` : ""}`,
+      }]);
+    } catch {
+      setNotice("Atlas could not reach the project service. No repository was created.");
     } finally {
       setSending(false);
     }
@@ -389,12 +434,21 @@ export function ChatSection() {
         {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Starting…</p></div></div>}
         {suggestion && <div className="atlas-message suggestion-card"><div className="assistant-avatar"><AtlasMark /></div><div>
           <b>Atlas</b>
-          <p>{suggestion.reason} {suggestion.kind === "project_task" ? <>It will run on <strong>{repository}</strong> ({branch}).</> : <>It will run on your computer and ask you before anything important.</>}</p>
+          <p>{suggestion.reason} {suggestion.kind === "project_task"
+            ? <>It will run on <strong>{repository}</strong> ({branch}).</>
+            : suggestion.kind === "computer_task"
+              ? <>It will run on your computer and ask you before anything important.</>
+              : <>It will create <strong>{suggestion.name}</strong> from the <strong>{suggestion.template}</strong> template and then select it here.</>}</p>
           <div className="suggestion-actions">
-            <button type="button" className="primary" onClick={() => void (suggestion.kind === "project_task" ? startProjectTask(suggestion) : startComputerTask(suggestion))}>
-              {suggestion.kind === "project_task" ? (suggestion.mode === "inspect" ? "Start review" : suggestion.mode === "debug" ? "Start debugging" : "Start task") : "Start on my computer"}
+            <button type="button" className="primary" onClick={() => void (suggestion.kind === "project_task" ? startProjectTask(suggestion) : suggestion.kind === "computer_task" ? startComputerTask(suggestion) : startGenesisProject(suggestion))}>
+              {suggestion.kind === "project_task"
+                ? (suggestion.mode === "inspect" ? "Start review" : suggestion.mode === "debug" ? "Start debugging" : "Start task")
+                : suggestion.kind === "computer_task"
+                  ? "Start on my computer"
+                  : "Create repository"}
             </button>
-            <button type="button" className="secondary" onClick={() => void ask(suggestion.text)}>Just answer in chat</button>
+            {suggestion.kind !== "project_genesis" && <button type="button" className="secondary" onClick={() => void ask(suggestion.text)}>Just answer in chat</button>}
+            {suggestion.kind === "project_genesis" && <button type="button" className="secondary" onClick={() => setSuggestion(null)}>Not now</button>}
           </div>
         </div></div>}
         {tasks.map((task) => <TaskActivity key={task.taskId} task={task} onLog={addLog} onChanges={addItems}
@@ -419,4 +473,3 @@ export function ChatSection() {
     </form>
   </AtlasShell>;
 }
-

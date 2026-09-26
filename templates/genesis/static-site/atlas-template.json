@@ -1,0 +1,11 @@
+{
+  "name": "static-site",
+  "description": "A lightweight static site starter with HTML and CSS.",
+  "stack": ["html", "css"],
+  "commands": {
+    "install": "true",
+    "build": "mkdir -p dist && cp index.html styles.css dist/",
+    "test": "test -f index.html",
+    "dev": "python3 -m http.server 8787"
+  }
+}

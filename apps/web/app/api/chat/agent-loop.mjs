@@ -128,14 +128,14 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
  *   emit: (type: string, data: unknown) => void,
  *   fetcher?: typeof fetch,
  *   tools?: object[],
- *   handlers?: Record<string, ((call: object, helpers: { emit: (type: string, data: unknown) => void }) => Promise<{ ok: boolean, label: string, content: string, preview?: unknown }>) & { pending?: string }>,
+ *   handlers?: Record<string, ((call: object, helpers: { emit: (type: string, data: unknown) => void }) => Promise<{ ok: boolean, label: string, content: string, preview?: unknown, proposal?: { kind: string, name: string, template: string, description: string } | null }>) & { pending?: string }>,
  *   allowTasks?: boolean,
  *   maxRounds?: number,
  *   maxTokens?: number,
  *   agentId?: string,
  *   sleep?: (ms: number) => Promise<void>,
  * }} options
- * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[] } | { error: string, status: number }>}
+ * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[], proposal?: { kind: string, name: string, template: string, description: string } | null } | { error: string, status: number }>}
  */
 export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause }) {
   // Child agents get their own, narrower tool list and no task starting; the lead gets everything.
@@ -147,13 +147,14 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   const taskCalls = [];
   const steps = [];
   let text = "";
+  let proposal = null;
   let toolsSupported = true;
   // Work already done is kept when a later round fails: what was found, plus why it stopped.
   const interrupted = (reason) => {
     const note = `${text.trim() ? "\n\n" : ""}_Stopped early: ${reason}_`;
     text += note;
     emit("delta", { text: note });
-    return { reply: text.trim(), steps };
+    return { reply: text.trim(), steps, proposal };
   };
   let freshFrom = working.length;
   for (let round = 0; round <= maxRounds; round += 1) {
@@ -218,10 +219,11 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       const outcome = handler ? await handler(call, { emit }) : await runInstantTool(call, toolContext);
       emit("tool", { id: call.id, label: outcome.label, state: outcome.ok ? "done" : "failed", ...tag, ...(outcome.preview ? { preview: outcome.preview } : {}) });
       steps.push({ label: outcome.label, ok: outcome.ok });
+      if (outcome.proposal) proposal = outcome.proposal;
       working.push({ role: "tool", tool_call_id: call.id, content: outcome.content });
     }
   }
-  if (!allowTasks) return { reply: text.trim(), steps };
+  if (!allowTasks) return { reply: text.trim(), steps, proposal };
   // Runs the model asked for start after its words, and each gets one line saying whether it started.
   const started = await startTasks(taskRequestsFromCalls(taskCalls.slice(0, 3), { defaultRepository, userMessage }));
   if (started.length) {
@@ -229,5 +231,5 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     text += addition;
     emit("delta", { text: addition });
   }
-  return { reply: text.trim(), steps };
+  return { reply: text.trim(), steps, proposal };
 }

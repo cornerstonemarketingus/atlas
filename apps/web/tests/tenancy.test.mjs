@@ -182,15 +182,17 @@ test("cross-tenant: repository allowlists and merge policies are per tenant, bou
   assert.deepEqual([...await tenantAllowlist(d1, a.tenantId, deployment)], []);
   await upsertTenantRepository(d1, a.tenantId, { owner: "acme", name: "app", mergePolicy: "ci-gated" });
   await upsertTenantRepository(d1, a.tenantId, { owner: "evil", name: "outside", mergePolicy: "manual" });
+  await upsertTenantRepository(d1, a.tenantId, { owner: "genesis", name: "roofing-crm", mergePolicy: "manual" });
   await upsertTenantRepository(d1, b.tenantId, { owner: "acme", name: "app", mergePolicy: "manual" });
   assert.deepEqual([...await tenantAllowlist(d1, a.tenantId, deployment)], ["acme/app"]);
+  assert.deepEqual([...await tenantAllowlist(d1, a.tenantId, deployment, { namespaceOwners: ["genesis"] })].sort(), ["acme/app", "genesis/roofing-crm"]);
   assert.deepEqual([...await tenantAllowlist(d1, b.tenantId, deployment)], ["acme/app"]);
   assert.equal(await tenantMergePolicy(d1, a.tenantId, "acme/app"), "ci-gated");
   assert.equal(await tenantMergePolicy(d1, b.tenantId, "acme/app"), "manual");
   assert.equal(await tenantMergePolicy(d1, b.tenantId, "acme/site"), null);
   // Deleting in one tenant never touches another's row.
   assert.equal(await deleteTenantRepository(d1, b.tenantId, { owner: "evil", name: "outside" }), false);
-  assert.equal((await listTenantRepositories(d1, a.tenantId)).length, 2);
+  assert.equal((await listTenantRepositories(d1, a.tenantId)).length, 3);
   assert.equal(await deleteTenantRepository(d1, b.tenantId, { owner: "acme", name: "app" }), true);
   assert.equal(await tenantMergePolicy(d1, a.tenantId, "acme/app"), "ci-gated");
   sqlite.close();

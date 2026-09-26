@@ -5,6 +5,7 @@ import { allowedRepositories } from "../../tasks/dispatch.mjs";
 import { createInstallationToken, githubAppConfiguration } from "../../tasks/github-app.mjs";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { platformGitHubToken } from "../../tasks/github-token.mjs";
+import { genesisNamespaceOwners } from "../../projects/genesis/service.mjs";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -18,7 +19,7 @@ export async function GET(request: Request) {
     const d1 = getD1();
     const tenant = await resolveTenantContext(request, account, d1);
     if (!tenant) return Response.json({ message: NO_TENANT_MESSAGE }, { status: 403 });
-    repositories = [...await tenantAllowlist(d1, tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES))];
+    repositories = [...await tenantAllowlist(d1, tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES), { namespaceOwners: genesisNamespaceOwners(process.env) })];
   } catch {
     return Response.json({ message: "Your workspace's repositories are unavailable." }, { status: 503 });
   }

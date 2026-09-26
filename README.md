@@ -92,6 +92,9 @@ For production GitHub access, configure a GitHub App using
 `ATLAS_GITHUB_APP_PRIVATE_KEY`, and `ATLAS_GITHUB_APP_SLUG`. Atlas exchanges the
 private key for short-lived installation tokens server-side. A personal token
 remains supported only as a single-operator fallback.
+Project Genesis also needs `ATLAS_GENESIS_REPOSITORY_OWNER` plus
+`ATLAS_GENESIS_REPOSITORY_OWNER_TYPE` (`org` or `user`) so Atlas knows where to
+create and later reconnect brand-new repositories.
 Coder tasks run on autopilot by default: Atlas opens a pull request and merges
 it itself once every CI check on it passes (`ci-gated`), holding it for review
 if a check fails or its own verification finds a regression. A repository's
