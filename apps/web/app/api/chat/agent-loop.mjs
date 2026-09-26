@@ -46,7 +46,7 @@ export function retryAfterMs(headers) {
  * provider asks (when that is short) and retry once, then try the fallback
  * model on the same endpoint. Other statuses are returned as they are.
  */
-async function callModel(endpoint, turns, options) {
+export async function callModel(endpoint, turns, options) {
   let response = await sendModel(endpoint, turns, options);
   if (response.status !== 429) return response;
   const wait = retryAfterMs(response.headers);
@@ -128,7 +128,7 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
  *   emit: (type: string, data: unknown) => void,
  *   fetcher?: typeof fetch,
  *   tools?: object[],
- *   handlers?: Record<string, (call: object, helpers: { emit: (type: string, data: unknown) => void }) => Promise<{ ok: boolean, label: string, content: string, preview?: unknown }>>,
+ *   handlers?: Record<string, ((call: object, helpers: { emit: (type: string, data: unknown) => void }) => Promise<{ ok: boolean, label: string, content: string, preview?: unknown }>) & { pending?: string }>,
  *   allowTasks?: boolean,
  *   maxRounds?: number,
  *   maxTokens?: number,
@@ -214,7 +214,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       }
       used += 1;
       const handler = handlers[call.function.name];
-      emit("tool", { id: call.id, label: handler ? `Running ${call.function.name.replaceAll("_", " ")}…` : pendingLabel(call), state: "running", ...tag });
+      emit("tool", { id: call.id, label: handler ? handler.pending ?? `Running ${call.function.name.replaceAll("_", " ")}…` : pendingLabel(call), state: "running", ...tag });
       const outcome = handler ? await handler(call, { emit }) : await runInstantTool(call, toolContext);
       emit("tool", { id: call.id, label: outcome.label, state: outcome.ok ? "done" : "failed", ...tag, ...(outcome.preview ? { preview: outcome.preview } : {}) });
       steps.push({ label: outcome.label, ok: outcome.ok });

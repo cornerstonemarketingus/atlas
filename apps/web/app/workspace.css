@@ -167,3 +167,90 @@ html[data-atlas-theme="light"] .suggestion-card>div:last-child{background:#fff;b
 .thinking-block{margin:4px 0 10px;border-left:2px solid var(--ws-line);padding:2px 0 2px 12px;color:var(--ws-muted);font-size:13px}
 .thinking-block summary{cursor:pointer;color:#8b958e;font-size:12px}
 .thinking-block p{margin:6px 0 0;white-space:pre-wrap;line-height:1.5;max-height:260px;overflow:auto}
+
+/* --- work panel: terminal + files beside the conversation ------------------ */
+.atlas-shell.has-panel{grid-template-columns:264px minmax(0,1fr) clamp(340px,34vw,560px)}
+.atlas-side-panel{min-width:0;min-height:0;display:grid;grid-template-rows:48px minmax(0,1fr);border-left:1px solid var(--ws-line);background:#0b0d0c}
+.atlas-side-panel-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px 0 12px;border-bottom:1px solid var(--ws-line)}
+.atlas-side-panel-bar [role=tablist]{display:flex;gap:4px}
+.atlas-side-panel-bar [role=tab]{border:0;background:transparent;color:var(--ws-muted);font:600 11px var(--font-geist-mono);text-transform:uppercase;letter-spacing:.04em;padding:8px 10px;border-radius:7px;cursor:pointer}
+.atlas-side-panel-bar [role=tab].active{background:#171b18;color:var(--ws-text)}
+.atlas-side-panel-close{border:0;background:transparent;color:var(--ws-muted);font-size:20px;line-height:1;padding:4px 8px;border-radius:7px;cursor:pointer}.atlas-side-panel-close:hover{background:#171b18;color:var(--ws-text)}
+.panel-toggle{cursor:pointer;background:transparent;color:var(--ws-text)}.panel-toggle.active{color:var(--ws-accent);border-color:#3f5a26}
+.terminal{min-height:0;overflow:auto;padding:12px 14px;font:12.5px/1.6 var(--font-geist-mono),ui-monospace,monospace;color:#c9d1cb}
+.terminal-empty{color:#6b746e;font:12px/1.6 var(--font-geist-mono),monospace;margin:4px 0}
+.terminal-line{display:grid;grid-template-columns:auto auto 1fr;gap:10px;align-items:baseline;white-space:pre-wrap;word-break:break-word}
+.term-time{color:#4d5550;font-size:11px}
+.term-who{color:#8ea3ff;font-weight:600}
+.term-agent .term-who{color:#d7b46a}.term-run .term-who{color:#7fc8c0}
+.term-running .term-text,.term-planning .term-text{color:var(--ws-text)}
+.term-done .term-text{color:#a9c78a}.term-failed .term-text{color:#f0a8a0}.term-unverified .term-text,.term-skipped .term-text{color:#c9b27a}
+.term-note .term-text{color:#8d968f}
+.files-view{min-height:0;display:grid;grid-template-rows:minmax(80px,32%) minmax(0,1fr)}
+.files-list{overflow:auto;border-bottom:1px solid var(--ws-line);padding:8px}
+.files-group{margin:6px 6px 4px;color:#6b746e;font:650 10px var(--font-geist-mono);text-transform:uppercase;letter-spacing:.06em}
+.file-entry,.changed-file{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:8px;align-items:center;width:100%;border:0;background:transparent;color:#c9d1cb;text-align:left;padding:6px 8px;border-radius:7px;font:12px var(--font-geist-mono),monospace;cursor:pointer}
+.file-entry:hover,.file-entry.active,.changed-file:hover{background:#171b18;color:var(--ws-text)}
+.file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-kind{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:5px;font:700 10px var(--font-geist-mono);background:#1c211e;color:#9aa39c}
+.kind-added{background:#18301a;color:#8fd18b}.kind-removed{background:#361a18;color:#f0a8a0}.kind-modified,.kind-changed{background:#2d2a17;color:#e0c774}.kind-renamed,.kind-copied{background:#1a2536;color:#8ea3ff}
+.plus{color:#8fd18b;font-weight:600}.minus{color:#f0a8a0;font-weight:600}
+.file-preview{min-height:0;overflow:auto;padding:12px 14px}
+.preview-head{margin:0 0 10px;font-size:13px;color:var(--ws-text);word-break:break-all}.preview-head small{color:var(--ws-muted)}
+.code-view code,.diff-view code{display:block;font-size:12px;line-height:1.55}
+.code-line{display:block}.line-no{display:inline-block;width:3.2em;margin-right:12px;text-align:right;color:#4d5550;user-select:none}
+.diff-line{display:block}
+.diff-add{background:#12301a;color:#b8e6b0}.diff-del{background:#3a1715;color:#f3bdb6}.diff-hunk{color:#8ea3ff;background:#141a2b}.diff-ctx{color:#aab3ad}
+
+/* --- agent team tree in the conversation --------------------------------- */
+.agent-tree,.agent-children{list-style:none;margin:0;padding:0}
+.agent-tree{margin:0 0 10px;padding:10px 12px;border:1px solid var(--ws-line);border-radius:10px;background:#0f1210;font-size:13px}
+.agent-children{margin:4px 0 2px 8px;padding-left:12px;border-left:1px dashed #2e3530}
+.agent-node{margin:4px 0}
+.agent-line{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
+.agent-line strong{color:var(--ws-text)}
+.agent-title{color:#aab3ad;flex:1 1 200px;min-width:0}
+.agent-line small{color:#6b746e;font:550 10px var(--font-geist-mono);text-transform:uppercase}
+.agent-mark{color:var(--ws-accent);width:14px;display:inline-block}
+.agent-running .agent-mark,.agent-planning .agent-mark,.agent-verifying .agent-mark{animation:atlas-pulse 1.2s ease-in-out infinite}
+.agent-failed .agent-mark{color:#f0a8a0}.agent-unverified .agent-mark,.agent-skipped .agent-mark{color:#c9b27a}
+.agent-tools{list-style:none;margin:3px 0 3px 22px;padding:0;display:grid;gap:2px;font:12px var(--font-geist-mono),monospace;color:#9aa39c}
+.agent-tools li{display:grid;grid-template-columns:16px 1fr;gap:6px}
+.agent-tools li.done span{color:var(--ws-accent)}.agent-tools li.failed span{color:#f0a8a0}.agent-tools li.running{color:var(--ws-text)}
+@keyframes atlas-pulse{50%{opacity:.35}}
+
+/* --- edited files on a coder run ----------------------------------------- */
+.changed-files{margin:8px 0;border:1px solid var(--ws-line);border-radius:10px;padding:8px;background:#0f1210}
+.changed-files ul{list-style:none;margin:0;padding:0}
+.changed-files li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.changed-files li>pre{grid-column:1/-1;margin:4px 0 8px}
+.changed-head{margin:2px 6px 6px;font-size:13px;color:var(--ws-text)}
+.open-in-panel{border:0;background:transparent;color:var(--ws-muted);cursor:pointer;padding:4px 8px;border-radius:6px}.open-in-panel:hover{color:var(--ws-text);background:#171b18}
+
+/* --- richer markdown ------------------------------------------------------ */
+.md-body .md-h1{font-size:20px}.md-body .md-h2{font-size:17px}.md-body .md-h3{font-size:15px}.md-body .md-h4{font-size:14px;color:var(--ws-muted)}
+.md-body .md-heading{font-weight:700;margin:14px 0 6px;color:var(--ws-text)}
+.md-body .md-rule{border:0;border-top:1px solid var(--ws-line);margin:14px 0}
+.md-body .md-quote{margin:10px 0;padding:2px 0 2px 12px;border-left:3px solid #3f5a26;color:#aab3ad}
+.md-body .md-table-wrap{overflow-x:auto;margin:10px 0}
+.md-body .md-table{border-collapse:collapse;font-size:13px;min-width:50%}
+.md-body .md-table th,.md-body .md-table td{border:1px solid var(--ws-line);padding:6px 10px;vertical-align:top}
+.md-body .md-table th{background:#141815;font-weight:650}
+.md-body .md-check{color:var(--ws-muted)}.md-body .md-check.checked{color:var(--ws-accent)}
+.md-code-wrap{margin:10px 0 0;border:1px solid #2a302c;border-radius:10px;overflow:hidden;background:#0c0e0d}
+.md-code-bar{display:flex;justify-content:space-between;align-items:center;padding:5px 10px;border-bottom:1px solid #2a302c;color:#6b746e;font:600 10px var(--font-geist-mono);text-transform:uppercase}
+.md-code-bar button{border:0;background:transparent;color:#8d968f;font:600 10px var(--font-geist-mono);cursor:pointer;text-transform:uppercase}.md-code-bar button:hover{color:var(--ws-text)}
+.md-code-wrap .md-code{margin:0;border:0;border-radius:0}
+
+html[data-atlas-theme="light"] .atlas-side-panel,html[data-atlas-theme="light"] .agent-tree,html[data-atlas-theme="light"] .changed-files{background:#fbfaf6}
+html[data-atlas-theme="light"] .terminal{background:#111412}
+html[data-atlas-theme="light"] .md-code-wrap{background:#f3f1ea;border-color:#d7d4cb}
+
+@media(max-width:1080px){
+  .atlas-shell.has-panel{grid-template-columns:228px minmax(0,1fr)}
+  .atlas-side-panel{position:fixed;z-index:40;top:0;right:0;bottom:0;width:min(560px,100vw);box-shadow:-24px 0 60px #000a}
+}
+@media(max-width:760px){
+  .atlas-shell.has-panel{grid-template-columns:minmax(0,1fr)}
+}
+.agent-tree,.agent-tools,.terminal-line{overflow-wrap:anywhere}

@@ -169,7 +169,7 @@ function parseArguments(call) {
  *
  * @param {{ function?: { name?: string, arguments?: unknown } }} call
  * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined> }} context
- * @returns {Promise<{ ok: boolean, label: string, content: string }>}
+ * @returns {Promise<{ ok: boolean, label: string, content: string, preview?: { kind: "file" | "page", title: string, content: string, url?: string, repository?: string, path?: string } }>}
  */
 export async function runInstantTool(call, context = {}) {
   const name = call?.function?.name ?? "";
@@ -204,7 +204,11 @@ async function readWebPage(args, fetcher) {
   if (!/text\/|json|xml/iu.test(type)) return { ok: false, label: `Skipped ${shown}`, content: `The page is ${type || "an unknown type"}, not text.` };
   const raw = await readBounded(response, MAX_PAGE_BYTES);
   const { title, text } = /html/iu.test(type) ? htmlToText(raw) : { title: "", text: raw };
-  return { ok: true, label: `Read ${title ? `“${title.slice(0, 80)}”` : shown}`, content: asData(`web page ${finalUrl.toString()}`, clip(`${title ? `${title}\n\n` : ""}${text}`, MAX_TOOL_CHARS)) };
+  const pageText = clip(`${title ? `${title}\n\n` : ""}${text}`, MAX_TOOL_CHARS);
+  return {
+    ok: true, label: `Read ${title ? `“${title.slice(0, 80)}”` : shown}`, content: asData(`web page ${finalUrl.toString()}`, pageText),
+    preview: { kind: "page", title: title || shown, url: finalUrl.toString(), content: pageText },
+  };
 }
 
 async function webSearch(args, fetcher, environment) {
@@ -264,7 +268,11 @@ async function readRepositoryFile(args, fetcher, context) {
   const bytes = Uint8Array.from(atob(body.content.replace(/\s+/gu, "")), (character) => character.charCodeAt(0));
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   if (text.includes("\u0000")) return { ok: false, label: `Skipped ${shown}`, content: "The file is binary." };
-  return { ok: true, label: `Read ${shown}`, content: asData(`repository ${access.repository} file ${path}`, clip(text, MAX_FILE_CHARS)) };
+  const fileText = clip(text, MAX_FILE_CHARS);
+  return {
+    ok: true, label: `Read ${shown}`, content: asData(`repository ${access.repository} file ${path}`, fileText),
+    preview: { kind: "file", title: path, repository: access.repository, path, content: fileText },
+  };
 }
 
 async function searchRepositoryCode(args, fetcher, context) {
