@@ -15,6 +15,16 @@ found during the audit.
 | **Verification** | `tests/chat-intent.test.mjs` (the message classifies as chat); `tests/dispatch.test.mjs` (the objective is refused for coder mode; concrete objectives, including the hosted smoke check's, still pass); headless-Chromium run of the chat box against a local worker. |
 | **Remaining risk** | The objective check is a heuristic: a concrete-sounding but still vague objective can pass, and the runner's turn limit remains the backstop. |
 
+## 1b. Task creation returns HTTP 502 in production (OPEN — owner action)
+
+| | |
+|---|---|
+| **Symptom** | `verify-hosted.yml` (inspect mode) run 36203794563 on 2026-09-26: setup reported "ready (8/8)", then `POST /api/tasks` answered **HTTP 502**. No runner started. Chat (run 36201960356) still works. |
+| **Evidence** | The deploy log shows the GitHub App secrets are not configured, so dispatch uses `ATLAS_GITHUB_TOKEN`. The route returns 502 only when GitHub refuses the dispatch (non-2xx) or cannot be reached. The request shape and workflow inputs match `main` (`task_id`, `repository`, `branch`, `mode`, `objective`, `merge_policy` for coder, `correlation_id`), and the last successful web dispatches were on 2026-09-25 before 03:25 UTC. |
+| **Most likely cause** | The `ATLAS_GITHUB_TOKEN` credential has expired, been revoked, or lost Actions write access — an **external configuration** problem, not a code defect. It cannot be confirmed from this session: the secret is not readable here and the deployed code returned only a generic message. |
+| **Fix in code** | Task creation now says which of the four causes it is (401 expired/revoked, 403 permission, 404 not visible, 422 input mismatch) with the minimum fix; `/api/setup/status` performs a live, read-only check of the credential against the workflow instead of reporting "ready" when a secret merely exists; the smoke check prints that diagnosis. |
+| **Owner action** | Rotate `ATLAS_GITHUB_TOKEN` (fine-grained token with *Actions: read and write* and *Contents: read* on the allowed repositories), or configure the GitHub App (`ATLAS_GITHUB_APP_ID`, `ATLAS_GITHUB_INSTALLATION_ID`, `ATLAS_GITHUB_APP_PRIVATE_KEY`, `ATLAS_GITHUB_APP_SLUG`); redeploy; run *Verify hosted Atlas* in `inspect` mode. |
+
 ## 2. Hosted approval could authorize two actions (SEC-5)
 
 | | |

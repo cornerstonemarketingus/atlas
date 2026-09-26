@@ -4,6 +4,7 @@ import { getDb } from "../../../db";
 import { conversationMessages, conversations, repositories, runEvents, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
+import { explainGitHubFailure } from "./github-diagnosis.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
 import {
   fetchGitHubJson,
@@ -72,17 +73,20 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
     const githubApp = githubAppConfiguration();
     if (githubApp.configured) githubToken = await createInstallationToken(githubApp);
   } catch {
-    return Response.json({ message: "GitHub App authentication is temporarily unavailable." }, { status: 502 });
+    return Response.json({ message: "GitHub App authentication failed, so nothing was started.", code: "GITHUB_APP_AUTH_FAILED", blocked: "BLOCKED_BY_MISSING_CREDENTIAL", unblock: "Check the ATLAS_GITHUB_APP_* secrets (app id, installation id, private key) and redeploy." }, { status: 502 });
   }
   if (githubToken) {
     try {
       const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
       const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy, correlationId });
-      if (!response.ok) return Response.json({ message: "GitHub Actions rejected the task dispatch." }, { status: 502 });
+      if (!response.ok) {
+        const failure = explainGitHubFailure(response.status, { workflow, repository: task.repository });
+        return Response.json({ ...failure, message: `${failure.message} Nothing was started.` }, { status: 502 });
+      }
       const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "managed", correlationId);
       return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "managed", recorded }, { status: 202 });
     } catch {
-      return Response.json({ message: "GitHub Actions is temporarily unavailable." }, { status: 502 });
+      return Response.json({ ...explainGitHubFailure(503), message: "GitHub could not be reached, so nothing was started." }, { status: 502 });
     }
   }
   const endpoint = process.env.ATLAS_AGENT_DISPATCH_URL;

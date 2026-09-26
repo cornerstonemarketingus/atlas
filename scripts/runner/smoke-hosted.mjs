@@ -6,8 +6,11 @@ async function api(route, body) {
   if (!response.ok) {
     // A repository-settings error carries a schema diagnostic, not model or
     // user content. Preserve only that bounded message for setup diagnosis.
-    const detail = route === "/api/settings/repositories" ? await response.json().catch(() => ({})) : {};
-    throw new Error(`${route}: HTTP ${response.status}${typeof detail.message === "string" ? ` (${detail.message.slice(0, 500)})` : ""}`);
+    // Task creation answers with a fixed, user-content-free diagnosis
+    // (e.g. "GitHub rejected Atlas's credential"), which is what an operator
+    // needs to fix a failed run; print it with the status.
+    const detail = route === "/api/settings/repositories" || route === "/api/tasks" ? await response.json().catch(() => ({})) : {};
+    throw new Error(`${route}: HTTP ${response.status}${typeof detail.message === "string" ? ` (${detail.message.slice(0, 500)})` : ""}${typeof detail.unblock === "string" ? ` — ${detail.unblock.slice(0, 300)}` : ""}`);
   }
   return response.json();
 }
