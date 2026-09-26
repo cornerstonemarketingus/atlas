@@ -94,6 +94,8 @@ test("the system prompt tells the model to choose the capability itself and to b
   assert.match(prompt, /never ask them to pick a mode/u);
   assert.match(prompt, /"computer" does browser or desktop work/u);
   assert.match(prompt, /every Monday/u);
+  assert.match(prompt, /why CI failed/u);
+  assert.match(prompt, /quotes the failing test and error/u);
 });
 
 test("memory digest recalls other conversations and runs, clipped and capped", () => {

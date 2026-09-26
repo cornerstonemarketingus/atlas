@@ -48,6 +48,7 @@ export async function POST(request: Request) {
   let memory = "";
   let stored = true;
   let allowlist = new Set<string>();
+  let scope: { tenantId: number; principal: string } | null = null;
   try {
     // Tenancy (#71): threads belong to the caller's tenant; an id owned by another tenant or principal is never written to.
     const tenant = await resolveTenantContext(request, account, getD1());
@@ -61,6 +62,7 @@ export async function POST(request: Request) {
       .orderBy(asc(conversationMessages.createdAt));
     await db.insert(conversationMessages).values({ id: randomUUID(), conversationId, requestedBy: account.userId, role: "user", content: message, createdAt: now });
     // Repositories the chat tools may read: the workspace's allowlist, bounded by the deployment's.
+    scope = tenantScope(tenant);
     try { allowlist = await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)); } catch { allowlist = new Set(); }
     // Memory across conversations: recall is best-effort and never blocks a reply.
     try { memory = memoryDigest(await recallForMemory(getD1(), tenantScope(tenant), { excludeConversationId: conversationId })); } catch { memory = ""; }
@@ -80,7 +82,13 @@ export async function POST(request: Request) {
   ];
 
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
-  const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
+  const toolContext = {
+    environment: process.env as Record<string, string | undefined>,
+    allowlist,
+    githubToken: memoizedGitHubToken(),
+    d1: getD1(),
+    taskScope: scope,
+  };
   const loop = { endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks };
 
   if (body.stream === true) {
@@ -104,16 +112,18 @@ export async function POST(request: Request) {
   return Response.json({ conversationId, stored, steps: outcome.steps, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
 }
 
-/** A GitHub credential for the read-only chat tools: the GitHub App's installation token when configured, else the platform token. Fetched once per request, only if a tool needs it. */
+/** A GitHub credential for the read-only chat tools: prefer the broader platform token when present, else fall back to the app installation token. Fetched once per request, only if a tool needs it. */
 function memoizedGitHubToken() {
   let pending: Promise<string | undefined> | null = null;
   return () => {
     pending ??= (async () => {
+      const platformToken = platformGitHubToken();
+      if (platformToken) return platformToken;
       try {
         const configuration = githubAppConfiguration();
         if (configuration.configured) return await createInstallationToken(configuration);
-      } catch { /* fall back to the platform token */ }
-      return platformGitHubToken();
+      } catch { /* no GitHub credential available */ }
+      return undefined;
     })();
     return pending;
   };
