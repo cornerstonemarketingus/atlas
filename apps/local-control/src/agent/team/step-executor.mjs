@@ -211,8 +211,10 @@ async function runAuthorizedTool({ call, allowedTools, authorizedExecutor, appro
   };
   let result = await authorizedExecutor.invoke({ ...request, signal });
   if (result.status === "awaiting_approval" && approvals?.request && result.approvalId) {
+    const platformApproval = platformStore.getApproval(TENANT, result.approvalId);
+    const actionDigest = platformApproval?.actionDigest ?? result.approvalId;
     const approval = approvals.request({
-      digest: result.approvalId,
+      digest: actionDigest,
       capability: call.name,
       summary: `${agent.name} wants to use ${call.name}: ${summarizeInput(input)}`,
       sessionId: meta.rootTaskId,
@@ -221,7 +223,12 @@ async function runAuthorizedTool({ call, allowedTools, authorizedExecutor, appro
       const decision = await waitForDecision({ approvals, id: approval.id, checkpoint, signal, waitMs: approvals.waitMs ?? APPROVAL_WAIT_MS });
       if (decision === "approved") {
         platformStore.resolveApproval(TENANT, result.approvalId, { decision: "approved", resolvedBy: "local-owner" });
-        result = await authorizedExecutor.invoke({ ...request, approvalId: result.approvalId, signal });
+        if (typeof approvals.check === "function" && !await approvals.check(actionDigest)) {
+          platformStore.resolveApproval(TENANT, result.approvalId, { decision: "rejected", resolvedBy: "local-owner", reason: "The compatibility approval could not be consumed." });
+          result = { status: "denied", result: { error: { code: "APPROVAL_NOT_CONSUMED", message: "The approval could not be consumed exactly once." } } };
+        } else {
+          result = await authorizedExecutor.invoke({ ...request, approvalId: result.approvalId, signal });
+        }
       } else {
         platformStore.resolveApproval(TENANT, result.approvalId, { decision: decision === "denied" ? "rejected" : "expired", resolvedBy: "local-owner" });
       }
