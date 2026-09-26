@@ -100,6 +100,8 @@ export const installations = sqliteTable("installations", {
 
 export const repositories = sqliteTable("repositories", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  // Tenancy (0015_tenants): nullable only for the backfill; new rows always carry it.
+  tenantId: integer("tenant_id").references(() => tenants.id),
   installationId: integer("installation_id").references(() => installations.id),
   owner: text("owner").notNull(),
   name: text("name").notNull(),
@@ -107,7 +109,7 @@ export const repositories = sqliteTable("repositories", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
-  ownerNameIndex: uniqueIndex("repositories_owner_name_idx").on(table.owner, table.name),
+  tenantOwnerNameIndex: uniqueIndex("repositories_tenant_owner_name_idx").on(table.tenantId, table.owner, table.name),
 }));
 
 /**
@@ -131,6 +133,8 @@ export const repositories = sqliteTable("repositories", {
  */
 export const tasks = sqliteTable("tasks", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  // Tenancy (0015_tenants): nullable only for the backfill; new rows always carry it.
+  tenantId: integer("tenant_id").references(() => tenants.id),
   taskId: text("task_id").notNull(),
   userId: integer("user_id").references(() => users.id),
   requestedBy: text("requested_by").notNull(),
@@ -191,6 +195,8 @@ export const automationRuns = sqliteTable("automation_runs", {
 
 export const conversations = sqliteTable("conversations", {
   id: text("id").primaryKey(),
+  // Tenancy (0015_tenants): nullable only for the backfill; new rows always carry it.
+  tenantId: integer("tenant_id").references(() => tenants.id),
   requestedBy: text("requested_by").notNull(),
   title: text("title").notNull(),
   repository: text("repository").notNull(),
@@ -225,6 +231,8 @@ export const runEvents = sqliteTable("run_events", {
 /** A paired executor. Secrets are returned once and only their SHA-256 digest is stored. */
 export const computerDevices = sqliteTable("computer_devices", {
   id: text("id").primaryKey(),
+  // Tenancy (0015_tenants): nullable only for the backfill; new rows always carry it.
+  tenantId: integer("tenant_id").references(() => tenants.id),
   requestedBy: text("requested_by").notNull(),
   name: text("name").notNull(),
   platform: text("platform").notNull().default("windows"),
@@ -265,6 +273,8 @@ export const computerTasks = sqliteTable("computer_tasks", {
 /** Exact, one-time approval requested before a companion performs a consequential action. */
 export const computerApprovals = sqliteTable("computer_approvals", {
   id: text("id").primaryKey(),
+  // Tenancy (0015_tenants): nullable only for the backfill; new rows always carry it.
+  tenantId: integer("tenant_id").references(() => tenants.id),
   taskId: text("task_id").notNull().references(() => computerTasks.id),
   requestedBy: text("requested_by").notNull(),
   actionHash: text("action_hash").notNull(),
@@ -326,3 +336,36 @@ export const sessionRevocations = sqliteTable("session_revocations", {
   revokedBefore: integer("revoked_before").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+/**
+ * Tenancy (migration 0015_tenants, #71). Tenant-scoped queries live in
+ * db/tenancy.mjs. The "default" tenant is owned by the deployment owner
+ * (principal "operator") and holds every pre-tenancy row; users who sign up
+ * later get a "personal" tenant (slug "user-<id>").
+ */
+export const TENANT_ROLES = ["owner", "admin", "member"] as const;
+export type TenantRole = (typeof TENANT_ROLES)[number];
+
+export const tenants = sqliteTable("tenants", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  slug: text("slug").notNull(),
+  name: text("name").notNull(),
+  kind: text("kind").notNull().default("personal"),
+  ownerPrincipal: text("owner_principal").notNull(),
+  personalUserId: integer("personal_user_id").references(() => users.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  slugIndex: uniqueIndex("tenants_slug_idx").on(table.slug),
+  personalUserIndex: uniqueIndex("tenants_personal_user_idx").on(table.personalUserId),
+}));
+
+export const tenantMembers = sqliteTable("tenant_members", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull().references(() => tenants.id),
+  userId: integer("user_id").notNull().references(() => users.id),
+  role: text("role").notNull().default("member"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  tenantUserIndex: uniqueIndex("tenant_members_tenant_user_idx").on(table.tenantId, table.userId),
+  userIndex: index("tenant_members_user_idx").on(table.userId),
+}));

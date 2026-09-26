@@ -44,7 +44,7 @@ function latestStep(task: Task) {
   return step ? step.summary : null;
 }
 
-/** Tasks: supervised browser and desktop work on a paired computer, or an entitled hosted browser. */
+/** Computer: supervised browser and desktop work on a paired computer, or an entitled hosted browser. */
 export function AutomationSection() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -211,7 +211,7 @@ export function AutomationSection() {
     <div className="section-scroll">
       <div className="section-page">
         <header className="page-head">
-          <h1>Tasks</h1>
+          <h1>Computer control</h1>
           <p>Work Atlas does for you on your computer, in the browser or in desktop apps.</p>
           <button className="page-action task-primary" type="button" onClick={startTask}>＋ New task</button>
         </header>

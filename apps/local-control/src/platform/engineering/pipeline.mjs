@@ -81,17 +81,28 @@ export function judgeCheck(kind, outcome) {
 // --------------------------------------------------------------------------
 // Command runners
 
+const ISOLATING_RUNNERS = new Set(["container", "namespaces"]);
+
 /**
  * The default command runner: the platform TerminalController. Worktrees are
  * placed inside controller workspaces (`prepareDirectory`), so checks run
  * under its policy — no shell, rebuilt environment, timeouts, output caps,
  * redaction. High-risk commands are not approved here and come back as
  * `requires_approval`, which judges as a failed check.
+ *
+ * `requireIsolation: true` (use it for untrusted repositories) refuses a
+ * controller that would run commands with the plain process runner; the
+ * controller must be configured with `container` or `namespaces`.
  */
-export function createTerminalCommandRunner({ controller, tenantId = "engineering" }) {
+export function createTerminalCommandRunner({ controller, tenantId = "engineering", requireIsolation = false }) {
+  const isolation = controller.isolation ?? "process";
+  if (requireIsolation === true && !ISOLATING_RUNNERS.has(isolation)) {
+    throw new EngineeringWorkflowError("ISOLATION_REQUIRED", `Isolation is required but the terminal controller uses the '${isolation}' runner; configure container or namespaces.`);
+  }
   const workspaces = new Map();
   return {
     kind: "terminal-controller",
+    isolation,
     prepareDirectory({ taskId, name }) {
       const workspace = controller.createWorkspace({ tenantId, taskId: `${taskId}-${name}` });
       const directory = realOrResolved(workspace.directory);
@@ -158,8 +169,10 @@ export class EngineeringWorkflow {
    * @param {object} [options.commandRunner]  `{ run({cwd, argv}), prepareDirectory?, releaseDirectory? }`; default TerminalController
    * @param {Function} [options.createPullRequest]  async (payload) => { url, number }
    * @param {string[]} [options.forbiddenPaths]
+   * @param {boolean} [options.requireIsolation]  refuse to run checks unless commands are sandboxed (container or namespaces)
+   * @param {object} [options.terminal]  extra TerminalController options for the default runner, e.g. `{ namespaces: true }`
    */
-  constructor({ repository, workDirectory, ownership, coders, commandRunner = undefined, createPullRequest = undefined, forbiddenPaths = DEFAULT_FORBIDDEN_PATHS, identity = undefined, now = () => new Date() } = {}) {
+  constructor({ repository, workDirectory, ownership, coders, commandRunner = undefined, createPullRequest = undefined, forbiddenPaths = DEFAULT_FORBIDDEN_PATHS, identity = undefined, now = () => new Date(), requireIsolation = false, terminal = {} } = {}) {
     if (!ownership?.order) throw new EngineeringWorkflowError("INVALID_INPUT", "An ownership plan is required.");
     if (!coders || typeof coders !== "object") throw new EngineeringWorkflowError("INVALID_INPUT", "coders must map roles to functions.");
     if (typeof workDirectory !== "string" || !workDirectory) throw new EngineeringWorkflowError("INVALID_INPUT", "workDirectory is required.");
@@ -167,10 +180,19 @@ export class EngineeringWorkflow {
     this.#ownership = ownership;
     this.#coders = coders;
     if (commandRunner) {
+      // A custom runner must declare its isolation to satisfy the requirement.
+      if (requireIsolation === true && !ISOLATING_RUNNERS.has(commandRunner.isolation)) {
+        throw new EngineeringWorkflowError("ISOLATION_REQUIRED", "Isolation is required but the command runner does not declare isolation 'container' or 'namespaces'.");
+      }
       this.#runner = commandRunner;
     } else {
-      this.#ownsController = new TerminalController({ rootDirectory: join(workDirectory, "terminal") });
-      this.#runner = createTerminalCommandRunner({ controller: this.#ownsController });
+      try {
+        this.#ownsController = new TerminalController({ ...terminal, requireIsolation, rootDirectory: join(workDirectory, "terminal") });
+      } catch (error) {
+        if (error?.code === "ISOLATION_REQUIRED") throw new EngineeringWorkflowError("ISOLATION_REQUIRED", error.message);
+        throw error;
+      }
+      this.#runner = createTerminalCommandRunner({ controller: this.#ownsController, requireIsolation });
     }
     this.#createPullRequest = createPullRequest;
     this.#forbiddenPaths = forbiddenPaths;

@@ -6,6 +6,7 @@ import { createInstallationToken, githubAppConfiguration } from "../../tasks/git
 import { allowedRepositories } from "../../tasks/dispatch.mjs";
 import { probeGitHubDispatch } from "../../tasks/github-diagnosis.mjs";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
+import { platformGitHubToken } from "../../tasks/github-token.mjs";
 
 type StepState = "complete" | "action-required" | "failed";
 
@@ -35,7 +36,7 @@ function step(id: string, label: string, complete: boolean, detail: string, acti
 
 async function githubDispatchReadiness(githubApp: ReturnType<typeof githubAppConfiguration>) {
   const [repository = "cornerstonemarketingus/atlas"] = [...allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)];
-  let token = process.env.ATLAS_GITHUB_TOKEN;
+  let token = platformGitHubToken();
   try {
     if (githubApp.configured) token = await createInstallationToken(githubApp);
   } catch {
@@ -54,7 +55,7 @@ export async function GET(request: Request) {
   const githubApp = githubAppConfiguration();
   const database = await databaseReadiness();
   const sessionSecretConfigured = Boolean(process.env.ATLAS_SESSION_SECRET);
-  const githubDispatchConfigured = githubApp.configured || Boolean(process.env.ATLAS_GITHUB_TOKEN);
+  const githubDispatchConfigured = githubApp.configured || Boolean(platformGitHubToken());
   const workerSecretsConfigured = sessionSecretConfigured && githubOAuth.configured && githubDispatchConfigured;
   // "Ready" means the credential works, not merely that one is set: a
   // read-only look at the workflow Atlas would dispatch.

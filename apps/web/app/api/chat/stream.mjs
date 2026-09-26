@@ -9,7 +9,9 @@
 /**
  * Incremental parser for `data: {...}` lines. Feed it decoded text chunks in
  * any split; it returns the text deltas found so far and whether the server
- * signalled the end. Reasoning fields are ignored on purpose.
+ * signalled the end. Reasoning ("thinking") text is kept apart from the
+ * answer: collected here and drained with `drainReasoning()`, so it can be
+ * shown as thinking and never becomes part of the stored reply.
  */
 export function createDeltaParser() {
   let buffer = "";
@@ -17,8 +19,15 @@ export function createDeltaParser() {
   // Tool calls arrive in pieces keyed by index: the name once, the JSON
   // arguments split across many chunks. They are assembled, never streamed.
   const calls = new Map();
+  let reasoning = "";
   return {
     get done() { return done; },
+    /** Thinking text received since the last drain. */
+    drainReasoning() {
+      const text = reasoning;
+      reasoning = "";
+      return text;
+    },
     /** Tool calls assembled so far, in the chat-completions message shape. */
     get toolCalls() {
       return [...calls.entries()].sort(([a], [b]) => a - b)
@@ -49,6 +58,8 @@ export function createDeltaParser() {
             calls.set(index, call);
           }
         }
+        const thought = choice?.delta?.reasoning ?? choice?.delta?.reasoning_content;
+        if (typeof thought === "string" && thought) reasoning += thought;
         const content = choice?.delta?.content ?? choice?.message?.content;
         if (typeof content === "string" && content) deltas.push(content);
         else if (Array.isArray(content)) {
