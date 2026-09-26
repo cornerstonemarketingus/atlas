@@ -7,6 +7,36 @@ long-term product while preserving an incremental build order. A checked item
 means it has been implemented and validated; an unchecked item is not a claim
 that the capability works.
 
+## Current state (2026-09-26)
+
+Working end-to-end today:
+- Chat-first product flow: Atlas chat can read/search, reason, show thinking/live
+  run steps, and start coder/inspect/debug/computer tasks (evidence:
+  `apps/web/tests/chat-agent-loop.test.mjs`,
+  `apps/web/tests/chat-instant-tools.test.mjs`,
+  `apps/web/tests/run-activity.test.mjs`,
+  `apps/web/tests/chat-atlas-knowledge.test.mjs`).
+- Local daemon foundations are live: container + namespace terminal isolation,
+  orchestrator families, MCP over HTTP, Atlas MCP server, and tenancy-scoped
+  storage/routes (evidence: `apps/local-control/tests/container-sandbox.test.mjs`,
+  `apps/local-control/tests/platform-terminal-namespaces.test.mjs`,
+  `apps/local-control/tests/platform-orchestrator.test.mjs`,
+  `apps/local-control/tests/platform-mcp-http.test.mjs`,
+  `apps/local-control/tests/platform-mcp-server.test.mjs`,
+  `apps/web/tests/tenancy.test.mjs`).
+
+Top 10 gaps (from `docs/COPILOT-PLAN.md`):
+1. Project Genesis prompt→deployed app ([#94](https://github.com/cornerstonemarketingus/atlas/issues/94), [#95](https://github.com/cornerstonemarketingus/atlas/issues/95), [#96](https://github.com/cornerstonemarketingus/atlas/issues/96), [#74](https://github.com/cornerstonemarketingus/atlas/issues/74))
+2. Multi-agent supervisor missions ([#87](https://github.com/cornerstonemarketingus/atlas/issues/87))
+3. Production-ready computer control ([#91](https://github.com/cornerstonemarketingus/atlas/issues/91))
+4. CI/review-aware coding loop with self-repair ([#83](https://github.com/cornerstonemarketingus/atlas/issues/83), [#86](https://github.com/cornerstonemarketingus/atlas/issues/86))
+5. Persistent engineering memory quality ([#82](https://github.com/cornerstonemarketingus/atlas/issues/82))
+6. Sandboxes that fully support dev workflows ([#92](https://github.com/cornerstonemarketingus/atlas/issues/92))
+7. Universal model router with fallback ([#84](https://github.com/cornerstonemarketingus/atlas/issues/84))
+8. MCP server and Skills ecosystem ([#93](https://github.com/cornerstonemarketingus/atlas/issues/93))
+9. Persistent automations runtime ([#75](https://github.com/cornerstonemarketingus/atlas/issues/75))
+10. Unified conversation UI follow-ons (uploads/vision and compute/artifacts) ([#88](https://github.com/cornerstonemarketingus/atlas/issues/88), [#89](https://github.com/cornerstonemarketingus/atlas/issues/89))
+
 ## Product thesis
 
 Atlas will be a local-first, AI-native software engineering platform spanning a
@@ -382,7 +412,12 @@ measurable quality, and transparent cost control.
 - [ ] Add authentication, organizations, teams, projects, and role-based access.
 - [ ] Add repository connection and workspace provisioning.
 - [ ] Add file tree, editor, search, symbols, terminal, preview, and Git panels.
-- [ ] Add chat, plans, tasks, approvals, diffs, tests, and agent activity views.
+- [x] Add unified chat + task start flow with live activity and thinking display
+      (evidence: `apps/web/tests/chat-agent-loop.test.mjs`,
+      `apps/web/tests/run-activity.test.mjs`,
+      `apps/web/tests/chat-atlas-knowledge.test.mjs`).
+- [ ] Add approvals, diffs, and test/result detail views inside the same
+      conversation workspace.
 - [ ] Add collaborative presence, comments, and handoff.
 - [ ] Add accessible keyboard navigation and responsive layouts.
 - [ ] Add real-time event streaming with reconnect and replay.
@@ -579,11 +614,12 @@ What still stops Atlas from doing a job end to end, with who owns each item.
 
 ### Claude (local daemon and agent runtime)
 
-- [x] Prompt-injection provenance (SEC-11, P7-4): tool output, memory and
-      earlier-step reports enter daemon model turns as a labelled
-      `<data source>` block they cannot close; instruction-shaped text is
-      flagged; `tests/fixtures/injection-corpus.json` guards regressions.
-      Still open: the Windows companion and hosted chat.
+- [x] Prompt-injection provenance (SEC-11, P7-4) in daemon model turns: tool
+      output, memory and earlier-step reports are wrapped as labelled
+      `<data source>` blocks and instruction-shaped text is flagged (evidence:
+      `apps/local-control/tests/untrusted.test.mjs`).
+- [ ] Extend the same prompt-injection provenance protections to the Windows
+      companion and hosted chat surfaces.
 - [ ] `AuthorizedToolExecutor` as the only execution path for daemon tools,
       with durable budgets and idempotency keys. Team steps route through it
       since #66; the conversation loop does not yet.
@@ -595,27 +631,40 @@ What still stops Atlas from doing a job end to end, with who owns each item.
       delete scoped memory through the existing `GET/DELETE /v1/knowledge`.
 - [ ] Actions-minutes visibility (SEC-15, P7-5): report the budget guard's
       state, including when it failed open, with the task result.
-- [ ] Finish the six in-progress workstreams and land them on top of main.
-      Done on this branch: planning/voice/workers, MCP over HTTP and the Atlas
-      MCP server, orchestrator adapters, namespace terminal runner, desktop
-      safety layer (not yet registered in `main.mjs`), tenancy (#71).
+- [x] Land planning/voice/workers workstreams on `main` (evidence:
+      `apps/local-control/tests/platform-planning.test.mjs`,
+      `apps/local-control/tests/platform-voice.test.mjs`,
+      `apps/local-control/tests/platform-workers.test.mjs`).
+- [x] Land MCP over HTTP and Atlas MCP server support on `main` (evidence:
+      `apps/local-control/tests/platform-mcp-http.test.mjs`,
+      `apps/local-control/tests/platform-mcp-server.test.mjs`).
+- [x] Land orchestrator adapters on `main` (evidence:
+      `apps/local-control/tests/platform-orchestrator.test.mjs`,
+      `apps/local-control/tests/platform-orchestrator-agent.test.mjs`).
+- [x] Land namespace terminal runner on `main` (evidence:
+      `apps/local-control/tests/platform-terminal-namespaces.test.mjs`).
+- [x] Register desktop safety tooling in `main.mjs` (evidence:
+      `apps/local-control/tests/platform-desktop.test.mjs`).
+- [x] Land tenancy foundations on `main` (#71) (evidence:
+      `apps/web/tests/tenancy.test.mjs`,
+      `apps/web/tests/computer-tenancy.test.mjs`).
 
 ### Queued (larger product work, one GitHub issue each)
 
-- [ ] Tenant model (SEC-1, P9-1) beyond the per-user GitHub permission
-      check — #71. Built: tenants, members, migration 0015, tenant-scoped
-      repositories, tasks, conversations, computer devices and approvals.
-      Still open: a workspace switcher and member management UI.
-- [ ] Container or VM runner so terminal commands are isolated from the
-      operator's account — #72. Container runner done: set
-      `ATLAS_TERMINAL_CONTAINER_RUNTIME` (and optionally `_IMAGE`) and every
-      `terminal.run` command runs in a disposable container with only its
-      workspace mounted and no network. A Linux-namespace runner covers
-      hosts without a container runtime, and callers can require isolation
-      (`requireIsolation`). Still open: git worktrees link to the main
-      repository's `.git` outside the workspace, so git writes inside either
-      sandbox likely fail; the engineering workflow's checks need that fixed
-      before they can run sandboxed.
+- [x] Tenant model (SEC-1, P9-1) foundations: tenants, members, migration 0015,
+      and tenant-scoped repositories/tasks/conversations/computer devices and
+      approvals (evidence: `apps/web/tests/tenancy.test.mjs`,
+      `apps/web/tests/computer-tenancy.test.mjs`).
+- [ ] Tenant model (#71 remaining): workspace switcher and member-management UI.
+- [x] Container + namespace terminal isolation for `terminal.run` (#72 partial):
+      disposable container mode via `ATLAS_TERMINAL_CONTAINER_RUNTIME`, no
+      network, workspace-only mount, Linux-namespace fallback, and explicit
+      `requireIsolation` support (evidence:
+      `apps/local-control/tests/container-sandbox.test.mjs`,
+      `apps/local-control/tests/platform-terminal-namespaces.test.mjs`,
+      `apps/local-control/tests/terminal-tools.test.mjs`).
+- [ ] Container/VM runner (#72 remaining): git worktree writes still need a
+      sandbox-safe path before engineering workflow checks can run isolated.
 - [ ] Project Genesis: prompt → requirements → plan → new repository →
       deployed preview — #73.
 - [ ] Visual builder: live preview with click-to-edit mapped to source — #74.

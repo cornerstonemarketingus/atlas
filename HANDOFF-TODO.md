@@ -238,9 +238,9 @@ the sensitive-value patterns do not backtrack catastrophically.
 | Cloud services add convenience, not dependency | Yes — hosted browser and billing are both optional adapters |
 | Every consequential action previewable, approval-bound, auditable, verifiable | Yes — digest-bound one-time approvals, plan-then-apply, post-action evidence |
 
-Two milestones are **partially** done and say so in their sections: the Windows
-MSI has never been built, and the mobile native projects have never been
-generated. Everything else in both is implemented and tested.
+Three milestones are **partially** done and say so in their sections: the
+Windows MSI has never been built, the mobile native projects have never been
+generated, and billing still depends on one unapplied production migration.
 
 
 The goal is that Atlas stops being a GitHub Actions application: a local-first
@@ -591,10 +591,12 @@ Needs external credentials: a Cloudflare account id and a scoped Browser
 Rendering token. Without them the service reports "not configured on this
 Atlas" and the local companion path is unaffected.
 
-### Milestone 10 — billing and commercial release — **done, pending one migration**
+### Milestone 10 — billing and commercial release — **partially done**
 
 Checkout, the billing portal and webhook signature verification already
 existed. This milestone added what made them safe to actually take money with.
+Still partial: `drizzle/0011_billing_idempotency.sql` has tests but has not yet
+been applied to production, so end-to-end live billing safety is not validated.
 
 - **Idempotent webhooks.** Stripe retries on timeouts, on 500s, and on a deploy
   that lands mid-request, so duplicate delivery is routine. Events are deduped
