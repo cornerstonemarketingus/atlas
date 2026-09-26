@@ -11,9 +11,9 @@ found during the audit.
 |---|---|
 | **Symptom** | Atlas Coder run 36088414372 failed with `Atlas coder run stopped with status 'blocked': Turn limit reached.` The user saw a failed task and no explanation. |
 | **Root cause** | The objective was conversational ("hi can u debug yourself? formy atlas repo can u make direct changes"). Nothing converts an under-specified request into a concrete, evidence-backed change before a coder run is dispatched, so the model explored until its turn budget ran out. The runner behaved correctly (bounded, no change made). |
-| **Fix** | Not a code defect in the runner. The structural fix is upstream intake: the innovation pipeline on this branch makes "what should Atlas change about itself?" an evidence-backed Opportunity Brief → Implementation Proposal → approved build, instead of an open-ended coder prompt. Wiring hosted intake to it is `IMPLEMENTATION-PLAN.md` step 2.3. |
-| **Verification** | Pipeline refuses briefs without cited evidence (`tests/platform-innovation.test.mjs` "an Opportunity Brief without evidence … is refused"). |
-| **Remaining risk** | The hosted composer still dispatches free-text objectives directly. Until intake routes vague requests through clarification, this failure mode remains reachable. |
+| **Fix** | Two layers. (1) Chat no longer dispatches on keywords: `apps/web/app/chat/intent.mjs` answers questions and only *offers* a task the person confirms — this exact message is now answered in chat. (2) `POST /api/tasks` refuses a coding objective with nothing concrete to change (`assessCoderObjective` in `dispatch.mjs`): 422 with `needsClarification` and an example of a good objective. Read-only modes stay open-ended. |
+| **Verification** | `tests/chat-intent.test.mjs` (the message classifies as chat); `tests/dispatch.test.mjs` (the objective is refused for coder mode; concrete objectives, including the hosted smoke check's, still pass); headless-Chromium run of the chat box against a local worker. |
+| **Remaining risk** | The objective check is a heuristic: a concrete-sounding but still vague objective can pass, and the runner's turn limit remains the backstop. |
 
 ## 2. Hosted approval could authorize two actions (SEC-5)
 
@@ -41,9 +41,10 @@ found during the audit.
 | **Verification** | `python3 .github/atlas/check-workflows.py` → all 9 workflows ok; the new check returns a failure for a document without the block. |
 | **Remaining risk** | None known; neither workflow uses the job token for writes. |
 
-## 5. Outbox without a dispatcher (found, not yet fixed)
+## 5. Outbox without a dispatcher
 
-`PlatformTaskStore` writes every event to a transactional outbox, but nothing
-in `src/` calls `claimOutbox`. Events are durable and visible in the
-dashboard; they are simply never delivered anywhere. Tracked as
-`IMPLEMENTATION-PLAN.md` step 1.2.
+`PlatformTaskStore` wrote every event to a transactional outbox, but nothing
+in `src/` called `claimOutbox`, so events were durable but never delivered.
+**Fixed:** `platform/outbox-dispatcher.mjs` runs in the daemon, delivers
+at-least-once with retry and a visible dead-letter state, and feeds the live
+dashboard stream (`tests/platform-outbox.test.mjs`).

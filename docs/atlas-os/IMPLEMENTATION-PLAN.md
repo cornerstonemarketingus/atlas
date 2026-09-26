@@ -26,6 +26,17 @@ observable.
   Wired into the daemon (`/innovation`, `/v1/innovation/*`). See
   `INNOVATION.md`.
 
+- Chat: intent classification instead of keyword dispatch, streaming replies,
+  safe Markdown, confirm-to-start task cards (project or computer).
+- Computer control: desktop drivers (Windows UI Automation, X11), one
+  planner across browser and desktop, deterministic desktop risk rules,
+  daemon `desktop.*` tools, companion progress reporting to Operate.
+- UI and copy: "Build it. Run it. Grow it." positioning with honest
+  availability per mode; rail names Chat / Create / Operate.
+- Foundations: outbox dispatcher + live dashboard stream, model routing with
+  fallback for conversation turns, `terminal.run` over the platform
+  TerminalController, and a coder-objective guard at hosted intake.
+
 ## 1. Canonical runtime (next)
 
 1.1 **Agent step execution.** Bind a family agent to a model session: an
@@ -33,14 +44,12 @@ observable.
     runs them through `AuthorizedToolExecutor` with the agent's own
     permissions as the policy subject, and submits results. First consumers:
     the BDE (draft briefs from signals) and the Research agents (validate).
-1.2 **Outbox dispatcher.** A daemon loop that `claimOutbox` → delivers to
-    in-process subscribers (dashboard live view, agent workers) → `ackOutbox`,
-    with `nackOutbox` → dead letter after `maxOutboxAttempts`.
+1.2 ~~Outbox dispatcher~~ — done; next subscriber: agent workers.
 1.3 **One policy path.** Route `ToolRegistry` executions through
     `AuthorizedToolExecutor`/`PolicyEngine`; keep `allow/ask/deny` as policy
     rules rather than a parallel mechanism.
-1.4 **Model router.** Conversation executor gets its client from the platform
-    router with fallback; persist the model used on each tool call/step.
+1.4 ~~Model router for conversation turns~~ — done; extend to coding and
+    vision tasks and persist the model on each platform tool call.
 
 ## 2. Autonomous repository development (dogfood on Atlas)
 
@@ -51,8 +60,7 @@ observable.
 2.2 Evidence sources for Atlas itself: CI failure history, failed Atlas Coder
     runs, `docs/atlas-os/BACKLOG.md` rows, security-review gaps — since the
     repository has no inline TODO markers.
-2.3 Hosted intake: a vague objective ("debug yourself") becomes a clarification
-    or a BDE research request instead of a coder dispatch (RECOVERY §1).
+2.3 ~~Hosted intake guard~~ — done (chat intent + coder-objective check).
 
 ## 3. Create — first spectacular slice
 
@@ -63,9 +71,10 @@ preview via `apps/browser-worker` → Visual QA agent screenshot/critique/repair
 
 ## 4. Operate and Automate
 
-Wire `platform/terminal` into the daemon; desktop adapter in the Windows
-companion; durable local scheduler that creates platform tasks through the
-same intake and policy path.
+Terminal and desktop control are wired (see §0). Next: a hosted
+browser/desktop worker for people without a paired PC, macOS desktop driver,
+and a durable scheduler (local first; hosted needs Cron Triggers or Queues on
+the Worker) that turns a successful task into a saved automation.
 
 ## 5. Security prerequisites before widening access
 

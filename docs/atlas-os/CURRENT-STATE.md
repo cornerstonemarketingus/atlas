@@ -58,16 +58,18 @@ Legend: **IMPLEMENTED** (wired into a running entry point and tested),
 | Verified coder session (baseline → edit → re-verify → repair) | IMPLEMENTED | `packages/atlas-cli/src/agent/verified-coder-session.ts` |
 | Local daemon, sessions, leases, recovery | IMPLEMENTED | `apps/local-control/src/main.mjs`, `agent/runtime.mjs` |
 | Mission DAG scheduler | IMPLEMENTED | `agent/mission-scheduler.mjs`, wired `main.mjs` |
-| Platform task store + outbox + read-only dashboard | IMPLEMENTED (store, events, dashboard); DISCONNECTED (outbox has no dispatcher/consumer) | `platform/task-store.mjs` `claimOutbox` has no caller in `src/` |
+| Platform task store + outbox + dashboard | **IMPLEMENTED on this branch**: `OutboxDispatcher` delivers at-least-once with retry and dead-letter; dashboard updates live over SSE | `platform/outbox-dispatcher.mjs` |
+| Chat box | **Fixed on this branch**: questions are answered (streamed, Markdown), work is offered as a confirmed task instead of keyword-dispatched | `apps/web/app/chat/*`, `app/api/chat/*` |
+| Computer control (desktop) | **IMPLEMENTED on this branch**: Windows (PowerShell/UI Automation) and X11 drivers behind one action vocabulary and risk rules; companion plans across browser and desktop; daemon `desktop.*` tools; live progress in Operate | `apps/windows-companion/src/desktop/*`; Windows integration test passes on `windows-latest` |
 | Policy engine + authorized executor | DISCONNECTED | `platform/policy.mjs`, `platform/executor.mjs` — used only by tests and the browser vertical slice fixture |
 | Agent family graph, delegation, typed messages | **IMPLEMENTED on this branch** (was DISCONNECTED) | now loaded by `platform/innovation/bootstrap.mjs` from `main.mjs` |
 | Business Development / Product executives, Innovation Backlog | **IMPLEMENTED on this branch** (was MISSING) | `platform/innovation/*`, `/innovation`, `/v1/innovation/*` |
 | Scoped memory store | DISCONNECTED | `platform/memory/*` — no import outside tests |
 | MCP gateway | DISCONNECTED | `platform/mcp/*` — no import outside tests |
-| Capability model router (platform) | DISCONNECTED; the older `agent/models/router.mjs` is used only for `describeRoutes` | `main.mjs` |
-| Terminal controller (platform) | DISCONNECTED | `platform/terminal/*` |
+| Model routing with fallback | **IMPLEMENTED on this branch** for conversation turns (`ATLAS_MODEL_ROUTES`, failover before first chunk, model audited); the platform capability router remains DISCONNECTED | `agent/models/routed-client.mjs` |
+| Terminal controller (platform) | **IMPLEMENTED on this branch** as the `terminal.run` agent tool (per-session workspace, allowlist, approvals for high-risk commands) | `agent/tools/terminal-tools.mjs` |
 | Browser worker package | IMPLEMENTED as package + vertical-slice test; not the daemon's default browser | `apps/browser-worker` |
-| Desktop control | MISSING | no UIA/xdotool code |
+
 | Project Genesis (prompt → requirements → plan → app) | MISSING | — |
 | Visual builder / live preview with source mapping | MISSING | roadmap only |
 | Deployment adapters | PARTIAL (Cloudflare/Vercel/git-host plan/apply/rollback adapters exist in local daemon) | `agent/infrastructure/*` |
