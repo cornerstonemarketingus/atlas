@@ -13,6 +13,7 @@ import { ThreadRail, useThreads } from "../ThreadRail.js";
 type Message = { id: string; role: string; content: string; createdAt: string };
 type Task = { taskId: string; objective: string; mode: string; status?: string; repository?: string; branch?: string; run?: { id?: number; url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
 type Detail = { messages?: Message[]; tasks?: Task[] };
+type GenesisProposal = { kind: "project_genesis"; name: string; template: "web-app" | "static-site"; description: string };
 
 const STARTERS = [
   { title: "Fix a bug in my project", prompt: "Find the most likely bug in my project, fix it, run the tests, and open a pull request." },
@@ -35,8 +36,18 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
 
 type Suggestion =
   | { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string }
-  | { kind: "project_genesis"; name: string; template: string; description: string; reason: string };
+  | (GenesisProposal & { reason: string });
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
+
+function isGenesisProposal(value: unknown): value is GenesisProposal {
+  return Boolean(value)
+    && typeof value === "object"
+    && value !== null
+    && value.kind === "project_genesis"
+    && typeof (value as GenesisProposal).name === "string"
+    && ["web-app", "static-site"].includes(String((value as GenesisProposal).template))
+    && typeof (value as GenesisProposal).description === "string";
+}
 
 /**
  * Chat is the main Atlas workspace. Questions stay in the conversation;
@@ -208,7 +219,7 @@ export function ChatSection() {
         const { value, done } = await reader.read();
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; proposal?: { kind?: string; name?: string; template?: string; description?: string } | null; id?: string; label?: string; state?: ToolStep["state"] } | null;
+          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; proposal?: GenesisProposal | null; id?: string; label?: string; state?: ToolStep["state"] } | null;
           if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
           else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
@@ -224,8 +235,8 @@ export function ChatSection() {
             if (thought) setThoughts((items) => ({ ...items, [reply.id]: thought }));
             if (steps.length) setStepLogs((items) => ({ ...items, [reply.id]: steps }));
             setMessages((items) => [...items, reply]);
-            if (data.proposal?.kind === "project_genesis" && data.proposal.name && data.proposal.template && data.proposal.description) {
-              setSuggestion({ kind: "project_genesis", name: data.proposal.name, template: data.proposal.template, description: data.proposal.description, reason: "Atlas picked a starter template and repository name for your new app." });
+            if (isGenesisProposal(data.proposal)) {
+              setSuggestion({ ...data.proposal, reason: "Atlas picked a starter template and repository name for your new app." });
             }
           }
         }

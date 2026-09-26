@@ -91,15 +91,14 @@ export async function createGenesisRepository(project, { configuration, githubTo
   const defaultBranch = String(repository?.default_branch ?? "main").trim() || "main";
   if (!owner || !name) throw withStatus(502, "GitHub created a repository without a usable owner or name.");
 
-  const tree = [];
-  for (const [path, content] of Object.entries(template.files)) {
+  const tree = await Promise.all(Object.entries(template.files).map(async ([path, content]) => {
     const blob = await githubJson(`${githubApi}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/blobs`, {
       method: "POST",
       headers: githubHeaders(githubToken),
       body: JSON.stringify({ content, encoding: "utf-8" }),
     }, fetcher, `GitHub could not upload template file ${path}.`);
-    tree.push({ path, mode: "100644", type: "blob", sha: blob.sha });
-  }
+    return { path, mode: "100644", type: "blob", sha: blob.sha };
+  }));
   const createdTree = await githubJson(`${githubApi}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees`, {
     method: "POST",
     headers: githubHeaders(githubToken),
