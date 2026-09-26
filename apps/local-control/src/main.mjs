@@ -9,6 +9,11 @@ import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { PlatformTaskStore } from "./platform/task-store.mjs";
+import { AgentFamilyRegistry, seedFamilies } from "./platform/family/index.mjs";
+import { ScopedMemoryStore } from "./platform/memory/memory-store.mjs";
+import { TerminalController } from "./platform/terminal/terminal-controller.mjs";
+import { McpGateway } from "./platform/mcp/gateway.mjs";
+import { LOCAL_TENANT_ID } from "./platform/api-routes.mjs";
 import { createGitHubActionsExecutor, createLocalExecutor } from "./agent/executors.mjs";
 import { createGitHubActionsClient } from "./agent/github-actions-client.mjs";
 import { createConversationExecutor } from "./agent/conversation-executor.mjs";
@@ -48,6 +53,14 @@ if (!token) {
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
 const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
 const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
+const familyRegistry = new AgentFamilyRegistry(join(dataDirectory, "family.sqlite"));
+// The default tree is created through the same policy-checked path as any
+// other agent, and only once: an existing root is reused.
+seedFamilies(familyRegistry, LOCAL_TENANT_ID, { authorizer: "owner" });
+const memoryStore = new ScopedMemoryStore(join(dataDirectory, "memory.sqlite"));
+const terminalController = new TerminalController({ rootDirectory: join(dataDirectory, "workspaces") });
+// No MCP servers are registered by default, and with no authorizer every call is refused.
+const mcpGateway = new McpGateway({ audit: (event) => store.audit("mcp.call", `${event.serverId ?? ""} ${event.tool ?? ""} ${event.outcome ?? ""}`.trim()) });
 const vault = createCredentialVault({ filePath: join(dataDirectory, "credentials.vault.json") });
 const license = loadLicense();
 const runtime = new AgentRuntime({
@@ -73,6 +86,7 @@ const server = createLocalControlServer({
   runtime,
   missionService,
   platformStore,
+  platformServices: { family: familyRegistry, memory: memoryStore, terminal: terminalController, mcp: mcpGateway },
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
@@ -103,6 +117,10 @@ function shutdown() {
   server.close(async () => {
     await runtime.stop();
     sessions.close();
+    await mcpGateway.close().catch(() => {});
+    memoryStore.close();
+    familyRegistry.close();
+    platformStore.close();
     store.close();
     process.exit(0);
   });
