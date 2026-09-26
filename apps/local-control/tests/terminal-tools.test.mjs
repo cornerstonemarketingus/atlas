@@ -24,8 +24,9 @@ test("agents run allowlisted commands in a per-session workspace; risky ones wai
   const hello = await run(["node", "-e", "require('fs').writeFileSync('note.txt','hi'); console.log('ok')"]);
   assert.equal(hello.status, "completed", hello.message);
   assert.match(hello.output, /exit code 0[\s\S]*stdout:\nok/u);
-  assert.match((await run(["cat", "note.txt"])).output, /hi/u, "the same session keeps its workspace");
-  assert.match((await run(["cat", "note.txt"], "s2")).output, /exit code [1-9]/u, "another session has a separate workspace");
+  const readNote = ["node", "-e", "process.stdout.write(require('node:fs').readFileSync(process.argv[1], 'utf8'))", "note.txt"];
+  assert.match((await run(readNote)).output, /hi/u, "the same session keeps its workspace");
+  assert.match((await run(readNote, "s2")).output, /exit code [1-9]/u, "another session has a separate workspace");
 
   const shell = await run(["bash", "-c", "echo hi"]);
   assert.equal(shell.status, "failed");
