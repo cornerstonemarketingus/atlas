@@ -151,6 +151,9 @@
 .pair-card p{margin:0 0 14px;color:var(--ws-muted);font-size:12px;line-height:1.6}
 .pair-card form{display:grid;gap:12px}
 .pair-card ol{margin:0;padding-left:18px;list-style:decimal;color:var(--ws-muted);font-size:12px;line-height:1.9}
+.pair-card ol+form{margin-top:14px}
+.pair-card p a{color:var(--ws-text)}
+.task-composer .mission-form{margin-top:16px}
 .pair-help a{color:var(--ws-accent);text-decoration:underline;text-underline-offset:3px}
 .credential{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;margin-top:14px;padding:12px;border:1px solid #3f5a26;border-radius:9px;background:#141a11}
 .credential small{grid-column:1/-1;color:#8fa373;font:650 9px var(--font-geist-mono);letter-spacing:.1em}
