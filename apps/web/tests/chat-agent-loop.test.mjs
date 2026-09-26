@@ -63,7 +63,10 @@ test("Atlas reads a page, sees the result, then answers", async () => {
   assert.equal(outcome.reply, "Let me look.\n\nIt says Example body.");
   assert.deepEqual(outcome.steps, [{ label: "Read “Example”", ok: true }]);
   const tools = events.filter((event) => event.type === "tool").map((event) => event.data);
-  assert.deepEqual(tools, [{ id: "t1", label: "Reading example.com/…", state: "running" }, { id: "t1", label: "Read “Example”", state: "done" }]);
+  assert.deepEqual(tools.map(({ id, label, state }) => ({ id, label, state })), [{ id: "t1", label: "Reading example.com/…", state: "running" }, { id: "t1", label: "Read “Example”", state: "done" }]);
+  // The finished step carries a preview of the page for the Files panel.
+  assert.equal(tools[1].preview.kind, "page");
+  assert.match(tools[1].preview.content, /Example body/u);
   const second = requests[1].messages;
   assert.equal(second.at(-2).role, "assistant");
   assert.equal(second.at(-2).tool_calls[0].id, "t1");

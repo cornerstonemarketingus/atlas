@@ -12,10 +12,12 @@ import { createInstallationToken, githubAppConfiguration } from "../tasks/github
 import { platformGitHubToken } from "../tasks/github-token.mjs";
 import { GET as listDevices } from "../computer/devices/route";
 import { POST as startComputerTask } from "../computer/tasks/route";
-import { SELF_REPOSITORY, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom } from "./atlas-knowledge.mjs";
+import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom } from "./atlas-knowledge.mjs";
 import { resolveChatModel, threadTitle } from "./model-endpoint.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
+import { createAgentTeam } from "./agent-team.mjs";
+import { instantToolDefinitions } from "./instant-tools.mjs";
 
 /** How much of a thread is replayed to the model. Enough for continuity, bounded so a long thread cannot grow a request without limit. */
 const HISTORY_TURNS = 20;
@@ -81,7 +83,13 @@ export async function POST(request: Request) {
 
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
   const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
-  const loop = { endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks };
+  // The lead (this reply) can hand work to an agent team built on the daemon's planner; see agent-team.mjs.
+  const team = createAgentTeam({ endpoint, toolContext });
+  const loop = {
+    endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks,
+    tools: [TASK_TOOL, team.definition, ...instantToolDefinitions(toolContext.environment)],
+    handlers: { [team.definition.function.name]: team.handler },
+  };
 
   if (body.stream === true) {
     return streamReply({ ...loop, conversationId, stored, db, userId: account.userId });
@@ -203,6 +211,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
   endpoint: Endpoint; turns: ChatTurn[]; toolContext: ToolContext; conversationId: string; stored: boolean;
   db: ReturnType<typeof getDb>; userId: string; defaultRepository: string; userMessage: string;
   startTasks: (calls: TaskRequests) => Promise<string[]>;
+  tools: object[]; handlers: Parameters<typeof converse>[0]["handlers"];
 }) {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
