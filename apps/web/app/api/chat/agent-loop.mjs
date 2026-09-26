@@ -18,16 +18,60 @@ import { createDeltaParser } from "./stream.mjs";
 export const MAX_TOOL_STEPS = 6;
 /** Instant tool calls honoured per round; extra calls in one round are answered as skipped. */
 export const MAX_CALLS_PER_STEP = 4;
-const MAX_REPLY_TOKENS = 4096;
+export const MAX_REPLY_TOKENS = 2048;
+/** The longest wait honoured from a provider's retry-after before trying the fallback model instead. */
+const MAX_RATE_LIMIT_WAIT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 
-function callModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher }) {
+function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS }) {
   return fetcher(completionsUrl(endpoint.baseUrl), {
     method: "POST",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
-    body: JSON.stringify({ model: endpoint.model, messages: turns, stream, temperature: 0.2, max_tokens: MAX_REPLY_TOKENS, ...(tools ? { tools, tool_choice: toolChoice } : {}) }),
+    body: JSON.stringify({ model: endpoint.model, messages: turns, stream, temperature: 0.2, max_tokens: maxTokens, ...(tools ? { tools, tool_choice: toolChoice } : {}) }),
   });
+}
+
+/** Milliseconds a 429 asks us to wait (retry-after in seconds, or a Groq-style "1.5s"/"250ms" reset). */
+export function retryAfterMs(headers) {
+  const after = Number.parseFloat(headers.get("retry-after") ?? "");
+  if (Number.isFinite(after) && after >= 0) return Math.ceil(after * 1000);
+  const reset = /^(\d+(?:\.\d+)?)(ms|s)$/u.exec(headers.get("x-ratelimit-reset-tokens") ?? headers.get("x-ratelimit-reset-requests") ?? "");
+  if (reset) return Math.ceil(Number(reset[1]) * (reset[2] === "s" ? 1000 : 1));
+  return 2_000;
+}
+
+/**
+ * Sends a model request, riding out rate limits: on 429, wait what the
+ * provider asks (when that is short) and retry once, then try the fallback
+ * model on the same endpoint. Other statuses are returned as they are.
+ */
+export async function callModel(endpoint, turns, options) {
+  let response = await sendModel(endpoint, turns, options);
+  if (response.status !== 429) return response;
+  const wait = retryAfterMs(response.headers);
+  if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
+    await (options.sleep ?? sleep)(wait);
+    response = await sendModel(endpoint, turns, options);
+    if (response.status !== 429) return response;
+  }
+  if (endpoint.fallbackModel) return sendModel({ ...endpoint, model: endpoint.fallbackModel }, turns, options);
+  return response;
+}
+
+/** Rate limits count every token resent each round, so results the model already used are cut to a digest. */
+const COMPACT_TOOL_CHARS = 1_200;
+export function compactOlderToolResults(turns, freshFrom) {
+  for (let index = 0; index < freshFrom; index += 1) {
+    const turn = turns[index];
+    if (turn?.role !== "tool" || typeof turn.content !== "string" || turn.content.length <= COMPACT_TOOL_CHARS + 200) continue;
+    const closes = turn.content.endsWith("</data>") ? "\n</data>" : "";
+    turns[index] = { ...turn, content: `${turn.content.slice(0, COMPACT_TOOL_CHARS)}\n… (already read; shortened)${closes}` };
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -35,11 +79,11 @@ function callModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetche
  * calling answers 400 or 422, and the call is retried without them rather
  * than failing. Streams thinking and words through `emit` as they arrive.
  */
-async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher }) {
-  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher });
+async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause }) {
+  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause });
   let toolsDropped = false;
   if (tools && (response.status === 400 || response.status === 422)) {
-    response = await callModel(endpoint, turns, { stream, tools: null, fetcher });
+    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause });
     toolsDropped = true;
   }
   if (!response.ok) return { ok: false, status: response.status };
@@ -84,18 +128,45 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
  *   stream: boolean,
  *   emit: (type: string, data: unknown) => void,
  *   fetcher?: typeof fetch,
+ *   tools?: object[],
+ *   handlers?: Record<string, ((call: object, helpers: { emit: (type: string, data: unknown) => void }) => Promise<{ ok: boolean, label: string, content: string, preview?: unknown }>) & { pending?: string }>,
+ *   allowTasks?: boolean,
+ *   maxRounds?: number,
+ *   maxTokens?: number,
+ *   agentId?: string,
+ *   sleep?: (ms: number) => Promise<void>,
  * }} options
  * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[], proposal?: { kind: string, name: string, template: string, description: string } | null } | { error: string, status: number }>}
  */
+<<<<<<< HEAD
 export async function converse({ endpoint, turns, toolContext, defaultRepository, userMessage, startTasks, projectTool = null, stream, emit, fetcher = fetch }) {
   const tools = [TASK_TOOL, ...(projectTool ? [projectTool] : []), ...instantToolDefinitions(toolContext?.environment ?? {})];
+=======
+export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause }) {
+  // Child agents get their own, narrower tool list and no task starting; the lead gets everything.
+  const tools = toolOverride ?? [...(allowTasks ? [TASK_TOOL] : []), ...instantToolDefinitions(toolContext?.environment ?? {})];
+  const offered = new Set(tools.map((tool) => tool.function.name));
+  const runnable = (name) => offered.has(name) && (isInstantTool(name) || name in handlers);
+  const tag = agentId ? { agentId } : {};
+>>>>>>> origin/main
   const working = [...turns];
   const taskCalls = [];
   const projectCalls = [];
   const steps = [];
   let text = "";
   let toolsSupported = true;
-  for (let round = 0; round <= MAX_TOOL_STEPS; round += 1) {
+  // Work already done is kept when a later round fails: what was found, plus why it stopped.
+  const interrupted = (reason) => {
+    const note = `${text.trim() ? "\n\n" : ""}_Stopped early: ${reason}_`;
+    text += note;
+    emit("delta", { text: note });
+    return { reply: text.trim(), steps };
+  };
+  let freshFrom = working.length;
+  for (let round = 0; round <= maxRounds; round += 1) {
+    // Tool results the model has already read are shortened before the next round; the latest round's stay whole.
+    compactOlderToolResults(working, freshFrom);
+    freshFrom = working.length;
     let firstDelta = true;
     // Words from separate rounds read as separate paragraphs.
     const sink = (type, data) => {
@@ -109,13 +180,21 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     let result;
     try {
       // The last round keeps the tool definitions (earlier rounds' results refer to them) but must answer in words.
-      result = await modelStep({ endpoint, turns: working, tools: toolsSupported ? tools : null, stream, emit: sink, toolChoice: round < MAX_TOOL_STEPS ? "auto" : "none", fetcher });
+      result = await modelStep({ endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sink, toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause });
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "TimeoutError";
-      return { error: timedOut ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.", status: 504 };
+      const message = timedOut ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.";
+      if (round > 0) return interrupted(message);
+      return { error: message, status: 504 };
     }
     // The status is the actionable part; the body can contain the prompt echoed back.
-    if (!result.ok) return { error: `The model endpoint answered ${result.status}.`, status: 502 };
+    if (!result.ok) {
+      const message = result.status === 429
+        ? "The model provider's rate limit was reached (429). Wait a minute and ask again, or set a higher-limit model or ATLAS_CHAT_FALLBACK_MODEL."
+        : `The model endpoint answered ${result.status}.`;
+      if (round > 0) return interrupted(message);
+      return { error: message, status: result.status === 429 ? 429 : 502 };
+    }
     if (result.toolsDropped) toolsSupported = false;
     const calls = result.calls
       .filter((call) => typeof call?.function?.name === "string" && call.function.name)
@@ -124,15 +203,23 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         type: "function",
         function: { name: call.function.name, arguments: typeof call.function.arguments === "string" ? call.function.arguments : JSON.stringify(call.function.arguments ?? {}) },
       }));
+<<<<<<< HEAD
     taskCalls.push(...calls.filter((call) => !isInstantTool(call.function.name) && call.function.name !== PROJECT_TOOL_NAME));
     projectCalls.push(...calls.filter((call) => call.function.name === PROJECT_TOOL_NAME));
     const instant = calls.filter((call) => isInstantTool(call.function.name));
     if (instant.length === 0 || round === MAX_TOOL_STEPS) break;
+=======
+    if (allowTasks) taskCalls.push(...calls.filter((call) => !runnable(call.function.name)));
+    const instant = calls.filter((call) => runnable(call.function.name));
+    if (instant.length === 0 || round === maxRounds) break;
+>>>>>>> origin/main
     working.push({ role: "assistant", content: result.text || null, tool_calls: calls });
     let used = 0;
     for (const call of calls) {
-      if (!isInstantTool(call.function.name)) {
-        working.push({ role: "tool", tool_call_id: call.id, content: "Queued: this starts as soon as your reply is finished. Tell the person it is starting; do not claim a result." });
+      if (!runnable(call.function.name)) {
+        working.push({ role: "tool", tool_call_id: call.id, content: allowTasks
+          ? "Queued: this starts as soon as your reply is finished. Tell the person it is starting; do not claim a result."
+          : `You cannot use '${call.function.name}'. Report what you found instead.` });
         continue;
       }
       if (used >= MAX_CALLS_PER_STEP) {
@@ -140,13 +227,15 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         continue;
       }
       used += 1;
-      emit("tool", { id: call.id, label: pendingLabel(call), state: "running" });
-      const outcome = await runInstantTool(call, toolContext);
-      emit("tool", { id: call.id, label: outcome.label, state: outcome.ok ? "done" : "failed" });
+      const handler = handlers[call.function.name];
+      emit("tool", { id: call.id, label: handler ? handler.pending ?? `Running ${call.function.name.replaceAll("_", " ")}…` : pendingLabel(call), state: "running", ...tag });
+      const outcome = handler ? await handler(call, { emit }) : await runInstantTool(call, toolContext);
+      emit("tool", { id: call.id, label: outcome.label, state: outcome.ok ? "done" : "failed", ...tag, ...(outcome.preview ? { preview: outcome.preview } : {}) });
       steps.push({ label: outcome.label, ok: outcome.ok });
       working.push({ role: "tool", tool_call_id: call.id, content: outcome.content });
     }
   }
+  if (!allowTasks) return { reply: text.trim(), steps };
   // Runs the model asked for start after its words, and each gets one line saying whether it started.
   const started = await startTasks(taskRequestsFromCalls(taskCalls.slice(0, 3), { defaultRepository, userMessage }));
   if (started.length) {
