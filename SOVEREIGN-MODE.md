@@ -81,6 +81,37 @@ tool calls, edits, and validation remain on the machine. Audit records are
 written under the user's `.atlas/runs` directory. Use `--help` for model,
 context-window, verification-directory, and endpoint options.
 
+### Self-improvement ("Atlas, improve yourself")
+
+With Ollama running, Atlas can pick and make its own improvements locally:
+
+```text
+node scripts/local/self-improve.mjs --iterations 5
+```
+
+Each iteration:
+
+1. runs the checks of `--verify-dir` (default `apps/local-control`) on the current HEAD;
+2. chooses one task and records why: a failing check first, then a TODO/FIXME
+   in a file Atlas may change, then a `- [ ] … (self)` item in TODO.md;
+3. makes the change in its own git worktree on `atlas/self-*/builder` with the
+   local coder, which verifies and repairs its own edit;
+4. re-runs the checks; every check must pass;
+5. applies the self-modification policy: at most 8 files and 400 changed
+   lines, no CI, runner, policy, approval, auth, sandbox, redaction or
+   dependency files, no deleted tests, no drop in test count, nothing
+   secret-shaped or risky;
+6. asks a separate reviewer model (`--review-model`) to approve the diff;
+7. keeps an accepted change as a branch plus a patch under
+   `~/.atlas/self-improve/patches` for you to merge (`git merge <branch>`),
+   or removes a rejected attempt entirely.
+
+Nothing is merged automatically. `~/.atlas/self-improve/ledger.jsonl` records
+every attempt and the streak of consecutive accepted changes. A 7B CPU model
+will struggle with long edits; point `--base-url`/`--model` (and
+`--api-key-env`) at a stronger OpenAI-compatible model for harder work, and
+keep the reviewer on a different model from the builder where you can.
+
 ### Local computer use
 
 The Windows companion remains the default computer-control executor. Browser
