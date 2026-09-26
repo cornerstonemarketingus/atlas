@@ -25,9 +25,9 @@ test("non-owners are told they cannot start work on Atlas itself", () => {
   assert.match(prompt, /someone\/app/u);
 });
 
-test("the tool schema only allows the three real modes", () => {
+test("the tool schema only allows the four real modes", () => {
   assert.equal(TASK_TOOL.function.name, TASK_TOOL_NAME);
-  assert.deepEqual(TASK_TOOL.function.parameters.properties.mode.enum, ["coder", "inspect", "debug"]);
+  assert.deepEqual([...TASK_TOOL.function.parameters.properties.mode.enum], ["coder", "inspect", "debug", "computer"]);
   assert.deepEqual(TASK_TOOL.function.parameters.required, ["mode", "objective"]);
 });
 
@@ -78,4 +78,20 @@ test("streamed tool calls are assembled from pieces and become task requests", a
   const { requests, errors } = taskRequestsFromCalls(parser.toolCalls);
   assert.deepEqual(errors, []);
   assert.deepEqual(requests, [{ mode: "coder", objective: "Add a test for defaultMergePolicy.", repository: SELF_REPOSITORY }]);
+});
+
+test("computer requests need no repository and are described with where they run", () => {
+  const { requests } = taskRequestsFrom(toolReply(call({ mode: "computer", objective: "Submit the contact form on example.com.", repository: "ignored/repo" })), { defaultRepository: "someone/app" });
+  assert.deepEqual(requests, [{ mode: "computer", objective: "Submit the contact form on example.com.", repository: "" }]);
+  const request = requests[0];
+  assert.match(describeStartedTask(request, { ok: true, deviceName: "Office PC", deviceOnline: true }), /^Started on \*\*Office PC\*\*.*ask you before anything consequential.*\]\(\/automation\)/u);
+  assert.match(describeStartedTask(request, { ok: true, deviceName: "Laptop", deviceOnline: false }), /begin when that computer comes online/u);
+  assert.match(describeStartedTask(request, { ok: false, message: "no computer is paired yet" }), /^I could not start that on your computer: no computer is paired yet/u);
+});
+
+test("the system prompt tells the model to choose the capability itself and to be honest about gaps", () => {
+  const prompt = atlasSystemPrompt({ isOwner: true });
+  assert.match(prompt, /never ask them to pick a mode/u);
+  assert.match(prompt, /"computer" does browser or desktop work/u);
+  assert.match(prompt, /every Monday/u);
 });

@@ -7,6 +7,8 @@ import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
 import { isDeploymentOwner } from "../tasks/self-protection.mjs";
 import { POST as startTask } from "../tasks/route";
+import { GET as listDevices } from "../computer/devices/route";
+import { POST as startComputerTask } from "../computer/tasks/route";
 import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, taskRequestsFrom, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { completionsUrl, replyText, resolveChatModel, threadTitle } from "./model-endpoint.mjs";
 import { createDeltaParser, encodeEvent } from "./stream.mjs";
@@ -104,6 +106,33 @@ export async function POST(request: Request) {
 }
 
 type Endpoint = ReturnType<typeof resolveChatModel>;
+
+/**
+ * Starts computer work through the same routes the Computer page uses, so
+ * pairing, workspace scoping and approval rules are identical. Picks the
+ * person's online computer, else their most recent one (the task waits for
+ * it to come online).
+ */
+async function startOnComputer(request: Request, headers: Headers, objective: string): Promise<{ ok: boolean; message: string; deviceName?: string; deviceOnline?: boolean }> {
+  try {
+    const listed = await listDevices(new Request(new URL("/api/computer/devices", request.url), { headers }));
+    if (!listed.ok) return { ok: false, message: `the computer service answered ${listed.status}` };
+    const { devices = [] } = await listed.json() as { devices?: { id: string; name: string; status: string; revokedAt: string | null }[] };
+    const usable = devices.filter((device) => !device.revokedAt);
+    const device = usable.find((candidate) => candidate.status === "online") ?? usable[0];
+    if (!device) return { ok: false, message: "no computer is paired yet. Pair one on the [Computer](/automation) page, then ask again" };
+    const started = await startComputerTask(new Request(new URL("/api/computer/tasks", request.url), {
+      method: "POST", headers, body: JSON.stringify({ deviceId: device.id, executionProvider: "windows", objective }),
+    }));
+    if (!started.ok) {
+      const body = await started.json().catch(() => ({})) as { message?: string };
+      return { ok: false, message: body.message ?? `the computer service answered ${started.status}` };
+    }
+    return { ok: true, message: "started", deviceName: device.name, deviceOnline: device.status === "online" };
+  } catch {
+    return { ok: false, message: "the computer service could not be reached" };
+  }
+}
 type TaskRequests = ReturnType<typeof taskRequestsFrom>;
 
 /**
@@ -130,11 +159,15 @@ async function startRequestedTasks(request: Request, { requests, errors }: TaskR
   const lines: string[] = [...errors];
   for (const task of requests) {
     const forwarded = new Headers();
-    for (const name of ["authorization", "cookie", "oai-authenticated-user-id"]) {
+    for (const name of ["authorization", "cookie", "oai-authenticated-user-id", "x-atlas-tenant"]) {
       const value = request.headers.get(name);
       if (value) forwarded.set(name, value);
     }
     forwarded.set("content-type", "application/json");
+    if (task.mode === "computer") {
+      lines.push(describeStartedTask(task, await startOnComputer(request, forwarded, task.objective)));
+      continue;
+    }
     const taskBranch = task.repository === context.repository.toLowerCase() && context.branch ? context.branch : "main";
     let outcome: { ok: boolean; message: string; taskId?: string; mergePolicy?: string };
     try {

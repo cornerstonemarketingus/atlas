@@ -40,11 +40,11 @@ export function ThreadRail({ threads, activeId, newLabel, emptyLabel, onNew, onO
   return <div className="rail-threads">
     <button className="new-thread" onClick={onNew}><b>＋</b> {newLabel}</button>
     <label className="thread-search"><span className="sr-only">Search conversations</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" /></label>
-    <p className="sidebar-label">Chats</p>
+    <p className="sidebar-label">History</p>
     <div className="thread-list">
       {visibleThreads.map((item) => <div className={item.id === activeId ? "active" : ""} key={item.id}>
         <button className="thread-open" onClick={() => onOpen(item.id)}>
-          <span>{item.title || "Untitled thread"}</span><small>{item.repository || "No project"}</small>
+          <span>{item.title || "Untitled chat"}</span>{item.repository && <small>{item.repository}</small>}
         </button>
         <button className="thread-close" aria-label={`Close ${item.title}`} title="Close thread" onClick={() => onClose(item.id)}>×</button>
       </div>)}

@@ -34,28 +34,32 @@ export function atlasSystemPrompt({ isOwner = false, repository = "" } = {}) {
   return [
     "You are Atlas: an AI software engineering agent and the product this person is using right now. When someone says \"you\", \"yourself\", \"this app\" or \"Atlas\", they mean you and your own codebase, not a hypothetical app.",
     ARCHITECTURE,
-    "You can act, not just advise. To change code, investigate, or debug, call the start_atlas_task tool. It starts a real run on GitHub: mode \"coder\" edits code, verifies it, and opens a pull request that merges itself once CI passes; \"inspect\" reads the repository and reports; \"debug\" runs its checks and finds what fails.",
+    "You can act, not just advise. Call the start_atlas_task tool to do real work. Choose the mode yourself from what the person asked for; never ask them to pick a mode, a section, or a tool. Modes: \"coder\" edits code in a GitHub repository, verifies it, and opens a pull request that merges itself once CI passes; \"inspect\" reads a repository and reports; \"debug\" runs a repository's checks and finds what fails; \"computer\" does browser or desktop work on the person's paired computer (visit a site, fill in and submit a form, collect information from web pages), pausing for their approval before anything consequential.",
+    "Capabilities you do not have yet, so say so plainly instead of pretending: creating a brand-new repository from scratch (offer to build it inside an existing connected repository instead), running something on a schedule such as \"every Monday\" (offer to do it once now), and producing downloadable spreadsheets or documents (a computer task can gather the information and report it in chat).",
     `To work on yourself, call start_atlas_task with repository "${SELF_REPOSITORY}". ${selfWork}${selected}`,
     "When the person asks you to build, fix, improve, audit or work on something, start the task instead of writing a generic plan for them to carry out. Write the objective as one concrete, checkable change grounded in the parts of the codebase above (name the app, module or file area). If the request is broad, like \"work on yourself\", pick the single most valuable concrete change you can justify, say which one and why in one sentence, and start it. Split large requests into one task per concrete change.",
-    "Answer questions about yourself from the facts above. Do not invent files, features, metrics or results. Never claim a task ran, passed, merged or deployed unless the conversation contains that result; after starting a task, say it has started and that its outcome will appear in Tasks.",
+    "Answer questions about yourself from the facts above. Do not invent files, features, metrics or results. Never claim a task ran, passed, merged or deployed unless the conversation contains that result; after starting work, say it has started and that progress will appear in this conversation.",
     "Be direct and brief; use Markdown for lists and code. No filler, no day-by-day timelines, no asking which generic tools to use.",
   ].join("\n\n");
 }
+
+/** The work Atlas can start from a conversation. Code modes run on GitHub; computer runs on a paired PC. */
+export const TASK_MODES = Object.freeze(["coder", "inspect", "debug", "computer"]);
 
 /** OpenAI-compatible tool definition for starting an Atlas run. */
 export const TASK_TOOL = {
   type: "function",
   function: {
     name: TASK_TOOL_NAME,
-    description: "Start a real Atlas run on a GitHub repository. coder: change code, verify it, open a pull request that merges itself when CI passes. inspect: read the repository and report. debug: run its checks and find what is failing.",
+    description: "Start real Atlas work. coder: change code in a GitHub repository, verify it, open a pull request that merges itself when CI passes. inspect: read a repository and report. debug: run a repository's checks and find what is failing. computer: browser or desktop work on the person's paired computer, with approval before anything consequential.",
     parameters: {
       type: "object",
       additionalProperties: false,
       required: ["mode", "objective"],
       properties: {
-        mode: { type: "string", enum: ["coder", "inspect", "debug"] },
-        objective: { type: "string", description: "One concrete, checkable goal, naming the part of the codebase it concerns. At most 4000 characters." },
-        repository: { type: "string", description: `owner/name. Use "${SELF_REPOSITORY}" to work on Atlas itself. Defaults to the selected project, or Atlas itself when none is selected.` },
+        mode: { type: "string", enum: TASK_MODES },
+        objective: { type: "string", description: "One concrete, checkable goal. For code, name the part of the codebase it concerns; for computer work, name the site and what to do there. At most 4000 characters." },
+        repository: { type: "string", description: `Code modes only: owner/name. Use "${SELF_REPOSITORY}" to work on Atlas itself. Defaults to the selected project, or Atlas itself when none is selected.` },
       },
     },
   },
@@ -88,13 +92,18 @@ export function taskRequestsFromCalls(calls, { defaultRepository = "" } = {}) {
       errors.push("A task request had unreadable arguments.");
       continue;
     }
-    const mode = ["coder", "inspect", "debug"].includes(args?.mode) ? args.mode : null;
-    const objective = typeof args?.objective === "string" ? args.objective.trim().slice(0, 4000) : "";
-    const repository = (typeof args?.repository === "string" && args.repository.trim()) || defaultRepository || SELF_REPOSITORY;
+    const mode = TASK_MODES.includes(args?.mode) ? args.mode : null;
+    const objective = typeof args?.objective === "string" ? args.objective.trim().slice(0, mode === "computer" ? 2000 : 4000) : "";
     if (!mode || !objective) {
       errors.push("A task request was missing its mode or objective.");
       continue;
     }
+    if (mode === "computer") {
+      // Computer work has no repository; it runs on the person's paired PC.
+      requests.push({ mode, objective, repository: "" });
+      continue;
+    }
+    const repository = (typeof args?.repository === "string" && args.repository.trim()) || defaultRepository || SELF_REPOSITORY;
     requests.push({ mode, objective, repository: repository.trim().toLowerCase() });
   }
   return { requests, errors };
@@ -102,6 +111,12 @@ export function taskRequestsFromCalls(calls, { defaultRepository = "" } = {}) {
 
 /** A short, honest line describing what happened to one requested run. */
 export function describeStartedTask(request, outcome) {
+  if (request.mode === "computer") {
+    if (!outcome.ok) return `I could not start that on your computer: ${outcome.message}`;
+    const where = outcome.deviceName ? ` on **${outcome.deviceName}**` : " on your computer";
+    const waiting = outcome.deviceOnline === false ? " It will begin when that computer comes online." : "";
+    return `Started${where}: "${request.objective}". I will ask you before anything consequential.${waiting} Follow it in [Computer](/automation).`;
+  }
   const what = request.mode === "coder" ? "a coder run" : request.mode === "inspect" ? "an inspection" : "a debug run";
   if (!outcome.ok) return `I could not start ${what} on ${request.repository}: ${outcome.message}`;
   const merge = request.mode === "coder"
@@ -111,5 +126,5 @@ export function describeStartedTask(request, outcome) {
         ? " It will open a pull request and merge it immediately."
         : " It will open a pull request for your review."
     : "";
-  return `Started ${what} on ${request.repository}: "${request.objective}".${merge} Follow it in Tasks${outcome.taskId ? ` (task ${outcome.taskId})` : ""}.`;
+  return `Started ${what} on ${request.repository}: "${request.objective}".${merge} Progress appears in this conversation${outcome.taskId ? ` (task ${outcome.taskId})` : ""}.`;
 }

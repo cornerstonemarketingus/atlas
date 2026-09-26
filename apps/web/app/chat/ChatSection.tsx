@@ -14,10 +14,23 @@ type Task = { taskId: string; objective: string; mode: string; status?: string; 
 type Detail = { messages?: Message[]; tasks?: Task[] };
 
 const STARTERS = [
-  { title: "Review my project", prompt: "Review my project and tell me what I should improve first." },
-  { title: "Find and fix a bug", prompt: "Find the most likely bug in my project, fix it, run the tests, and open a pull request." },
-  { title: "Plan what to build next", prompt: "Help me decide what to build next and explain the simplest useful version." },
+  { title: "Fix a bug in my project", prompt: "Find the most likely bug in my project, fix it, run the tests, and open a pull request." },
+  { title: "Fill in a form on a website", prompt: "Go to " },
+  { title: "Explain how my code works", prompt: "Explain how my project is organised and where the main logic lives." },
 ];
+
+/**
+ * The capabilities a conversation is using, shown as context only once they
+ * are in use. Nobody picks one up front: Atlas chooses from the request.
+ */
+function activeCapabilities(conversationId: string | null, tasks: Task[], messages: Message[]) {
+  const items: { label: string; href: string }[] = [];
+  if (tasks.length && conversationId) items.push({ label: "Code", href: `/build?conversation=${encodeURIComponent(conversationId)}` });
+  const pullRequest = tasks.find((task) => task.pullRequest?.url)?.pullRequest?.url;
+  if (pullRequest) items.push({ label: "Pull request ↗", href: pullRequest });
+  if (messages.some((message) => message.role === "assistant" && message.content.includes("](/automation)"))) items.push({ label: "Computer", href: "/automation" });
+  return items;
+}
 
 type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
@@ -143,8 +156,10 @@ export function ChatSection() {
   }
 
   /**
-   * Questions are always answered. A clear request for work is offered as a
-   * task to confirm — never started just because a message contained a verb.
+   * Every message goes to Atlas, and Atlas decides what it needs: an answer,
+   * code work, or work on the person's computer. Only when no model is
+   * connected (so nothing can decide) does a keyword guess offer the work as
+   * a card to confirm instead.
    */
   async function send(event: FormEvent) {
     event.preventDefault();
@@ -153,7 +168,7 @@ export function ChatSection() {
     setDraft("");
     setNotice("");
     const intent = classifyIntent(text, { hasProject: Boolean(repository) });
-    if (intent.kind === "project_task" || intent.kind === "computer_task") {
+    if (ready?.configured === false && (intent.kind === "project_task" || intent.kind === "computer_task")) {
       showLocal(text);
       setSuggestion({ text, kind: intent.kind, mode: "mode" in intent ? intent.mode : undefined, reason: intent.reason });
       return;
@@ -263,13 +278,17 @@ export function ChatSection() {
     section="chat"
     rail={<ThreadRail threads={threads} activeId={conversationId} newLabel="New chat" emptyLabel="Nothing yet. Ask Atlas anything."
       onNew={startNew} onOpen={(id) => void openThread(id)} onClose={(id) => void close(id).then((done) => { if (done && id === conversationId) startNew(); })} />}
-    headerContext={<span className="context-chip">{ready === null ? "Checking model…" : ready.configured ? "Model connected" : "No model endpoint"}</span>}
+    headerContext={<>
+      {activeCapabilities(conversationId, tasks, messages).map((item) => <a key={item.label} className="context-chip capability-chip" href={item.href}
+        {...(item.href.startsWith("http") ? { target: "_blank", rel: "noreferrer" } : {})}>{item.label}</a>)}
+      {ready?.configured === false && <span className="context-chip">No model connected</span>}
+    </>}
   >
     <div className="section-scroll">
       {messages.length === 0 ? <div className="section-empty">
         <div className="empty-mark"><AtlasMark /></div>
-        <h1>What can I help you get done?</h1>
-        <p>Ask a question, or tell Atlas what to build, fix, or do on your computer.</p>
+        <h1>What do you want to accomplish?</h1>
+        <p>Ask a question or describe the outcome. Atlas works out whether it needs to answer, change code, or use your computer.</p>
         <div className="starter-grid">
           {STARTERS.map((item) => <button key={item.title} onClick={() => setDraft(item.prompt)}>
             {item.title}
@@ -301,7 +320,7 @@ export function ChatSection() {
       </p>}
       <textarea aria-label="Message Atlas" value={draft} rows={3} onKeyDown={keyDown}
         onChange={(event) => setDraft(event.target.value)}
-      placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything, or describe what you want to get done…"} />
+      placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything…"} />
       <div className="composer-actions">
         <div><span className="composer-hint">Enter sends · Shift+Enter for a new line</span></div>
         {streaming !== null
