@@ -1,0 +1,11 @@
+{
+  "name": "web-app",
+  "description": "Vinext + React app on a Cloudflare Worker with D1 and a starter CI workflow.",
+  "stack": ["vinext", "react", "cloudflare-worker", "d1"],
+  "commands": {
+    "install": "npm ci",
+    "build": "npm run build",
+    "test": "npm test",
+    "dev": "npm run dev"
+  }
+}

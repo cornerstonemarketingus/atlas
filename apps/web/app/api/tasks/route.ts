@@ -22,6 +22,7 @@ import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun, visib
 import { selfModificationDecision } from "./self-protection.mjs";
 import { repositoryAccessDecision } from "./repository-access.mjs";
 import { platformGitHubToken } from "./github-token.mjs";
+import { genesisNamespaceOwners } from "../projects/genesis/service.mjs";
 
 export async function POST(request: Request) {
   // A caller-supplied x-atlas-correlation-id is honoured only when it is
@@ -45,7 +46,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   let allowlist: Set<string>;
   try {
     tenant = await resolveTenantContext(request, account, getD1());
-    allowlist = tenant ? await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)) : new Set();
+    allowlist = tenant ? await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES), { namespaceOwners: genesisNamespaceOwners(process.env) }) : new Set();
   } catch {
     return Response.json({ message: "Your workspace is unavailable. Apply D1 migration 0015_tenants." }, { status: 503 });
   }

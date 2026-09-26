@@ -130,14 +130,14 @@ export async function deleteTenantRepository(d1, tenantId, { owner, name }) {
  * (deployment owner and every pre-tenancy user) keeps the whole deployment
  * allowlist, exactly as before tenancy.
  */
-export async function tenantAllowlist(d1, tenantId, deploymentAllowlist) {
+export async function tenantAllowlist(d1, tenantId, deploymentAllowlist, { namespaceOwners = [] } = {}) {
   const upperBound = new Set([...deploymentAllowlist].map((value) => String(value).toLowerCase()));
-  if (await isDefaultTenant(d1, tenantId)) return upperBound;
+  const allowedOwners = new Set(namespaceOwners.map((value) => String(value).toLowerCase()).filter(Boolean));
   const rows = await listTenantRepositories(d1, tenantId);
-  const allowed = new Set();
+  const allowed = await isDefaultTenant(d1, tenantId) ? new Set(upperBound) : new Set();
   for (const row of rows) {
     const full = `${row.owner}/${row.name}`.toLowerCase();
-    if (upperBound.has(full)) allowed.add(full);
+    if (upperBound.has(full) || allowedOwners.has(String(row.owner).toLowerCase())) allowed.add(full);
   }
   return allowed;
 }

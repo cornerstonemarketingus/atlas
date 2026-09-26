@@ -23,3 +23,14 @@ test("creates a GitHub App JWT and installation token request", async () => {
   });
   assert.equal(token, "github-installation-token-value");
 });
+
+test("can request a broader installation token scope for Genesis repo creation", async () => {
+  const configuration = githubAppConfiguration({ ATLAS_GITHUB_APP_ID: "123", ATLAS_GITHUB_INSTALLATION_ID: "456", ATLAS_GITHUB_APP_PRIVATE_KEY: pem });
+  await createInstallationToken(configuration, async (_url, init) => {
+    assert.deepEqual(JSON.parse(init.body), { permissions: { administration: "write", contents: "write", metadata: "read" } });
+    return new Response(JSON.stringify({ token: "github-installation-token-value" }), { status: 201 });
+  }, {
+    repositories: [],
+    permissions: { administration: "write", contents: "write", metadata: "read" },
+  });
+});

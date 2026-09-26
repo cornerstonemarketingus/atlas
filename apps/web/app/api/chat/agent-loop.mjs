@@ -1,4 +1,4 @@
-import { TASK_TOOL, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
+import { PROJECT_TOOL_NAME, TASK_TOOL, taskRequestsFromCalls, projectRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } from "./instant-tools.mjs";
 import { completionsUrl, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
@@ -80,16 +80,18 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
  *   defaultRepository: string,
  *   userMessage: string,
  *   startTasks: (calls: ReturnType<typeof taskRequestsFromCalls>) => Promise<string[]>,
+ *   projectTool?: object | null,
  *   stream: boolean,
  *   emit: (type: string, data: unknown) => void,
  *   fetcher?: typeof fetch,
  * }} options
- * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[] } | { error: string, status: number }>}
+ * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[], proposal?: { kind: string, name: string, template: string, description: string } | null } | { error: string, status: number }>}
  */
-export async function converse({ endpoint, turns, toolContext, defaultRepository, userMessage, startTasks, stream, emit, fetcher = fetch }) {
-  const tools = [TASK_TOOL, ...instantToolDefinitions(toolContext?.environment ?? {})];
+export async function converse({ endpoint, turns, toolContext, defaultRepository, userMessage, startTasks, projectTool = null, stream, emit, fetcher = fetch }) {
+  const tools = [TASK_TOOL, ...(projectTool ? [projectTool] : []), ...instantToolDefinitions(toolContext?.environment ?? {})];
   const working = [...turns];
   const taskCalls = [];
+  const projectCalls = [];
   const steps = [];
   let text = "";
   let toolsSupported = true;
@@ -122,7 +124,8 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         type: "function",
         function: { name: call.function.name, arguments: typeof call.function.arguments === "string" ? call.function.arguments : JSON.stringify(call.function.arguments ?? {}) },
       }));
-    taskCalls.push(...calls.filter((call) => !isInstantTool(call.function.name)));
+    taskCalls.push(...calls.filter((call) => !isInstantTool(call.function.name) && call.function.name !== PROJECT_TOOL_NAME));
+    projectCalls.push(...calls.filter((call) => call.function.name === PROJECT_TOOL_NAME));
     const instant = calls.filter((call) => isInstantTool(call.function.name));
     if (instant.length === 0 || round === MAX_TOOL_STEPS) break;
     working.push({ role: "assistant", content: result.text || null, tool_calls: calls });
@@ -151,5 +154,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     text += addition;
     emit("delta", { text: addition });
   }
-  return { reply: text.trim(), steps };
+  const projectRequests = projectRequestsFromCalls(projectCalls);
+  const proposal = projectRequests.requests[0] ? { kind: "project_genesis", ...projectRequests.requests[0] } : null;
+  return { reply: text.trim(), steps, proposal };
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { MAX_TOOL_STEPS, converse } from "../app/api/chat/agent-loop.mjs";
+import { PROJECT_TOOL } from "../app/api/chat/atlas-knowledge.mjs";
 
 const endpoint = { baseUrl: "https://model.test/v1", apiKey: "k", model: "m" };
 const sse = (events) => new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
@@ -45,7 +46,7 @@ test("a plain answer is one round with the tools offered", async () => {
   const { fetcher, requests } = scripted([[say("Hello "), say("there")]]);
   const { promise, events } = run(fetcher);
   const outcome = await promise;
-  assert.deepEqual(outcome, { reply: "Hello there", steps: [] });
+  assert.deepEqual(outcome, { reply: "Hello there", steps: [], proposal: null });
   assert.equal(requests.length, 1);
   assert.ok(requests[0].tools.some((tool) => tool.function.name === "read_web_page"));
   assert.equal(requests[0].tool_choice, "auto");
@@ -79,6 +80,13 @@ test("tasks the model starts run once, after the reply", async () => {
   assert.equal(started.length, 1);
   assert.equal(started[0].requests[0].mode, "coder");
   assert.equal(outcome.reply, "Starting it.\n\nStarted coder.");
+  assert.equal(outcome.proposal, null);
+});
+
+test("project-creation tool calls become confirmation proposals instead of running immediately", async () => {
+  const { fetcher } = scripted([[say("I picked a starter."), callTool("p1", "create_project", { name: "roofing-crm", template: "web-app", description: "CRM for roofing contractors" })]]);
+  const outcome = await run(fetcher, { projectTool: PROJECT_TOOL }).promise;
+  assert.deepEqual(outcome.proposal, { kind: "project_genesis", name: "roofing-crm", template: "web-app", description: "CRM for roofing contractors" });
 });
 
 test("tool use is bounded: the last round must answer in words", async () => {
@@ -89,6 +97,7 @@ test("tool use is bounded: the last round must answer in words", async () => {
   assert.equal(requests.at(-1).tool_choice, "none");
   assert.equal(outcome.steps.length, MAX_TOOL_STEPS);
   assert.equal(outcome.reply, "Done looking.");
+  assert.equal(outcome.proposal, null);
 });
 
 test("an endpoint without tool support is retried without tools", async () => {
@@ -97,6 +106,7 @@ test("an endpoint without tool support is retried without tools", async () => {
   assert.equal(outcome.reply, "Plain answer.");
   assert.ok(requests[0].tools);
   assert.equal(requests[1].tools, undefined);
+  assert.equal(outcome.proposal, null);
 });
 
 test("model failures become an actionable error", async () => {
@@ -115,4 +125,5 @@ test("non-streaming replies are handled the same way", async () => {
   const outcome = await run(fetcher, { stream: false }).promise;
   assert.equal(outcome.reply, "Found it.");
   assert.equal(outcome.steps.length, 1);
+  assert.equal(outcome.proposal, null);
 });
