@@ -203,9 +203,9 @@ test("read_ci_logs follows the redirect, keeps the failing excerpt, and redacts 
       return json({ jobs: [{ id: 501, run_id: 15, name: "test", status: "completed", conclusion: "failure", html_url: "https://github.com/owner/repo/actions/jobs/501" }] });
     }
     if (url.includes("/actions/jobs/501/logs")) {
-      return new Response("", { status: 302, headers: { location: "https://logs.example/job-501" } });
+      return new Response("", { status: 302, headers: { location: "https://pipelines.actions.githubusercontent.com/job-501" } });
     }
-    if (url === "https://logs.example/job-501") {
+    if (url === "https://pipelines.actions.githubusercontent.com/job-501") {
       return new Response([
         "setup",
         "token ghp_abcdefghijklmnopqrstuvwxyz123456",
@@ -226,4 +226,23 @@ test("read_ci_logs follows the redirect, keeps the failing excerpt, and redacts 
   assert.match(result.content, /not ok 7 - handles CI errors/u);
   assert.match(result.content, /\[REDACTED\]/u);
   assert.doesNotMatch(result.content, /ghp_abcdefghijklmnopqrstuvwxyz123456/u);
+});
+
+test("read_ci_logs refuses redirects to non-GitHub log hosts", async () => {
+  const fetcher = async (url) => {
+    if (url.includes("/actions/jobs/501/logs")) {
+      return new Response("", { status: 302, headers: { location: "https://evil.example/logs" } });
+    }
+    if (url.includes("/actions/jobs/501")) {
+      return json({ id: 501, run_id: 15, name: "test", status: "completed", conclusion: "failure", html_url: "https://github.com/owner/repo/actions/jobs/501" });
+    }
+    throw new Error(`unexpected ${url}`);
+  };
+  const result = await runInstantTool(call("read_ci_logs", { repository: "owner/repo", jobId: 501 }), {
+    fetcher,
+    allowlist: new Set(["owner/repo"]),
+    githubToken: async () => "tkn",
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.content, /did not return that job log/u);
 });

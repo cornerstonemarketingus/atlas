@@ -457,9 +457,9 @@ async function fetchGitHubGraphql({ token, query, variables }, fetcher) {
 async function fetchGitHubText(request, fetcher) {
   const response = await fetcher(request.url, { ...request.init, signal: AbortSignal.timeout(TOOL_TIMEOUT_MS), redirect: "manual" });
   if (response.status >= 300 && response.status < 400) {
-    const location = response.headers.get("location");
+    const location = trustedGitHubLogUrl(response.headers.get("location"));
     if (!location) return null;
-    const redirected = await fetcher(location, {
+    const redirected = await fetcher(location.toString(), {
       method: "GET",
       signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
       headers: { accept: "text/plain", "user-agent": "atlas-chat" },
@@ -470,6 +470,15 @@ async function fetchGitHubText(request, fetcher) {
   }
   if (!response.ok) return null;
   return await response.text();
+}
+
+function trustedGitHubLogUrl(raw) {
+  let url;
+  try { url = new URL(String(raw ?? "")); } catch { return null; }
+  if (url.protocol !== "https:" || url.username || url.password) return null;
+  const host = url.hostname.toLowerCase();
+  if (host === "objects.githubusercontent.com" || host.endsWith(".actions.githubusercontent.com") || /^productionresultssa\d+\.blob\.core\.windows\.net$/u.test(host)) return url;
+  return null;
 }
 
 function readTaskRequest(scope, taskId) {
@@ -499,8 +508,8 @@ async function resolveRunForTask(row, repository, token, fetcher, context) {
       candidateRuns.map((run) => ({ ...run, workflow })),
     )[0] ?? null;
     runId = assignment?.runId ?? null;
-    if (runId !== null && context.d1 && context.taskScope) {
-      try { await setTaskRunId(context.d1, context.taskScope, row.taskId, runId); } catch { /* best effort */ }
+    if (runId !== null && context.d1) {
+      try { await setTaskRunId(context.d1, { tenantId: row.tenantId, principal: row.requestedBy }, row.taskId, runId); } catch { /* best effort */ }
     }
   }
   const listedRun = runId === null ? null : candidateRuns.find((run) => run.id === runId) ?? null;
