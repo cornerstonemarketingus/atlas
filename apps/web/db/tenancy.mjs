@@ -234,3 +234,55 @@ export async function setTaskRunId(d1, scope, taskId, runId) {
     .bind(runId, taskId, scope.tenantId, scope.principal).run();
   return (result?.meta?.changes ?? 0) > 0;
 }
+
+// ---- Hosted automations ----------------------------------------------------
+
+export async function listAutomations(d1, scope, limit = 100) {
+  requireScope(scope);
+  const { results } = await d1.prepare(
+    `SELECT id, tenant_id AS tenantId, requested_by AS requestedBy, user_id AS userId, name, repository, branch, mode, objective,
+            trigger_type AS triggerType, trigger_config AS triggerConfig, budget_limit AS budgetLimit, budget_window_days AS budgetWindowDays,
+            paused_at AS pausedAt, created_at AS createdAt, updated_at AS updatedAt
+       FROM automations
+      WHERE tenant_id = ? AND requested_by = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?`,
+  ).bind(scope.tenantId, scope.principal, limit).all();
+  return results;
+}
+
+export async function listAutomationRuns(d1, scope, automationIds, limit = 200) {
+  requireScope(scope);
+  if (!Array.isArray(automationIds) || automationIds.length === 0) return [];
+  const params = automationIds.map(() => "?").join(",");
+  const { results } = await d1.prepare(
+    `SELECT id, tenant_id AS tenantId, automation_id AS automationId, requested_by AS requestedBy, status, reason, task_id AS taskId,
+            dedupe_key AS dedupeKey, triggered_at AS triggeredAt
+       FROM automation_runs
+      WHERE tenant_id = ? AND requested_by = ? AND automation_id IN (${params})
+      ORDER BY triggered_at DESC, id DESC
+      LIMIT ?`,
+  ).bind(scope.tenantId, scope.principal, ...automationIds, limit).all();
+  return results;
+}
+
+export async function insertAutomation(d1, scope, values) {
+  requireScope(scope);
+  await d1.prepare(
+    `INSERT INTO automations (id, tenant_id, requested_by, user_id, name, repository, branch, mode, objective, trigger_type, trigger_config, budget_limit, budget_window_days, paused_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    values.id, scope.tenantId, scope.principal, values.userId ?? null, values.name, values.repository, values.branch, values.mode,
+    values.objective, values.triggerType, values.triggerConfig, values.budgetLimit, values.budgetWindowDays, values.pausedAt ?? null,
+    values.createdAt, values.updatedAt,
+  ).run();
+}
+
+export async function setAutomationPaused(d1, scope, { id, paused }, now = new Date().toISOString()) {
+  requireScope(scope);
+  const result = await d1.prepare(
+    "UPDATE automations SET paused_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND requested_by = ?",
+  ).bind(paused ? now : null, now, id, scope.tenantId, scope.principal).run();
+  if ((result?.meta?.changes ?? 0) === 0) return null;
+  return { id, pausedAt: paused ? now : null };
+}

@@ -42,14 +42,23 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   // Tenancy (#71): the caller's tenant bounds which repositories they may use
   // (its allowlist within ATLAS_ALLOWED_REPOSITORIES) and owns what is recorded.
   let tenant: { tenantId: number; role: string; principal: string } | null;
-  let allowlist: Set<string>;
   try {
     tenant = await resolveTenantContext(request, account, getD1());
-    allowlist = tenant ? await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)) : new Set();
   } catch {
     return Response.json({ message: "Your workspace is unavailable. Apply D1 migration 0015_tenants." }, { status: 503 });
   }
   if (!tenant) return Response.json({ message: NO_TENANT_MESSAGE }, { status: 403 });
+  return dispatchTaskForTenant(account, tenant, body, correlationId);
+}
+
+export async function dispatchTaskForTenant(
+  account: { userId: string; dbUserId: number | null },
+  tenant: { tenantId: number; role: string; principal: string },
+  body: unknown,
+  correlationId: string,
+  environment = process.env,
+): Promise<Response> {
+  const allowlist = await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(environment.ATLAS_ALLOWED_REPOSITORIES));
   const validated = validateTask(body, allowlist);
   if ("error" in validated) return Response.json({ message: validated.error, ...(validated.needsClarification ? { needsClarification: true } : {}) }, { status: validated.status });
   const task = validated.task;
@@ -60,9 +69,9 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   // Never append to a conversation owned by another tenant or principal.
   try { if (!(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) conversationId = randomUUID(); } catch { conversationId = randomUUID(); }
 
-  let githubToken = platformGitHubToken();
+  let githubToken = platformGitHubToken(environment);
   try {
-    const githubApp = githubAppConfiguration();
+    const githubApp = githubAppConfiguration(environment);
     if (githubApp.configured) githubToken = await createInstallationToken(githubApp);
   } catch {
     return Response.json({ message: "GitHub App authentication failed, so nothing was started.", code: "GITHUB_APP_AUTH_FAILED", blocked: "BLOCKED_BY_MISSING_CREDENTIAL", unblock: "Check the ATLAS_GITHUB_APP_* secrets (app id, installation id, private key) and redeploy." }, { status: 502 });
@@ -92,7 +101,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
     // A repository with no saved setting uses the deployment default. The
     // owner chose autopilot, so unless ATLAS_DEFAULT_MERGE_POLICY says
     // otherwise Atlas merges its own change once every CI check passes.
-    mergePolicy = defaultMergePolicy(process.env.ATLAS_DEFAULT_MERGE_POLICY);
+    mergePolicy = defaultMergePolicy(environment.ATLAS_DEFAULT_MERGE_POLICY);
     try {
       const [owner, name] = task.repository.split("/");
       const [row] = await getDb().select().from(repositories).where(and(eq(repositories.tenantId, tenant.tenantId), eq(repositories.owner, owner), eq(repositories.name, name)));
@@ -106,7 +115,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   const taskId = randomUUID();
   if (githubToken) {
     try {
-      const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
+      const workflow = workflowForMode(task.mode, { defaultWorkflow: environment.ATLAS_GITHUB_WORKFLOW, coderWorkflow: environment.ATLAS_CODER_WORKFLOW });
       const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy, correlationId });
       if (!response.ok) {
         const failure = explainGitHubFailure(response.status, { workflow, repository: task.repository });
@@ -118,8 +127,8 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
       return Response.json({ ...explainGitHubFailure(503), message: "GitHub could not be reached, so nothing was started." }, { status: 502 });
     }
   }
-  const endpoint = process.env.ATLAS_AGENT_DISPATCH_URL;
-  const token = process.env.ATLAS_AGENT_DISPATCH_TOKEN;
+  const endpoint = environment.ATLAS_AGENT_DISPATCH_URL;
+  const token = environment.ATLAS_AGENT_DISPATCH_TOKEN;
   if (!endpoint || !token) return Response.json({ message: "The autonomous task dispatcher has not been configured." }, { status: 503 });
   try {
     const response = await fetch(endpoint, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", [CORRELATION_HEADER]: correlationId }, body: JSON.stringify({ taskId, ...task, requestedBy: account.userId, commitMode: "approval-required" }) });

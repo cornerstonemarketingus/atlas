@@ -160,6 +160,7 @@ export const tasks = sqliteTable("tasks", {
 /** Hosted automation templates that can dispatch tasks on schedules or events. */
 export const automations = sqliteTable("automations", {
   id: text("id").primaryKey(),
+  tenantId: integer("tenant_id").notNull().references(() => tenants.id),
   requestedBy: text("requested_by").notNull(),
   userId: integer("user_id").references(() => users.id),
   name: text("name").notNull(),
@@ -175,12 +176,13 @@ export const automations = sqliteTable("automations", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
-  ownerIndex: index("automations_owner_created_at_idx").on(table.requestedBy, table.createdAt),
+  tenantOwnerIndex: index("automations_tenant_owner_created_at_idx").on(table.tenantId, table.requestedBy, table.createdAt),
 }));
 
 /** Per-trigger execution receipts for each automation. */
 export const automationRuns = sqliteTable("automation_runs", {
   id: text("id").primaryKey(),
+  tenantId: integer("tenant_id").notNull().references(() => tenants.id),
   automationId: text("automation_id").notNull().references(() => automations.id),
   requestedBy: text("requested_by").notNull(),
   status: text("status").notNull(),
@@ -189,8 +191,8 @@ export const automationRuns = sqliteTable("automation_runs", {
   dedupeKey: text("dedupe_key"),
   triggeredAt: text("triggered_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
-  automationIndex: index("automation_runs_automation_triggered_at_idx").on(table.automationId, table.triggeredAt),
-  dedupeIndex: uniqueIndex("automation_runs_automation_dedupe_idx").on(table.automationId, table.dedupeKey),
+  tenantAutomationIndex: index("automation_runs_tenant_automation_triggered_at_idx").on(table.tenantId, table.automationId, table.triggeredAt),
+  dedupeIndex: uniqueIndex("automation_runs_tenant_automation_dedupe_idx").on(table.tenantId, table.automationId, table.dedupeKey),
 }));
 
 export const conversations = sqliteTable("conversations", {
