@@ -717,7 +717,7 @@ const TOKEN_PATTERNS = [
   /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/gu,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/gu,
   /\b(?:Bearer|token)\s+[A-Za-z0-9._=-]{16,}\b/gu,
-  /\b[A-Za-z0-9_\/+=-]{32,}\b/gu,
+  /\b[A-Za-z0-9_/+=-]{32,}\b/gu,
 ];
 
 function redactSecrets(text) {
