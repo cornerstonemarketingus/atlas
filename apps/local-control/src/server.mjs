@@ -12,13 +12,13 @@ import { createRateLimiter, LIMITS } from "./rate-limit.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, innovation = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, innovation = null, platformStream = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
   const missionRoutes = missionService ? createMissionRoutes({ missionService }) : null;
-  const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore }) : null;
+  const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore, stream: platformStream }) : null;
   const innovationRoutes = innovation ? createInnovationRoutes({ pipeline: innovation.pipeline, organization: innovation.organization, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
 
   async function startTask(taskId) {

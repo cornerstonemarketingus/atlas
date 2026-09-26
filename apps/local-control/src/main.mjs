@@ -10,6 +10,8 @@ import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { PlatformTaskStore } from "./platform/task-store.mjs";
 import { bootstrapInnovation } from "./platform/innovation/bootstrap.mjs";
+import { OutboxDispatcher, createEventStream } from "./platform/outbox-dispatcher.mjs";
+import { LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
 import { createGitHubActionsExecutor, createLocalExecutor } from "./agent/executors.mjs";
 import { createGitHubActionsClient } from "./agent/github-actions-client.mjs";
 import { createConversationExecutor } from "./agent/conversation-executor.mjs";
@@ -20,12 +22,14 @@ import { detectHardware } from "./agent/models/hardware.mjs";
 import { discoverModelServers } from "./agent/models/discovery.mjs";
 import { recommendModels } from "./agent/models/recommend.mjs";
 import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/router.mjs";
+import { createRoutedClient } from "./agent/models/routed-client.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { registerRepositoryTools } from "./agent/tools/repository-tools.mjs";
 import { registerRepositoryWriteTools } from "./agent/tools/repository-write-tools.mjs";
 import { registerFilesystemTools } from "./agent/tools/filesystem-tools.mjs";
 import { registerBrowserTools } from "./agent/tools/browser-tools.mjs";
 import { registerDesktopTools } from "./agent/tools/desktop-tools.mjs";
+import { registerTerminalTools } from "./agent/tools/terminal-tools.mjs";
 import { registerCommunicationsTools } from "./agent/tools/communications-tools.mjs";
 import { registerWorkflowTools } from "./agent/tools/workflow-tools.mjs";
 import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.mjs";
@@ -54,6 +58,12 @@ const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite
 // specialists, plus the Engineering, Design, Computer Operations and Research
 // peers) and the Innovation Backlog it works from.
 const innovation = bootstrapInnovation({ filename: join(dataDirectory, "organization.sqlite"), store, platformStore });
+// Every platform event committed to the outbox is delivered from here: today
+// to live dashboard clients; failures retry and then dead-letter visibly.
+const platformStream = createEventStream({ tenantFor: () => LOCAL_TENANT_ID });
+const outbox = new OutboxDispatcher({ store: platformStore, onError: (error) => console.error("Outbox delivery failed:", error instanceof Error ? error.message : error) });
+outbox.subscribe("*", (event) => platformStream.publish(event));
+outbox.start();
 const vault = createCredentialVault({ filePath: join(dataDirectory, "credentials.vault.json") });
 const license = loadLicense();
 const runtime = new AgentRuntime({
@@ -80,6 +90,7 @@ const server = createLocalControlServer({
   missionService,
   platformStore,
   innovation,
+  platformStream,
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
@@ -109,6 +120,7 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
 function shutdown() {
   server.close(async () => {
     await runtime.stop();
+    await outbox.stop();
     sessions.close();
     innovation.close();
     platformStore.close();
@@ -128,7 +140,15 @@ function buildExecutors() {
   const executors = {
     local: createLocalExecutor({ dataDirectory }),
     conversation: createConversationExecutor({
-      client: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
+      // Conversation turns go through the configured planning routes with
+      // fallback; with no routes configured this is the single default client.
+      client: createRoutedClient({
+        routes: parseRoutes(process.env.ATLAS_MODEL_ROUTES ?? "[]"),
+        task: "planning",
+        createClient: (route) => createModelClient({ baseUrl: route.endpoint }),
+        fallback: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
+        onRoute: (route, { failedOver }) => store.audit("model.route", `${route.model} served a conversation turn${failedOver ? " after failover" : ""}`),
+      }),
       registry: buildToolRegistry(),
       approvals: {
         // One-time and digest-bound: spending an approval consumes it, and it
@@ -172,6 +192,9 @@ function buildToolRegistry() {
   // Desktop control: same companion runtime and rules; fails closed with a
   // structured reason on machines without a supported desktop.
   registerDesktopTools(registry, { session: buildDesktopSession });
+  // Terminal: the platform controller (no shell, allowlist, per-session
+  // workspace). High-risk commands need an approval bound to the command.
+  registerTerminalTools(registry, { controller: buildTerminalController });
   registerInfrastructureTools(registry, { providers: buildInfrastructureProviders(), vault });
   return registry;
 }
@@ -208,6 +231,26 @@ async function buildBrowserSession() {
         store.createApproval({ capability: "computer.high_risk", summary, actionDigest: digest });
         return store.consumeApprovedDigest(digest);
       },
+    },
+  });
+}
+
+/** The platform terminal controller, rooted in the daemon's own workspace area. */
+async function buildTerminalController() {
+  const [{ TerminalController }, { createHash }, { mkdirSync: makeDirectory }] = await Promise.all([
+    import("./platform/terminal/terminal-controller.mjs"),
+    import("node:crypto"),
+    import("node:fs"),
+  ]);
+  const rootDirectory = join(dataDirectory, "terminal-workspaces");
+  makeDirectory(rootDirectory, { recursive: true });
+  return new TerminalController({
+    rootDirectory,
+    approve: ({ argv, reasons }) => {
+      const digest = createHash("sha256").update(JSON.stringify(argv)).digest("hex");
+      if (store.consumeApprovedDigest(digest)) return true;
+      store.createApproval({ capability: "terminal.run", summary: `Run \`${argv.join(" ").slice(0, 200)}\` (${reasons.join("; ")})`, actionDigest: digest });
+      return false;
     },
   });
 }
