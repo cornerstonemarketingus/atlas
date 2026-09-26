@@ -3,15 +3,17 @@ import { and, eq, gt, isNull } from "drizzle-orm";
 import { getDb } from "../../../../../../db";
 import { computerApprovals, computerTasks, requestRateLimits } from "../../../../../../db/schema";
 import { authenticatedDevice } from "../../../companion-auth";
-import { enforceRateLimit, rateLimitSubjectForDevice, rateLimitSubjectForIp } from "../../../../rate-limit.mjs";
+import { enforceRateLimit, rateLimitSubjectForDevice, rateLimitSubjectForIp, rateLimitedResponse } from "../../../../rate-limit.mjs";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const device = await authenticatedDevice(request);
+  const subject = device ? rateLimitSubjectForDevice(device) : rateLimitSubjectForIp(request);
+  if (!subject) return rateLimitedResponse(15 * 60);
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
     request,
-    subject: device ? rateLimitSubjectForDevice(device) : rateLimitSubjectForIp(request),
+    subject,
     route: "computer_companion_approval",
     limit: 30,
     windowSeconds: 15 * 60,

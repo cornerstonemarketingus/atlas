@@ -58,7 +58,8 @@ export async function enforceRateLimit({ db, table, request, subject, route, lim
   try {
     const outcome = await consumeRateLimit(typeof db === "function" ? db() : db, table, { subject, route, limit, windowSeconds, now });
     return outcome.allowed ? null : rateLimitedResponse(outcome.retryAfter);
-  } catch {
+  } catch (error) {
+    console.warn("Rate limit check failed.", { route, subject, failClosed, error: error instanceof Error ? error.message : String(error) });
     return failClosed ? rateLimitedResponse(windowSeconds) : null;
   }
 }
