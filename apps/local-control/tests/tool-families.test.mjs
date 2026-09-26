@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,9 +22,13 @@ import { normalizeAttachment, loadAttachment } from "../src/agent/attachments.mj
 import { symlink } from "node:fs/promises";
 
 async function symlinkOrSkip(t, target, path) {
-  try { await symlink(target, path); return true; }
+  try {
+    const type = process.platform === "win32" && existsSync(target) && statSync(target).isDirectory() ? "junction" : "file";
+    await symlink(target, path, type);
+    return true;
+  }
   catch (error) {
-    if (error?.code === "EPERM") { t.skip("Windows Developer Mode or symlink privilege is required for this fixture."); return false; }
+    if (["EPERM", "EACCES"].includes(error?.code)) { t.skip("Windows Developer Mode or symlink privilege is required for this fixture."); return false; }
     throw error;
   }
 }
@@ -415,7 +419,7 @@ test("a symlink inside a root cannot be used to read or write outside it", async
   // A symlink pointing out of the repository, and one to an absolute system
   // path. Both are things a cloned repository can legitimately contain.
   if (!await symlinkOrSkip(t, outside, join(repo, "escape"))) return;
-  if (!await symlinkOrSkip(t, "/etc/passwd", join(repo, "passwd-link"))) return;
+  if (!await symlinkOrSkip(t, join(outside, "secret.txt"), join(repo, "passwd-link"))) return;
 
   const { registry, approvals } = registryFor();
   registerRepositoryTools(registry);
@@ -486,7 +490,7 @@ test("a root that is itself a symlink still accepts its own contents", async (t)
   // for instance. Resolving the root too is what stops every path under it
   // looking like an escape.
   const confined = confineRealPath(linked, "file.txt", (code, message) => new Error(`${code}: ${message}`));
-  assert.equal(confined, join(await import("node:fs/promises").then((fs) => fs.realpath(real)), "file.txt"));
+  assert.equal(await readFile(confined, "utf8"), "content", "the resolved path points to the root's own file despite Windows short-path normalization");
 
   const { registry, approvals } = registryFor();
   registerRepositoryTools(registry);

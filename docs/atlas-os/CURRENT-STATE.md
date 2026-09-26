@@ -85,10 +85,10 @@ executables from configured absolute search directories on Windows; `.cmd` and
 entrypoints through Node. Timeout/cancel uses a fixed `taskkill /T /F` call for
 the managed PID tree. MCP inherits only an explicit set of non-secret Windows
 OS variables in addition to granted values. Terminal and MCP tests now use
-portable fixtures. Focused Windows-hosted tests passed 39/39 and the full local
-control suite passed 318 with 3 symlink-privilege skips on the development
-machine. The latest full suite contains 322 tests: 319 passed, 0 failed, 3
-symlink-privilege skips. CI now runs the full local-control test suite on
+portable fixtures. Focused Windows-hosted tests passed 40/40 and the full local
+control suite passed 321 with 1 file-symlink privilege skip on the development
+machine. The latest full suite contains 322 tests: 321 passed, 0 failed, 1
+file-symlink privilege skip. CI now runs the full local-control test suite on
 `windows-latest`.
 
 This does **not** make terminal execution a sandbox: commands run as the

@@ -264,6 +264,7 @@ export class McpGateway {
     allowedTools = [],
     rateLimit = { perMinute: 60 },
     timeoutMs = 30_000,
+    connectTimeoutMs = 30_000,
     trust = "untrusted",
     risk = "moderate",
     clientInfo = undefined,
@@ -281,11 +282,12 @@ export class McpGateway {
     const perMinute = rateLimit?.perMinute;
     if (!Number.isInteger(perMinute) || perMinute < 1) throw new McpGatewayError("INVALID_REGISTRATION", "rateLimit.perMinute must be a positive integer.");
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new McpGatewayError("INVALID_REGISTRATION", "timeoutMs must be a positive integer.");
+    if (!Number.isInteger(connectTimeoutMs) || connectTimeoutMs < 1) throw new McpGatewayError("INVALID_REGISTRATION", "connectTimeoutMs must be a positive integer.");
     const key = McpGateway.key(tenantId, serverId);
     if (this.servers.has(key)) throw new McpGatewayError("DUPLICATE_SERVER", `Server '${serverId}' is already registered for this tenant.`);
     this.servers.set(key, {
       tenantId, serverId, transportFactory, credentialsScope, allowedTools: [...allowedTools],
-      perMinute, timeoutMs, trust, risk, clientInfo,
+      perMinute, timeoutMs, connectTimeoutMs, trust, risk, clientInfo,
       client: null, connecting: null, tools: null, flagged: [], rejected: [],
     });
     return { tenantId, serverId };
@@ -304,7 +306,7 @@ export class McpGateway {
     if (!entry.connecting) {
       entry.connecting = (async () => {
         const transport = await entry.transportFactory({ tenantId: entry.tenantId, serverId: entry.serverId, credentialsScope: entry.credentialsScope });
-        const client = new McpClient({ transport, requestTimeoutMs: entry.timeoutMs, ...(entry.clientInfo ? { clientInfo: entry.clientInfo } : {}) });
+        const client = new McpClient({ transport, requestTimeoutMs: entry.connectTimeoutMs, ...(entry.clientInfo ? { clientInfo: entry.clientInfo } : {}) });
         try {
           await client.initialize();
         } catch (error) {
@@ -339,7 +341,7 @@ export class McpGateway {
     }
     try {
       const client = await this.#connect(entry);
-      const rawTools = await client.listTools({ timeoutMs: entry.timeoutMs });
+      const rawTools = await client.listTools({ timeoutMs: entry.connectTimeoutMs });
       const tools = new Map();
       const flagged = [];
       const rejected = [];

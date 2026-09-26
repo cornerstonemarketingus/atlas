@@ -62,7 +62,7 @@ owned by another active session; shared contracts require an integration PR.
 | C | Hosted workspace UX | `apps/web/app/AtlasShell.tsx`, chat/tasks/projects/activity UI and web UI tests | Runtime event API from B | Chat remains command center; Create/Operate/Automate/Activity can coexist; no fake status; mobile + browser tests. Avoid local console files. |
 | D | Create / preview / publish | New Project Genesis and preview routes in `apps/web` plus browser-worker adapters | A, B, sandbox policy | Real project artifact, isolated preview, tests, approval before deploy/domain/DNS mutation, rollback evidence. |
 | E | Code intelligence / IDE panels | `packages/atlas-cli/src/domain/*` and `apps/web` Create code panels | None, but keep contracts backward compatible | Compiler/LSP-backed symbols where available; evidence-linked diff/file views; tests across a fixture repo. Coordinate web shell changes through C. |
-| F | Windows terminal support | `apps/local-control/src/platform/terminal/*`, terminal tests, Windows CI config | A | **Implemented on `copilot/windows-terminal-portability`**; focused Windows terminal/MCP 40/40 and full local-control 319 passed, 0 failed, 3 symlink-privilege skips. Windows CI job added; awaiting CI. Process-level only; not container isolation. |
+| F | Windows terminal support | `apps/local-control/src/platform/terminal/*`, terminal tests, Windows CI config | A | **Implemented on `copilot/windows-terminal-portability`**; focused Windows terminal/MCP 40/40 and full local-control 321 passed, 0 failed, 1 file-symlink privilege skip. Windows CI job added; awaiting CI. Process-level only; not container isolation. |
 | G | Container/VM isolation | New isolated runner package and its tests/docs | F interfaces frozen | Untrusted execution in disposable environment with resource/egress controls, cleanup, crash tests. No host credentials. |
 | H | Operate sessions / takeover | `apps/windows-companion/src/desktop/*`, browser session API/UI under Operate, own tests | A, B | Multiple isolated sessions, genuine status, pause/stop/takeover where supported, approval/audit and ownership checks. Do not claim cloud browser is available without a consumer. |
 | I | Connectors and protocols | `apps/local-control/src/platform/mcp/*`, connector APIs, focused tests | A policy interface | Streamable HTTP/OAuth with credential references, per-agent scopes, deterministic policy, redaction, reconnect and audit; Atlas MCP server separately versioned. |
@@ -72,7 +72,7 @@ owned by another active session; shared contracts require an integration PR.
 | M | Models/runtime | `apps/local-control/src/agent/models/*` and model tests | A | Real routing in every execution path, health/fallback/cost/privacy accounting; no credentials in child processes. |
 | N | Controlled self-improvement | `.github/atlas/*`, self-improve workflow and eval packages | A, O, benchmarks | Admin-only activation; isolated branch/worktree; baseline/eval/security review; draft PR; explicit owner merge; rollback. Atlas cannot alter its own approval gates. |
 | O | Auth, tenancy, and governance | `apps/web/db/schema.ts`, migrations, auth/session/repository APIs and security tests | None; coordinate migrations with owner | Tenant/member isolation; session revocation; per-repository authorization; rate limits; audit; migration and restore tests. No broader autonomous access before this. |
-| P | Windows test portability | `apps/local-control/tests/platform-terminal.test.mjs`, MCP env tests, Windows CI | F | **Implemented on `copilot/windows-terminal-portability`**; POSIX command/path assumptions removed from terminal fixtures; only privilege-dependent symlink checks skip explicitly. |
+| P | Windows test portability | `apps/local-control/tests/platform-terminal.test.mjs`, MCP env tests, Windows CI | F | **Implemented on `copilot/windows-terminal-portability`**; POSIX command/path assumptions removed from terminal fixtures; only the file-symlink privilege check skips explicitly. |
 
 ## Immediate sequence
 
@@ -151,8 +151,8 @@ validation. Return a focused PR; do not merge or deploy.
 
 - PR #59 has green Linux CI, but is still a draft and not deployed.
 - Before F/P: Windows local-control suite had 19 failures from POSIX terminal
-   assumptions. After the portability changes: 319 passed, 0 failed, 3
-   symlink-privilege skips. The new Windows CI job remains to be confirmed.
+   assumptions. After the portability changes: 321 passed, 0 failed, 1
+   file-symlink privilege skip. The new Windows CI job remains to be confirmed.
 - Production task dispatch previously returned 502; owner must rotate or
   replace GitHub credentials and verify before declaring hosted coding usable.
 - Do not label the 200-item roadmap complete by counting libraries, mocks,
