@@ -1,13 +1,5 @@
 import { sessionCookieHeader, signSession } from "../session.mjs";
-
-function sameSecret(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let difference = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  }
-  return difference === 0;
-}
+import { constantTimeEqual } from "../../tasks/operator-auth.mjs";
 
 export async function POST(request: Request) {
   const origin = request.headers.get("origin");
@@ -25,7 +17,9 @@ export async function POST(request: Request) {
   const accessCode = body && typeof body === "object" && "accessCode" in body
     ? String((body as { accessCode?: unknown }).accessCode ?? "")
     : "";
-  if (!sameSecret(accessCode, expected)) {
+  // Digest-then-compare: the old length check returned early and leaked the
+  // access code's length through timing.
+  if (!(await constantTimeEqual(accessCode, expected))) {
     return Response.json({ message: "That access code is not valid." }, { status: 401 });
   }
 

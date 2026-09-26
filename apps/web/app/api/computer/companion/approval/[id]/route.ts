@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../../../db";
 import { computerApprovals, computerTasks } from "../../../../../../db/schema";
 import { authenticatedDevice } from "../../../companion-auth";
+import { consumeApproval } from "../../../approval-state.mjs";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const device = await authenticatedDevice(request);
@@ -18,8 +19,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (!task) return Response.json({ message: "Approval not found." }, { status: 404 });
   if (approval.status !== "approved") return Response.json({ status: approval.status }, { status: 409 });
   if (approval.consumedAt || approval.expiresAt <= new Date().toISOString()) return Response.json({ status: "expired" }, { status: 409 });
-  if (createHash("sha256").update(action).digest("hex") !== approval.actionHash) return Response.json({ status: "binding-mismatch" }, { status: 409 });
-  const consumedAt = new Date().toISOString();
-  await db.update(computerApprovals).set({ status: "consumed", consumedAt }).where(and(eq(computerApprovals.id, id), eq(computerApprovals.status, "approved")));
-  return Response.json({ status: "consumed", consumedAt });
+  const actionHash = createHash("sha256").update(action).digest("hex");
+  if (actionHash !== approval.actionHash) return Response.json({ status: "binding-mismatch" }, { status: 409 });
+  // The checks above only choose the error message. Authorization is the
+  // conditional UPDATE: only the one request whose UPDATE matched the row
+  // may act, so a concurrent second consumer gets 409, never "consumed".
+  const consumed = await consumeApproval(db, computerApprovals, { id, actionHash });
+  if (!consumed) return Response.json({ status: "already-consumed" }, { status: 409 });
+  return Response.json({ status: "consumed", consumedAt: consumed.consumedAt });
 }
