@@ -19,6 +19,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
   <a href="#/home" data-nav="home"><span class="ico" aria-hidden="true">⌂</span>Home</a>
   <a href="#/missions" data-nav="missions"><span class="ico" aria-hidden="true">◎</span>Missions</a>
   <a href="#/improve" data-nav="improve"><span class="ico" aria-hidden="true">↻</span>Improve Atlas<span class="badge" id="improve-badge" hidden></span></a>
+  <a href="#/models" data-nav="models"><span class="ico" aria-hidden="true">◈</span>Models</a>
   <a href="#/families" data-nav="families"><span class="ico" aria-hidden="true">⋔</span>Agent families</a>
   <a href="#/computer" data-nav="computer"><span class="ico" aria-hidden="true">▣</span>Computer</a>
   <a href="#/projects" data-nav="projects"><span class="ico" aria-hidden="true">▤</span>Projects</a>
@@ -93,6 +94,13 @@ export const LOCAL_UI_HTML = `<!doctype html>
   <div class="panel"><div class="task-top"><h3>Progress</h3><span id="improve-state"></span></div><pre id="improve-log" class="log" aria-live="polite">Unlock this tab to load progress.</pre></div>
   <section aria-labelledby="improve-pending-heading"><h3 id="improve-pending-heading">Waiting for your approval</h3><div id="improve-pending" class="list"><p class="empty">Nothing waiting.</p></div></section>
   <section aria-labelledby="improve-recent-heading"><h3 id="improve-recent-heading">Recent attempts</h3><div id="improve-recent" class="list"><p class="empty">No attempts yet.</p></div></section>
+ </section>
+ <section class="view" data-view="models" hidden aria-labelledby="models-heading">
+  <div class="section-title"><div><p class="eyebrow">RUNS ON THIS COMPUTER</p><h2 id="models-heading">Models</h2></div><button type="button" class="secondary" id="models-refresh">Refresh</button></div>
+  <p class="hint">Atlas runs open models on this machine: pick one, install it, and Atlas starts the local model server, loads the model with a context length that fits your memory, and routes easy work to fast models and hard work to strong ones. Sizes are estimates for 4-bit quantized models.</p>
+  <div class="panel"><div class="task-top"><h3>This machine</h3><span id="models-runtime-state"></span></div><div id="models-machine"><p class="empty">Unlock this tab to load models.</p></div><div class="actions"><button type="button" id="models-start">Start model server</button><button type="button" class="secondary" id="models-stop">Stop</button></div><p id="models-notice" class="hint" role="status" aria-live="polite"></p></div>
+  <div class="panel"><div class="task-top"><h3>Recommended for this machine</h3><button type="button" id="models-apply">Use this plan</button></div><div id="models-plan"></div></div>
+  <section aria-labelledby="models-catalog-heading"><h3 id="models-catalog-heading">Catalog</h3><div id="models-catalog" class="list"></div></section>
  </section>
  <section class="view" data-view="families" hidden aria-labelledby="families-heading">
   <div class="hero"><h2 id="families-heading">Agent families</h2><p class="lede">Atlas works as an organization. Executives commission work, specialists do it, and peer organizations help when asked. Authority only narrows as work is handed down, and every hand-off is recorded.</p></div>
@@ -451,7 +459,7 @@ if(sessionStorage.getItem('atlas-token')){loadMissions();loadMissionModels()}
 setInterval(()=>{if(sessionStorage.getItem('atlas-token'))loadMissions()},5000);
 
 /* ---- Shell: sections, theme, lock state, and the views built on the platform APIs. ---- */
-const VIEWS={home:'Home',missions:'Missions',improve:'Improve Atlas',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
+const VIEWS={home:'Home',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
 const $=q,$$=s=>[...document.querySelectorAll(s)];
 const isUnlocked=()=>Boolean(sessionStorage.getItem('atlas-token'));
 let currentView='home',openMissionId=null,shownMission='';
@@ -527,9 +535,40 @@ async function decideImprove(id,action){
 $('#improve-form').onsubmit=async e=>{e.preventDefault();const notice=$('#improve-notice');try{await sendJson('/v1/self-improve/runs','POST',{iterations:Number($('#improve-iterations').value)||1});notice.textContent='Started. Progress appears below.'}catch(error){notice.textContent=error.message}loadImprove()};
 $('#improve-refresh').onclick=()=>loadImprove();
 
+/* Models: install, run and choose local models without configuring a server by hand. */
+let modelsOverview=null;
+function gib(n){return n==null?'?':(Math.round(n*10)/10)+' GB'}
+async function loadModels(){
+ const machine=$('#models-machine'),planBox=$('#models-plan'),catalogBox=$('#models-catalog');
+ try{
+  const o=modelsOverview=await getJson('/v1/models/hosting');
+  const h=o.hardware,r=o.runtime;
+  $('#models-runtime-state').innerHTML=pill(r.reachable?'running':'stopped')+(r.managed?' <span class="chip">started by Atlas</span>':'')+(r.version?' <span class="chip">Ollama '+esc(r.version)+'</span>':'');
+  machine.innerHTML='<dl class="kv"><dt>Runs models on</dt><dd>'+esc(h.accelerator==='cpu'?'CPU ('+h.cpuCount+' cores)':h.accelerator==='apple'?'Apple Silicon GPU (unified memory)':(h.gpus||[]).map(g=>g.name+' · '+g.memoryGiB+' GB').join(', '))+'</dd><dt>Memory for models</dt><dd>'+esc(String(h.usableModelMemoryGiB))+' GB of '+esc(String(h.totalMemoryGiB))+' GB ('+esc(String(h.freeMemoryGiB??'?'))+' GB free now)</dd><dt>Loaded</dt><dd>'+esc((r.loaded||[]).map(m=>m.tag+(m.context?' · '+m.context+' ctx':'')+(m.memoryGB?' · '+m.memoryGB+' GB':'')).join(', ')||'nothing')+'</dd></dl>'+(r.binary==='missing'?'<div class="error"><strong>No local model runtime is installed.</strong><p>Install Ollama from <a href="'+esc(r.installGuide)+'" target="_blank" rel="noopener">ollama.com/download</a>, then press Start model server. Atlas manages it from there.</p></div>':'')+((r.jobs||[]).filter(j=>j.state==='running').map(j=>'<p class="hint">Installing '+esc(j.tag)+': '+esc(j.status)+'</p><progress max="100" value="'+esc(String(j.percent||0))+'"></progress>').join(''))+((r.jobs||[]).filter(j=>j.state==='failed').slice(-2).map(j=>'<p class="hint">'+esc(j.tag)+' failed: '+esc(j.status)+'</p>').join(''));
+  const rec=o.recommended,applied=o.applied;
+  const role=(name,e)=>e?'<tr><td>'+name+'</td><td><code>'+esc(e.tag)+'</code></td><td>'+esc(String(e.context||''))+'</td><td>'+(e.installed===false?'needs '+gib(e.downloadGB)+' download':'installed')+'</td></tr>':'';
+  planBox.innerHTML='<p class="hint">'+esc(rec.summary)+'</p><table class="table"><thead><tr><th>Role</th><th>Model</th><th>Context</th><th></th></tr></thead><tbody>'+role('Coding',rec.coder)+role('Reviewing',rec.reviewer)+role('Quick tasks',rec.fast)+'</tbody></table>'+(applied?'<p class="hint">In use: coding <code>'+esc(applied.coder.tag)+'</code>'+(applied.reviewer?', reviewing <code>'+esc(applied.reviewer.tag)+'</code>':'')+(applied.fast?', quick tasks <code>'+esc(applied.fast.tag)+'</code>':'')+'.</p>':'<p class="hint">No plan applied yet; Atlas uses its default model.</p>')+(rec.missing.length?'<div class="actions">'+rec.missing.map(t=>'<button type="button" class="secondary" data-model-install="'+esc(t)+'">Install '+esc(t)+'</button>').join('')+'</div>':'');
+  const running=new Set((r.jobs||[]).filter(j=>j.state==='running').map(j=>j.tag));
+  catalogBox.innerHTML=o.catalog.map(m=>'<article class="task"><div class="task-top"><h4>'+esc(m.tag)+'</h4>'+pill(m.installed?'installed':m.fits?'fits':'too large')+'</div><div class="meta"><span>coding '+esc(String(m.coding))+'/10</span><span>reasoning '+esc(String(m.reasoning))+'/10</span><span>'+esc(gib(m.downloadGB))+' download</span><span>'+(m.fits?'~'+esc(gib(m.memoryGiB))+' at '+esc(String(m.context))+' ctx':'needs ~'+esc(gib(m.memoryGiB)))+'</span>'+(m.activeB<m.parametersB?'<span>mixture of experts: fast for its size</span>':'')+(m.tools?'':'<span>no tool calls</span>')+(m.vision?'<span>vision</span>':'')+'</div><div class="actions">'+(m.installed?'<button type="button" data-model-warm="'+esc(m.tag)+'" data-context="'+esc(String(m.context||8192))+'"'+(m.fits?'':' disabled')+'>Run</button><button type="button" class="secondary" data-model-remove="'+esc(m.tag)+'">Remove</button>':'<button type="button" data-model-install="'+esc(m.tag)+'"'+(running.has(m.tag)?' disabled':'')+'>'+(running.has(m.tag)?'Installing…':'Install')+'</button>')+'</div></article>').join('');
+  $$('[data-model-install]').forEach(b=>b.onclick=()=>modelAction('install',{tag:b.dataset.modelInstall},'Downloading '+b.dataset.modelInstall+'…'));
+  $$('[data-model-remove]').forEach(b=>b.onclick=()=>{if(confirm('Remove '+b.dataset.modelRemove+' from this computer?'))modelAction('remove',{tag:b.dataset.modelRemove},'Removed.')});
+  $$('[data-model-warm]').forEach(b=>b.onclick=()=>modelAction('warm',{tag:b.dataset.modelWarm,context:Number(b.dataset.context)},'Loading '+b.dataset.modelWarm+'…'));
+ }catch(error){machine.innerHTML=problem(error)}
+}
+async function modelAction(action,body,pending){
+ const notice=$('#models-notice');notice.textContent=pending;
+ try{const result=await sendJson('/v1/models/hosting/'+action,'POST',body);notice.textContent=action==='warm'?result.loaded+' is loaded with a '+result.context+'-token context.':action==='install'?'Downloading '+result.job.tag+'. Progress appears above.':action==='plan'?'Atlas now uses '+result.applied.coder.tag+' for coding.':action==='server'?(result.stopped===false?'Atlas did not start this server, so it left it running.':result.stopped?'Stopped.':result.started?'Started the model server.':'The model server is already running.'):pending}
+ catch(error){notice.textContent=error.message+(error.unblock?' '+error.unblock:'')}
+ loadModels();
+}
+$('#models-start').onclick=()=>modelAction('server',{action:'start'},'Starting the model server…');
+$('#models-stop').onclick=()=>modelAction('server',{action:'stop'},'Stopping…');
+$('#models-apply').onclick=()=>modelAction('plan',{},'Applying…');
+$('#models-refresh').onclick=()=>loadModels();
+
 function refreshView(){
  if(!isUnlocked())return;
- const run={home:loadHome,missions:loadTeam,improve:loadImprove,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections}[currentView];
+ const run={home:loadHome,missions:loadTeam,improve:loadImprove,models:loadModels,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections}[currentView];
  if(run)run().catch(()=>{});
  loadBadge().catch(()=>{});
 }
@@ -675,5 +714,5 @@ async function loadConnections(){
 
 syncLock();
 show(viewFromHash());
-setInterval(()=>{if(isUnlocked()&&!document.hidden&&['home','missions','improve'].includes(currentView))refreshView()},5000);
+setInterval(()=>{if(isUnlocked()&&!document.hidden&&['home','missions','improve','models'].includes(currentView))refreshView()},5000);
 `;

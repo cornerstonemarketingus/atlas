@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { SelfImprovementLoop } from "./loop.mjs";
 import { DEFAULT_MODEL_ENDPOINT, buildCoderCli, createCoderBuilder, createReviewer, runCheck } from "./runtime.mjs";
 import { SelfImprovementService, createSelfImproveRoutes } from "./service.mjs";
+import { classifyDifficulty, modelForDifficulty } from "../../agent/models/difficulty.mjs";
 
 export { SelfImprovementLoop, SelfImprovementService, createSelfImproveRoutes };
 
@@ -13,13 +14,20 @@ export { SelfImprovementLoop, SelfImprovementService, createSelfImproveRoutes };
  * Configuration (all optional): ATLAS_SELF_IMPROVE_BASE_URL, _MODEL,
  * _REVIEW_MODEL, _API_KEY_ENV, _VERIFY_DIR (default apps/local-control).
  * The coder CLI is built on first use, not at daemon start.
+ *
+ * With a model plan applied on the Models page (and no explicit model set),
+ * each attempt picks its model by difficulty: simple tasks the fast model,
+ * others the coder, and a retry of the same task escalates. The reviewer
+ * uses the plan's reviewer, a different model family where one fits.
  */
-export function createDaemonSelfImprovement({ atlasRoot, dataDirectory, environment = process.env }) {
+export function createDaemonSelfImprovement({ atlasRoot, dataDirectory, environment = process.env, modelPlan = null }) {
   if (!existsSync(join(atlasRoot, ".git")) || !existsSync(join(atlasRoot, "packages", "atlas-cli"))) return null;
   const home = join(dataDirectory, "self-improve");
   const baseUrl = environment.ATLAS_SELF_IMPROVE_BASE_URL || DEFAULT_MODEL_ENDPOINT.baseUrl;
   const model = environment.ATLAS_SELF_IMPROVE_MODEL || DEFAULT_MODEL_ENDPOINT.model;
+  const explicitModel = Boolean(environment.ATLAS_SELF_IMPROVE_MODEL);
   const reviewModel = environment.ATLAS_SELF_IMPROVE_REVIEW_MODEL || model;
+  const plan = () => (explicitModel ? null : modelPlan?.read() ?? null);
   const apiKey = environment.ATLAS_SELF_IMPROVE_API_KEY_ENV ? environment[environment.ATLAS_SELF_IMPROVE_API_KEY_ENV] ?? "" : "";
   let cli = null;
   return new SelfImprovementService({
@@ -28,8 +36,13 @@ export function createDaemonSelfImprovement({ atlasRoot, dataDirectory, environm
     createLoop: ({ log, onOutput }) => {
       const builder = async (input) => {
         cli ??= buildCoderCli(atlasRoot, { stdio: "ignore" });
-        return createCoderBuilder({ atlasRoot, cli, runsDirectory: join(home, "runs"), endpoint: { baseUrl, model, apiKey }, onOutput })(input);
+        const { level, reasons } = classifyDifficulty({ objective: input.objective, kind: input.task?.kind, attempt: input.task?.attempt });
+        const choice = modelForDifficulty(plan(), level, { tag: model, context: 16_384 });
+        log(`builder: ${choice.tag} for a ${level} task${reasons.length ? ` (${reasons.join("; ")})` : ""}`);
+        const result = await createCoderBuilder({ atlasRoot, cli, runsDirectory: join(home, "runs"), endpoint: { baseUrl, model: choice.tag, apiKey }, contextWindow: String(choice.context ?? 16_384), onOutput })(input);
+        return { ...result, model: choice.tag, difficulty: level };
       };
+      const reviewer = (input) => createReviewer({ baseUrl, model: plan()?.reviewer?.tag ?? reviewModel, apiKey })(input);
       return new SelfImprovementLoop({
         repository: atlasRoot,
         worktreeRoot: join(home, "worktrees"),
@@ -38,7 +51,7 @@ export function createDaemonSelfImprovement({ atlasRoot, dataDirectory, environm
         verifyDirectory: environment.ATLAS_SELF_IMPROVE_VERIFY_DIR || "apps/local-control",
         builder,
         runCheck,
-        reviewer: createReviewer({ baseUrl, model: reviewModel, apiKey }),
+        reviewer,
         log,
       });
     },

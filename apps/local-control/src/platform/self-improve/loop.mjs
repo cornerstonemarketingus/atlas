@@ -139,9 +139,11 @@ export class SelfImprovementLoop {
       log(`[${id}] chose ${task.kind} ${task.id}: ${reason}`);
       const objective = `${task.objective}\n\nContext:\n${task.evidence}`.slice(0, 3900);
 
-      const built = await this.options.builder({ worktree: handle.path, objective, verifyDirectory: this.options.verifyDirectory });
+      // Attempts on the same candidate escalate the model (see agent/models/difficulty.mjs).
+      const attempt = this.history().filter((entry) => entry.candidateId === task.id).length + 1;
+      const built = await this.options.builder({ worktree: handle.path, objective, verifyDirectory: this.options.verifyDirectory, task: { kind: task.kind, attempt } });
       const head = await this.worktrees.commitAll(handle, `Atlas self-improvement: ${task.kind} ${task.id}`);
-      const base_ = { id, at: started, base, candidateId: task.id, kind: task.kind, objective: task.objective, reason, builder: { ok: built.ok, summary: String(built.summary ?? "").slice(0, 1000) } };
+      const base_ = { id, at: started, base, candidateId: task.id, kind: task.kind, objective: task.objective, reason, builder: { ok: built.ok, summary: String(built.summary ?? "").slice(0, 1000), ...(built.model ? { model: built.model, difficulty: built.difficulty } : {}) } };
       if (!head) {
         await cleanup();
         return this.#record({ ...base_, outcome: "rejected", violations: [{ rule: "empty", detail: "The builder made no change." }] });
