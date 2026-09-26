@@ -9,6 +9,20 @@ type TaskEvent = { id: string; kind: string; summary: string; detail: string | n
 type Task = { id: string; workflowType: Workflow; objective: string; status: string; result: string | null; error: string | null; createdAt: string; events: TaskEvent[] };
 type Approval = { id: string; summary: string; domain: string | null; expiresAt: string };
 type Capabilities = { providers: { windows: { available: boolean }; cloudflare: { available: boolean; entitled: boolean; configured: boolean; monthlyMinutes: number | null } } };
+type HostedAutomation = {
+  id: string;
+  name: string;
+  repository: string;
+  branch: string;
+  mode: string;
+  objective: string;
+  triggerType: string;
+  trigger: { cron?: string; branch?: string; checkName?: string } | null;
+  budgetLimit: number;
+  budgetWindowDays: number;
+  paused: boolean;
+  runs: Array<{ id: string; status: string; reason: string | null; taskId: string | null; triggeredAt: string }>;
+};
 
 const WORKFLOWS: Array<{ id: Workflow; title: string; summary: string; startUrl: string; objective: string; guardrail: string }> = [
   { id: "job-application", title: "Apply for jobs", summary: "Find matching jobs and fill in applications.", startUrl: "https://www.linkedin.com/jobs/", objective: "Find roles matching my profile and preferences. For each strong match, summarize why it fits, prepare accurate tailored application answers, fill the form, and pause before every final submission.", guardrail: "Asks before submitting each application" },
@@ -35,6 +49,7 @@ export function AutomationSection() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [hostedAutomations, setHostedAutomations] = useState<HostedAutomation[]>([]);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [credential, setCredential] = useState("");
   const [copied, setCopied] = useState(false);
@@ -46,18 +61,31 @@ export function AutomationSection() {
   const [objective, setObjective] = useState(WORKFLOWS[0].objective);
   const [startUrl, setStartUrl] = useState(WORKFLOWS[0].startUrl);
   const [tab, setTab] = useState<"attention" | "running" | "history">("attention");
+  const [automationName, setAutomationName] = useState("Weekly dependency update");
+  const [automationRepository, setAutomationRepository] = useState("cornerstonemarketingus/atlas");
+  const [automationBranch, setAutomationBranch] = useState("main");
+  const [automationMode, setAutomationMode] = useState<"inspect" | "debug" | "coder">("debug");
+  const [automationObjective, setAutomationObjective] = useState("Review and update outdated dependencies, then open a pull request with test results.");
+  const [automationTriggerType, setAutomationTriggerType] = useState<"cron" | "github-check-failure">("cron");
+  const [automationCron, setAutomationCron] = useState("0 9 * * 1");
+  const [automationCheckName, setAutomationCheckName] = useState("");
+  const [automationBudgetLimit, setAutomationBudgetLimit] = useState(1);
+  const [automationBudgetWindowDays, setAutomationBudgetWindowDays] = useState(7);
   const taskComposerRef = useRef<HTMLElement>(null);
 
   const refresh = useCallback(async () => {
-    const [deviceResponse, taskResponse] = await Promise.all([
+    const [deviceResponse, taskResponse, automationResponse] = await Promise.all([
       fetch("/api/computer/devices", { cache: "no-store" }),
       fetch("/api/computer/tasks", { cache: "no-store" }),
+      fetch("/api/automations", { cache: "no-store" }),
     ]);
-    if (deviceResponse.status === 401 || taskResponse.status === 401) { window.location.href = "/"; return; }
-    if (!deviceResponse.ok || !taskResponse.ok) throw new Error("Automation is temporarily unavailable. Check that the database migration in Connections has been applied.");
+    if (deviceResponse.status === 401 || taskResponse.status === 401 || automationResponse.status === 401) { window.location.href = "/"; return; }
+    if (!deviceResponse.ok || !taskResponse.ok || !automationResponse.ok) throw new Error("Automation is temporarily unavailable. Check that the database migration in Connections has been applied.");
     setDevices((await deviceResponse.json()).devices);
     const data = await taskResponse.json();
+    const automationData = await automationResponse.json();
     setTasks(data.tasks); setApprovals(data.approvals); setCapabilities(data.capabilities);
+    setHostedAutomations(Array.isArray(automationData.automations) ? automationData.automations : []);
   }, []);
 
   useEffect(() => {
@@ -115,6 +143,38 @@ export function AutomationSection() {
     await fetch(`/api/computer/devices/${id}`, { method: "DELETE" });
     await refresh().catch(() => undefined);
   }
+  async function createAutomation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true);
+    const response = await fetch("/api/automations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: automationName,
+        repository: automationRepository,
+        branch: automationBranch,
+        mode: automationMode,
+        objective: automationObjective,
+        triggerType: automationTriggerType,
+        trigger: automationTriggerType === "cron"
+          ? { cron: automationCron }
+          : { branch: "main", checkName: automationCheckName },
+        budgetLimit: automationBudgetLimit,
+        budgetWindowDays: automationBudgetWindowDays,
+      }),
+    });
+    const data = await response.json(); setBusy(false);
+    if (!response.ok) { setNotice(data.message ?? "Automation could not be created."); return; }
+    setNotice("Automation saved.");
+    await refresh().catch(() => undefined);
+  }
+  async function pauseAutomation(id: string, paused: boolean) {
+    await fetch(`/api/automations/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paused }),
+    });
+    await refresh().catch(() => undefined);
+  }
 
   const active = WORKFLOWS.find((item) => item.id === workflow)!;
   const available = devices.filter((device) => !device.revokedAt);
@@ -151,6 +211,82 @@ export function AutomationSection() {
         </header>
 
         {notice && <p className="page-notice" role="status">{notice}</p>}
+
+        <section className="page-block">
+          <h2>Hosted automations</h2>
+          <p>Run Atlas automatically on a schedule or when CI fails on main. Automation runs always use your repository merge policy.</p>
+          <form className="mission-form" onSubmit={createAutomation}>
+            <label>Name
+              <input value={automationName} onChange={(event) => setAutomationName(event.target.value)} maxLength={100} required />
+            </label>
+            <div className="field-row">
+              <label>Repository
+                <input value={automationRepository} onChange={(event) => setAutomationRepository(event.target.value)} placeholder="owner/repo" required />
+              </label>
+              <label>Branch
+                <input value={automationBranch} onChange={(event) => setAutomationBranch(event.target.value)} required />
+              </label>
+              <label>Mode
+                <select value={automationMode} onChange={(event) => setAutomationMode(event.target.value as "inspect" | "debug" | "coder")}>
+                  <option value="inspect">Inspect</option>
+                  <option value="debug">Debug</option>
+                  <option value="coder">Coder</option>
+                </select>
+              </label>
+            </div>
+            <label>Objective
+              <textarea value={automationObjective} onChange={(event) => setAutomationObjective(event.target.value)} rows={4} maxLength={4000} required />
+            </label>
+            <div className="field-row">
+              <label>Trigger
+                <select value={automationTriggerType} onChange={(event) => setAutomationTriggerType(event.target.value as "cron" | "github-check-failure")}>
+                  <option value="cron">Schedule (cron)</option>
+                  <option value="github-check-failure">CI failed on main</option>
+                </select>
+              </label>
+              {automationTriggerType === "cron"
+                ? <label>Cron (UTC)
+                  <input value={automationCron} onChange={(event) => setAutomationCron(event.target.value)} placeholder="0 9 * * 1" required />
+                </label>
+                : <label>Check name <span>optional</span>
+                  <input value={automationCheckName} onChange={(event) => setAutomationCheckName(event.target.value)} placeholder="CI" />
+                </label>}
+              <label>Budget runs
+                <input type="number" min={1} max={1000} value={automationBudgetLimit} onChange={(event) => setAutomationBudgetLimit(Number(event.target.value) || 1)} required />
+              </label>
+              <label>Per days
+                <input type="number" min={1} max={365} value={automationBudgetWindowDays} onChange={(event) => setAutomationBudgetWindowDays(Number(event.target.value) || 7)} required />
+              </label>
+            </div>
+            <div className="mission-send">
+              <button disabled={busy}>{busy ? "Saving…" : "Create automation"}</button>
+            </div>
+          </form>
+          <div className="task-history-detail">
+            {hostedAutomations.length === 0
+              ? <p>No automations yet.</p>
+              : hostedAutomations.map((automation) => <article className="run-row" key={automation.id}>
+                <span className={`run-state ${automation.paused ? "paused" : "running"}`}>{automation.paused ? "Paused" : "Active"}</span>
+                <div>
+                  <small>{automation.repository} · {automation.branch} · {automation.mode}</small>
+                  <strong>{automation.name}</strong>
+                  <p>{automation.objective}</p>
+                  <p>Trigger: {automation.triggerType === "cron" ? automation.trigger?.cron : `CI failed on ${automation.trigger?.branch ?? "main"}`}</p>
+                  <p>Budget: {automation.budgetLimit} run(s) / {automation.budgetWindowDays} day(s)</p>
+                  {automation.runs.length > 0 && <details className="task-timeline">
+                    <summary>Run history ({automation.runs.length})</summary>
+                    <ol>{automation.runs.map((run) => <li key={run.id}>
+                      <span className={`event-dot ${run.status === "started" ? "progress" : "error"}`} />
+                      <div><b>{run.status.replaceAll("_", " ")}</b>{run.taskId && <p>Task: {run.taskId}</p>}{run.reason && <p>{run.reason}</p>}<time>{new Date(run.triggeredAt).toLocaleString()}</time></div>
+                    </li>)}</ol>
+                  </details>}
+                </div>
+                <div className="run-end">
+                  <button onClick={() => void pauseAutomation(automation.id, !automation.paused)}>{automation.paused ? "Resume" : "Pause"}</button>
+                </div>
+              </article>)}
+          </div>
+        </section>
 
         {approvals.length > 0 && <section className="approval-panel">
           <p className="kicker">WAITING FOR YOU</p>

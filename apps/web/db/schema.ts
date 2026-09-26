@@ -153,6 +153,42 @@ export const tasks = sqliteTable("tasks", {
   conversationIndex: index("tasks_conversation_idx").on(table.conversationId, table.createdAt),
 }));
 
+/** Hosted automation templates that can dispatch tasks on schedules or events. */
+export const automations = sqliteTable("automations", {
+  id: text("id").primaryKey(),
+  requestedBy: text("requested_by").notNull(),
+  userId: integer("user_id").references(() => users.id),
+  name: text("name").notNull(),
+  repository: text("repository").notNull(),
+  branch: text("branch").notNull(),
+  mode: text("mode").notNull(),
+  objective: text("objective").notNull(),
+  triggerType: text("trigger_type").notNull(),
+  triggerConfig: text("trigger_config").notNull(),
+  budgetLimit: integer("budget_limit").notNull().default(1),
+  budgetWindowDays: integer("budget_window_days").notNull().default(7),
+  pausedAt: text("paused_at"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  ownerIndex: index("automations_owner_created_at_idx").on(table.requestedBy, table.createdAt),
+}));
+
+/** Per-trigger execution receipts for each automation. */
+export const automationRuns = sqliteTable("automation_runs", {
+  id: text("id").primaryKey(),
+  automationId: text("automation_id").notNull().references(() => automations.id),
+  requestedBy: text("requested_by").notNull(),
+  status: text("status").notNull(),
+  reason: text("reason"),
+  taskId: text("task_id"),
+  dedupeKey: text("dedupe_key"),
+  triggeredAt: text("triggered_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  automationIndex: index("automation_runs_automation_triggered_at_idx").on(table.automationId, table.triggeredAt),
+  dedupeIndex: uniqueIndex("automation_runs_automation_dedupe_idx").on(table.automationId, table.dedupeKey),
+}));
+
 export const conversations = sqliteTable("conversations", {
   id: text("id").primaryKey(),
   requestedBy: text("requested_by").notNull(),

@@ -2,6 +2,7 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { withSecurityHeaders } from "./security-headers.mjs";
+import { runAutomations } from "../app/api/automations/runner";
 
 interface Env {
   ASSETS: Fetcher;
@@ -20,6 +21,11 @@ interface ExecutionContext {
   passThroughOnException(): void;
 }
 
+interface ScheduledEvent {
+  cron: string;
+  scheduledTime: number;
+}
+
 // Image security config. SVG sources with .svg extension auto-skip the
 // optimization endpoint on the client side (served directly, no proxy).
 // To route SVGs through the optimizer (with security headers), set
@@ -27,7 +33,12 @@ interface ExecutionContext {
 // const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
 
 const worker = {
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    Object.assign(process.env, env as unknown as Record<string, string>);
+    ctx.waitUntil(runAutomations({ kind: "cron" }));
+  },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    Object.assign(process.env, env as unknown as Record<string, string>);
     const url = new URL(request.url);
 
     if (url.pathname === "/_vinext/image") {

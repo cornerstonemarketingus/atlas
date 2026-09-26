@@ -41,6 +41,9 @@ export default defineConfig(async ({ command }) => {
   const localBindingConfig = {
     main: "./worker/index.ts",
     compatibility_flags: ["nodejs_compat"],
+    triggers: {
+      crons: [process.env.ATLAS_AUTOMATION_TICK_CRON || "*/5 * * * *"],
+    },
     d1_databases: d1 && d1DatabaseId
       ? [
           {
