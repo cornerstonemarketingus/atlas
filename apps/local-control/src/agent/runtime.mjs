@@ -76,6 +76,13 @@ export class AgentRuntime {
   getSession(sessionId) { return this.#sessions.session(sessionId); }
   getTurns(sessionId) { return this.#sessions.turns(sessionId); }
   getEvents(sessionId, afterSequence = 0) { return this.#sessions.events(sessionId, afterSequence); }
+  healthSnapshot() {
+    const sessions = this.#sessions.sessions(10_000);
+    let queuedTurns = 0;
+    for (const session of sessions) queuedTurns += this.#sessions.turns(session.id).filter((turn) => turn.state === "pending").length;
+    const activeSessions = [...this.#runs.keys()].length;
+    return { activeAgents: activeSessions, activeSessions, queuedTurns, sessions: sessions.length };
+  }
 
   /**
    * Boot-time recovery. A session whose lease has lapsed was being run by a
