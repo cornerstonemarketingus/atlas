@@ -72,9 +72,38 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
   return { ok: true, text, calls: parser.toolCalls, toolsDropped };
 }
 
+function isRetryableStatus(status) {
+  return status === 429 || status >= 500;
+}
+
+function routeLabel(route) {
+  return route?.label || `${route?.provider ?? "model"}:${route?.model ?? "default"}`;
+}
+
+async function routedModelStep({ routes, turns, tools, stream, emit, toolChoice, fetcher }) {
+  let lastFailure = null;
+  for (let index = 0; index < routes.length; index += 1) {
+    const endpoint = routes[index];
+    try {
+      const result = await modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher });
+      if (!result.ok && isRetryableStatus(result.status) && index < routes.length - 1) {
+        continue;
+      }
+      return { ...result, servedBy: routeLabel(endpoint) };
+    } catch (error) {
+      lastFailure = error;
+      if (index < routes.length - 1) continue;
+      throw error;
+    }
+  }
+  if (lastFailure) throw lastFailure;
+  return { ok: false, status: 503, servedBy: null };
+}
+
 /**
  * @param {{
- *   endpoint: { baseUrl?: string, apiKey?: string | null, model?: string },
+ *   endpoint?: { baseUrl?: string, apiKey?: string | null, model?: string, label?: string, provider?: string },
+ *   routes?: { baseUrl?: string, apiKey?: string | null, model?: string, label?: string, provider?: string }[],
  *   turns: object[],
  *   toolContext: Parameters<typeof runInstantTool>[1] & { environment?: Record<string, string|undefined> },
  *   defaultRepository: string,
@@ -84,15 +113,18 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
  *   emit: (type: string, data: unknown) => void,
  *   fetcher?: typeof fetch,
  * }} options
- * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[] } | { error: string, status: number }>}
+ * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[], answeredBy: string | null } | { error: string, status: number }>}
  */
-export async function converse({ endpoint, turns, toolContext, defaultRepository, userMessage, startTasks, stream, emit, fetcher = fetch }) {
+export async function converse({ endpoint, routes, turns, toolContext, defaultRepository, userMessage, startTasks, stream, emit, fetcher = fetch }) {
   const tools = [TASK_TOOL, ...instantToolDefinitions(toolContext?.environment ?? {})];
+  const configuredRoutes = routes?.length ? routes : endpoint ? [endpoint] : [];
+  if (!configuredRoutes.length) return { error: "No model server answered. Check the endpoint in Connections.", status: 504 };
   const working = [...turns];
   const taskCalls = [];
   const steps = [];
   let text = "";
   let toolsSupported = true;
+  let answeredBy = null;
   for (let round = 0; round <= MAX_TOOL_STEPS; round += 1) {
     let firstDelta = true;
     // Words from separate rounds read as separate paragraphs.
@@ -107,13 +139,22 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     let result;
     try {
       // The last round keeps the tool definitions (earlier rounds' results refer to them) but must answer in words.
-      result = await modelStep({ endpoint, turns: working, tools: toolsSupported ? tools : null, stream, emit: sink, toolChoice: round < MAX_TOOL_STEPS ? "auto" : "none", fetcher });
+      result = await routedModelStep({
+        routes: configuredRoutes,
+        turns: working,
+        tools: toolsSupported ? tools : null,
+        stream,
+        emit: sink,
+        toolChoice: round < MAX_TOOL_STEPS ? "auto" : "none",
+        fetcher,
+      });
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "TimeoutError";
       return { error: timedOut ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.", status: 504 };
     }
     // The status is the actionable part; the body can contain the prompt echoed back.
     if (!result.ok) return { error: `The model endpoint answered ${result.status}.`, status: 502 };
+    answeredBy = result.servedBy ?? answeredBy;
     if (result.toolsDropped) toolsSupported = false;
     const calls = result.calls
       .filter((call) => typeof call?.function?.name === "string" && call.function.name)
@@ -151,5 +192,5 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     text += addition;
     emit("delta", { text: addition });
   }
-  return { reply: text.trim(), steps };
+  return { reply: text.trim(), steps, answeredBy };
 }

@@ -6,6 +6,7 @@ import { AtlasShell } from "../AtlasShell.js";
 type SetupStep = { id: string; label: string; state: "complete" | "action-required" | "failed"; detail: string; action?: string };
 type SetupStatus = { overall: string; completedSteps: number; totalSteps: number; steps: SetupStep[]; optional: { stripeConfigured: boolean } };
 type GitHub = { connected: boolean; method: string; installUrl: string | null };
+type ChatModelStatus = { configured: boolean; reason: string | null; routes?: { purpose: string; route: string; endpoint: string }[]; lastServedModel?: string | null };
 
 const MERGE_POLICIES = [
   { id: "manual", label: "Review first: a person merges each pull request" },
@@ -23,7 +24,7 @@ const MERGE_POLICIES = [
 export function SetupCenter() {
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [github, setGitHub] = useState<GitHub | null>(null);
-  const [model, setModel] = useState<{ configured: boolean; reason: string | null } | null>(null);
+  const [model, setModel] = useState<ChatModelStatus | null>(null);
   const [repository, setRepository] = useState("");
   const [repositoryOptions, setRepositoryOptions] = useState<string[]>([]);
   const [mergePolicy, setMergePolicy] = useState("manual");
@@ -58,7 +59,7 @@ export function SetupCenter() {
     ]).then(([status, chat, options]) => {
       if (!active) return;
       if (status) setGitHub(status as GitHub);
-      if (chat) setModel(chat as { configured: boolean; reason: string | null });
+      if (chat) setModel(chat as ChatModelStatus);
       const names = (options as { repositories?: string[] } | null)?.repositories ?? [];
       if (names.length) { setRepositoryOptions(names); setRepository((current) => current || names[0]); }
     });
@@ -123,6 +124,15 @@ export function SetupCenter() {
               <p>{model?.configured
                 ? "Chat is connected. Atlas works with any OpenAI-compatible model server, hosted or your own."
                 : model?.reason ?? "Chat cannot answer until a model endpoint is configured."}</p>
+              {model?.lastServedModel && <p>Last served: <code>{model.lastServedModel}</code></p>}
+              {!!model?.routes?.length && <table>
+                <thead><tr><th>Purpose</th><th>Route</th><th>Endpoint</th></tr></thead>
+                <tbody>
+                  {model.routes.map((item, index) => <tr key={`${item.purpose}:${item.route}:${index}`}>
+                    <td>{item.purpose}</td><td><code>{item.route}</code></td><td><code>{item.endpoint || "configured at runtime"}</code></td>
+                  </tr>)}
+                </tbody>
+              </table>}
             </article>
             <article className="status-card">
               <small>COMPUTER</small>

@@ -68,6 +68,32 @@ function writeJson(filename, value) {
   });
 }
 
+function parseCodingRoutes(raw) {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error("ATLAS_MODEL_ROUTES must be valid JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("ATLAS_MODEL_ROUTES must be a JSON object.");
+  }
+  const coding = parsed.coding;
+  if (coding === undefined) return [];
+  if (!Array.isArray(coding) || coding.some((item) => typeof item !== "string" || !item.trim())) {
+    throw new Error("ATLAS_MODEL_ROUTES.coding must be an array of provider:model routes.");
+  }
+  return coding.map((entry) => {
+    const separator = entry.indexOf(":");
+    if (separator <= 0 || separator === entry.length - 1) {
+      throw new Error(`Invalid coding route '${entry}'. Expected provider:model.`);
+    }
+    return { provider: entry.slice(0, separator).trim().toLowerCase(), model: entry.slice(separator + 1).trim() };
+  });
+}
+
 /**
  * Writes an artifact after scrubbing credentials out of it.
  *
@@ -180,17 +206,37 @@ if (metadata.mode === "inspect") {
   // never becomes a way to name an arbitrary environment variable to read.
   const providerInput = (process.env.ATLAS_CODER_PROVIDER || "").trim().toLowerCase();
   const PROVIDER_KEY_VARIABLES = { anthropic: "ANTHROPIC_API_KEY", groq: "GROQ_API_KEY" };
+  let codingRoutes = [];
+  try {
+    codingRoutes = parseCodingRoutes(process.env.ATLAS_MODEL_ROUTES);
+  } catch (error) {
+    writeStatus("failed", error.message);
+    console.error(`Atlas coder mode: ${error.message}`);
+    process.exit(2);
+  }
+  const invalidCodingProvider = codingRoutes.find((route) => !Object.hasOwn(PROVIDER_KEY_VARIABLES, route.provider));
+  if (invalidCodingProvider) {
+    writeStatus("failed", `Coding route provider '${invalidCodingProvider.provider}' is not recognised; expected one of: ${Object.keys(PROVIDER_KEY_VARIABLES).join(", ")}.`);
+    console.error(`Atlas coder mode: unknown provider '${invalidCodingProvider.provider}'.`);
+    process.exit(2);
+  }
   if (providerInput && !Object.hasOwn(PROVIDER_KEY_VARIABLES, providerInput)) {
     const known = Object.keys(PROVIDER_KEY_VARIABLES).join(", ");
     writeStatus("failed", `ATLAS_CODER_PROVIDER '${providerInput}' is not recognised; expected one of: ${known}.`);
     console.error(`Atlas coder mode: unknown provider '${providerInput}'.`);
     process.exit(2);
   }
-  const model = process.env.ATLAS_CODER_MODEL || "openai/gpt-oss-120b";
+  const primaryFromRoutes = codingRoutes[0];
+  const model = primaryFromRoutes?.model || process.env.ATLAS_CODER_MODEL || "openai/gpt-oss-120b";
   // Match the CLI's own inference so the runner asks for the key the CLI will
   // actually look up; naming the provider explicitly below keeps the two from
   // drifting apart later.
-  const provider = providerInput || (/^(anthropic\/)?claude[-.]/i.test(model) ? "anthropic" : "groq");
+  const provider = primaryFromRoutes?.provider || providerInput || (/^(anthropic\/)?claude[-.]/i.test(model) ? "anthropic" : "groq");
+  if (!Object.hasOwn(PROVIDER_KEY_VARIABLES, provider)) {
+    writeStatus("failed", `Coding route provider '${provider}' is not recognised; expected one of: ${Object.keys(PROVIDER_KEY_VARIABLES).join(", ")}.`);
+    console.error(`Atlas coder mode: unknown provider '${provider}'.`);
+    process.exit(2);
+  }
   const apiKeyVariable = PROVIDER_KEY_VARIABLES[provider];
   // A self-hosted OpenAI-compatible server (vLLM, Ollama, llama.cpp) usually
   // has no API key at all, so requiring one would make it impossible to run
@@ -229,7 +275,9 @@ if (metadata.mode === "inspect") {
   if (baseUrl) codeArgs.push("--base-url", baseUrl);
   if (verifyDir) codeArgs.push("--verify-dir", verifyDir);
   if (/^[0-5]$/.test(repairAttempts)) codeArgs.push("--max-repair-attempts", repairAttempts);
-  const fallbacks = (process.env.ATLAS_CODER_FALLBACKS || "").split(",").map((item) => item.trim()).filter(Boolean);
+  const fallbacks = codingRoutes.length > 1
+    ? codingRoutes.slice(1).map((route) => `${route.provider}:${route.model}:${PROVIDER_KEY_VARIABLES[route.provider] || ""}`)
+    : (process.env.ATLAS_CODER_FALLBACKS || "").split(",").map((item) => item.trim()).filter(Boolean);
   for (const fallback of fallbacks) {
     if (!/^(?:anthropic|groq):[A-Za-z0-9._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY)$/.test(fallback)) {
       writeStatus("failed", "ATLAS_CODER_FALLBACKS contains an invalid route. Expected provider:model:API_KEY_ENV.");

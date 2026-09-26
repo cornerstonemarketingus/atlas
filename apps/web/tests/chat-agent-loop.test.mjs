@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { MAX_TOOL_STEPS, converse } from "../app/api/chat/agent-loop.mjs";
 
-const endpoint = { baseUrl: "https://model.test/v1", apiKey: "k", model: "m" };
+const endpoint = { baseUrl: "https://model.test/v1", apiKey: "k", model: "m", provider: "primary", label: "primary:m" };
 const sse = (events) => new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
 const say = (text) => ({ choices: [{ delta: { content: text } }] });
 const callTool = (id, name, args) => ({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] } }] });
@@ -45,7 +45,7 @@ test("a plain answer is one round with the tools offered", async () => {
   const { fetcher, requests } = scripted([[say("Hello "), say("there")]]);
   const { promise, events } = run(fetcher);
   const outcome = await promise;
-  assert.deepEqual(outcome, { reply: "Hello there", steps: [] });
+  assert.deepEqual(outcome, { reply: "Hello there", steps: [], answeredBy: "primary:m" });
   assert.equal(requests.length, 1);
   assert.ok(requests[0].tools.some((tool) => tool.function.name === "read_web_page"));
   assert.equal(requests[0].tool_choice, "auto");
@@ -61,6 +61,7 @@ test("Atlas reads a page, sees the result, then answers", async () => {
   const { promise, events } = run(fetcher);
   const outcome = await promise;
   assert.equal(outcome.reply, "Let me look.\n\nIt says Example body.");
+  assert.equal(outcome.answeredBy, "primary:m");
   assert.deepEqual(outcome.steps, [{ label: "Read “Example”", ok: true }]);
   const tools = events.filter((event) => event.type === "tool").map((event) => event.data);
   assert.deepEqual(tools, [{ id: "t1", label: "Reading example.com/…", state: "running" }, { id: "t1", label: "Read “Example”", state: "done" }]);
@@ -79,6 +80,7 @@ test("tasks the model starts run once, after the reply", async () => {
   assert.equal(started.length, 1);
   assert.equal(started[0].requests[0].mode, "coder");
   assert.equal(outcome.reply, "Starting it.\n\nStarted coder.");
+  assert.equal(outcome.answeredBy, "primary:m");
 });
 
 test("tool use is bounded: the last round must answer in words", async () => {
@@ -89,12 +91,14 @@ test("tool use is bounded: the last round must answer in words", async () => {
   assert.equal(requests.at(-1).tool_choice, "none");
   assert.equal(outcome.steps.length, MAX_TOOL_STEPS);
   assert.equal(outcome.reply, "Done looking.");
+  assert.equal(outcome.answeredBy, "primary:m");
 });
 
 test("an endpoint without tool support is retried without tools", async () => {
   const { fetcher, requests } = scripted([() => new Response("no tools", { status: 400 }), [say("Plain answer.")]]);
   const outcome = await run(fetcher).promise;
   assert.equal(outcome.reply, "Plain answer.");
+  assert.equal(outcome.answeredBy, "primary:m");
   assert.ok(requests[0].tools);
   assert.equal(requests[1].tools, undefined);
 });
@@ -115,4 +119,31 @@ test("non-streaming replies are handled the same way", async () => {
   const outcome = await run(fetcher, { stream: false }).promise;
   assert.equal(outcome.reply, "Found it.");
   assert.equal(outcome.steps.length, 1);
+  assert.equal(outcome.answeredBy, "primary:m");
+});
+
+test("falls back to the next route when the primary returns 429", async () => {
+  const requests = [];
+  const routes = [
+    { baseUrl: "https://primary.test/v1", apiKey: "one", model: "m1", label: "groq:m1", provider: "groq" },
+    { baseUrl: "https://backup.test/v1", apiKey: "two", model: "m2", label: "openai:m2", provider: "openai" },
+  ];
+  const fetcher = async (url, init) => {
+    const target = String(url);
+    if (target.startsWith("https://primary.test")) {
+      requests.push({ target, body: JSON.parse(init.body) });
+      return new Response("rate limited", { status: 429 });
+    }
+    if (target.startsWith("https://backup.test")) {
+      requests.push({ target, body: JSON.parse(init.body) });
+      return sse([say("Recovered via fallback.")]);
+    }
+    return new Response("<title>Example</title><p>Example body</p>", { headers: { "content-type": "text/html" } });
+  };
+  const outcome = await run(fetcher, { endpoint: undefined, routes }).promise;
+  assert.equal(outcome.reply, "Recovered via fallback.");
+  assert.equal(outcome.answeredBy, "openai:m2");
+  assert.equal(requests.length, 2);
+  assert.match(requests[0].target, /primary\.test/u);
+  assert.match(requests[1].target, /backup\.test/u);
 });

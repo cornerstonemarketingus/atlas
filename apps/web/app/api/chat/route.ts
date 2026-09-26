@@ -13,7 +13,8 @@ import { platformGitHubToken } from "../tasks/github-token.mjs";
 import { GET as listDevices } from "../computer/devices/route";
 import { POST as startComputerTask } from "../computer/tasks/route";
 import { SELF_REPOSITORY, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom } from "./atlas-knowledge.mjs";
-import { resolveChatModel, threadTitle } from "./model-endpoint.mjs";
+import { threadTitle } from "./model-endpoint.mjs";
+import { lastServedRoute, rememberServedRoute, resolveModelRoutes } from "./model-router.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
 
@@ -37,9 +38,9 @@ export async function POST(request: Request) {
 
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
-  const endpoint = resolveChatModel(process.env);
-  if (!endpoint.configured) {
-    return Response.json({ message: endpoint.reason, needsModelEndpoint: true }, { status: 503 });
+  const routing = resolveModelRoutes(process.env);
+  if (!routing.configured) {
+    return Response.json({ message: routing.reason, needsModelEndpoint: true }, { status: 503 });
   }
 
   const db = getDb();
@@ -81,7 +82,7 @@ export async function POST(request: Request) {
 
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
   const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
-  const loop = { endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks };
+  const loop = { routes: routing.chatRoutes, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks };
 
   if (body.stream === true) {
     return streamReply({ ...loop, conversationId, stored, db, userId: account.userId });
@@ -89,6 +90,7 @@ export async function POST(request: Request) {
 
   const outcome = await converse({ ...loop, stream: false, emit: () => {} });
   if ("error" in outcome) return Response.json({ message: outcome.error, conversationId }, { status: outcome.status });
+  rememberServedRoute("chat", outcome.answeredBy);
   const reply = outcome.reply;
   if (!reply) return Response.json({ message: "The model endpoint returned an empty reply.", conversationId }, { status: 502 });
 
@@ -101,7 +103,7 @@ export async function POST(request: Request) {
     } catch { stored = false; }
   }
 
-  return Response.json({ conversationId, stored, steps: outcome.steps, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+  return Response.json({ conversationId, stored, steps: outcome.steps, answeredBy: outcome.answeredBy, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
 }
 
 /** A GitHub credential for the read-only chat tools: the GitHub App's installation token when configured, else the platform token. Fetched once per request, only if a tool needs it. */
@@ -118,8 +120,6 @@ function memoizedGitHubToken() {
     return pending;
   };
 }
-
-type Endpoint = ReturnType<typeof resolveChatModel>;
 
 /**
  * Starts computer work through the same routes the Computer page uses, so
@@ -200,7 +200,7 @@ async function startRequestedTasks(request: Request, { requests, errors }: TaskR
  * finishes, while the request is still open.
  */
 function streamReply({ conversationId, stored, db, userId, ...loop }: {
-  endpoint: Endpoint; turns: ChatTurn[]; toolContext: ToolContext; conversationId: string; stored: boolean;
+  routes: Parameters<typeof converse>[0]["routes"]; turns: ChatTurn[]; toolContext: ToolContext; conversationId: string; stored: boolean;
   db: ReturnType<typeof getDb>; userId: string; defaultRepository: string; userMessage: string;
   startTasks: (calls: TaskRequests) => Promise<string[]>;
 }) {
@@ -215,6 +215,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
         controller.close();
         return;
       }
+      rememberServedRoute("chat", outcome.answeredBy);
       const reply = outcome.reply;
       if (!reply) {
         emit("error", { message: "The model endpoint returned an empty reply." });
@@ -230,7 +231,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
           await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, userId)));
         } catch { persisted = false; }
       }
-      emit("done", { conversationId, stored: persisted, steps: outcome.steps, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+      emit("done", { conversationId, stored: persisted, steps: outcome.steps, answeredBy: outcome.answeredBy, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
       controller.close();
     },
   });
@@ -245,6 +246,11 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-  const endpoint = resolveChatModel(process.env);
-  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null }, { headers: { "cache-control": "no-store" } });
+  const routing = resolveModelRoutes(process.env);
+  return Response.json({
+    configured: routing.configured,
+    reason: routing.reason ?? null,
+    routes: routing.routesTable ?? [],
+    lastServedModel: lastServedRoute("chat"),
+  }, { headers: { "cache-control": "no-store" } });
 }
