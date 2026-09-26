@@ -333,3 +333,23 @@ export const tenantMembers = sqliteTable("tenant_members", {
   tenantUserIndex: uniqueIndex("tenant_members_tenant_user_idx").on(table.tenantId, table.userId),
   userIndex: index("tenant_members_user_idx").on(table.userId),
 }));
+
+/** Durable Project Genesis handoff from a user's idea to the future builder pipeline. */
+export const genesisProjects = sqliteTable("genesis_projects", {
+  id: text("id").primaryKey(),
+  tenantId: integer("tenant_id").notNull().references(() => tenants.id),
+  requestedBy: text("requested_by").notNull(),
+  prompt: text("prompt").notNull(),
+  name: text("name").notNull(),
+  requirementsJson: text("requirements_json").notNull(),
+  status: text("status").notNull().default("planned"),
+  repository: text("repository"),
+  previewUrl: text("preview_url"),
+  deploymentUrl: text("deployment_url"),
+  evidenceJson: text("evidence_json").notNull().default("[]"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  tenantUpdatedIndex: index("genesis_projects_tenant_updated_idx").on(table.tenantId, table.updatedAt),
+  requesterIndex: index("genesis_projects_requester_idx").on(table.requestedBy, table.createdAt),
+}));
