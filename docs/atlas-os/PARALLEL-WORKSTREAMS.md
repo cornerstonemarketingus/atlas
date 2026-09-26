@@ -86,7 +86,7 @@ owned by another active session; shared contracts require an integration PR.
 5. Land O security/tenant controls before widening users or self-improvement.
 6. Build B/J, then C/H/D, then E/K/L/I/M, then N and broader SaaS features.
 
-## Current execution split: this session vs GitHub Copilot
+## Current execution split: this session vs Claude Code
 
 These assignments are deliberately disjoint. Both should work from separate
 branches/worktrees and open PRs. Copilot should not edit the PR #59 desktop,
@@ -112,7 +112,7 @@ integration review.
     mission recovery E2E. Owner-only credentials/migrations remain owner
     actions; do not request, print, or alter secret values.
 
-### GitHub Copilot parallel assignment (mobile-only)
+### Claude Code parallel assignment (mobile-only)
 
 Use a fresh worktree based on the verified PR #59 head, then open a PR targeting
 `claude/atlas-platform-development-o9znpd` (stacked). Own only:
@@ -141,7 +141,7 @@ validation, and sensitive-action biometric gating. Run the mobile shell tests;
 add a native build/test where available and document the unavailable device
 validation. Return a focused PR; do not merge or deploy.
 
-### Next independent Copilot work after mobile PR
+### Next independent Claude Code work after mobile PR
 
 - **Windows execution portability** only after this session freezes the
    terminal adapter interface; otherwise avoid concurrent edits to the same
