@@ -265,11 +265,7 @@ export function ChatSection() {
         const { value, done } = await reader.read();
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-<<<<<<< HEAD
-          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; proposal?: GenesisProposal | null; id?: string; label?: string; state?: ToolStep["state"] } | null;
-=======
-          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
->>>>>>> origin/main
+          const data = item.data as ({ conversationId?: string; text?: string; message?: string; reply?: Message; proposal?: GenesisProposal | null; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode>) | null;
           if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
           else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
@@ -477,4 +473,3 @@ export function ChatSection() {
     </form>
   </AtlasShell>;
 }
-

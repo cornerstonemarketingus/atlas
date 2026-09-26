@@ -1,4 +1,4 @@
-import { PROJECT_TOOL_NAME, TASK_TOOL, taskRequestsFromCalls, projectRequestsFromCalls } from "./atlas-knowledge.mjs";
+import { TASK_TOOL, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } from "./instant-tools.mjs";
 import { completionsUrl, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
@@ -124,12 +124,11 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
  *   defaultRepository: string,
  *   userMessage: string,
  *   startTasks: (calls: ReturnType<typeof taskRequestsFromCalls>) => Promise<string[]>,
- *   projectTool?: object | null,
  *   stream: boolean,
  *   emit: (type: string, data: unknown) => void,
  *   fetcher?: typeof fetch,
  *   tools?: object[],
- *   handlers?: Record<string, ((call: object, helpers: { emit: (type: string, data: unknown) => void }) => Promise<{ ok: boolean, label: string, content: string, preview?: unknown }>) & { pending?: string }>,
+ *   handlers?: Record<string, ((call: object, helpers: { emit: (type: string, data: unknown) => void }) => Promise<{ ok: boolean, label: string, content: string, preview?: unknown, proposal?: { kind: string, name: string, template: string, description: string } | null }>) & { pending?: string }>,
  *   allowTasks?: boolean,
  *   maxRounds?: number,
  *   maxTokens?: number,
@@ -138,29 +137,24 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
  * }} options
  * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[], proposal?: { kind: string, name: string, template: string, description: string } | null } | { error: string, status: number }>}
  */
-<<<<<<< HEAD
-export async function converse({ endpoint, turns, toolContext, defaultRepository, userMessage, startTasks, projectTool = null, stream, emit, fetcher = fetch }) {
-  const tools = [TASK_TOOL, ...(projectTool ? [projectTool] : []), ...instantToolDefinitions(toolContext?.environment ?? {})];
-=======
 export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause }) {
   // Child agents get their own, narrower tool list and no task starting; the lead gets everything.
   const tools = toolOverride ?? [...(allowTasks ? [TASK_TOOL] : []), ...instantToolDefinitions(toolContext?.environment ?? {})];
   const offered = new Set(tools.map((tool) => tool.function.name));
   const runnable = (name) => offered.has(name) && (isInstantTool(name) || name in handlers);
   const tag = agentId ? { agentId } : {};
->>>>>>> origin/main
   const working = [...turns];
   const taskCalls = [];
-  const projectCalls = [];
   const steps = [];
   let text = "";
+  let proposal = null;
   let toolsSupported = true;
   // Work already done is kept when a later round fails: what was found, plus why it stopped.
   const interrupted = (reason) => {
     const note = `${text.trim() ? "\n\n" : ""}_Stopped early: ${reason}_`;
     text += note;
     emit("delta", { text: note });
-    return { reply: text.trim(), steps };
+    return { reply: text.trim(), steps, proposal };
   };
   let freshFrom = working.length;
   for (let round = 0; round <= maxRounds; round += 1) {
@@ -203,16 +197,9 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         type: "function",
         function: { name: call.function.name, arguments: typeof call.function.arguments === "string" ? call.function.arguments : JSON.stringify(call.function.arguments ?? {}) },
       }));
-<<<<<<< HEAD
-    taskCalls.push(...calls.filter((call) => !isInstantTool(call.function.name) && call.function.name !== PROJECT_TOOL_NAME));
-    projectCalls.push(...calls.filter((call) => call.function.name === PROJECT_TOOL_NAME));
-    const instant = calls.filter((call) => isInstantTool(call.function.name));
-    if (instant.length === 0 || round === MAX_TOOL_STEPS) break;
-=======
     if (allowTasks) taskCalls.push(...calls.filter((call) => !runnable(call.function.name)));
     const instant = calls.filter((call) => runnable(call.function.name));
     if (instant.length === 0 || round === maxRounds) break;
->>>>>>> origin/main
     working.push({ role: "assistant", content: result.text || null, tool_calls: calls });
     let used = 0;
     for (const call of calls) {
@@ -232,10 +219,11 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       const outcome = handler ? await handler(call, { emit }) : await runInstantTool(call, toolContext);
       emit("tool", { id: call.id, label: outcome.label, state: outcome.ok ? "done" : "failed", ...tag, ...(outcome.preview ? { preview: outcome.preview } : {}) });
       steps.push({ label: outcome.label, ok: outcome.ok });
+      if (outcome.proposal) proposal = outcome.proposal;
       working.push({ role: "tool", tool_call_id: call.id, content: outcome.content });
     }
   }
-  if (!allowTasks) return { reply: text.trim(), steps };
+  if (!allowTasks) return { reply: text.trim(), steps, proposal };
   // Runs the model asked for start after its words, and each gets one line saying whether it started.
   const started = await startTasks(taskRequestsFromCalls(taskCalls.slice(0, 3), { defaultRepository, userMessage }));
   if (started.length) {
@@ -243,12 +231,5 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     text += addition;
     emit("delta", { text: addition });
   }
-  const projectRequests = projectRequestsFromCalls(projectCalls);
-  if (projectRequests.errors.length) {
-    const addition = `${text.trim() ? "\n\n" : ""}${projectRequests.errors.join("\n\n")}`;
-    text += addition;
-    emit("delta", { text: addition });
-  }
-  const proposal = projectRequests.requests[0] ? { kind: "project_genesis", ...projectRequests.requests[0] } : null;
   return { reply: text.trim(), steps, proposal };
 }

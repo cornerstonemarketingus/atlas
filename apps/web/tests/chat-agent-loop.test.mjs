@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { MAX_TOOL_STEPS, converse } from "../app/api/chat/agent-loop.mjs";
-import { PROJECT_TOOL } from "../app/api/chat/atlas-knowledge.mjs";
+import { createProjectTool } from "../app/api/chat/create-project.mjs";
 
 const endpoint = { baseUrl: "https://model.test/v1", apiKey: "k", model: "m" };
 const sse = (events) => new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
@@ -87,9 +87,20 @@ test("tasks the model starts run once, after the reply", async () => {
 });
 
 test("project-creation tool calls become confirmation proposals instead of running immediately", async () => {
-  const { fetcher } = scripted([[say("I picked a starter."), callTool("p1", "create_project", { name: "roofing-crm", template: "web-app", description: "CRM for roofing contractors" })]]);
-  const outcome = await run(fetcher, { projectTool: PROJECT_TOOL }).promise;
+  const { fetcher } = scripted([
+    [say("I picked a starter."), callTool("p1", "create_project", { name: "roofing-crm", template: "web-app", description: "CRM for roofing contractors" })],
+    [say("Please confirm and I can create it.")],
+  ]);
+  const project = createProjectTool();
+  const started = [];
+  const outcome = await run(fetcher, {
+    tools: [project.definition],
+    handlers: { [project.definition.function.name]: project.handler },
+    startTasks: async (calls) => { started.push(calls); return []; },
+  }).promise;
+  assert.deepEqual(started, [{ requests: [], errors: [] }]);
   assert.deepEqual(outcome.proposal, { kind: "project_genesis", name: "roofing-crm", template: "web-app", description: "CRM for roofing contractors" });
+  assert.match(outcome.reply, /Please confirm/u);
 });
 
 test("tool use is bounded: the last round must answer in words", async () => {
