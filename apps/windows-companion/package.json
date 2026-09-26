@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node src/index.mjs",
-    "check": "node --check src/index.mjs && node --check src/policy.mjs && node --check src/profile.mjs && node --check src/runtime.mjs && node --check src/operator/classification.mjs && node --check src/operator/session.mjs && node --check src/operator/fixtures.mjs && node --check src/operator/scenarios.mjs && node --check src/operator/unified.mjs && node --check src/desktop/index.mjs && node --check src/desktop/actions.mjs && node --check src/desktop/driver.mjs && node --check src/desktop/session.mjs && node --check src/desktop/drivers/linux.mjs && node --check src/desktop/drivers/windows.mjs",
+    "check": "node --check src/index.mjs && node --check src/policy.mjs && node --check src/profile.mjs && node --check src/runtime.mjs && node --check src/operator/classification.mjs && node --check src/operator/session.mjs && node --check src/operator/fixtures.mjs && node --check src/operator/scenarios.mjs && node --check src/operator/unified.mjs && node --check src/desktop/index.mjs && node --check src/desktop/actions.mjs && node --check src/desktop/driver.mjs && node --check src/desktop/session.mjs && node --check src/desktop/drivers/linux.mjs && node --check src/desktop/drivers/windows.mjs && node --check src/url-safety.mjs",
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {

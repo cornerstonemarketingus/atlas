@@ -31,6 +31,8 @@ export class LocalTaskStore {
       CREATE TABLE IF NOT EXISTS local_devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, revoked_at TEXT);
       CREATE TABLE IF NOT EXISTS local_pairing_codes (code_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL, used_at TEXT);
       CREATE TABLE IF NOT EXISTS local_audit (id TEXT PRIMARY KEY, category TEXT NOT NULL, summary TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TRIGGER IF NOT EXISTS local_audit_no_update BEFORE UPDATE ON local_audit BEGIN SELECT RAISE(ABORT, 'The audit log is append-only'); END;
+      CREATE TRIGGER IF NOT EXISTS local_audit_no_delete BEFORE DELETE ON local_audit BEGIN SELECT RAISE(ABORT, 'The audit log is append-only'); END;
       CREATE TABLE IF NOT EXISTS local_missions (
         id TEXT PRIMARY KEY,
         status TEXT NOT NULL,
@@ -220,11 +222,18 @@ export class LocalTaskStore {
       // action_digest, session_id and consumed_at, and a positional insert
       // would have silently started failing on every restore.
       const approval = this.#db.prepare("INSERT OR IGNORE INTO local_approvals (id, task_id, capability, summary, status, requested_at, resolved_at, action_digest, session_id, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      // A restored approval is history, never authority: a backup file is
+      // just data, so an "approved" row in it must not be spendable here.
+      // Pending ones are expired and approved ones are marked consumed.
+      const restoredAt = new Date().toISOString();
       for (const row of snapshot.approvals) {
-        approval.run(row.id, row.taskId ?? null, row.capability, row.summary, row.status, row.requestedAt, row.resolvedAt ?? null, row.actionDigest ?? null, row.sessionId ?? null, row.consumedAt ?? null);
+        const status = row.status === "pending" ? "expired" : row.status;
+        approval.run(row.id, row.taskId ?? null, row.capability, row.summary, status, row.requestedAt, row.resolvedAt ?? restoredAt, row.actionDigest ?? null, row.sessionId ?? null, row.consumedAt ?? restoredAt);
       }
+      // Imported audit entries are labelled as imported so they can never be
+      // mistaken for something that happened on this machine.
       const audit = this.#db.prepare("INSERT OR IGNORE INTO local_audit VALUES (?, ?, ?, ?)");
-      for (const row of snapshot.audit) audit.run(row.id, row.category, row.summary, row.createdAt);
+      for (const row of snapshot.audit) audit.run(`imported:${row.id}`, `imported:${String(row.category).slice(0, 64)}`, String(row.summary).slice(0, 2000), row.createdAt);
       const mission = this.#db.prepare("INSERT OR IGNORE INTO local_missions (id, status, snapshot_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)");
       for (const row of snapshot.missions ?? []) {
         validateMissionId(row.id);

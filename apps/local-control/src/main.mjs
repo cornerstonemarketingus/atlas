@@ -176,9 +176,10 @@ function buildExecutors() {
 function buildToolRegistry() {
   const registry = new ToolRegistry({
     policy: (capability) => store.policy(capability).decision,
-    // Secrets are read from the process environment for now, by reference
-    // only. No tool receives a value it did not declare a need for.
-    secrets: (reference) => process.env[reference] ?? null,
+    // Secrets resolve by reference, from the OS-backed credential vault first
+    // and the process environment only as a fallback for existing setups
+    // (SECURITY-REVIEW SEC-8). No tool receives a value it did not declare.
+    secrets: async (reference) => (await vault.get(reference).catch(() => null)) ?? process.env[reference] ?? null,
   });
   registerRepositoryTools(registry);
   registerRepositoryWriteTools(registry);

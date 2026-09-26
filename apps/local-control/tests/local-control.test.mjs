@@ -123,3 +123,33 @@ test("Git worktree command accepts an ordinary repository path", async (t) => {
   const check = spawnSync("git", ["-C", directory, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
   assert.equal(check.stdout.trim(), "true");
 });
+
+test("the audit log is append-only and a restored backup can never authorize an action (SEC-12)", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { DatabaseSync } = await import("node:sqlite");
+  const dir = await mkdtemp(join(tmpdir(), "atlas-audit-"));
+  try {
+    const source = new LocalTaskStore(join(dir, "source.sqlite"));
+    const approval = source.createApproval({ capability: "desktop.control", summary: "Press alt+f4", actionDigest: "digest-1" });
+    source.decideApproval(approval.id, "approved");
+    source.createApproval({ capability: "code.write", summary: "Write", actionDigest: "digest-2" });
+    const snapshot = source.snapshot();
+    source.close();
+
+    const target = new LocalTaskStore(join(dir, "target.sqlite"));
+    target.importSnapshot(snapshot);
+    assert.equal(target.consumeApprovedDigest("digest-1"), false, "an imported approval is history, not authority");
+    assert.ok(target.approvals().every((a) => a.status !== "pending"), "imported pending approvals expire");
+    assert.ok(target.auditEvents().filter((e) => e.id.startsWith("imported:")).every((e) => e.category.startsWith("imported:")));
+    target.close();
+
+    const db = new DatabaseSync(join(dir, "target.sqlite"));
+    assert.throws(() => db.prepare("DELETE FROM local_audit").run(), /append-only/u);
+    assert.throws(() => db.prepare("UPDATE local_audit SET summary = 'x'").run(), /append-only/u);
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

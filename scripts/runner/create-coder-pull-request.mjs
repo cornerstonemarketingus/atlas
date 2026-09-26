@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { decideMergeAction } from "./merge-decision.mjs";
+import { autoMergeAllowed, decideMergeAction } from "./merge-decision.mjs";
 import { correlationFooter, correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
 import { isDraftPullRequest } from "./pull-request-policy.mjs";
 
@@ -182,16 +182,14 @@ async function waitForCiOutcome(headSha) {
   }
 }
 
-// A regressed verification means Atlas *knows* this change broke checks that
-// passed before it. "none" means "don't wait for CI" — it does not mean
-// "merge code we already measured as broken", so a regression overrides the
-// policy in the safe direction. Weaker signals (unverified, inconclusive) do
-// NOT override it: absence of evidence is the bar the operator already chose
-// when they selected their policy, and silently overriding that would make
-// the setting untrustworthy.
-if (verification?.status === "regressed" && mergePolicy !== "manual") {
-  const message = `Opened a pull request but did NOT auto-merge it despite the '${mergePolicy}' policy: verification found ${verification.newFailures?.length ?? 0} failure(s) this change introduced. ${verification.message}`;
-  writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: false, verification });
+// Auto-merge needs evidence, not just permission: only a change whose
+// baseline/post-change verification passed may merge without a person,
+// whatever the policy says (SECURITY-REVIEW SEC-7). A regression, or no
+// verification at all, leaves the pull request open for review.
+const mergeGate = autoMergeAllowed(mergePolicy, verification);
+if (mergePolicy !== "manual" && !mergeGate.allowed) {
+  const message = `Opened a pull request but did NOT auto-merge it despite the '${mergePolicy}' policy: ${mergeGate.reason}`;
+  writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: false, ...(verification ? { verification } : {}) });
   console.log(message);
 } else if (mergePolicy === "none") {
   const result = await mergePullRequest(pullRequest.number);

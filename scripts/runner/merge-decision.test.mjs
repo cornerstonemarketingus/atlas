@@ -53,3 +53,15 @@ test("ci-gated holds if any completed check failed, even if others passed", () =
 test("ci-gated holds on an unrecognized completed conclusion rather than guessing", () => {
   assert.equal(decideMergeAction("ci-gated", [{ status: "completed", conclusion: "startup_failure" }]), "hold");
 });
+
+test("auto-merge requires passed verification, whatever the policy (SEC-7)", async () => {
+  const { autoMergeAllowed } = await import("./merge-decision.mjs");
+  for (const policy of ["none", "ci-gated"]) {
+    assert.equal(autoMergeAllowed(policy, { status: "passed" }).allowed, true);
+    assert.equal(autoMergeAllowed(policy, { status: "regressed", newFailures: ["a", "b"], message: "Tests broke." }).allowed, false);
+    assert.match(autoMergeAllowed(policy, { status: "regressed", newFailures: ["a", "b"], message: "Tests broke." }).reason, /2 failure\(s\).*Tests broke/u);
+    assert.equal(autoMergeAllowed(policy, { status: "inconclusive" }).allowed, false);
+    assert.equal(autoMergeAllowed(policy, null).allowed, false, "no verification is not a pass");
+  }
+  assert.equal(autoMergeAllowed("manual", { status: "passed" }).allowed, false);
+});

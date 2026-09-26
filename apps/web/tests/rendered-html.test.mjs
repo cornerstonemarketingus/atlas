@@ -76,3 +76,15 @@ for (const path of ["/build", "/automation", "/computer", "/setup", "/account"])
     assert.match(html, /Owner access code/);
   });
 }
+
+test("every page carries the security headers (SEC-13)", async () => {
+  const workerUrl = new URL(`../dist/server/index.js?headers-test=${Date.now()}`, import.meta.url);
+  const { default: worker } = await import(workerUrl.href);
+  for (const path of ["/", "/product", "/pricing"]) {
+    const response = await worker.fetch(new Request(`http://localhost${path}`, { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
+    assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/u, path);
+    assert.equal(response.headers.get("x-frame-options"), "DENY", path);
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff", path);
+    assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin", path);
+  }
+});

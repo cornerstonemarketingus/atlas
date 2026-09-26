@@ -188,7 +188,7 @@ export function AutomationSection() {
               <label>Runs on
                 <select aria-label="Browser execution provider" value={provider} onChange={(event) => setProvider(event.target.value as "windows" | "cloudflare")}>
                   <option value="windows">My Windows PC · included</option>
-                  <option value="cloudflare" disabled={!hostedReady}>Hosted browser{!capabilities?.providers.cloudflare.entitled ? " · Pro required" : !capabilities?.providers.cloudflare.configured ? " · activating soon" : ` · ${capabilities.providers.cloudflare.monthlyMinutes ?? "metered"} min/mo`}</option>
+                  <option value="cloudflare" disabled={!hostedReady}>Hosted browser{!capabilities?.providers.cloudflare.entitled ? " · Pro required" : !capabilities?.providers.cloudflare.configured ? " · not available yet" : ` · ${capabilities.providers.cloudflare.monthlyMinutes ?? "metered"} min/mo`}</option>
                 </select>
               </label>
               {provider === "windows" && <label>Computer

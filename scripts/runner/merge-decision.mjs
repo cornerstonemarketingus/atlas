@@ -30,3 +30,22 @@ export function decideMergeAction(policy, checkRuns) {
   // don't guess; treat anything unrecognized as not-passing.
   return "hold";
 }
+
+/**
+ * Whether a coder pull request may be merged without a person, whatever the
+ * repository's merge policy says (SECURITY-REVIEW SEC-7). Only a change whose
+ * baseline/post-change verification *passed* qualifies: "regressed" is known
+ * to be broken, and "unverified"/"inconclusive" mean Atlas has no evidence the
+ * change works — both stay open for review instead of merging on hope.
+ *
+ * @returns {{ allowed: boolean, reason: string }}
+ */
+export function autoMergeAllowed(policy, verification) {
+  if (policy !== "none" && policy !== "ci-gated") return { allowed: false, reason: "The merge policy is manual." };
+  const status = verification?.status ?? "unverified";
+  if (status === "passed") return { allowed: true, reason: "Verification passed." };
+  if (status === "regressed") {
+    return { allowed: false, reason: `verification found ${verification.newFailures?.length ?? 0} failure(s) this change introduced. ${verification.message ?? ""}`.trim() };
+  }
+  return { allowed: false, reason: `verification did not pass (status: ${status}), so there is no evidence the change works.` };
+}

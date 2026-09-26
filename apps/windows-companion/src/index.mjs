@@ -7,6 +7,7 @@ import { parseLocalProfile, profileForPrompt } from "./profile.mjs";
 import { retryDelay } from "./runtime.mjs";
 import { createDesktopDriver, DesktopSession } from "./desktop/index.mjs";
 import { buildUnifiedPrompt, isDesktopAction, validateUnifiedAction } from "./operator/unified.mjs";
+import { allowHostsFrom, classifyUrl } from "./url-safety.mjs";
 
 const atlasUrl = (process.env.ATLAS_URL ?? "https://atlas-web.cornerstonemarketingus.workers.dev").replace(/\/$/u, "");
 const credential = process.env.ATLAS_DEVICE_CREDENTIAL ?? await readCredential();
@@ -91,6 +92,17 @@ async function ensureActive(taskId) {
   if (!task || task.status === "cancelled") throw new Error("Task cancelled by user.");
 }
 
+/**
+ * Private and local addresses (routers, NAS admin pages, cloud metadata,
+ * this machine's own services) are reachable from the owner's PC but should
+ * never be visited just because a model or a page suggested it: they ask.
+ */
+async function guardNavigation(taskId, target) {
+  const verdict = await classifyUrl(target, { allowHosts: allowHostsFrom(process.env.ATLAS_BROWSER_ALLOW_HOSTS) });
+  if (!verdict.public) await approval(taskId, { type: "navigate", url: verdict.url }, `Open ${new URL(verdict.url).host}, which is ${verdict.reason} on your network`, new URL(verdict.url).hostname);
+  return verdict.url;
+}
+
 const byLabel = (label) => page.getByLabel(label, { exact: true }).first();
 async function act(taskId, action) {
   const risk = actionRisk(action);
@@ -98,7 +110,7 @@ async function act(taskId, action) {
   if (risk.decision === "ask") await approval(taskId, action, risk.reason);
   if (action.type !== "done" && action.type !== "extract") await browserPage();
   switch (action.type) {
-    case "navigate": { const target = new URL(action.url); if (!["http:", "https:"].includes(target.protocol)) throw new Error("Navigation must use HTTP or HTTPS."); return page.goto(target.toString(), { waitUntil: "domcontentloaded", timeout: 30_000 }); }
+    case "navigate": return page.goto(await guardNavigation(taskId, action.url), { waitUntil: "domcontentloaded", timeout: 30_000 });
     case "click": return page.getByRole("button", { name: action.name, exact: true }).or(page.getByRole("link", { name: action.name, exact: true })).first().click({ timeout: 10_000 });
     case "fill": return byLabel(action.label).fill(action.value, { timeout: 10_000 });
     case "select": return byLabel(action.label).selectOption({ label: action.value }, { timeout: 10_000 });
@@ -112,7 +124,7 @@ async function act(taskId, action) {
 }
 
 async function run(task) {
-  if (task.startUrl) await (await browserPage()).goto(task.startUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  if (task.startUrl) await (await browserPage()).goto(await guardNavigation(task.id, task.startUrl), { waitUntil: "domcontentloaded", timeout: 30_000 });
   const desktop = desktopDriver ? new DesktopSession({
     driver: desktopDriver,
     evidenceDir: join(evidenceRoot, task.id),

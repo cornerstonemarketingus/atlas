@@ -205,7 +205,7 @@ export class ToolRegistry {
 
     const credentials = {};
     for (const reference of tool.credentials) {
-      const value = this.#secrets(reference);
+      const value = await this.#secrets(reference);
       if (value === null || value === undefined) {
         return { status: "rejected", code: "MISSING_CREDENTIAL", message: `This tool needs the credential '${reference}', which is not configured on this machine.`, input };
       }
