@@ -88,12 +88,14 @@ test("an owner-managed HTTPS proxy is recorded and checked", () => withDirectory
   await assert.rejects(remote.useProxy("http://plain.example.com"), (error) => error.code === "INVALID_URL");
 }));
 
-test("over a proxy the owner token is refused unless allowed; paired devices work; /v1/remote is owner-only", (t) => withDirectory(async (directory) => {
+test("over a proxy the owner token is refused unless allowed; paired devices work; /v1/remote is owner-only", async (t) => {
+  // Cleanup order matters on Windows: the server and database close before the directory is removed.
+  const directory = mkdtempSync(join(tmpdir(), "atlas-remote-http-"));
   const store = new LocalTaskStore(join(directory, "test.sqlite"));
   const remoteAccess = new RemoteAccess({ port: 4317, settingsPath: join(directory, "remote.json"), runCommandImpl: fakeTailscale().runCommandImpl });
   const server = createLocalControlServer({ store, token: TOKEN, runTask: async () => ({ ok: true, message: "" }), remoteAccess });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(async () => { await new Promise((resolve) => server.close(resolve)); store.close(); });
+  t.after(async () => { server.closeAllConnections?.(); await new Promise((resolve) => server.close(resolve)); store.close(); rmSync(directory, { recursive: true, force: true }); });
   const origin = `http://127.0.0.1:${server.address().port}`;
   const owner = { authorization: `Bearer ${TOKEN}` };
   const proxied = { "x-forwarded-for": "100.64.0.9" };
@@ -120,4 +122,4 @@ test("over a proxy the owner token is refused unless allowed; paired devices wor
   await handle({ method: "POST", url: "/v1/remote/owner", body: { allow: true } }, allow, { role: "admin" });
   assert.equal(allow.body.settings.ownerRemote, true);
   assert.equal((await fetch(`${origin}/v1/tasks`, { headers: { ...owner, ...proxied } })).status, 200, "the owner chose to allow it");
-}));
+});
