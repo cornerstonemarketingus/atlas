@@ -11,18 +11,18 @@ import { AtlasMark } from "./AtlasMark.js";
  * "Workspace", /setup called the same destination "Back to tasks", and
  * /account was a bare legal page. Four pages, four vocabularies, no way to see
  * what else Atlas could do from where you happened to be standing. The rail
- * below is deliberately always present and always identical: the three things
- * Atlas does, then the two places you configure it.
+ * below is deliberately always present and always identical: chat, then the
+ * modes Atlas works in (Create, Operate), then the places you configure it.
  */
 
 export type Section = "chat" | "build" | "automation" | "connections" | "settings";
 
-type NavItem = { id: Section; href: string; label: string; glyph: string };
+type NavItem = { id: Section; href: string; label: string; glyph: string; hint?: string };
 
 export const PRIMARY_SECTIONS: readonly NavItem[] = [
-  { id: "chat", href: "/", label: "Chat", glyph: "◇" },
-  { id: "build", href: "/build", label: "Projects", glyph: "⬢" },
-  { id: "automation", href: "/automation", label: "Tasks", glyph: "◈" },
+  { id: "chat", href: "/", label: "Chat", hint: "Ask, plan, decide", glyph: "◇" },
+  { id: "build", href: "/build", label: "Create", hint: "Build and improve software", glyph: "⬢" },
+  { id: "automation", href: "/automation", label: "Operate", hint: "Work on your computer", glyph: "◈" },
 ];
 
 const UTILITY_SECTIONS: readonly NavItem[] = [
@@ -75,7 +75,7 @@ export function AtlasShell({ section, rail, headerContext, children, wide = fals
           <Link key={item.id} href={item.href} aria-current={item.id === section ? "page" : undefined}
             className={item.id === section ? "rail-link active" : "rail-link"} onClick={() => setMenuOpen(false)}>
             <span className="rail-glyph" aria-hidden="true">{item.glyph}</span>
-            <span className="rail-text"><b>{item.label}</b></span>
+            <span className="rail-text"><b>{item.label}</b>{item.hint && <small>{item.hint}</small>}</span>
           </Link>
         ))}
       </nav>

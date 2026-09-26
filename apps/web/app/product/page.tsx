@@ -4,66 +4,117 @@ import { MarketingFooter, MarketingNav } from "../MarketingNav.js";
 import { ParallelMissionPreview } from "./ParallelMissionPreview.js";
 
 /**
- * Copy rule for this page: present tense describes what the hosted workspace
- * does when you sign in today. The mission runtime — child agents, budgets,
- * checkpoints, recovery — runs in the self-hosted control plane, so it is
- * named as that rather than implied to be part of the product you just bought.
- * Anything not built yet is written as not built yet.
+ * Copy rule for this page: headlines describe what Atlas is for; every mode
+ * then says plainly what is available today, what runs in the self-hosted
+ * control plane, and what is still being built. Nothing unbuilt is written in
+ * the present tense, and there are no claims about other products — only what
+ * is architecturally different about Atlas.
  */
 export const metadata: Metadata = {
-  title: "Atlas — Build the product. Operate the work.",
-  description: "Describe an outcome. Atlas opens a reviewable pull request, or tells you plainly that it did not — and pauses before any consequential computer action.",
+  title: "Atlas — Build it. Run it. Grow it.",
+  description: "Atlas is an autonomous AI workspace that builds software, operates computers and turns successful work into persistent automations.",
 };
 
-const capabilities = [
-  ["Describe the outcome", "Say what you want in plain language. Atlas turns it into a bounded job against a real repository and branch you choose."],
-  ["Engineer against the real codebase", "Atlas reads the project, edits on its own branch, runs the repository's builds and tests, and opens a pull request you review before anything merges."],
-  ["Operate the browser", "Research, fill forms, navigate portals, and complete repeatable browser work on a Windows computer you pair — or a hosted browser on paid plans."],
-  ["Keep the thread", "Conversations, the jobs started from them, and their results persist across sessions and devices instead of vanishing with the tab."],
-  ["Run on your own model", "Point Atlas at any OpenAI-compatible server — Ollama, llama.cpp, vLLM, LM Studio — or a hosted one. The provider is configuration, not architecture."],
-  ["Stop before it costs you", "Sends, submissions, purchases, uploads, publishing, and account changes pause for a one-time approval bound to that exact action."],
+type Availability = { now: string[]; selfHosted?: string[]; next?: string[] };
+
+const MODES: { id: string; kicker: string; title: string; copy: string; availability: Availability }[] = [
+  {
+    id: "create",
+    kicker: "CREATE",
+    title: "Go from an idea to working software.",
+    copy: "Describe an application, feature, API, automation or business tool. Atlas assembles an AI engineering team to design it, build the full stack, test the real product and prepare it for launch.",
+    availability: {
+      now: ["Changes to your existing repository, verified against its own build and tests, returned as a pull request you review", "Planning and architecture help in chat, streamed as it is written"],
+      next: ["New projects from a single description, with editable requirements and plans", "Live preview and visual editing mapped to the real source"],
+    },
+  },
+  {
+    id: "operate",
+    kicker: "OPERATE",
+    title: "Give AI the tools to actually do the work.",
+    copy: "Atlas agents can work through authorized browsers, computers, terminals, files and connected services.",
+    availability: {
+      now: ["A paired Windows computer that Atlas operates in the browser and in desktop applications", "Live step-by-step progress, local screenshots as evidence, and an approval before every consequential action"],
+      selfHosted: ["Browser, desktop, terminal and file tools for local agents, governed by your own allow / ask / deny policy"],
+    },
+  },
+  {
+    id: "automate",
+    kicker: "AUTOMATE",
+    title: "Turn work into an autonomous system.",
+    copy: "Take successful work and turn it into scheduled, event-driven or monitored missions.",
+    availability: {
+      now: ["Tasks survive a closed tab or a disconnected computer and resume where they stopped"],
+      selfHosted: ["Durable multi-agent missions with checkpoints, budgets and crash recovery"],
+      next: ["Schedules, webhooks and monitoring triggers that start saved missions"],
+    },
+  },
 ];
+
+const PILLARS = [
+  { kicker: "AUTONOMOUS DEVELOPMENT", title: "Your repository doesn’t stop improving when you stop prompting.", copy: "Authorize Atlas to inspect your project for bugs, regressions and valuable improvements. Atlas builds changes in isolation, tests them, repairs failures and presents verified improvements for approval.", note: "Runs daily on the Atlas repository today, with a person merging every change. Its Business Development and Product executives propose only evidence-backed work in the self-hosted control plane." },
+  { kicker: "COMPUTER", title: "Software that can use software.", copy: "Browser. Desktop. Terminal. Files. APIs. One set of rules decides what runs, what waits for you, and what never happens.", note: "Browser and desktop control ship in the Windows companion; terminal and file tools run in the self-hosted control plane." },
+  { kicker: "AGENTS", title: "Don’t hire one AI. Assemble a team.", copy: "Engineering. Design. QA. Security. Operations. Research. Business. Each agent has a role, a budget and only the permissions its parent could give it — and business agents decide what is worth building before engineering builds it.", note: "The agent organization runs in the self-hosted control plane." },
+  { kicker: "ADVANCED", title: "Full control when you want it.", copy: "Inspect code, diffs, terminal activity, models, permissions, budgets and every consequential action.", note: "Every task keeps an activity receipt; approvals are bound to the exact action and expire." },
+];
+
+function AvailabilityList({ availability }: { availability: Availability }) {
+  return <dl className="availability">
+    <div><dt>Available now</dt>{availability.now.map((item) => <dd key={item}>{item}</dd>)}</div>
+    {availability.selfHosted && <div><dt>Self-hosted control plane</dt>{availability.selfHosted.map((item) => <dd key={item}>{item}</dd>)}</div>}
+    {availability.next && <div><dt>In progress</dt>{availability.next.map((item) => <dd key={item}>{item}</dd>)}</div>}
+  </dl>;
+}
 
 export default function ProductPage() {
   return <main>
     <MarketingNav />
     <section className="marketing-hero">
-      <p className="eyebrow"><span>ATLAS</span> An operator that builds software and works a browser</p>
-      <h1>Build the product.<br /><em>Operate the work.</em></h1>
-      <p>Describe the outcome once. Atlas works against your real repository on its own branch, runs the project&rsquo;s own checks, and opens a pull request for you to review — then carries the browser work around the launch, pausing before anything with a consequence. You keep the approvals, the credentials, and the receipts.</p>
-      <div className="hero-actions"><Link href="/demo">Walk through a mission</Link><Link href="/api/auth/github/start" className="quiet">Start building</Link></div>
+      <p className="eyebrow"><span>ATLAS</span> An autonomous AI workspace</p>
+      <h1>Build it. Run it.<br /><em>Grow it.</em></h1>
+      <p>Atlas is an autonomous AI workspace that builds software, operates computers and turns successful work into persistent automations.</p>
+      <div className="hero-actions"><Link href="/api/auth/github/start">Start building</Link><Link href="/demo" className="quiet">Walk through a mission</Link></div>
     </section>
 
     <section className="category-section">
-      <p className="eyebrow"><span>ONE SYSTEM</span> Beyond the point solutions</p>
+      <p className="eyebrow"><span>GO BEYOND THE CODING ASSISTANT</span> Coding is only one part of building a product</p>
       <div>
-        <article><b>It does not stop at the first screen.</b><p>Atlas works in the repository you already have — architecture, tests, and a pull request against your branch — rather than generating a project you then have to adopt.</p></article>
-        <article><b>It reports what actually happened.</b><p>Every job links its run and its pull request. When a run finishes without changing anything, Atlas says exactly that instead of reporting success.</p></article>
-        <article><b>It stops before it acts on your behalf.</b><p>Browser work pauses at a one-action approval bound to the specific step, with an activity receipt you can read afterwards.</p></article>
+        <article><b>One workspace for the whole job.</b><p>Atlas combines AI software development, visual building, computer operation, autonomous agents, deployment and persistent automation in one workspace.</p></article>
+        <article><b>It reports what actually happened.</b><p>Every task links its run, its evidence and its pull request. When nothing changed, Atlas says exactly that instead of reporting success.</p></article>
+        <article><b>It stops before it acts on your behalf.</b><p>Sends, submissions, purchases, uploads, publishing and account changes pause for a one-time approval bound to that exact action.</p></article>
       </div>
     </section>
 
+    {MODES.map((mode) => <section className="mode-section" id={mode.id} key={mode.id}>
+      <div>
+        <p className="eyebrow"><span>{mode.kicker}</span></p>
+        <h2>{mode.title}</h2>
+        <p>{mode.copy}</p>
+      </div>
+      <AvailabilityList availability={mode.availability} />
+    </section>)}
+
     <ParallelMissionPreview />
 
-    <section className="capability-grid">
-      {capabilities.map(([title, copy], index) => <article key={title}><span>0{index + 1}</span><h2>{title}</h2><p>{copy}</p></article>)}
+    <section className="capability-grid pillars">
+      {PILLARS.map((pillar, index) => <article key={pillar.kicker}><span>0{index + 1} · {pillar.kicker}</span><h2>{pillar.title}</h2><p>{pillar.copy}</p><p className="pillar-note">{pillar.note}</p></article>)}
     </section>
 
     <section className="proof-section">
       <div>
-        <p className="eyebrow"><span>THE ADVANTAGE</span> Autonomy you can inspect</p>
+        <p className="eyebrow"><span>THE DIFFERENCE</span> Autonomy you can inspect</p>
         <h2>Atlas does not ask you to trust a magic box. It shows the work — and admits when there is none.</h2>
       </div>
       <div>
-        <article><b>Evidence, not assurances</b><p>A job shows the state of its run and links the log and the pull request. Atlas reports what it can observe and nothing beyond it.</p></article>
-        <article><b>Consequential-action control</b><p>Sending, submitting, publishing, purchasing, uploading, and account changes pause at an exact approval boundary that expires.</p></article>
-        <article><b>Review before merge</b><p>Build mode always opens a pull request. Whether it may then merge itself is a per-project setting that defaults to a person doing it.</p></article>
-        <article><b>Portable by construction</b><p>Run the models locally and keep the repository and credentials yours. Hosted capacity is an adapter you can remove.</p></article>
+        <article><b>Evidence, not assurances</b><p>Tests, screenshots, pull requests and activity receipts — Atlas reports what it can observe and nothing beyond it.</p></article>
+        <article><b>Consequential-action control</b><p>Approvals are bound to the exact action, expire, and can be answered from your phone.</p></article>
+        <article><b>Review before merge</b><p>Code changes always arrive as a pull request. Whether one may merge itself is a per-project setting that defaults to a person.</p></article>
+        <article><b>Portable by construction</b><p>Point Atlas at any OpenAI-compatible model — local or hosted. The provider is configuration, not architecture.</p></article>
       </div>
     </section>
 
     <section className="closing-cta">
-      <p>Run findings and validation evidence return to the thread. Detailed step-by-step progress inside a run is still being built.</p>
+      <p>Create. Operate. Automate.</p>
       <h2>Give Atlas the outcome.<br />Keep control of the mission.</h2>
       <Link href="/guide">See how access and safeguards work →</Link>
     </section>

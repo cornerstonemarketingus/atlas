@@ -22,7 +22,7 @@
 .rail-link.active .rail-glyph{background:var(--ws-accent);border-color:var(--ws-accent);color:#10150d}
 .rail-text{display:grid;min-width:0}
 .rail-text b{font-size:13px;font-weight:650}
-.rail-text small{display:none}
+.rail-text small{display:block;font-size:11px;font-weight:450;color:#7d877f;letter-spacing:0;text-transform:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rail-threads{display:flex;flex-direction:column;min-height:0;margin-top:22px;flex:1}
 .rail-bottom{margin-top:auto;display:grid;gap:2px;border-top:1px solid var(--ws-line);padding-top:10px}
 .rail-utility{color:#879089;font-size:12px;padding:9px 10px}

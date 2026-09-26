@@ -48,14 +48,17 @@ export function MessageBody({ text }: { text: string }) {
   return <div className="md-body">{blocks}</div>;
 }
 
-const INLINE = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))/gu;
+// Links: absolute http(s), or a path on this site ("/automation") — never another scheme.
+const INLINE = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\((?:https?:\/\/|\/(?!\/))[^\s)]*\))/gu;
 
 function inline(text: string): ReactNode[] {
   return text.split(INLINE).filter(Boolean).map((part, i) => {
     if (part.startsWith("`") && part.endsWith("`")) return <code key={i}>{part.slice(1, -1)}</code>;
     if (part.startsWith("**") && part.endsWith("**")) return <strong key={i}>{part.slice(2, -2)}</strong>;
-    const link = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/u.exec(part);
-    if (link) return <a key={i} href={link[2]} target="_blank" rel="noreferrer noopener">{link[1]}</a>;
+    const link = /^\[([^\]]+)\]\(((?:https?:\/\/|\/(?!\/))[^\s)]*)\)$/u.exec(part);
+    if (link) return link[2].startsWith("/")
+      ? <a key={i} href={link[2]}>{link[1]}</a>
+      : <a key={i} href={link[2]} target="_blank" rel="noreferrer noopener">{link[1]}</a>;
     return part;
   });
 }
