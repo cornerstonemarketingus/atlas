@@ -23,6 +23,8 @@ import { discoverModelServers } from "./agent/models/discovery.mjs";
 import { recommendModels } from "./agent/models/recommend.mjs";
 import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/router.mjs";
 import { createRoutedClient } from "./agent/models/routed-client.mjs";
+import { createTeamService } from "./agent/team/team-service.mjs";
+import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { registerRepositoryTools } from "./agent/tools/repository-tools.mjs";
 import { registerRepositoryWriteTools } from "./agent/tools/repository-write-tools.mjs";
@@ -66,6 +68,23 @@ outbox.subscribe("*", (event) => platformStream.publish(event));
 outbox.start();
 const vault = createCredentialVault({ filePath: join(dataDirectory, "credentials.vault.json") });
 const license = loadLicense();
+// One model client (routed, with fallback) and one tool registry serve both
+// conversations and agent missions, so policy and approvals are identical.
+const modelClient = createRoutedClient({
+  routes: parseRoutes(process.env.ATLAS_MODEL_ROUTES ?? "[]"),
+  task: "planning",
+  createClient: (route) => createModelClient({ baseUrl: route.endpoint }),
+  fallback: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
+  onRoute: (route, { failedOver }) => store.audit("model.route", `${route.model} served a model turn${failedOver ? " after failover" : ""}`),
+});
+const toolRegistry = buildToolRegistry();
+const toolApprovals = {
+  // One-time and digest-bound: spending an approval consumes it, and it
+  // only matches the exact action it was granted for.
+  check: (digest) => store.consumeApprovedDigest(digest),
+  request: ({ digest, capability, summary, sessionId }) =>
+    store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
+};
 const runtime = new AgentRuntime({
   sessions,
   executors: buildExecutors(),
@@ -78,7 +97,31 @@ const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
 const missionService = new MissionService({ store, execute: runMissionChild });
+// Agent missions: goal → plan over the agent organization → steps run by the
+// assigned agents on the same mission scheduler as coder missions.
+const teamStep = createAgentStepExecutor({
+  family: innovation.registry,
+  delegation: innovation.pipeline.delegation,
+  toolRegistry,
+  client: modelClient,
+  platformStore,
+  approvals: toolApprovals,
+  resultsOf: (missionId, ids) => (missionService.get(missionId)?.children ?? [])
+    .filter((c) => ids.includes(c.id))
+    .map((c) => ({ title: c.metadata?.stepTitle ?? c.id, summary: c.result?.handoff?.report ?? c.result?.summary ?? "" })),
+});
+const team = createTeamService({
+  family: innovation.registry,
+  delegation: innovation.pipeline.delegation,
+  missionService,
+  platformStore,
+  toolRegistry,
+  client: modelClient,
+  model: process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
+  workspace: join(dataDirectory, "workspace"),
+});
 const recoveredMissions = missionService.recover();
+team.reattach();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
 
 const server = createLocalControlServer({
@@ -91,6 +134,7 @@ const server = createLocalControlServer({
   platformStore,
   innovation,
   platformStream,
+  team,
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
@@ -99,6 +143,7 @@ const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
 server.listen(port, host, () => console.log(`Atlas sovereign control plane: http://${host}:${port}\nAgent runtime ${runtime.instanceId} executors: ${runtime.executorIds().join(", ")}`));
 
 async function runMissionChild({ child, signal, budget, checkpoint }) {
+  if (child.metadata?.kind === "agent_step") return teamStep({ child, signal, budget, checkpoint });
   await checkpoint();
   budget.record({ toolCalls: 1 });
   const repository = child.metadata?.repository;
@@ -140,23 +185,9 @@ function buildExecutors() {
   const executors = {
     local: createLocalExecutor({ dataDirectory }),
     conversation: createConversationExecutor({
-      // Conversation turns go through the configured planning routes with
-      // fallback; with no routes configured this is the single default client.
-      client: createRoutedClient({
-        routes: parseRoutes(process.env.ATLAS_MODEL_ROUTES ?? "[]"),
-        task: "planning",
-        createClient: (route) => createModelClient({ baseUrl: route.endpoint }),
-        fallback: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
-        onRoute: (route, { failedOver }) => store.audit("model.route", `${route.model} served a conversation turn${failedOver ? " after failover" : ""}`),
-      }),
-      registry: buildToolRegistry(),
-      approvals: {
-        // One-time and digest-bound: spending an approval consumes it, and it
-        // only matches the exact action it was granted for.
-        check: (digest) => store.consumeApprovedDigest(digest),
-        request: ({ digest, capability, summary, sessionId }) =>
-          store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
-      },
+      client: modelClient,
+      registry: toolRegistry,
+      approvals: toolApprovals,
     }),
   };
   const token = process.env.ATLAS_GITHUB_TOKEN;

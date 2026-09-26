@@ -8,17 +8,19 @@ import { createAgentRoutes } from "./agent/routes.mjs";
 import { createMissionRoutes } from "./agent/mission-routes.mjs";
 import { createPlatformRoutes, LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
 import { createInnovationRoutes, describeInnovationError } from "./platform/innovation/routes.mjs";
+import { createTeamRoutes } from "./agent/team/routes.mjs";
 import { createRateLimiter, LIMITS } from "./rate-limit.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, innovation = null, platformStream = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, innovation = null, platformStream = null, team = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
   const missionRoutes = missionService ? createMissionRoutes({ missionService }) : null;
   const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore, stream: platformStream }) : null;
+  const teamRoutes = team ? createTeamRoutes({ team, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const innovationRoutes = innovation ? createInnovationRoutes({ pipeline: innovation.pipeline, organization: innovation.organization, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
 
   async function startTask(taskId) {
@@ -55,6 +57,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
 
     if (platformRoutes && platformRoutes.handle(request, response, identity)) return;
     if (!platformRoutes && (request.url ?? "").startsWith("/v1/platform/")) return send(response, 503, { message: "The Atlas platform task store is not running in this process." });
+    if (teamRoutes && (request.url ?? "").startsWith("/v1/team/")) { if (await teamRoutes(request, response, identity)) return; }
+    if (!teamRoutes && (request.url ?? "").startsWith("/v1/team/")) return send(response, 503, { message: "Agent missions are not running in this process." });
     if (innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) { if (await innovationRoutes.handle(request, response, identity)) return; }
     if (!innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) return send(response, 503, { message: "The Atlas innovation pipeline is not running in this process." });
     if (missionRoutes && (request.url ?? "").startsWith("/v1/missions")) { if (await missionRoutes.handle(request, response, identity)) return; }
