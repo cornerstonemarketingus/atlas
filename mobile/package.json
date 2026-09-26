@@ -9,7 +9,7 @@
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/secure-storage.mjs && node --check src/bridge.mjs && node --check src/deep-link-handler.mjs",
+    "check": "node --check src/secure-storage.mjs && node --check src/bridge.mjs && node --check src/deep-link-handler.mjs && node --check src/remote-companion.mjs",
     "sync": "cap sync",
     "open:ios": "cap open ios",
     "open:android": "cap open android"
