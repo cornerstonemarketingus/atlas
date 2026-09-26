@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
-test("home page contains the Atlas Genesis heading", () => {
-  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /Atlas Genesis/u);
+test("build output includes the Atlas Genesis home page", () => {
+  const serverBundle = readFileSync(new URL("../dist/server/index.js", import.meta.url), "utf8");
+  assert.match(serverBundle, /Atlas Genesis/u);
 });

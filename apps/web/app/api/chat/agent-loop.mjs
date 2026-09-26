@@ -155,6 +155,11 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     emit("delta", { text: addition });
   }
   const projectRequests = projectRequestsFromCalls(projectCalls);
+  if (projectRequests.errors.length) {
+    const addition = `${text.trim() ? "\n\n" : ""}${projectRequests.errors.join("\n\n")}`;
+    text += addition;
+    emit("delta", { text: addition });
+  }
   const proposal = projectRequests.requests[0] ? { kind: "project_genesis", ...projectRequests.requests[0] } : null;
   return { reply: text.trim(), steps, proposal };
 }
