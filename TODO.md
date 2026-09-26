@@ -1,6 +1,6 @@
 # Atlas Master Product and Engineering TODO
 
-Last reviewed: 2026-08-17
+Last reviewed: 2026-09-26
 
 This is the authoritative capability backlog for Atlas. It describes the
 long-term product while preserving an incremental build order. A checked item
@@ -544,6 +544,69 @@ measurable quality, and transparent cost control.
 - [ ] Add reproducible local development and test environments.
 - [ ] Add examples for providers, tools, workflows, and extensions.
 - [ ] Keep capability documentation aligned with validated behavior.
+
+## Remaining limitations (reviewed 2026-09-26)
+
+What still stops Atlas from doing a job end to end, with who owns each item.
+"Copilot" items are the scope of work in the GitHub issue titled
+"Copilot scope: hosted rate limiting, audit trail and accessibility";
+"Claude" items are being built on `claude/atlas-implementation-eah694`;
+"Owner" items need a person with repository or account settings access.
+
+### Owner (settings only; no code)
+
+- [ ] Coder model: set `GROQ_API_KEY` (paid tier), `ATLAS_CODER_PROVIDER=groq`,
+      `ATLAS_CODER_MODEL=openai/gpt-oss-120b`, `ATLAS_MAX_TURNS=32`,
+      `ATLAS_TOKEN_BUDGET=200000`, `ATLAS_OUTPUT_TOKENS_PER_TURN=8192`; delete
+      `ATLAS_CODER_FALLBACKS` if it names a provider without a key.
+- [ ] Apply D1 migration 0014 (session revocation) in production.
+- [ ] Enable branch protection on `main` requiring the CI checks, so no
+      automation can merge around them.
+- [ ] Review the About page bio.
+
+### Copilot (hosted web app)
+
+- [ ] Rate limiting on hosted API routes (SEC-6, P1-5): sign-in, owner
+      sign-in, task creation, chat and approval decisions return 429 with
+      `Retry-After` past a per-account/per-IP budget.
+- [ ] Append-only hosted audit trail (SEC-9, P1-2): `audit_events` table and
+      migration; owner sign-ins, sign-outs, repository policy edits, device
+      pairing and approval decisions write a metadata-only row; owner-only
+      read API and a page listing them.
+- [ ] Accessibility pass on the hosted app: keyboard-only use of chat, tasks,
+      projects and approvals; labelled controls; visible focus; WCAG AA
+      contrast; an automated check in the web test suite.
+
+### Claude (local daemon and agent runtime)
+
+- [ ] Prompt-injection provenance (SEC-11, P7-4): tag untrusted spans
+      (web pages, repository files, tool output, MCP results) at the point
+      they enter a model turn, and add a regression corpus of injection
+      fixtures that must never produce a tool call.
+- [ ] `AuthorizedToolExecutor` as the only execution path for daemon tools,
+      with durable budgets and idempotency keys.
+- [ ] Connect the platform capability router so tasks, not only chat turns,
+      use `ATLAS_MODEL_ROUTES` fallback.
+- [ ] Browser worker as the daemon's default browser, keeping the origin
+      allowlist.
+- [ ] Time- and event-driven automations beyond the daily self-improvement
+      run (schedule a mission; run one when a watched PR or check changes).
+- [ ] Memory page in the local dashboard: search, inspect history and
+      delete scoped memory through the existing `GET/DELETE /v1/knowledge`.
+- [ ] Actions-minutes visibility (SEC-15, P7-5): report the budget guard's
+      state, including when it failed open, with the task result.
+- [ ] Finish the six in-progress workstreams (orchestrator, terminal
+      sessions, desktop control, tenancy, MCP over HTTP, planning) and land
+      them on top of main.
+
+### Not started (larger product work)
+
+- [ ] Tenant model (SEC-1, P9-1) beyond the per-user GitHub permission check.
+- [ ] Script-src CSP with renderer nonces (SEC-13).
+- [ ] Container or VM runner so terminal commands are isolated from the
+      operator's account.
+- [ ] Project Genesis (prompt → requirements → plan → app) and a visual
+      builder with live preview.
 
 ## Immediate next assignments
 
