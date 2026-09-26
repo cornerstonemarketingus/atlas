@@ -585,13 +585,12 @@ What still stops Atlas from doing a job end to end, with who owns each item.
       flagged; `tests/fixtures/injection-corpus.json` guards regressions.
       Still open: the Windows companion and hosted chat.
 - [ ] `AuthorizedToolExecutor` as the only execution path for daemon tools,
-      with durable budgets and idempotency keys.
+      with durable budgets and idempotency keys. Team steps route through it
+      since #66; the conversation loop does not yet.
 - [ ] Connect the platform capability router so tasks, not only chat turns,
       use `ATLAS_MODEL_ROUTES` fallback.
 - [ ] Browser worker as the daemon's default browser, keeping the origin
       allowlist.
-- [ ] Time- and event-driven automations beyond the daily self-improvement
-      run (schedule a mission; run one when a watched PR or check changes).
 - [ ] Memory page in the local dashboard: search, inspect history and
       delete scoped memory through the existing `GET/DELETE /v1/knowledge`.
 - [ ] Actions-minutes visibility (SEC-15, P7-5): report the budget guard's
@@ -600,14 +599,17 @@ What still stops Atlas from doing a job end to end, with who owns each item.
       sessions, desktop control, tenancy, MCP over HTTP, planning) and land
       them on top of main.
 
-### Not started (larger product work)
+### Queued (larger product work, one GitHub issue each)
 
-- [ ] Tenant model (SEC-1, P9-1) beyond the per-user GitHub permission check.
-- [ ] Script-src CSP with renderer nonces (SEC-13).
+- [ ] Tenant model (SEC-1, P9-1) beyond the per-user GitHub permission
+      check — #71.
 - [ ] Container or VM runner so terminal commands are isolated from the
-      operator's account.
-- [ ] Project Genesis (prompt → requirements → plan → app) and a visual
-      builder with live preview.
+      operator's account — #72.
+- [ ] Project Genesis: prompt → requirements → plan → new repository →
+      deployed preview — #73.
+- [ ] Visual builder: live preview with click-to-edit mapped to source — #74.
+- [ ] Scheduled and event-driven automations — #75.
+- [ ] Script-src CSP with renderer nonces (SEC-13) — #76.
 
 ## Immediate next assignments
 
