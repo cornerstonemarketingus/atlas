@@ -20,7 +20,7 @@ export function createScriptNonce() {
 }
 
 export function buildScriptCspReportOnly(nonce) {
-  return `script-src 'nonce-${nonce}' 'strict-dynamic'; object-src 'none'; base-uri 'none'`;
+  return `script-src 'nonce-${nonce}' 'strict-dynamic'; connect-src 'self'; style-src-attr 'unsafe-inline'; object-src 'none'; base-uri 'none'`;
 }
 
 /** Returns a response carrying the security headers; existing values win. */
