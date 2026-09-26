@@ -44,10 +44,12 @@ function approvalInbox() {
 
 async function setup(t, { charDelayMs = 0, policyCheck = null, storePath = ":memory:", driver = null, allowedApps = ["notes", "mail"], onIndicator = undefined } = {}) {
   const base = await mkdtemp(join(tmpdir(), "atlas-desktop-"));
-  t.after(() => rm(base, { recursive: true, force: true }));
   let now = new Date("2026-09-01T10:00:00.000Z").getTime();
   const store = new DesktopSafetyStore({ path: storePath === "file" ? join(base, "desktop.db") : storePath, clock: () => new Date(now) });
+  // After-hooks run in the order they are added. Close the database before
+  // deleting its folder: Windows refuses to delete an open file (EBUSY).
   t.after(() => { try { store.close(); } catch { /* already closed */ } });
+  t.after(() => rm(base, { recursive: true, force: true }));
   const device = store.enrollDevice({ ownerId: OWNER, name: "Test PC", platform: "simulated" });
   store.approveDevice(device.id, { ownerId: OWNER });
   const desktop = driver ?? new SimulatedDesktop({ charDelayMs });
@@ -295,8 +297,12 @@ test("emergency stop survives a restart: a reopened store is still stopped", asy
   await controller.emergencyStop({ by: OWNER });
   store.close();
   const reopened = new DesktopSafetyStore({ path: join(base, "desktop.db") });
-  t.after(() => reopened.close());
-  assert.equal(reopened.emergencyState().stopped, true);
+  // Closed here, not in an after-hook: setup's hook deletes the folder first.
+  try {
+    assert.equal(reopened.emergencyState().stopped, true);
+  } finally {
+    reopened.close();
+  }
 });
 
 test("session expiry: actions after the TTL are refused and the indicator is turned off", async (t) => {
@@ -457,9 +463,9 @@ test("unsupported capabilities are refused honestly", async (t) => {
 test("desktop.session.* tools run through AuthorizedToolExecutor; open requires an approvalId; out-of-scope typing is denied", async (t) => {
   const { controller, desktop, approve } = await setup(t);
   const dir = await mkdtemp(join(tmpdir(), "atlas-desktop-exec-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
   const platform = new PlatformTaskStore(join(dir, "p.sqlite"));
   t.after(() => platform.close());
+  t.after(() => rm(dir, { recursive: true, force: true }));
   const executor = new AuthorizedToolExecutor({ store: platform, policy: new PolicyEngine({ version: "desktop.test", rules: [] }) });
   const tools = desktopToolDefinitions(controller);
   for (const tool of tools) executor.register(tool);
