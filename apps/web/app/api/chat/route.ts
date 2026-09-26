@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
-import { getDb } from "../../../db";
+import { getD1, getDb } from "../../../db";
+import { conversationWritable } from "../../../db/tenancy.mjs";
+import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
 import { isDeploymentOwner } from "../tasks/self-protection.mjs";
@@ -40,9 +42,12 @@ export async function POST(request: Request) {
   let history: { role: string; content: string }[] = [];
   let stored = true;
   try {
+    // Tenancy (#71): threads belong to the caller's tenant; an id owned by another tenant or principal is never written to.
+    const tenant = await resolveTenantContext(request, account, getD1());
+    if (!tenant || !(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) throw new Error("Conversation is not writable in this workspace.");
     await db.insert(conversations)
-      .values({ id: conversationId, requestedBy: account.userId, title: threadTitle(message), repository, branch, createdAt: now, updatedAt: now })
-      .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now } });
+      .values({ id: conversationId, tenantId: tenant.tenantId, requestedBy: account.userId, title: threadTitle(message), repository, branch, createdAt: now, updatedAt: now })
+      .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now }, setWhere: and(eq(conversations.tenantId, tenant.tenantId), eq(conversations.requestedBy, account.userId)) });
     history = await db.select({ role: conversationMessages.role, content: conversationMessages.content })
       .from(conversationMessages)
       .where(and(eq(conversationMessages.conversationId, conversationId), eq(conversationMessages.requestedBy, account.userId)))

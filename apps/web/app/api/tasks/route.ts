@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { eq, and, desc } from "drizzle-orm";
-import { getDb } from "../../../db";
+import { getD1, getDb } from "../../../db";
+import { conversationWritable, tenantAllowlist } from "../../../db/tenancy.mjs";
+import { NO_TENANT_MESSAGE, resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
 import { conversationMessages, conversations, repositories, runEvents, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, defaultMergePolicy, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
@@ -36,13 +38,26 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   if (!account) return Response.json({ message: "Sign in is required to create a task." }, { status: 401 });
   let body: unknown;
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
-  const validated = validateTask(body, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES));
+  // Tenancy (#71): the caller's tenant bounds which repositories they may use
+  // (its allowlist within ATLAS_ALLOWED_REPOSITORIES) and owns what is recorded.
+  let tenant: { tenantId: number; role: string; principal: string } | null;
+  let allowlist: Set<string>;
+  try {
+    tenant = await resolveTenantContext(request, account, getD1());
+    allowlist = tenant ? await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)) : new Set();
+  } catch {
+    return Response.json({ message: "Your workspace is unavailable. Apply D1 migration 0015_tenants." }, { status: 503 });
+  }
+  if (!tenant) return Response.json({ message: NO_TENANT_MESSAGE }, { status: 403 });
+  const validated = validateTask(body, allowlist);
   if ("error" in validated) return Response.json({ message: validated.error, ...(validated.needsClarification ? { needsClarification: true } : {}) }, { status: validated.status });
   const task = validated.task;
   const selfModification = selfModificationDecision(account, task);
   if (!selfModification.allowed) return Response.json({ message: selfModification.reason }, { status: selfModification.status });
   const requestedConversationId = typeof (body as { conversationId?: unknown }).conversationId === "string" ? (body as { conversationId: string }).conversationId : "";
-  const conversationId = /^[0-9a-f-]{36}$/u.test(requestedConversationId) ? requestedConversationId : randomUUID();
+  let conversationId = /^[0-9a-f-]{36}$/u.test(requestedConversationId) ? requestedConversationId : randomUUID();
+  // Never append to a conversation owned by another tenant or principal.
+  try { if (!(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) conversationId = randomUUID(); } catch { conversationId = randomUUID(); }
 
   let githubToken = process.env.ATLAS_GITHUB_TOKEN;
   try {
@@ -79,7 +94,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
     mergePolicy = defaultMergePolicy(process.env.ATLAS_DEFAULT_MERGE_POLICY);
     try {
       const [owner, name] = task.repository.split("/");
-      const [row] = await getDb().select().from(repositories).where(and(eq(repositories.owner, owner), eq(repositories.name, name)));
+      const [row] = await getDb().select().from(repositories).where(and(eq(repositories.tenantId, tenant.tenantId), eq(repositories.owner, owner), eq(repositories.name, name)));
       if (row) mergePolicy = row.mergePolicy;
     } catch {
       // A settings-lookup failure keeps the deployment default rather than
@@ -96,7 +111,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
         const failure = explainGitHubFailure(response.status, { workflow, repository: task.repository });
         return Response.json({ ...failure, message: `${failure.message} Nothing was started.` }, { status: 502 });
       }
-      const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "managed", correlationId);
+      const recorded = await recordDispatchedTask(account, tenant.tenantId, task, taskId, mergePolicy, conversationId, "managed", correlationId);
       return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "managed", recorded, mergePolicy }, { status: 202 });
     } catch {
       return Response.json({ ...explainGitHubFailure(503), message: "GitHub could not be reached, so nothing was started." }, { status: 502 });
@@ -112,7 +127,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
     // run, so a row for it could only ever be matched against — and could steal
     // the run id of — a real Actions dispatch of the same workflow. Custom-runner
     // deployments get no task history until they report runs of their own.
-    const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "private", correlationId);
+    const recorded = await recordDispatchedTask(account, tenant.tenantId, task, taskId, mergePolicy, conversationId, "private", correlationId);
     return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "private", recorded, mergePolicy }, { status: 202 });
   } catch {
     return Response.json({ message: "The autonomous task dispatcher is temporarily unavailable." }, { status: 502 });
@@ -128,6 +143,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
  */
 async function recordDispatchedTask(
   account: { userId: string; dbUserId: number | null },
+  tenantId: number,
   task: { repository: string; branch: string; mode: string; objective: string },
   taskId: string,
   mergePolicy: string,
@@ -138,12 +154,13 @@ async function recordDispatchedTask(
   try {
     const db = getDb();
     const now = new Date().toISOString();
-    await db.insert(conversations).values({ id: conversationId, requestedBy: account.userId, title: task.objective.slice(0, 72), repository: task.repository, branch: task.branch, createdAt: now, updatedAt: now })
-      .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now, repository: task.repository, branch: task.branch } });
+    await db.insert(conversations).values({ id: conversationId, tenantId, requestedBy: account.userId, title: task.objective.slice(0, 72), repository: task.repository, branch: task.branch, createdAt: now, updatedAt: now })
+      .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now, repository: task.repository, branch: task.branch }, setWhere: and(eq(conversations.tenantId, tenantId), eq(conversations.requestedBy, account.userId)) });
     await db.insert(conversationMessages).values({ id: randomUUID(), conversationId, requestedBy: account.userId, role: "user", content: task.objective, createdAt: now });
     await db.insert(runEvents).values({ id: randomUUID(), conversationId, taskId, requestedBy: account.userId, kind: "queued", label: "Request received", detail: "Atlas is preparing a private execution workspace.", createdAt: now });
     await db.insert(tasks).values({
       taskId,
+      tenantId,
       userId: account.dbUserId,
       requestedBy: account.userId,
       repository: task.repository,
@@ -197,14 +214,18 @@ export async function GET(request: Request) {
   if (!account) return Response.json({ message: "Sign in is required to view your tasks." }, { status: 401 });
 
   let rows: TaskRow[];
+  let tenantId: number;
   try {
+    const tenant = await resolveTenantContext(request, account, getD1());
+    if (!tenant) return Response.json({ message: NO_TENANT_MESSAGE }, { status: 403 });
+    tenantId = tenant.tenantId;
     const selected: TaskRow[] = await getDb()
       .select()
       .from(tasks)
-      .where(eq(tasks.requestedBy, account.userId))
+      .where(and(eq(tasks.tenantId, tenantId), eq(tasks.requestedBy, account.userId)))
       .orderBy(desc(tasks.createdAt), desc(tasks.id))
       .limit(TASK_PAGE_SIZE);
-    rows = visibleTasks(selected, account);
+    rows = visibleTasks(selected, { ...account, tenantId });
   } catch {
     // Mirrors the dispatch path: a D1 problem degrades the feature instead of
     // erroring the page. The task list is informational; nothing depends on it.
@@ -260,7 +281,7 @@ export async function GET(request: Request) {
       const db = getDb();
       await Promise.all(
         [...resolvedRunIds].map(([taskId, runId]) =>
-          db.update(tasks).set({ githubRunId: runId }).where(and(eq(tasks.taskId, taskId), eq(tasks.requestedBy, account.userId))),
+          db.update(tasks).set({ githubRunId: runId }).where(and(eq(tasks.taskId, taskId), eq(tasks.tenantId, tenantId), eq(tasks.requestedBy, account.userId))),
         ),
       );
     } catch {
