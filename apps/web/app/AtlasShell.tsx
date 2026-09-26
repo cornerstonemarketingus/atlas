@@ -11,8 +11,11 @@ import { AtlasMark } from "./AtlasMark.js";
  * "Workspace", /setup called the same destination "Back to tasks", and
  * /account was a bare legal page. Four pages, four vocabularies, no way to see
  * what else Atlas could do from where you happened to be standing. The rail
- * below is deliberately always present and always identical: chat, then the
- * modes Atlas works in (Create, Operate), then the places you configure it.
+ * below is deliberately always present and always identical: Home (chat),
+ * then Projects and Computer, then the places you configure it. The sections
+ * that only exist on the local daemon (missions run by the agent
+ * organization, agent families, knowledge, approvals) are linked to the local
+ * console rather than imitated here.
  */
 
 export type Section = "chat" | "build" | "automation" | "connections" | "settings";
@@ -20,9 +23,18 @@ export type Section = "chat" | "build" | "automation" | "connections" | "setting
 type NavItem = { id: Section; href: string; label: string; glyph: string; hint?: string };
 
 export const PRIMARY_SECTIONS: readonly NavItem[] = [
-  { id: "chat", href: "/", label: "Chat", hint: "Ask, plan, decide", glyph: "◇" },
-  { id: "build", href: "/build", label: "Create", hint: "Build and improve software", glyph: "⬢" },
-  { id: "automation", href: "/automation", label: "Operate", hint: "Work on your computer", glyph: "◈" },
+  { id: "chat", href: "/", label: "Home", hint: "Ask, plan, decide", glyph: "◇" },
+  { id: "build", href: "/build", label: "Projects", hint: "Build and improve software", glyph: "⬢" },
+  { id: "automation", href: "/automation", label: "Computer", hint: "Work on your computer", glyph: "◈" },
+];
+
+/** Sections served by Atlas on the owner's computer (the local daemon's console). */
+export const LOCAL_CONSOLE = "http://127.0.0.1:4317";
+export const LOCAL_SECTIONS: readonly { href: string; label: string }[] = [
+  { href: `${LOCAL_CONSOLE}/#/missions`, label: "Missions" },
+  { href: `${LOCAL_CONSOLE}/#/families`, label: "Agent families" },
+  { href: `${LOCAL_CONSOLE}/#/knowledge`, label: "Knowledge" },
+  { href: `${LOCAL_CONSOLE}/#/approvals`, label: "Approvals" },
 ];
 
 const UTILITY_SECTIONS: readonly NavItem[] = [
@@ -80,6 +92,14 @@ export function AtlasShell({ section, rail, headerContext, children, wide = fals
         ))}
       </nav>
       {rail}
+      <nav className="rail-local" aria-label="On your computer">
+        <p>On your computer <small>needs Atlas running there</small></p>
+        {LOCAL_SECTIONS.map((item) => (
+          <a key={item.href} className="rail-utility" href={item.href} target="_blank" rel="noopener noreferrer">
+            <span aria-hidden="true">↗</span>{item.label}
+          </a>
+        ))}
+      </nav>
       <div className="rail-bottom">
         {UTILITY_SECTIONS.map((item) => (
           <Link key={item.id} href={item.href} aria-current={item.id === section ? "page" : undefined}

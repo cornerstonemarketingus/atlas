@@ -236,7 +236,7 @@ export function ChatSection() {
       const devices = listed.ok ? ((await listed.json()) as { devices?: Device[] }).devices ?? [] : [];
       const usable = devices.filter((device) => !device.revokedAt);
       const device = usable.find((candidate) => candidate.status === "online") ?? usable[0];
-      if (!device) { setNotice("No computer is paired yet. Open Operate to pair your PC, then send this again."); return; }
+      if (!device) { setNotice("No computer is paired yet. Open Computer to pair your PC, then send this again."); return; }
       const response = await fetch("/api/computer/tasks", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -245,7 +245,7 @@ export function ChatSection() {
       const result = await response.json() as { message?: string };
       if (!response.ok) { setNotice(result.message ?? "Atlas could not start that computer task."); return; }
       setMessages((items) => [...items, { id: `local-${Date.now()}-task`, role: "assistant", createdAt: new Date().toISOString(),
-        content: `Started on **${device.name}**${device.status === "online" ? "" : " (it will begin when that computer comes online)"}. I will pause for your approval before anything consequential. Follow it in [Operate](/automation).` }]);
+        content: `Started on **${device.name}**${device.status === "online" ? "" : " (it will begin when that computer comes online)"}. I will pause for your approval before anything consequential. Follow it in [Computer](/automation).` }]);
     } catch {
       setNotice("Atlas could not reach the computer service. Nothing was started.");
     } finally {
