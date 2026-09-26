@@ -48,7 +48,8 @@ const MAX_FILE_CHARS = 20_000;
 const MAX_LOG_CHARS = 15_000;
 const TOOL_TIMEOUT_MS = 12_000;
 const REPOSITORY_PATTERN = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/u;
-const TASK_ID_PATTERN = /^[0-9a-f-]{36}$/u;
+const TASK_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const MAX_PULL_REQUEST_ENRICHMENTS = 5;
 
 const definition = (name, description, properties, required) => ({
   type: "function",
@@ -629,7 +630,18 @@ async function listPullRequests(args, fetcher, context) {
   if (!response.ok) return { ok: false, label: `Could not list pull requests in ${access.repository}`, content: `GitHub answered ${response.status}.` };
   const listed = await response.json().catch(() => null);
   const pulls = Array.isArray(listed) ? listed.slice(0, 20) : [];
-  const enriched = await Promise.all(pulls.map(async (pull) => {
+  const enriched = await Promise.all(pulls.map(async (pull, index) => {
+    if (index >= MAX_PULL_REQUEST_ENRICHMENTS) {
+      return {
+        number: pull.number,
+        title: String(pull.title ?? ""),
+        author: typeof pull?.user?.login === "string" ? pull.user.login : null,
+        url: typeof pull.html_url === "string" ? pull.html_url : null,
+        state: typeof pull.state === "string" ? pull.state : null,
+        checks: { overall: "missing", total: 0, passed: 0, failed: 0, running: 0, pending: 0, cancelled: 0, runs: [] },
+        mergeable: typeof pull.mergeable_state === "string" ? pull.mergeable_state : "unknown",
+      };
+    }
     const [detail, runs] = await Promise.all([
       fetchGitHubJson({ ...pullRequestDetailRequest(access.repository, pull.number), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher),
       pull?.head?.sha
@@ -717,12 +729,15 @@ const TOKEN_PATTERNS = [
   /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/gu,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/gu,
   /\b(?:Bearer|token)\s+[A-Za-z0-9._=-]{16,}\b/gu,
-  /\b[A-Za-z0-9_/+=-]{32,}\b/gu,
 ];
 
 function redactSecrets(text) {
   let redacted = String(text ?? "");
   for (const pattern of TOKEN_PATTERNS) redacted = redacted.replace(pattern, "[REDACTED]");
+  redacted = redacted.replace(
+    /(\b(?:authorization|token|secret|password|passwd|cookie|api[_-]?key)\s*[:=]\s*)(["']?)[A-Za-z0-9._/+=-]{16,}\2/giu,
+    (_match, prefix, quote) => `${prefix}${quote}[REDACTED]${quote}`,
+  );
   return redacted;
 }
 
