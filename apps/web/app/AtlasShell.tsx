@@ -23,7 +23,7 @@ import { AtlasMark } from "./AtlasMark.js";
  * local console rather than imitated here.
  */
 
-export type Section = "chat" | "build" | "automation" | "connections" | "settings";
+export type Section = "chat" | "build" | "automation" | "memory" | "connections" | "settings";
 
 type NavItem = { id: Section; href: string; label: string; glyph: string; hint?: string };
 
@@ -32,6 +32,7 @@ const SECTION_LABELS: Record<Section, string> = {
   chat: "Atlas",
   build: "Code",
   automation: "Computer control",
+  memory: "Memory",
   connections: "Connections",
   settings: "Settings",
 };
@@ -40,6 +41,7 @@ const SECTION_LABELS: Record<Section, string> = {
 export const LOCAL_CONSOLE = "http://127.0.0.1:4317";
 
 const UTILITY_SECTIONS: readonly NavItem[] = [
+  { id: "memory", href: "/memory", label: "Memory", glyph: "⟡" },
   { id: "connections", href: "/setup", label: "Connections", glyph: "⟐" },
   { id: "settings", href: "/account", label: "Settings", glyph: "⚙" },
 ];

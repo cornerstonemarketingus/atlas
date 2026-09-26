@@ -1,3 +1,6 @@
+import { forgetMemory, memoryTableMissing, recallMemories, rememberMemory } from "../../../db/tenancy.mjs";
+import { memoryContentLooksSecret } from "./memory-safety.mjs";
+
 /**
  * Tools Atlas uses inside a chat reply, before it answers.
  *
@@ -11,13 +14,16 @@
  * - read_repository_file: read a file or list a directory in a repository on
  *   the workspace's allowlist.
  * - search_repository_code: find where something is in such a repository.
+ * - remember / recall / forget: manage durable tenant-scoped memory.
  *
  * Everything these return is untrusted data. It goes back to the model in a
  * `<data source="…">` block that the content cannot close, and nothing here
  * can change anything anywhere.
  */
 
-export const INSTANT_TOOL_NAMES = Object.freeze(["read_web_page", "web_search", "read_repository_file", "search_repository_code"]);
+export const INSTANT_TOOL_NAMES = Object.freeze([
+  "read_web_page", "web_search", "read_repository_file", "search_repository_code", "remember", "recall", "forget",
+]);
 
 const MAX_PAGE_BYTES = 600_000;
 const MAX_TOOL_CHARS = 7_000;
@@ -61,10 +67,35 @@ const SEARCH_REPOSITORY_CODE = definition(
   },
   ["repository", "query"],
 );
+const REMEMBER = definition(
+  "remember",
+  "Save or update one durable memory for this tenant and user: a fact, preference, decision, convention, failure or command. Use it when the person tells you a lasting rule or corrects you.",
+  {
+    kind: { type: "string", enum: ["fact", "preference", "decision", "convention", "failure", "command"] },
+    content: { type: "string", description: "The durable fact to remember. At most 1000 characters." },
+    repository: { type: "string", description: "Optional owner/name repository this memory belongs to." },
+  },
+  ["kind", "content"],
+);
+const RECALL = definition(
+  "recall",
+  "Search durable saved memories for this tenant and user. Use it when you need a remembered convention, decision, command or past failure.",
+  {
+    query: { type: "string", description: "Keywords to search for." },
+    repository: { type: "string", description: "Optional owner/name repository to prefer memories for." },
+  },
+  ["query"],
+);
+const FORGET = definition(
+  "forget",
+  "Delete one durable saved memory by id for this tenant and user.",
+  { id: { type: "string", description: "The memory id to delete." } },
+  ["id"],
+);
 
 /** The instant tools offered to the model; web search only when a search key is configured. */
 export function instantToolDefinitions(environment = {}) {
-  return [READ_WEB_PAGE, ...(searchKey(environment) ? [WEB_SEARCH] : []), READ_REPOSITORY_FILE, SEARCH_REPOSITORY_CODE];
+  return [READ_WEB_PAGE, ...(searchKey(environment) ? [WEB_SEARCH] : []), READ_REPOSITORY_FILE, SEARCH_REPOSITORY_CODE, REMEMBER, RECALL, FORGET];
 }
 
 export function isInstantTool(name) {
@@ -168,7 +199,7 @@ function parseArguments(call) {
  * message the model can read and recover from.
  *
  * @param {{ function?: { name?: string, arguments?: unknown } }} call
- * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined> }} context
+ * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined>, d1?: any, memoryScope?: { tenantId: number, principal: string }, conversationId?: string }} context
  * @returns {Promise<{ ok: boolean, label: string, content: string, preview?: { kind: "file" | "page", title: string, content: string, url?: string, repository?: string, path?: string } }>}
  */
 export async function runInstantTool(call, context = {}) {
@@ -181,6 +212,9 @@ export async function runInstantTool(call, context = {}) {
     if (name === "web_search") return await webSearch(args, fetcher, context.environment ?? {});
     if (name === "read_repository_file") return await readRepositoryFile(args, fetcher, context);
     if (name === "search_repository_code") return await searchRepositoryCode(args, fetcher, context);
+    if (name === "remember") return await remember(args, context);
+    if (name === "recall") return await recall(args, context);
+    if (name === "forget") return await forget(args, context);
     return { ok: false, label: `Unknown tool ${name}`, content: `There is no tool named '${name}'.` };
   } catch (error) {
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
@@ -290,6 +324,73 @@ async function searchRepositoryCode(args, fetcher, context) {
   return { ok: true, label: `Searched ${access.repository} for “${query.slice(0, 60)}” (${paths.length} files)`, content: asData(`code search in ${access.repository}: ${query}`, paths.join("\n") || "No matches.") };
 }
 
+async function remember(args, context) {
+  const repository = memoryRepository(args.repository);
+  const kind = typeof args.kind === "string" ? args.kind.trim() : "";
+  const content = typeof args.content === "string" ? args.content.trim().slice(0, 1000) : "";
+  if (!content) return memoryResult(false, "Nothing to remember", "The memory content was empty.");
+  if (memoryContentLooksSecret(content)) return memoryResult(false, "Refused to store a secret", "I will not store secrets, tokens, passwords or private keys in memory.");
+  const access = memoryAccess(context);
+  if (access.error) return access.error;
+  try {
+    const outcome = await rememberMemory(access.d1, access.scope, { kind, content, repository, sourceConversationId: context.conversationId ?? null });
+    const memory = outcome.memory;
+    return memoryResult(true, outcome.created ? "Saved a memory" : "Updated a memory", [
+      `id: ${memory?.id ?? "unknown"}`,
+      `kind: ${kind}`,
+      repository ? `repository: ${repository}` : "repository: shared",
+      `content: ${content}`,
+    ].join("\n"));
+  } catch (error) {
+    if (memoryTableMissing(error)) return memoryResult(false, "Memory is not set up yet", "The memory database has not been migrated yet.");
+    return memoryResult(false, "Could not save memory", "The memory could not be saved.");
+  }
+}
+
+async function recall(args, context) {
+  const query = typeof args.query === "string" ? args.query.trim().slice(0, 300) : "";
+  if (!query) return memoryResult(false, "Empty memory search", "The memory search query was empty.");
+  const repository = memoryRepository(args.repository);
+  const access = memoryAccess(context);
+  if (access.error) return access.error;
+  try {
+    const memories = await recallMemories(access.d1, access.scope, { query, repository, limit: 15 });
+    const lines = memories.map((memory) => `${memory.id} · ${memory.kind}${memory.repository ? ` · ${memory.repository}` : ""}\n${memory.content}`);
+    return memoryResult(true, `Recalled ${memories.length} memories`, lines.join("\n\n") || "No memories matched.");
+  } catch (error) {
+    if (memoryTableMissing(error)) return memoryResult(false, "Memory is not set up yet", "The memory database has not been migrated yet.");
+    return memoryResult(false, "Could not search memory", "The saved memories could not be searched.");
+  }
+}
+
+async function forget(args, context) {
+  const id = typeof args.id === "string" ? args.id.trim() : "";
+  if (!id) return memoryResult(false, "Missing memory id", "Provide the memory id to delete.");
+  const access = memoryAccess(context);
+  if (access.error) return access.error;
+  try {
+    const deleted = await forgetMemory(access.d1, access.scope, id);
+    return memoryResult(deleted, deleted ? "Deleted a memory" : "No memory deleted", deleted ? `id: ${id}` : "No saved memory with that id was found.");
+  } catch (error) {
+    if (memoryTableMissing(error)) return memoryResult(false, "Memory is not set up yet", "The memory database has not been migrated yet.");
+    return memoryResult(false, "Could not delete memory", "The saved memory could not be deleted.");
+  }
+}
+
+function memoryRepository(repository) {
+  const normalized = typeof repository === "string" ? repository.trim().toLowerCase() : "";
+  return /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/u.test(normalized) ? normalized : null;
+}
+
+function memoryAccess(context) {
+  if (context?.d1 && context?.memoryScope) return { d1: context.d1, scope: context.memoryScope };
+  return { error: memoryResult(false, "Memory is unavailable", "Memory is unavailable in this chat.") };
+}
+
+function memoryResult(ok, label, body) {
+  return { ok, label, content: asData("memory", body) };
+}
+
 /** What the chat shows while a tool call is running. */
 export function pendingLabel(call) {
   const args = parseArguments(call) ?? {};
@@ -301,5 +402,8 @@ export function pendingLabel(call) {
   if (name === "web_search") return `Searching the web for “${String(args.query ?? "").slice(0, 60)}”…`;
   if (name === "read_repository_file") return `Reading ${String(args.repository ?? "")}/${String(args.path ?? "").replace(/^\/+/u, "")}…`.replace(/\/…$/u, "…");
   if (name === "search_repository_code") return `Searching ${String(args.repository ?? "")} for “${String(args.query ?? "").slice(0, 60)}”…`;
+  if (name === "remember") return "Saving that to memory…";
+  if (name === "recall") return `Searching memory for “${String(args.query ?? "").slice(0, 60)}”…`;
+  if (name === "forget") return "Deleting that memory…";
   return `Running ${name}…`;
 }
