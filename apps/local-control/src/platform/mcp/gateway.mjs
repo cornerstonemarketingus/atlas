@@ -1,6 +1,7 @@
 import { digest, validateSchema, RISK_LEVELS } from "../../../../../packages/atlas-contracts/src/index.mjs";
 import { createRateLimiter } from "../../rate-limit.mjs";
 import { McpClient } from "./jsonrpc-stdio.mjs";
+import { createStreamableHttpTransport } from "./http-transport.mjs";
 
 /**
  * MCP client gateway (blueprint §8).
@@ -16,7 +17,15 @@ import { McpClient } from "./jsonrpc-stdio.mjs";
  *     are capped, secret-like strings are redacted, injection markers flagged,
  *     and the whole thing is wrapped `{ untrusted: true, ... }`;
  *   - audits every discover and call (success, denial, error) with an args
- *     digest, never raw args.
+ *     digest, never raw args;
+ *   - resolves server credentials ONLY through the injected
+ *     `credentialProvider(tenantId, serverId, credentialsScope)`, always with
+ *     the registration's own tenant / server / scope (never caller input). A
+ *     server that requires a credential and gets none is denied before any
+ *     connection. Credential values are scrubbed from results, errors and
+ *     audit events and never returned;
+ *   - re-creates a dead client at most once per call, after a backoff, and
+ *     retries a call only when the failure proves it was never delivered.
  */
 
 export class McpGatewayError extends Error {
@@ -144,9 +153,21 @@ function schemaIsObject(schema) {
 // Result sanitization
 // ---------------------------------------------------------------------------
 
+function scrubKnown(text, secrets) {
+  let out = text;
+  let count = 0;
+  for (const secret of secrets ?? []) {
+    if (typeof secret !== "string" || secret.length < 4) continue;
+    if (out.includes(secret)) { count += out.split(secret).length - 1; out = out.split(secret).join("[REDACTED:credential]"); }
+  }
+  return { text: out, count };
+}
+
 function sanitizeStrings(value, state) {
   if (typeof value === "string") {
-    const clean = stripControlChars(value);
+    const known = scrubKnown(value, state.secrets);
+    state.redactions += known.count;
+    const clean = stripControlChars(known.text);
     const markers = detectInjection(clean);
     if (markers.length) state.markers.push(...markers);
     const { text, count } = redactSecrets(clean);
@@ -165,8 +186,8 @@ function sanitizeStrings(value, state) {
   return value;
 }
 
-export function sanitizeToolResult(result, { serverId, tool, limits = DEFAULT_LIMITS } = {}) {
-  const state = { markers: [], redactions: 0, truncated: false, dropped: [] };
+export function sanitizeToolResult(result, { serverId, tool, limits = DEFAULT_LIMITS, secrets = [] } = {}) {
+  const state = { markers: [], redactions: 0, truncated: false, dropped: [], secrets };
   const content = [];
   let budget = limits.maxResultBytes;
   const items = Array.isArray(result?.content) ? result.content : [];
@@ -241,8 +262,13 @@ export class McpGateway {
    * @param {() => number} [options.now]
    * @param {object} [options.limits]
    * @param {boolean} [options.blockFlaggedTools] refuse calls to tools whose description was flagged (default true)
+   * @param {(tenantId: string, serverId: string, scope: string) => (string|null|{token:string}|Promise<...>)} [options.credentialProvider]
+   *        The only source of server credentials. Absent → servers that require a credential are denied.
+   * @param {(ms: number) => Promise<void>} [options.sleep] backoff sleeper (tests)
    */
-  constructor({ authorize, audit = () => {}, now = () => Date.now(), limits = {}, blockFlaggedTools = true } = {}) {
+  constructor({ authorize, audit = () => {}, now = () => Date.now(), limits = {}, blockFlaggedTools = true, credentialProvider = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+    this.credentialProvider = typeof credentialProvider === "function" ? credentialProvider : null;
+    this.sleep = sleep;
     this.authorize = typeof authorize === "function" ? authorize : () => ({ allow: false, reason: "no_authorizer_configured" });
     this.auditSink = audit;
     this.now = now;
@@ -268,12 +294,37 @@ export class McpGateway {
     trust = "untrusted",
     risk = "moderate",
     clientInfo = undefined,
+    http = undefined,
+    requiresCredential = undefined,
+    reconnectBackoffMs = 250,
   }) {
     if (typeof tenantId !== "string" || !tenantId) throw new McpGatewayError("INVALID_REGISTRATION", "tenantId is required.");
     if (typeof serverId !== "string" || !SERVER_ID.test(serverId)) {
       throw new McpGatewayError("INVALID_REGISTRATION", "serverId must match /^[a-z][a-z0-9_-]{0,63}$/.");
     }
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new McpGatewayError("INVALID_REGISTRATION", "timeoutMs must be a positive integer.");
+    if (http !== undefined) {
+      if (transportFactory !== undefined) throw new McpGatewayError("INVALID_REGISTRATION", "Pass either transportFactory or http, not both.");
+      if (!http || typeof http.url !== "string") throw new McpGatewayError("INVALID_REGISTRATION", "http.url is required.");
+      const { url, allowLoopback = false, allowPrivateHosts = [], maxResponseBytes, lookup, headers } = http;
+      try { createStreamableHttpTransport({ url, allowLoopback, allowPrivateHosts }); } catch (error) {
+        throw new McpGatewayError(error.code === "SSRF_BLOCKED" ? "SSRF_BLOCKED" : "INVALID_REGISTRATION", error.message);
+      }
+      transportFactory = ({ getCredential }) => createStreamableHttpTransport({
+        url, allowLoopback, allowPrivateHosts, timeoutMs: Math.max(timeoutMs, connectTimeoutMs),
+        ...(lookup ? { lookup } : {}),
+        ...(headers ? { headers } : {}),
+        ...(maxResponseBytes ? { maxResponseBytes } : {}),
+        ...(credentialsScope ? { getToken: getCredential } : {}),
+      });
+    }
     if (typeof transportFactory !== "function") throw new McpGatewayError("INVALID_REGISTRATION", "transportFactory is required.");
+    if (credentialsScope !== null && (typeof credentialsScope !== "string" || !credentialsScope)) {
+      throw new McpGatewayError("INVALID_REGISTRATION", "credentialsScope must be a non-empty string or null.");
+    }
+    const needsCredential = requiresCredential ?? (http !== undefined && credentialsScope !== null);
+    if (needsCredential && !credentialsScope) throw new McpGatewayError("INVALID_REGISTRATION", "A server that requires a credential needs a credentialsScope.");
+    if (!Number.isInteger(reconnectBackoffMs) || reconnectBackoffMs < 0) throw new McpGatewayError("INVALID_REGISTRATION", "reconnectBackoffMs must be a non-negative integer.");
     if (!Array.isArray(allowedTools) || !allowedTools.every((g) => typeof g === "string" && g)) {
       throw new McpGatewayError("INVALID_REGISTRATION", "allowedTools must be a list of glob strings.");
     }
@@ -287,8 +338,10 @@ export class McpGateway {
     if (this.servers.has(key)) throw new McpGatewayError("DUPLICATE_SERVER", `Server '${serverId}' is already registered for this tenant.`);
     this.servers.set(key, {
       tenantId, serverId, transportFactory, credentialsScope, allowedTools: [...allowedTools],
-      perMinute, timeoutMs, connectTimeoutMs, trust, risk, clientInfo,
-      client: null, connecting: null, tools: null, flagged: [], rejected: [],
+      perMinute, timeoutMs, connectTimeoutMs, trust, risk, clientInfo, requiresCredential: needsCredential, reconnectBackoffMs,
+      transport: http ? "http" : "custom",
+      client: null, connecting: null, everConnected: false, tools: null, flagged: [], rejected: [],
+      secrets: new Set(),
     });
     return { tenantId, serverId };
   }
@@ -301,11 +354,36 @@ export class McpGateway {
     return entry;
   }
 
+  /**
+   * Resolves the registration's credential through the provider. Always keyed
+   * by the registration (tenant, server, scope) — callers cannot choose them.
+   * Throws CREDENTIAL_UNAVAILABLE; the value is remembered only to scrub it.
+   */
+  async #resolveCredential(entry) {
+    const unavailable = () => new McpGatewayError("CREDENTIAL_UNAVAILABLE", `No credential is available for server '${entry.serverId}'.`);
+    if (!entry.credentialsScope || !this.credentialProvider) throw unavailable();
+    let value;
+    try {
+      value = await this.credentialProvider(entry.tenantId, entry.serverId, entry.credentialsScope);
+    } catch {
+      throw unavailable();
+    }
+    const token = typeof value === "string" ? value : (value && typeof value === "object" && typeof value.token === "string" ? value.token : null);
+    if (!token) throw unavailable();
+    entry.secrets.add(token);
+    return token;
+  }
+
+  #scrub(entry, text) {
+    return redactSecrets(scrubKnown(String(text ?? ""), entry?.secrets).text).text;
+  }
+
   async #connect(entry) {
     if (entry.client && !entry.client.closed) return entry.client;
     if (!entry.connecting) {
       entry.connecting = (async () => {
-        const transport = await entry.transportFactory({ tenantId: entry.tenantId, serverId: entry.serverId, credentialsScope: entry.credentialsScope });
+        const getCredential = () => this.#resolveCredential(entry);
+        const transport = await entry.transportFactory({ tenantId: entry.tenantId, serverId: entry.serverId, credentialsScope: entry.credentialsScope, getCredential });
         const client = new McpClient({ transport, requestTimeoutMs: entry.connectTimeoutMs, ...(entry.clientInfo ? { clientInfo: entry.clientInfo } : {}) });
         try {
           await client.initialize();
@@ -314,10 +392,37 @@ export class McpGateway {
           throw error;
         }
         entry.client = client;
+        entry.everConnected = true;
         return client;
       })().finally(() => { entry.connecting = null; });
     }
     return entry.connecting;
+  }
+
+  /**
+   * Runs `fn(client)`, re-creating a dead client at most once for this call:
+   * either because the previous client had died (after a backoff), or because
+   * the call failed with an error proving it was never delivered.
+   */
+  async #withClient(entry, fn) {
+    let recreated = false;
+    const reconnect = async () => {
+      recreated = true;
+      const old = entry.client;
+      entry.client = null;
+      if (old) await old.close().catch(() => {});
+      if (entry.reconnectBackoffMs > 0) await this.sleep(entry.reconnectBackoffMs);
+      return this.#connect(entry);
+    };
+    const dead = entry.everConnected && (!entry.client || entry.client.closed) && !entry.connecting;
+    const client = dead ? await reconnect() : await this.#connect(entry);
+    try {
+      return await fn(client);
+    } catch (error) {
+      const undelivered = error?.retryable === true || error?.code === "TRANSPORT_CLOSED" || error?.code === "SESSION_EXPIRED";
+      if (recreated || !undelivered || error instanceof McpGatewayError) throw error;
+      return fn(await reconnect());
+    }
   }
 
   async #audit(event) {
@@ -339,9 +444,14 @@ export class McpGateway {
       await this.#audit({ ...base, outcome: "denied", reason: error.code, durationMs: this.now() - started });
       throw error;
     }
+    if (entry.requiresCredential) {
+      try { await this.#resolveCredential(entry); } catch (error) {
+        await this.#audit({ ...base, outcome: "denied", reason: error.code, durationMs: this.now() - started });
+        throw error;
+      }
+    }
     try {
-      const client = await this.#connect(entry);
-      const rawTools = await client.listTools({ timeoutMs: entry.connectTimeoutMs });
+      const rawTools = await this.#withClient(entry, (client) => client.listTools({ timeoutMs: entry.connectTimeoutMs }));
       const tools = new Map();
       const flagged = [];
       const rejected = [];
@@ -377,8 +487,10 @@ export class McpGateway {
       await this.#audit({ ...base, outcome: "success", toolCount: tools.size, flaggedTools: flagged.map((f) => f.name), rejectedTools: rejected, durationMs: this.now() - started });
       return this.listTools(serverId, ctx);
     } catch (error) {
-      await this.#audit({ ...base, outcome: "error", reason: error.code ?? "ERROR", message: String(error.message).slice(0, 300), durationMs: this.now() - started });
-      throw error;
+      const message = this.#scrub(entry, error.message).slice(0, 300);
+      await this.#audit({ ...base, outcome: "error", reason: error.code ?? "ERROR", message, durationMs: this.now() - started });
+      if (error instanceof McpGatewayError) throw error;
+      throw new McpGatewayError(typeof error.code === "string" ? error.code : "DISCOVER_FAILED", message);
     }
   }
 
@@ -399,7 +511,7 @@ export class McpGateway {
 
   serverInfo(serverId, ctx = {}) {
     const entry = this.#lookup(ctx.tenantId, serverId);
-    return { tenantId: entry.tenantId, serverId: entry.serverId, trust: entry.trust, risk: entry.risk, allowedTools: [...entry.allowedTools], credentialsScope: entry.credentialsScope };
+    return { tenantId: entry.tenantId, serverId: entry.serverId, trust: entry.trust, risk: entry.risk, allowedTools: [...entry.allowedTools], credentialsScope: entry.credentialsScope, requiresCredential: entry.requiresCredential, transport: entry.transport };
   }
 
   /**
@@ -464,10 +576,13 @@ export class McpGateway {
       return deny("RATE_LIMITED", `Rate limit for '${serverId}' exceeded; retry after ${rate.retryAfterSeconds}s.`, { retryAfterSeconds: rate.retryAfterSeconds });
     }
 
+    if (entry.requiresCredential) {
+      try { await this.#resolveCredential(entry); } catch (error) { return deny(error.code, error.message); }
+    }
+
     try {
-      const client = await this.#connect(entry);
-      const raw = await client.callTool(toolName, args, { timeoutMs: entry.timeoutMs });
-      const output = sanitizeToolResult(raw, { serverId, tool: toolName, limits: this.limits });
+      const raw = await this.#withClient(entry, (client) => client.callTool(toolName, args, { timeoutMs: entry.timeoutMs }));
+      const output = sanitizeToolResult(raw, { serverId, tool: toolName, limits: this.limits, secrets: [...entry.secrets] });
       await this.#audit({
         ...base, outcome: "success", isError: output.isError, durationMs: this.now() - started,
         injectionSuspected: output.flags.injectionSuspected, injectionMarkers: output.flags.injectionMarkers,
@@ -476,8 +591,9 @@ export class McpGateway {
       return output;
     } catch (error) {
       if (error instanceof McpGatewayError) throw error;
-      await this.#audit({ ...base, outcome: "error", reason: error.code ?? "ERROR", message: redactSecrets(String(error.message)).text.slice(0, 300), durationMs: this.now() - started });
-      throw new McpGatewayError(error.code === "TIMEOUT" ? "TIMEOUT" : "CALL_FAILED", redactSecrets(String(error.message)).text.slice(0, 300));
+      const message = this.#scrub(entry, error.message).slice(0, 300);
+      await this.#audit({ ...base, outcome: "error", reason: error.code ?? "ERROR", message, durationMs: this.now() - started });
+      throw new McpGatewayError(error.code === "TIMEOUT" ? "TIMEOUT" : "CALL_FAILED", message, { cause: typeof error.code === "string" ? error.code : "ERROR" });
     }
   }
 
