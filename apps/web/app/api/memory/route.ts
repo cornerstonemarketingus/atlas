@@ -11,6 +11,16 @@ function normalizedRepository(value: unknown) {
   return repository && REPOSITORY_PATTERN.test(repository) ? repository : null;
 }
 
+function repositoryInput(value: unknown) {
+  if (value === undefined) return { valid: true, value: undefined };
+  if (value === null) return { valid: true, value: null };
+  if (typeof value !== "string") return { valid: false, value: null };
+  const trimmed = value.trim();
+  if (!trimmed) return { valid: true, value: null };
+  const repository = normalizedRepository(trimmed);
+  return repository ? { valid: true, value: repository } : { valid: false, value: null };
+}
+
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
@@ -37,15 +47,16 @@ export async function PATCH(request: Request) {
   const id = typeof body.id === "string" ? body.id.trim() : "";
   const content = typeof body.content === "string" ? body.content.trim().slice(0, 1000) : "";
   const kind = body.kind === undefined ? undefined : typeof body.kind === "string" ? body.kind.trim() : "";
-  const repository = body.repository === undefined ? undefined : normalizedRepository(body.repository);
+  const repository = repositoryInput(body.repository);
   if (!id || !content) return Response.json({ message: "Memory id and content are required." }, { status: 400 });
   if (kind !== undefined && !MEMORY_KINDS.includes(kind)) return Response.json({ message: "Memory kind is not valid." }, { status: 400 });
+  if (!repository.valid) return Response.json({ message: "Repository must use the owner/name form." }, { status: 400 });
   if (memoryContentLooksSecret(content)) return Response.json({ message: "Atlas will not store secrets in memory." }, { status: 400 });
   try {
     const d1 = getD1();
     const tenant = await resolveTenantContext(request, account, d1);
     if (!tenant) return Response.json({ message: NO_TENANT_MESSAGE }, { status: 403 });
-    const memory = await updateMemory(d1, tenantScope(tenant), { id, content, kind, repository });
+    const memory = await updateMemory(d1, tenantScope(tenant), { id, content, kind, repository: repository.value });
     if (!memory) return Response.json({ message: "Memory not found." }, { status: 404 });
     return Response.json({ memory });
   } catch (error) {

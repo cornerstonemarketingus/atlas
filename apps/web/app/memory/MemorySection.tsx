@@ -143,7 +143,9 @@ export function MemorySection() {
                   <div className="memory-meta">
                     <strong>{memory.kind}</strong>
                     <span>{memory.repository ?? "shared across this workspace"}</span>
-                    <time>{memory.lastUsedAt || memory.updatedAt ? new Date(memory.lastUsedAt ?? memory.updatedAt ?? "").toLocaleString() : "Unknown time"}</time>
+                    <time dateTime={memory.lastUsedAt ?? memory.updatedAt ?? ""}>
+                      {memory.lastUsedAt || memory.updatedAt ? new Date(memory.lastUsedAt ?? memory.updatedAt ?? "").toLocaleString() : "Unknown time"}
+                    </time>
                   </div>
                   <textarea value={drafts[memory.id] ?? memory.content} rows={4} maxLength={1000}
                     onChange={(event) => setDrafts((current) => ({ ...current, [memory.id]: event.target.value }))}
