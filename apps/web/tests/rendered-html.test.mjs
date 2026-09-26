@@ -101,7 +101,7 @@ test("every page carries the security headers (SEC-13)", async () => {
     assert.ok(nonceMatch, `${path} report-only script CSP should include a nonce`);
     const scriptNonce = nonceMatch[1];
     const html = await response.text();
-    const scriptTags = html.match(/<script\b[^>]*>/gu) ?? [];
+    const scriptTags = html.match(/<script\b[^>]*>/giu) ?? [];
     assert.ok(scriptTags.length > 0, `${path} should render framework script tags`);
     for (const scriptTag of scriptTags) assert.ok(scriptTag.includes(`nonce="${scriptNonce}"`), `${path} script tag should carry the response nonce`);
     assert.equal(response.headers.get("x-frame-options"), "DENY", path);

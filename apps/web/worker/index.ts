@@ -39,7 +39,7 @@ const worker = {
           const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
           return result.response();
         },
-      }, allowedWidths), { scriptNonce });
+      }, allowedWidths));
     }
 
     const requestHeaders = new Headers(request.headers);
@@ -48,10 +48,10 @@ const worker = {
     const response = await handler.fetch(renderRequest, env, ctx);
     const contentType = response.headers.get("content-type") ?? "";
 
-    if (!contentType.includes("text/html")) return withSecurityHeaders(response, { scriptNonce });
+    if (!contentType.includes("text/html")) return withSecurityHeaders(response);
 
     const html = await response.text();
-    const scriptNonceHtml = html.replace(/<script(?=[\s>])(?![^>]*\bnonce=)/gu, `<script nonce="${scriptNonce}"`);
+    const scriptNonceHtml = html.replace(/<script(?=[\s>])(?![^>]*\bnonce=)/giu, `<script nonce="${scriptNonce}"`);
     return withSecurityHeaders(new Response(scriptNonceHtml, {
       status: response.status,
       statusText: response.statusText,
