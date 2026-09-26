@@ -10,7 +10,7 @@
 .atlas-shell.shell-wide{grid-template-columns:264px minmax(0,1fr)}
 
 /* --- rail --------------------------------------------------------------- */
-.shell-rail{background:#0e110f;border-right:1px solid var(--ws-line);padding:18px 14px;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.shell-rail{background:#0e110f;border-right:1px solid var(--ws-line);padding:18px 14px;display:flex;flex-direction:column;min-width:0;min-height:0;overflow-y:auto}
 .rail-top{display:flex;align-items:flex-start;justify-content:space-between}
 .rail-top .workspace-brand{padding:5px 8px 18px}
 .rail-close{display:none}
@@ -34,7 +34,7 @@
 .settings-choice{display:grid;gap:8px;max-width:280px;color:#7b857e;font:650 10px var(--font-geist-mono);text-transform:uppercase}.settings-choice select{border:1px solid #2f3632;border-radius:9px;background:#0f1210;color:var(--ws-text);padding:11px 12px;font:450 14px var(--font-geist-sans)}
 
 /* --- body --------------------------------------------------------------- */
-.shell-body{min-width:0;display:grid;grid-template-rows:58px minmax(0,1fr) auto;background:radial-gradient(circle at 50% 18%,#151a16 0,transparent 45%),var(--ws-bg)}
+.shell-body{min-width:0;min-height:0;overflow:hidden;display:grid;grid-template-rows:58px minmax(0,1fr) auto;background:radial-gradient(circle at 50% 18%,#151a16 0,transparent 45%),var(--ws-bg)}
 .shell-header{border-bottom:1px solid var(--ws-line);display:flex;justify-content:space-between;align-items:center;gap:12px;padding:0 24px;color:#aeb5b0;font-size:12px}
 .shell-where{display:flex;align-items:center;font-weight:650}
 .shell-header-context{display:flex;gap:8px;align-items:center;min-width:0}
@@ -44,6 +44,11 @@
 .capability-chip{color:var(--ws-accent);border-color:#3f5a26;text-decoration:none}.capability-chip:hover,.capability-chip:focus-visible{background:#18210f}
 .shell-menu{display:none}
 .section-scroll{overflow:auto;padding:30px max(5vw,26px)}
+/* The shell is exactly one window tall and never scrolls itself, so the
+   content row must. Every page's main content is the row under the header;
+   without min-height:0 a grid row grows to fit its content and the overflow
+   is clipped by the shell with no way to reach it. */
+.shell-body>:not(.shell-header):not(.chat-composer):not(.build-body){min-height:0;overflow-y:auto;overscroll-behavior:contain}
 
 /* --- conversation surfaces (chat + build) -------------------------------- */
 .section-empty{max-width:700px;margin:6vh auto 0;text-align:center}
