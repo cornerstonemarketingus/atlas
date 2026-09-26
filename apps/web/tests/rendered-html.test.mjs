@@ -96,6 +96,14 @@ test("every page carries the security headers (SEC-13)", async () => {
   for (const path of ["/", "/product", "/pricing"]) {
     const response = await worker.fetch(new Request(`http://localhost${path}`, { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
     assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/u, path);
+    const reportOnlyCsp = response.headers.get("content-security-policy-report-only") ?? "";
+    const nonceMatch = reportOnlyCsp.match(/script-src 'nonce-([^']+)' 'strict-dynamic'; object-src 'none'; base-uri 'none'/u);
+    assert.ok(nonceMatch, `${path} report-only script CSP should include a nonce`);
+    const scriptNonce = nonceMatch[1];
+    const html = await response.text();
+    const scriptTags = html.match(/<script\b[^>]*>/gu) ?? [];
+    assert.ok(scriptTags.length > 0, `${path} should render framework script tags`);
+    for (const scriptTag of scriptTags) assert.ok(scriptTag.includes(`nonce="${scriptNonce}"`), `${path} script tag should carry the response nonce`);
     assert.equal(response.headers.get("x-frame-options"), "DENY", path);
     assert.equal(response.headers.get("x-content-type-options"), "nosniff", path);
     assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin", path);

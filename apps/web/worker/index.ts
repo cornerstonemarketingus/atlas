@@ -1,7 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { withSecurityHeaders } from "./security-headers.mjs";
+import { createScriptNonce, withSecurityHeaders } from "./security-headers.mjs";
 
 interface Env {
   ASSETS: Fetcher;
@@ -29,6 +29,7 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const scriptNonce = createScriptNonce();
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
@@ -38,10 +39,24 @@ const worker = {
           const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
           return result.response();
         },
-      }, allowedWidths));
+      }, allowedWidths), { scriptNonce });
     }
 
-    return withSecurityHeaders(await handler.fetch(request, env, ctx));
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set("x-atlas-script-nonce", scriptNonce);
+    const renderRequest = new Request(request, { headers: requestHeaders });
+    const response = await handler.fetch(renderRequest, env, ctx);
+    const contentType = response.headers.get("content-type") ?? "";
+
+    if (!contentType.includes("text/html")) return withSecurityHeaders(response, { scriptNonce });
+
+    const html = await response.text();
+    const scriptNonceHtml = html.replace(/<script(?=[\s>])(?![^>]*\bnonce=)/gu, `<script nonce="${scriptNonce}"`);
+    return withSecurityHeaders(new Response(scriptNonceHtml, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }), { scriptNonce });
   },
 };
 
