@@ -34,11 +34,9 @@ interface ScheduledEvent {
 
 const worker = {
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    Object.assign(process.env, env as unknown as Record<string, string>);
-    ctx.waitUntil(runAutomations({ kind: "cron" }));
+    ctx.waitUntil(runAutomations({ kind: "cron" }, new Date(), env as unknown as Record<string, string>));
   },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    Object.assign(process.env, env as unknown as Record<string, string>);
     const url = new URL(request.url);
 
     if (url.pathname === "/_vinext/image") {

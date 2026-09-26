@@ -8,6 +8,7 @@ import { explainGitHubFailure } from "./github-diagnosis.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
 import { repositoryAccessDecision } from "./repository-access.mjs";
 import { selfModificationDecision } from "./self-protection.mjs";
+import { CORRELATION_HEADER } from "./correlation.mjs";
 
 export async function dispatchTaskForAccount(account, body, correlationId, environment = process.env) {
   const validated = validateTask(body, allowedRepositories(environment.ATLAS_ALLOWED_REPOSITORIES));
@@ -73,7 +74,11 @@ export async function dispatchTaskForAccount(account, body, correlationId, envir
   try {
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { authorization: ["Bearer", token].join(" "), "content-type": "application/json" },
+      headers: {
+        authorization: ["Bearer", token].join(" "),
+        "content-type": "application/json",
+        ...(typeof correlationId === "string" && correlationId ? { [CORRELATION_HEADER]: correlationId } : {}),
+      },
       body: JSON.stringify({ taskId, ...task, requestedBy: account.userId, commitMode: "approval-required" }),
     });
     if (!response.ok) return Response.json({ message: "The autonomous task dispatcher rejected the task." }, { status: 502 });

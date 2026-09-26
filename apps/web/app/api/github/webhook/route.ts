@@ -22,18 +22,33 @@ function githubFailureEvent(eventName: string | null, payload: Record<string, un
     : null;
   if (!repository) return null;
   if (eventName === "check_run") {
-    const checkRun = payload.check_run as { conclusion?: unknown; status?: unknown; check_suite?: { head_branch?: unknown }; name?: unknown } | undefined;
+    const checkRun = payload.check_run as { id?: unknown; conclusion?: unknown; status?: unknown; check_suite?: { head_branch?: unknown }; name?: unknown } | undefined;
     if (!checkRun || checkRun.status !== "completed" || checkRun.conclusion !== "failure") return null;
     const branch = typeof checkRun.check_suite?.head_branch === "string" ? checkRun.check_suite.head_branch : "";
     if (!branch) return null;
-    return { kind: "github.check-failed" as const, repository, branch, checkName: typeof checkRun.name === "string" ? checkRun.name : "", deliveryId };
+    return {
+      kind: "github.check-failed" as const,
+      repository,
+      branch,
+      checkName: typeof checkRun.name === "string" ? checkRun.name : "",
+      eventId: typeof checkRun.id === "number" || typeof checkRun.id === "string" ? String(checkRun.id) : null,
+      deliveryId,
+    };
   }
   if (eventName === "workflow_run") {
-    const run = payload.workflow_run as { conclusion?: unknown; event?: unknown; head_branch?: unknown; name?: unknown } | undefined;
-    if (!run || run.conclusion !== "failure") return null;
+    const run = payload.workflow_run as { id?: unknown; conclusion?: unknown; event?: unknown; status?: unknown; head_branch?: unknown; name?: unknown } | undefined;
+    if (!run || run.status !== "completed" || run.conclusion !== "failure") return null;
+    if (run.event === "workflow_dispatch") return null;
     const branch = typeof run.head_branch === "string" ? run.head_branch : "";
     if (!branch) return null;
-    return { kind: "github.check-failed" as const, repository, branch, checkName: typeof run.name === "string" ? run.name : "", deliveryId };
+    return {
+      kind: "github.check-failed" as const,
+      repository,
+      branch,
+      checkName: typeof run.name === "string" ? run.name : "",
+      eventId: typeof run.id === "number" || typeof run.id === "string" ? String(run.id) : null,
+      deliveryId,
+    };
   }
   return null;
 }

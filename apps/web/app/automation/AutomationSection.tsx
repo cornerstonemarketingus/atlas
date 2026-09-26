@@ -157,7 +157,7 @@ export function AutomationSection() {
         triggerType: automationTriggerType,
         trigger: automationTriggerType === "cron"
           ? { cron: automationCron }
-          : { branch: "main", checkName: automationCheckName },
+          : { branch: automationBranch, checkName: automationCheckName },
         budgetLimit: automationBudgetLimit,
         budgetWindowDays: automationBudgetWindowDays,
       }),
@@ -168,11 +168,16 @@ export function AutomationSection() {
     await refresh().catch(() => undefined);
   }
   async function pauseAutomation(id: string, paused: boolean) {
-    await fetch(`/api/automations/${id}`, {
+    const response = await fetch(`/api/automations/${id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ paused }),
     });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({ message: "Automation state could not be updated." }));
+      setNotice(typeof data.message === "string" ? data.message : "Automation state could not be updated.");
+      return;
+    }
     await refresh().catch(() => undefined);
   }
 
@@ -197,6 +202,7 @@ export function AutomationSection() {
     taskComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("[aria-label='What should Atlas do?']")?.focus(), 250);
   }
+  const automationRunClass = (status: string) => status === "started" ? "progress" : status === "paused" ? "queued" : "error";
 
   return <AtlasShell
     section="automation"
@@ -276,13 +282,14 @@ export function AutomationSection() {
                   {automation.runs.length > 0 && <details className="task-timeline">
                     <summary>Run history ({automation.runs.length})</summary>
                     <ol>{automation.runs.map((run) => <li key={run.id}>
-                      <span className={`event-dot ${run.status === "started" ? "progress" : "error"}`} />
+                      <span className={`event-dot ${automationRunClass(run.status)}`} aria-hidden="true" />
                       <div><b>{run.status.replaceAll("_", " ")}</b>{run.taskId && <p>Task: {run.taskId}</p>}{run.reason && <p>{run.reason}</p>}<time>{new Date(run.triggeredAt).toLocaleString()}</time></div>
+                      <span className="sr-only">Run status: {run.status.replaceAll("_", " ")}</span>
                     </li>)}</ol>
                   </details>}
                 </div>
                 <div className="run-end">
-                  <button onClick={() => void pauseAutomation(automation.id, !automation.paused)}>{automation.paused ? "Resume" : "Pause"}</button>
+                  <button type="button" onClick={() => void pauseAutomation(automation.id, !automation.paused)}>{automation.paused ? "Resume" : "Pause"}</button>
                 </div>
               </article>)}
           </div>

@@ -23,9 +23,11 @@ export function validateAutomation(body, allowlist) {
   if (!Number.isInteger(budgetLimit) || budgetLimit < 1 || budgetLimit > 1000) return { error: "Budget limit is invalid.", status: 400 };
   if (!Number.isInteger(budgetWindowDays) || budgetWindowDays < 1 || budgetWindowDays > 365) return { error: "Budget window is invalid.", status: 400 };
   if (triggerType === "cron") {
+    if ("branch" in trigger || "checkName" in trigger) return { error: "Cron triggers only accept a cron expression.", status: 400 };
     if (typeof trigger.cron !== "string" || !isValidCron(trigger.cron)) return { error: "Cron expression is invalid.", status: 400 };
   }
   if (triggerType === "github-check-failure") {
+    if ("cron" in trigger) return { error: "GitHub check-failure triggers cannot include cron.", status: 400 };
     if (typeof trigger.branch !== "string" || !branchPattern.test(trigger.branch)) return { error: "Trigger branch is invalid.", status: 400 };
   }
   return {
@@ -55,7 +57,7 @@ function cronDatePartMin(index) {
   return index === 3 ? 1 : 0;
 }
 function cronDatePartMax(index) {
-  return [59, 23, 31, 12, 6][index];
+  return [59, 23, 31, 12, 7][index];
 }
 
 function matchCronField(field, min, max, validateOnly = false, current = 0) {
@@ -82,8 +84,18 @@ export function cronMatches(cron, now) {
   const fields = String(cron).trim().split(/\s+/u);
   if (fields.length !== 5) return false;
   const date = now instanceof Date ? now : new Date(now);
-  const values = [date.getUTCMinutes(), date.getUTCHours(), date.getUTCDate(), date.getUTCMonth() + 1, date.getUTCDay()];
-  return fields.every((field, index) => matchCronField(field, cronDatePartMin(index), cronDatePartMax(index), false, values[index]));
+  const [minuteField, hourField, dayOfMonthField, monthField, dayOfWeekField] = fields;
+  const minute = matchCronField(minuteField, 0, 59, false, date.getUTCMinutes());
+  const hour = matchCronField(hourField, 0, 23, false, date.getUTCHours());
+  const month = matchCronField(monthField, 1, 12, false, date.getUTCMonth() + 1);
+  const dayOfMonth = matchCronField(dayOfMonthField, 1, 31, false, date.getUTCDate());
+  const dayOfWeekValue = date.getUTCDay();
+  const dayOfWeek = matchCronField(dayOfWeekField, 0, 7, false, dayOfWeekValue)
+    || (dayOfWeekValue === 0 && matchCronField(dayOfWeekField, 0, 7, false, 7));
+  const dayOfMonthAny = dayOfMonthField === "*";
+  const dayOfWeekAny = dayOfWeekField === "*";
+  const dayMatches = (dayOfMonthAny || dayOfWeekAny) ? (dayOfMonth && dayOfWeek) : (dayOfMonth || dayOfWeek);
+  return minute && hour && month && dayMatches;
 }
 
 export function githubFailureMatches(trigger, event) {
