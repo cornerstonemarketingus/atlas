@@ -55,9 +55,11 @@ type ShellProps = {
   readonly children: ReactNode;
   /** Set by the workspace when its right-hand work panel is open. */
   readonly wide?: boolean;
+  /** A closable side panel beside the conversation (chat's terminal and files). */
+  readonly panel?: ReactNode;
 };
 
-export function AtlasShell({ section, rail, headerContext, children, wide = false }: ShellProps) {
+export function AtlasShell({ section, rail, headerContext, children, wide = false, panel = null }: ShellProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [account, setAccount] = useState<{ signedIn: boolean; githubLogin?: string | null } | null>(null);
 
@@ -78,7 +80,7 @@ export function AtlasShell({ section, rail, headerContext, children, wide = fals
   }
 
 
-  return <div className={`atlas-shell ${wide ? "shell-wide" : ""}`}>
+  return <div className={`atlas-shell ${wide ? "shell-wide" : ""} ${panel ? "has-panel" : ""}`}>
     {menuOpen && <button className="shell-scrim" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
     <aside className={`shell-rail ${menuOpen ? "open" : ""}`}>
       <div className="rail-top">
@@ -114,5 +116,6 @@ export function AtlasShell({ section, rail, headerContext, children, wide = fals
       </header>
       {children}
     </section>
+    {panel}
   </div>;
 }

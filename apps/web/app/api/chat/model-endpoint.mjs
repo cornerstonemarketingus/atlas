@@ -23,7 +23,21 @@
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1", "[::1]"];
 
-/** @returns {{ configured: boolean, reason?: string, baseUrl?: string, model?: string, apiKey?: string|null }} */
+/**
+ * A second model on the same endpoint for when the first is rate-limited.
+ * Providers such as Groq limit each model separately, so a smaller sibling
+ * usually still has room. ATLAS_CHAT_FALLBACK_MODEL sets it ("none" turns it
+ * off); on Groq it defaults to openai/gpt-oss-20b, which Atlas's coder
+ * already uses as its fallback.
+ */
+function fallbackModelFor(environment, url, model) {
+  const configured = (environment.ATLAS_CHAT_FALLBACK_MODEL || "").trim();
+  if (configured.toLowerCase() === "none") return null;
+  const fallback = configured || (url.origin === "https://api.groq.com" ? "openai/gpt-oss-20b" : "");
+  return fallback && fallback !== model ? fallback : null;
+}
+
+/** @returns {{ configured: boolean, reason?: string, baseUrl?: string, model?: string, apiKey?: string|null, fallbackModel?: string|null }} */
 export function resolveChatModel(environment = process.env) {
   const baseUrl = (environment.ATLAS_CHAT_BASE_URL || "").trim();
   const model = (environment.ATLAS_CHAT_MODEL || "").trim();
@@ -51,7 +65,7 @@ export function resolveChatModel(environment = process.env) {
 
   if (url.search || url.hash) return { configured: false, reason: "The model endpoint must not contain a query or fragment." };
   if (!apiKey && url.origin === "https://api.groq.com") apiKey = (environment.GROQ_API_KEY || "").trim();
-  return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null };
+  return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel: fallbackModelFor(environment, url, model) };
 }
 
 /** The absolute chat-completions URL for a resolved endpoint. */

@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { classifyIntent } from "./intent.mjs";
 import { MessageBody } from "./MessageBody.js";
 import { TaskActivity } from "./TaskActivity.js";
+import { AgentTree, ToolSteps, WorkPanel, type AgentNode, type LogLine, type ToolStep, type WorkItem } from "./Workspace.js";
 import { createEventParser } from "../api/chat/stream.mjs";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
@@ -35,6 +36,22 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
 
 type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
+type Preview = { kind: "file" | "page"; title: string; content: string; url?: string; repository?: string; path?: string };
+const PANEL_KEY = "atlas.workPanel";
+
+function readPanelPreference() {
+  try { return typeof window !== "undefined" && window.localStorage.getItem(PANEL_KEY) === "open"; } catch { return false; }
+}
+
+/** Files and pages Atlas read become panel items; the same file read twice is one item, refreshed. */
+function itemFromPreview(preview: Preview): WorkItem {
+  if (preview.kind === "page") return { id: `page:${preview.url}`, kind: "page", title: preview.title, url: preview.url ?? "", content: preview.content };
+  return { id: `file:${preview.repository}/${preview.path}`, kind: "file", title: preview.path ?? preview.title, path: preview.path ?? preview.title, repository: preview.repository, content: preview.content };
+}
+
+function upsert<T extends { id: string }>(list: T[], item: T) {
+  return list.some((existing) => existing.id === item.id) ? list.map((existing) => existing.id === item.id ? item : existing) : [...list, item];
+}
 
 /**
  * Chat is the main Atlas workspace. Questions stay in the conversation;
@@ -59,8 +76,34 @@ export function ChatSection() {
   const [thoughts, setThoughts] = useState<Record<string, string>>({});
   const [liveSteps, setLiveSteps] = useState<ToolStep[]>([]);
   const [stepLogs, setStepLogs] = useState<Record<string, ToolStep[]>>({});
+  // The agent team working on a reply (lead → team → child agents), live and then kept beside the reply.
+  const [liveAgents, setLiveAgents] = useState<AgentNode[]>([]);
+  const [agentLogs, setAgentLogs] = useState<Record<string, AgentNode[]>>({});
+  // The side panel: a terminal-style log of every step, and the files Atlas read or changed.
+  const [panelOpen, setPanelOpen] = useState(readPanelPreference);
+  const [panelTab, setPanelTab] = useState<"terminal" | "files">("terminal");
+  const [log, setLog] = useState<LogLine[]>([]);
+  const [items, setItems] = useState<WorkItem[]>([]);
+  const [selectedItem, setSelectedItem] = useState<string | null>(null);
+  const logSerial = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  function addLog(line: Omit<LogLine, "id" | "at">) {
+    logSerial.current += 1;
+    const entry = { ...line, id: `l${logSerial.current}`, at: Date.now() };
+    setLog((lines) => [...lines.slice(-499), entry]);
+  }
+
+  function togglePanel(open = !panelOpen) {
+    setPanelOpen(open);
+    try { window.localStorage.setItem(PANEL_KEY, open ? "open" : "closed"); } catch { /* preference only */ }
+  }
+
+  function addItems(next: WorkItem[]) {
+    if (!next.length) return;
+    setItems((list) => next.reduce(upsert, list));
+  }
 
   useEffect(() => {
     let active = true;
@@ -129,7 +172,7 @@ export function ChatSection() {
     }
   }
 
-  function startNew() { abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); }
+  function startNew() { abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
 
   useEffect(() => {
     if (!conversationId) return;
@@ -200,27 +243,42 @@ export function ChatSection() {
       let partial = "";
       let thought = "";
       let steps: ToolStep[] = [];
+      let agents: AgentNode[] = [];
       setThinking("");
       setLiveSteps([]);
+      setLiveAgents([]);
+      addLog({ kind: "note", text: `› ${text.length > 120 ? `${text.slice(0, 120)}…` : text}` });
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: ToolStep["state"] } | null;
+          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
           if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
           else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
           else if (item.type === "tool" && data?.id && data.label && data.state) {
-            const step: ToolStep = { id: data.id, label: data.label, state: data.state };
-            steps = steps.some((existing) => existing.id === step.id) ? steps.map((existing) => existing.id === step.id ? step : existing) : [...steps, step];
+            const step: ToolStep = { id: data.agentId ? `${data.agentId}:${data.id}` : data.id, label: data.label, state: data.state as ToolStep["state"], ...(data.agentId ? { agentId: data.agentId } : {}) };
+            steps = upsert(steps, step);
             setLiveSteps(steps);
             setStreaming((current) => current ?? "");
+            const who = data.agentId ? agents.find((agent) => agent.id === data.agentId)?.name ?? "Agent" : "Atlas";
+            addLog({ kind: "tool", state: step.state, who, text: step.state === "running" ? `$ ${step.label}` : `${step.state === "done" ? "✓" : "✕"} ${step.label}` });
+            if (data.preview) addItems([itemFromPreview(data.preview)]);
           }
-          else if (item.type === "error") setNotice(data?.message ?? "Atlas could not finish that reply.");
+          else if (item.type === "agent" && data?.id && data.name) {
+            const node: AgentNode = { id: data.id, parentId: data.parentId ?? null, name: data.name, role: data.role, title: data.title ?? "", state: data.state ?? "running", depth: data.depth ?? 1, summary: data.summary };
+            agents = upsert(agents, node);
+            setLiveAgents(agents);
+            setStreaming((current) => current ?? "");
+            addLog({ kind: "agent", state: node.state, who: node.name, text: `${node.state === "running" || node.state === "planning" ? "▸" : node.state === "done" ? "✓" : node.state === "failed" ? "✕" : "·"} ${node.title}${node.summary && (node.state === "done" || node.state === "failed") && node.depth === 0 ? ` (${node.summary})` : ""} · ${node.state}` });
+          }
+          else if (item.type === "error") { setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `✕ ${data?.message ?? "the reply failed"}` }); }
           else if (item.type === "done" && data?.reply) {
             const reply = data.reply;
             if (thought) setThoughts((items) => ({ ...items, [reply.id]: thought }));
             if (steps.length) setStepLogs((items) => ({ ...items, [reply.id]: steps }));
+            if (agents.length) setAgentLogs((items) => ({ ...items, [reply.id]: agents }));
+            addLog({ kind: "note", state: "done", who: "Atlas", text: "✓ reply finished" });
             setMessages((items) => [...items, reply]);
           }
         }
@@ -233,6 +291,7 @@ export function ChatSection() {
       setStreaming(null);
       setThinking("");
       setLiveSteps([]);
+      setLiveAgents([]);
       setSending(false);
     }
   }
@@ -294,10 +353,14 @@ export function ChatSection() {
     section="chat"
     rail={<ThreadRail threads={threads} activeId={conversationId} newLabel="New chat" emptyLabel="Nothing yet. Ask Atlas anything."
       onNew={startNew} onOpen={(id) => void openThread(id)} onClose={(id) => void close(id).then((done) => { if (done && id === conversationId) startNew(); })} />}
+    panel={panelOpen ? <WorkPanel tab={panelTab} onTab={setPanelTab} onClose={() => togglePanel(false)} log={log} items={items}
+      selectedId={selectedItem} onSelect={setSelectedItem} /> : null}
     headerContext={<>
       {activeCapabilities(conversationId, tasks, messages).map((item) => <a key={item.label} className="context-chip capability-chip" href={item.href}
         {...(item.href.startsWith("http") ? { target: "_blank", rel: "noreferrer" } : {})}>{item.label}</a>)}
       {ready?.configured === false && <span className="context-chip">No model connected</span>}
+      <button type="button" className={panelOpen ? "context-chip panel-toggle active" : "context-chip panel-toggle"} aria-pressed={panelOpen}
+        onClick={() => togglePanel()} title="Show what Atlas is doing: terminal log and files">{panelOpen ? "Hide panel" : `Terminal${items.length ? ` · ${items.length} files` : ""}`}</button>
     </>}
   >
     <div className="section-scroll">
@@ -315,12 +378,14 @@ export function ChatSection() {
           ? <div className="user-message" key={item.id}><p>{item.content}</p></div>
           : <div className="atlas-message" key={item.id}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>
             {thoughts[item.id] && <details className="thinking-block"><summary>Thought process</summary><p>{thoughts[item.id]}</p></details>}
-            {stepLogs[item.id] && <ToolSteps steps={stepLogs[item.id]} collapsed />}
+            {agentLogs[item.id] && <AgentTree agents={agentLogs[item.id]} steps={stepLogs[item.id] ?? []} collapsed />}
+            {stepLogs[item.id]?.some((step) => !step.agentId) && <ToolSteps steps={stepLogs[item.id].filter((step) => !step.agentId)} collapsed />}
             <MessageBody text={item.content} /></div></div>)}
         {streaming !== null && <div className="atlas-message" aria-live="polite"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>
           {thinking && <details className="thinking-block" open={!streaming}><summary>{streaming ? "Thought process" : "Thinking…"}</summary><p>{thinking}</p></details>}
-          {liveSteps.length > 0 && <ToolSteps steps={liveSteps} />}
-          {streaming ? <MessageBody text={streaming} /> : !thinking && liveSteps.length === 0 && <p className="thinking">Thinking…</p>}</div></div>}
+          {liveSteps.some((step) => !step.agentId) && <ToolSteps steps={liveSteps.filter((step) => !step.agentId)} />}
+          {liveAgents.length > 0 && <AgentTree agents={liveAgents} steps={liveSteps} />}
+          {streaming ? <MessageBody text={streaming} /> : !thinking && liveSteps.length === 0 && liveAgents.length === 0 && <p className="thinking">Thinking…</p>}</div></div>}
         {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Starting…</p></div></div>}
         {suggestion && <div className="atlas-message suggestion-card"><div className="assistant-avatar"><AtlasMark /></div><div>
           <b>Atlas</b>
@@ -332,7 +397,8 @@ export function ChatSection() {
             <button type="button" className="secondary" onClick={() => void ask(suggestion.text)}>Just answer in chat</button>
           </div>
         </div></div>}
-        {tasks.map((task) => <TaskActivity key={task.taskId} task={task} />)}
+        {tasks.map((task) => <TaskActivity key={task.taskId} task={task} onLog={addLog} onChanges={addItems}
+          onOpenFile={(id) => { setSelectedItem(id); setPanelTab("files"); togglePanel(true); }} />)}
       </div>}
       <div ref={endRef} />
     </div>
@@ -354,14 +420,3 @@ export function ChatSection() {
   </AtlasShell>;
 }
 
-type ToolStep = { id: string; label: string; state: "running" | "done" | "failed" };
-const STEP_MARK: Record<ToolStep["state"], string> = { running: "●", done: "✓", failed: "✕" };
-
-/** The lookups Atlas made while writing a reply: live while it works, then folded away beside the answer. */
-function ToolSteps({ steps, collapsed = false }: { readonly steps: ToolStep[]; readonly collapsed?: boolean }) {
-  const list = <ol className="activity-steps tool-steps">
-    {steps.map((step) => <li key={step.id} className={step.state === "running" ? "running" : step.state}><span aria-hidden="true">{STEP_MARK[step.state]}</span>{step.label}</li>)}
-  </ol>;
-  if (!collapsed) return list;
-  return <details className="thinking-block"><summary>{steps.length === 1 ? "1 step" : `${steps.length} steps`}</summary>{list}</details>;
-}
