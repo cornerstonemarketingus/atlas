@@ -84,7 +84,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
       const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy, correlationId });
       if (!response.ok) return Response.json({ message: "GitHub Actions rejected the task dispatch." }, { status: 502 });
       const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "managed", correlationId);
-      return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "managed", recorded }, { status: 202 });
+      return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "managed", recorded, mergePolicy }, { status: 202 });
     } catch {
       return Response.json({ message: "GitHub Actions is temporarily unavailable." }, { status: 502 });
     }
@@ -100,7 +100,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
     // the run id of — a real Actions dispatch of the same workflow. Custom-runner
     // deployments get no task history until they report runs of their own.
     const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "private", correlationId);
-    return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "private", recorded }, { status: 202 });
+    return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "private", recorded, mergePolicy }, { status: 202 });
   } catch {
     return Response.json({ message: "The autonomous task dispatcher is temporarily unavailable." }, { status: 502 });
   }

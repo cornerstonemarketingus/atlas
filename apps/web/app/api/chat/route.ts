@@ -3,18 +3,15 @@ import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
+import { isDeploymentOwner } from "../tasks/self-protection.mjs";
+import { POST as startTask } from "../tasks/route";
+import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, taskRequestsFrom } from "./atlas-knowledge.mjs";
 import { completionsUrl, replyText, resolveChatModel, threadTitle } from "./model-endpoint.mjs";
 
 /** How much of a thread is replayed to the model. Enough for continuity, bounded so a long thread cannot grow a request without limit. */
 const HISTORY_TURNS = 20;
 const MAX_MESSAGE = 8000;
 const REQUEST_TIMEOUT_MS = 60_000;
-
-const SYSTEM_PROMPT = [
-  "You are Atlas, a private AI assistant. Help the user understand ideas, plan work, and make clear decisions about software, products, and computer work.",
-  "Be concrete and brief. The interface may start a separate approved task when the user asks Atlas to work on a connected project.",
-  "Never claim to have run, built, deployed, or clicked anything unless the conversation includes a verified task result.",
-].join(" ");
 
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
@@ -58,19 +55,27 @@ export async function POST(request: Request) {
   }
 
   const turns = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository }) },
     ...history.slice(-HISTORY_TURNS).map((turn) => ({ role: turn.role === "assistant" ? "assistant" : "user", content: turn.content })),
     { role: "user", content: message },
   ];
 
+  // Tools first; an endpoint that does not support tool calling answers 400,
+  // and chat then falls back to a plain reply rather than failing.
+  const callModel = (withTools: boolean) => fetch(completionsUrl(endpoint.baseUrl!), {
+    method: "POST",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    headers: { "content-type": "application/json", ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
+    body: JSON.stringify({
+      model: endpoint.model, messages: turns, stream: false, temperature: 0.2, max_tokens: 1200,
+      ...(withTools ? { tools: [TASK_TOOL], tool_choice: "auto" } : {}),
+    }),
+  });
+
   let payload: unknown;
   try {
-    const response = await fetch(completionsUrl(endpoint.baseUrl!), {
-      method: "POST",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      headers: { "content-type": "application/json", ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
-      body: JSON.stringify({ model: endpoint.model, messages: turns, stream: false, temperature: 0.2, max_tokens: 1200 }),
-    });
+    let response = await callModel(true);
+    if (response.status === 400 || response.status === 422) response = await callModel(false);
     if (!response.ok) {
       // The status is the actionable part; the body can contain the prompt
       // echoed back, which does not belong in a client-facing message.
@@ -82,7 +87,38 @@ export async function POST(request: Request) {
     return Response.json({ message: timedOut ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.", conversationId }, { status: 504 });
   }
 
-  const reply = replyText(payload);
+  // Each requested run goes through /api/tasks exactly as the task composer
+  // would send it, carrying this request's credentials, so allowlists, the
+  // owner-only rule for Atlas's own repository, billing and merge policy all
+  // apply unchanged.
+  const { requests, errors } = taskRequestsFrom(payload, { defaultRepository: repository || SELF_REPOSITORY });
+  const started: string[] = [...errors];
+  for (const task of requests) {
+    const forwarded = new Headers();
+    for (const name of ["authorization", "cookie", "oai-authenticated-user-id"]) {
+      const value = request.headers.get(name);
+      if (value) forwarded.set(name, value);
+    }
+    forwarded.set("content-type", "application/json");
+    const taskBranch = task.repository === repository.toLowerCase() && branch ? branch : "main";
+    let outcome: { ok: boolean; message: string; taskId?: string; mergePolicy?: string };
+    try {
+      const result = await startTask(new Request(new URL("/api/tasks", request.url), {
+        method: "POST",
+        headers: forwarded,
+        body: JSON.stringify({ repository: task.repository, branch: taskBranch, mode: task.mode, objective: task.objective, conversationId }),
+      }));
+      const body = await result.json().catch(() => ({})) as { message?: string; taskId?: string; mergePolicy?: string };
+      outcome = result.ok
+        ? { ok: true, message: "started", taskId: body.taskId, mergePolicy: body.mergePolicy }
+        : { ok: false, message: body.message ?? `the task service answered ${result.status}` };
+    } catch {
+      outcome = { ok: false, message: "the task service could not be reached" };
+    }
+    started.push(describeStartedTask(task, outcome));
+  }
+
+  const reply = [replyText(payload), ...started].filter(Boolean).join("\n\n");
   if (!reply) return Response.json({ message: "The model endpoint returned an empty reply.", conversationId }, { status: 502 });
 
   const replyId = randomUUID();
