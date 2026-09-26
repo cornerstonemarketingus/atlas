@@ -12,10 +12,11 @@ import { createTeamRoutes } from "./agent/team/routes.mjs";
 import { createKnowledgeRoutes } from "./agent/knowledge-routes.mjs";
 import { createPlatformApiRoutes } from "./platform/api-routes.mjs";
 import { createRateLimiter, LIMITS } from "./rate-limit.mjs";
+import { createSelfImproveRoutes } from "./platform/self-improve/service.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -25,6 +26,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const teamRoutes = team ? createTeamRoutes({ team, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const knowledgeRoutes = createKnowledgeRoutes({ memory, connections, send: (response, status, value) => { send(response, status, value); return true; } });
   const innovationRoutes = innovation ? createInnovationRoutes({ pipeline: innovation.pipeline, organization: innovation.organization, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const selfImproveRoutes = selfImprove ? createSelfImproveRoutes({ service: selfImprove, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
 
   async function startTask(taskId) {
@@ -76,6 +78,10 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (/^\/v1\/(knowledge|connections)(\/|\?|$)/u.test(request.url ?? "")) { if (await knowledgeRoutes(request, response, identity)) return; }
     if (innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) { if (await innovationRoutes.handle(request, response, identity)) return; }
     if (!innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) return send(response, 503, { message: "The Atlas innovation pipeline is not running in this process." });
+    if ((request.url ?? "").startsWith("/v1/self-improve")) {
+      if (!selfImproveRoutes) return send(response, 503, { message: "Self-improvement needs Atlas running from a git checkout of its own source." });
+      if (await selfImproveRoutes(request, response, identity)) return;
+    }
     if (missionRoutes && (request.url ?? "").startsWith("/v1/missions")) { if (await missionRoutes.handle(request, response, identity)) return; }
     if (!missionService && (request.url ?? "").startsWith("/v1/missions")) return send(response, 503, { message: "The Atlas mission service is not running in this process." });
     if (agentRoutes && (request.url ?? "").startsWith("/v1/sessions")) { if (await agentRoutes.handle(request, response, identity)) return; }

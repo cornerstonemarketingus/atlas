@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
 import { LocalTaskStore } from "./store.mjs";
@@ -27,6 +28,7 @@ import { recommendModels } from "./agent/models/recommend.mjs";
 import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/router.mjs";
 import { createRoutedClient } from "./agent/models/routed-client.mjs";
 import { createTeamService } from "./agent/team/team-service.mjs";
+import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform/self-improve/index.mjs";
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { ScopedMemoryStore } from "./platform/memory/memory-store.mjs";
@@ -82,6 +84,8 @@ const modelClient = createRoutedClient({
   fallback: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
   onRoute: (route, { failedOver }) => store.audit("model.route", `${route.model} served a model turn${failedOver ? " after failover" : ""}`),
 });
+// "Atlas, improve yourself": only when running from a git checkout of Atlas itself.
+const selfImprove = createDaemonSelfImprovement({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory });
 const toolRegistry = buildToolRegistry();
 const authorizedToolExecutor = buildAuthorizedToolExecutor(toolRegistry);
 const toolApprovals = {
@@ -173,6 +177,7 @@ const server = createLocalControlServer({
   memory,
   connections: () => mcpReport,
   toolCatalog: () => toolRegistry.list(),
+  selfImprove,
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
   transcriber: buildTranscriber(),
@@ -274,6 +279,8 @@ function buildToolRegistry() {
   registerRepositoryWriteTools(registry);
   registerFilesystemTools(registry, { roots: [join(dataDirectory, "workspace")] });
   registerCommunicationsTools(registry, { send: null });
+  // Starting a run asks the owner first (requiresApproval); merging a result is a second, separate decision.
+  registerSelfImproveTool(registry, selfImprove);
   registerWorkflowTools(registry);
   // The browser family is registered whether or not a companion is attached:
   // its tools then fail closed with "no browser on this machine", which is a

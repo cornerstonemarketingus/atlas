@@ -18,6 +18,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
  <nav class="nav" aria-label="Sections">
   <a href="#/home" data-nav="home"><span class="ico" aria-hidden="true">⌂</span>Home</a>
   <a href="#/missions" data-nav="missions"><span class="ico" aria-hidden="true">◎</span>Missions</a>
+  <a href="#/improve" data-nav="improve"><span class="ico" aria-hidden="true">↻</span>Improve Atlas<span class="badge" id="improve-badge" hidden></span></a>
   <a href="#/families" data-nav="families"><span class="ico" aria-hidden="true">⋔</span>Agent families</a>
   <a href="#/computer" data-nav="computer"><span class="ico" aria-hidden="true">▣</span>Computer</a>
   <a href="#/projects" data-nav="projects"><span class="ico" aria-hidden="true">▤</span>Projects</a>
@@ -85,6 +86,14 @@ export const LOCAL_UI_HTML = `<!doctype html>
   </details>
  </section>
 
+ <section class="view" data-view="improve" hidden aria-labelledby="improve-heading">
+  <div class="section-title"><div><p class="eyebrow">ATLAS BUILDS ATLAS</p><h2 id="improve-heading">Improve Atlas</h2></div><button type="button" class="secondary" id="improve-refresh">Refresh</button></div>
+  <p class="hint">Atlas picks one small improvement at a time (a failing check first, then a TODO), makes it in an isolated worktree with the local model, re-runs the checks, applies the self-modification policy and has a separate reviewer approve it. Nothing reaches your checkout until you approve it here.</p>
+  <form id="improve-form" class="panel"><label>Iterations<input id="improve-iterations" type="number" min="1" max="20" step="1" value="1"></label><button id="improve-start">Improve yourself</button><p id="improve-notice" class="hint" role="status" aria-live="polite"></p></form>
+  <div class="panel"><div class="task-top"><h3>Progress</h3><span id="improve-state"></span></div><pre id="improve-log" class="log" aria-live="polite">Unlock this tab to load progress.</pre></div>
+  <section aria-labelledby="improve-pending-heading"><h3 id="improve-pending-heading">Waiting for your approval</h3><div id="improve-pending" class="list"><p class="empty">Nothing waiting.</p></div></section>
+  <section aria-labelledby="improve-recent-heading"><h3 id="improve-recent-heading">Recent attempts</h3><div id="improve-recent" class="list"><p class="empty">No attempts yet.</p></div></section>
+ </section>
  <section class="view" data-view="families" hidden aria-labelledby="families-heading">
   <div class="hero"><h2 id="families-heading">Agent families</h2><p class="lede">Atlas works as an organization. Executives commission work, specialists do it, and peer organizations help when asked. Authority only narrows as work is handed down, and every hand-off is recorded.</p></div>
   <div class="actions"><a class="button secondary" href="/innovation">Opportunity pipeline</a><a class="button ghost" href="/platform">Task ledger</a></div>
@@ -232,7 +241,8 @@ main{padding:16px 16px calc(96px + env(safe-area-inset-bottom))}.toast:not(:empt
 input,textarea,select{font-size:16px}
 .transcript{max-height:46vh}
 }
-@media (prefers-reduced-motion:reduce){*{transition:none!important}}`;
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}.log{max-height:360px;overflow:auto;margin:8px 0 0;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
+`;
 
 export const LOCAL_UI_JS = `const q=s=>document.querySelector(s),tokenInput=q('#token'),tasks=q('#tasks'),notice=q('#notice');let knownApprovals=new Set;tokenInput.value=sessionStorage.getItem('atlas-token')||'';const headers=()=>({authorization:'Bearer '+sessionStorage.getItem('atlas-token')}),api=(url,options={})=>fetch(url,{...options,headers:{...headers(),...(options.headers||{})}});function esc(v){const d=document.createElement('div');d.textContent=v??'';return d.innerHTML}async function load(){const [tr,ar,pr,lr,dr]=await Promise.all(['/v1/tasks','/v1/approvals','/v1/policies','/v1/audit','/v1/devices'].map(u=>api(u)));if(tr.status===401){tasks.innerHTML='<p class="empty">Unlock this tab to load tasks.</p>';return}const list=(await tr.json()).tasks;tasks.innerHTML=list.length?list.map(t=>'<article class="task"><div class="task-top"><h3>'+esc(t.objective)+'</h3><span class="status '+t.status+'">'+t.status+'</span></div><p>'+esc(t.repository)+' · '+esc(t.model)+'</p>'+(t.message?'<p>'+esc(t.message)+'</p>':'')+'<time>'+new Date(t.createdAt).toLocaleString()+'</time></article>').join(''):'<p class="empty">No local tasks yet.</p>';const approvals=(await ar.json()).approvals,pending=approvals.filter(a=>a.status==='pending');if('Notification'in window&&Notification.permission==='granted')pending.filter(a=>!knownApprovals.has(a.id)).forEach(a=>new Notification('Atlas approval required',{body:a.capability+': '+a.summary,tag:a.id}));knownApprovals=new Set(pending.map(a=>a.id));q('#approvals').innerHTML=pending.map(a=>'<article class="task"><h3>'+esc(a.capability)+'</h3><p>'+esc(a.summary)+'</p><div class="actions"><button data-decision="approved" data-id="'+a.id+'">Approve</button><button class="secondary" data-decision="denied" data-id="'+a.id+'">Deny</button></div></article>').join('')||'<p class="empty">No pending approvals.</p>';q('#approvals').querySelectorAll('button').forEach(b=>b.onclick=()=>decide(b.dataset.id,b.dataset.decision));const policies=(await pr.json()).policies;q('#policies').innerHTML=policies.map(p=>'<div class="policy"><span>'+esc(p.capability)+'</span><select data-capability="'+esc(p.capability)+'"><option'+(p.decision==='allow'?' selected':'')+'>allow</option><option'+(p.decision==='ask'?' selected':'')+'>ask</option><option'+(p.decision==='deny'?' selected':'')+'>deny</option></select></div>').join('');q('#policies').querySelectorAll('select').forEach(s=>s.onchange=()=>api('/v1/policies',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({capability:s.dataset.capability,decision:s.value})}).then(load));const events=(await lr.json()).events;q('#audit').innerHTML=events.slice(0,50).map(e=>'<article class="task"><div class="task-top"><h3>'+esc(e.category)+'</h3><time>'+new Date(e.createdAt).toLocaleString()+'</time></div><p>'+esc(e.summary)+'</p></article>').join('')||'<p class="empty">No audit events.</p>';const devices=(await dr.json()).devices;q('#devices').innerHTML=devices.filter(d=>!d.revokedAt).map(d=>'<article class="task"><div class="task-top"><h3>'+esc(d.name)+'</h3><button class="secondary" data-device="'+d.id+'">Revoke</button></div><time>'+new Date(d.createdAt).toLocaleString()+'</time></article>').join('')||'<p class="empty">No paired devices.</p>';q('#devices').querySelectorAll('button').forEach(b=>b.onclick=()=>api('/v1/devices/'+b.dataset.device,{method:'DELETE'}).then(load))}async function decide(id,decision){await api('/v1/approvals/'+id+'/decision',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({decision})});load()}async function models(){const r=await api('/v1/models');if(!r.ok)return;const v=await r.json();if(v.models.length)q('#model').innerHTML=v.models.map(m=>'<option>'+esc(m)+'</option>').join('')}q('#save-token').onclick=()=>{sessionStorage.setItem('atlas-token',tokenInput.value);load();models();loadSessions();if(sessionId)selectSession(sessionId)};q('#refresh').onclick=load;q('#notify').onclick=async()=>{if(!('Notification'in window))return notice.textContent='Notifications are unavailable in this browser.';const result=await Notification.requestPermission();notice.textContent=result==='granted'?'Approval notifications enabled.':'Notification permission was not granted.'};q('#task-form').onsubmit=async e=>{e.preventDefault();notice.textContent='Queueing…';const r=await api('/v1/tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repository:q('#repository').value,objective:q('#objective').value,model:q('#model').value})});const data=await r.json();notice.textContent=r.ok?(data.approval?'Waiting for approval.':'Task queued in an isolated worktree.'):data.message;load()};q('#pair').onclick=async()=>{const r=await api('/v1/pair',{method:'POST'}),v=await r.json();q('#pair-code').textContent=r.ok?'Pairing code '+v.code+' expires '+new Date(v.expiresAt).toLocaleTimeString():v.message};q('#export').onclick=async()=>{const r=await api('/v1/export',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:q('#passphrase').value})}),v=await r.json();q('#backup').value=r.ok?JSON.stringify(v.backup):v.message};q('#import').onclick=async()=>{let backup;try{backup=JSON.parse(q('#backup').value)}catch{return notice.textContent='Backup JSON is invalid.'}const r=await api('/v1/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:q('#passphrase').value,backup})});notice.textContent=r.ok?'Backup imported.':'Import failed.';load()};fetch('/health').then(r=>r.json()).then(v=>q('#health').textContent=v.status==='ok'?'Atlas is running':'Atlas is not responding').catch(()=>q('#health').textContent='Unavailable');if(tokenInput.value){load();models()}setInterval(()=>{if(sessionStorage.getItem('atlas-token'))load()},5000);
 let sessionId=sessionStorage.getItem('atlas-session')||'',cursor=0,stream=null;
@@ -441,7 +451,7 @@ if(sessionStorage.getItem('atlas-token')){loadMissions();loadMissionModels()}
 setInterval(()=>{if(sessionStorage.getItem('atlas-token'))loadMissions()},5000);
 
 /* ---- Shell: sections, theme, lock state, and the views built on the platform APIs. ---- */
-const VIEWS={home:'Home',missions:'Missions',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
+const VIEWS={home:'Home',missions:'Missions',improve:'Improve Atlas',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
 const $=q,$$=s=>[...document.querySelectorAll(s)];
 const isUnlocked=()=>Boolean(sessionStorage.getItem('atlas-token'));
 let currentView='home',openMissionId=null,shownMission='';
@@ -492,9 +502,34 @@ function syncLock(){
 $('#save-token').addEventListener('click',()=>{syncLock();refreshView()});
 $('#lock').onclick=()=>{sessionStorage.removeItem('atlas-token');sessionStorage.removeItem('atlas-session');location.reload()};
 
+/* Improve Atlas: start a run, watch it, and approve or reject what it produced. */
+async function loadImprove(){
+ const log=$('#improve-log'),pendingBox=$('#improve-pending'),recentBox=$('#improve-recent');
+ try{
+  const s=await getJson('/v1/self-improve');
+  $('#improve-state').innerHTML=pill(s.running?'running':'idle')+' <span class="chip">streak '+esc(String(s.streak))+'</span>';
+  $('#improve-start').disabled=s.running;
+  log.textContent=s.log.length?s.log.join('\\n'):'No run yet. Press "Improve yourself" to start one.';
+  log.scrollTop=log.scrollHeight;
+  const badge=$('#improve-badge');badge.hidden=!s.pending.length;badge.textContent=String(s.pending.length);
+  pendingBox.innerHTML=s.pending.length?s.pending.map(c=>'<article class="task"><div class="task-top"><h4>'+esc(c.kind||'change')+'</h4>'+pill('accepted')+'</div><p>'+esc(c.objective||'')+'</p><p class="hint">Why: '+esc(c.reason||'')+'</p><div class="meta"><span><code>'+esc(c.branch)+'</code></span><span>'+esc(String(c.stats?.files??0))+' files, +'+esc(String(c.stats?.added??0))+'/−'+esc(String(c.stats?.deleted??0))+'</span>'+(c.review?.summary?'<span>Reviewer: '+esc(c.review.summary)+'</span>':'')+'</div><div class="actions"><button data-improve="approve" data-id="'+esc(c.id)+'">Merge into my branch</button><button class="secondary" data-improve="reject" data-id="'+esc(c.id)+'">Reject</button></div></article>').join(''):'<p class="empty">Nothing waiting.</p>';
+  pendingBox.querySelectorAll('[data-improve]').forEach(b=>b.onclick=()=>decideImprove(b.dataset.id,b.dataset.improve));
+  recentBox.innerHTML=s.recent.length?s.recent.map(r=>'<article class="task"><div class="task-top"><h4>'+esc(r.kind||r.outcome)+'</h4>'+pill(r.outcome)+'</div>'+(r.objective?'<p>'+esc(r.objective)+'</p>':'')+((r.violations||[]).length?'<p class="hint">'+esc(r.violations.map(v=>v.detail).join(' · '))+'</p>':(r.reason&&!r.objective?'<p class="hint">'+esc(r.reason)+'</p>':''))+'<time>'+when(r.at)+'</time></article>').join(''):'<p class="empty">No attempts yet.</p>';
+ }catch(error){log.textContent='';pendingBox.innerHTML=problem(error)}
+}
+async function decideImprove(id,action){
+ const notice=$('#improve-notice');
+ if(action==='approve'&&!confirm('Merge this change into your current branch?'))return;
+ try{await sendJson('/v1/self-improve/changes/'+encodeURIComponent(id)+'/'+action,'POST',{});notice.textContent=action==='approve'?'Merged into your branch.':'Rejected; the branch was deleted.'}
+ catch(error){notice.textContent=error.message}
+ loadImprove();
+}
+$('#improve-form').onsubmit=async e=>{e.preventDefault();const notice=$('#improve-notice');try{await sendJson('/v1/self-improve/runs','POST',{iterations:Number($('#improve-iterations').value)||1});notice.textContent='Started. Progress appears below.'}catch(error){notice.textContent=error.message}loadImprove()};
+$('#improve-refresh').onclick=()=>loadImprove();
+
 function refreshView(){
  if(!isUnlocked())return;
- const run={home:loadHome,missions:loadTeam,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections}[currentView];
+ const run={home:loadHome,missions:loadTeam,improve:loadImprove,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections}[currentView];
  if(run)run().catch(()=>{});
  loadBadge().catch(()=>{});
 }
@@ -640,5 +675,5 @@ async function loadConnections(){
 
 syncLock();
 show(viewFromHash());
-setInterval(()=>{if(isUnlocked()&&!document.hidden&&['home','missions'].includes(currentView))refreshView()},5000);
+setInterval(()=>{if(isUnlocked()&&!document.hidden&&['home','missions','improve'].includes(currentView))refreshView()},5000);
 `;
