@@ -207,7 +207,9 @@ test("browser tools only open http(s) and gate sends and uploads behind approval
   };
 
   const { registry, approvals, approved } = registryFor();
-  registerBrowserTools(registry, { session, uploadRoot: directory });
+  // `.invalid` never resolves; a public answer is injected so this test stays
+  // about scheme and approval gating (destination policy: ssrf-guard.test.mjs).
+  registerBrowserTools(registry, { session, uploadRoot: directory, urlPolicy: { lookup: async () => [{ address: "93.184.215.14", family: 4 }], allowPrivateHosts: "" } });
   const run = call(registry, approvals, {});
 
   assert.match((await run("browser.navigate", { url: "https://example.invalid/jobs" })).output, /Opened https:\/\/example\.invalid\/jobs/u);

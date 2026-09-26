@@ -12,6 +12,8 @@
  * elements and clicks them by reference. Coordinates are not exposed, because
  * a pixel is not a thing an operator can meaningfully approve.
  */
+import { assertPublicDestination, UnsafeDestinationError } from "../../net/ssrf-guard.mjs";
+
 export class BrowserToolError extends Error {
   constructor(code, message) {
     super(message);
@@ -39,11 +41,29 @@ export function assertNavigableUrl(candidate) {
 }
 
 /**
+ * Scheme check plus destination check. A model-produced URL must not steer
+ * the operator's browser at loopback (this daemon), the LAN, or a cloud
+ * metadata address; see ../../net/ssrf-guard.mjs. `urlPolicy` carries an
+ * injectable `lookup` and `allowPrivateHosts` (default: the
+ * ATLAS_BROWSER_ALLOW_PRIVATE_HOSTS environment variable).
+ */
+export async function assertSafeNavigation(candidate, urlPolicy = {}) {
+  const url = assertNavigableUrl(candidate);
+  try {
+    await assertPublicDestination(url, urlPolicy);
+  } catch (error) {
+    if (error instanceof UnsafeDestinationError) throw new BrowserToolError(error.code, error.message);
+    throw error;
+  }
+  return url;
+}
+
+/**
  * `session` may be a session or a factory returning one. A factory is resolved
  * on first use and cached, so launching a browser costs nothing until the
  * model actually asks for one.
  */
-export function registerBrowserTools(registry, { session, uploadRoot = null }) {
+export function registerBrowserTools(registry, { session, uploadRoot = null, urlPolicy = {} }) {
   let resolved = typeof session === "function" ? undefined : session;
   const need = async () => {
     if (resolved === undefined) {
@@ -72,8 +92,18 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
       properties: { url: { type: "string", minLength: 1, maxLength: 2048 } },
     },
     async execute({ input, signal }) {
-      const url = assertNavigableUrl(input.url);
+      const url = await assertSafeNavigation(input.url, urlPolicy);
       const result = await (await need()).navigate({ url, signal });
+      // A public page can redirect to a private one. The Playwright page
+      // clears such a landing itself; this re-check covers any session that
+      // reports where it ended up, so the model is never told it succeeded.
+      if (result?.url && result.url !== url) {
+        try {
+          await assertSafeNavigation(result.url, urlPolicy);
+        } catch (error) {
+          throw new BrowserToolError(error.code ?? "PRIVATE_DESTINATION", `The page redirected to a destination Atlas does not open. ${error.message}`);
+        }
+      }
       return `Opened ${result?.url ?? url}${result?.title ? ` — ${result.title}` : ""}.`;
     },
   });
