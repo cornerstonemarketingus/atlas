@@ -86,6 +86,8 @@ const toolApprovals = {
   check: (digest) => store.consumeApprovedDigest(digest),
   request: ({ digest, capability, summary, sessionId }) =>
     store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
+  // Agent steps wait on the owner's decision rather than failing.
+  status: (id) => store.approval(id)?.status ?? null,
 };
 // Scoped, provenance-carrying memory: agents recall their family's verified
 // work and the owner can search, inspect and delete it under Knowledge.

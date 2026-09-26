@@ -451,6 +451,8 @@ async function getJson(url,options){
 }
 const sendJson=(url,method,body)=>getJson(url,{method,headers:{'content-type':'application/json'},body:JSON.stringify(body)});
 const when=v=>v?new Date(v).toLocaleString():'';
+/* An interrupted or paused mission waits for the owner; say that rather than the task's running state. */
+const missionState=m=>['interrupted','paused'].includes(m.status)?m.status:(m.taskStatus||m.status);
 const pill=s=>'<span class="status '+esc(String(s||'unknown').replace(/[^a-z_]/gi,''))+'">'+esc(String(s||'unknown').replaceAll('_',' '))+'</span>';
 
 /* Theme: device preference unless the owner picks one. */
@@ -529,7 +531,7 @@ async function loadTeam(){
  const box=$('#team-missions');
  try{
   const {missions}=await getJson('/v1/team/missions');
-  box.innerHTML=missions.length?missions.slice().reverse().map(m=>'<button type="button" class="card clickable'+(m.id===openMissionId?' selected':'')+'" data-open="'+esc(m.id)+'"><div class="task-top"><h4>'+esc(m.goal)+'</h4>'+pill(m.taskStatus||m.status)+'</div><progress max="'+m.steps.total+'" value="'+m.steps.completed+'"></progress><div class="meta"><span>'+m.steps.completed+'/'+m.steps.total+' steps verified</span>'+(m.steps.failed?'<span>'+m.steps.failed+' failed</span>':'')+'<span>'+m.usage.toolCalls+' tool calls</span><time>'+when(m.createdAt)+'</time></div></button>').join(''):'<p class="empty">No missions yet. Describe a goal above and the team will plan it.</p>';
+  box.innerHTML=missions.length?missions.slice().reverse().map(m=>'<button type="button" class="card clickable'+(m.id===openMissionId?' selected':'')+'" data-open="'+esc(m.id)+'"><div class="task-top"><h4>'+esc(m.goal)+'</h4>'+pill(missionState(m))+'</div><progress max="'+m.steps.total+'" value="'+m.steps.completed+'"></progress><div class="meta"><span>'+m.steps.completed+'/'+m.steps.total+' steps verified</span>'+(m.steps.failed?'<span>'+m.steps.failed+' failed</span>':'')+'<span>'+m.usage.toolCalls+' tool calls</span><time>'+when(m.createdAt)+'</time></div></button>').join(''):'<p class="empty">No missions yet. Describe a goal above and the team will plan it.</p>';
   box.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{openMissionId=b.dataset.open;shownMission='';loadTeam()});
   /* Re-render the open mission only while it can still change, so reading it is not interrupted. */
   const open=missions.find(m=>m.id===openMissionId);
@@ -548,7 +550,7 @@ async function openMission(id){
   const calls=m.toolCalls.length?'<table class="table"><thead><tr><th>Agent</th><th>Tool</th><th>Result</th></tr></thead><tbody>'+m.toolCalls.map(c=>'<tr><td>'+esc(c.agent)+'</td><td><code>'+esc(c.tool)+'</code></td><td>'+pill(c.status)+(c.error?.message?'<div class="hint">'+esc(c.error.message)+'</div>':'')+'</td></tr>').join('')+'</tbody></table>':'<p class="empty">No tools used yet.</p>';
   const artifacts=m.artifacts.length?m.artifacts.map(a=>'<details class="card"><summary><strong>'+esc(a.step||a.kind)+'</strong> · '+esc(a.agent||'')+' '+pill(a.verification)+'</summary>'+(a.report?'<p>'+esc(a.report)+'</p>':'')+(a.evidence||[]).map(ev=>'<p class="hint">Check: '+esc(ev.check||'')+' — '+esc(ev.reason||'')+'</p>').join('')+'</details>').join(''):'<p class="empty">No reports yet.</p>';
   const handoffs=m.messages.length?'<table class="table"><thead><tr><th>Message</th><th>From</th><th>To</th></tr></thead><tbody>'+m.messages.map(x=>'<tr><td>'+esc(x.type.replaceAll('_',' ').toLowerCase())+'</td><td>'+esc(x.from)+'</td><td>'+esc(x.to)+'</td></tr>').join('')+'</tbody></table>':'<p class="empty">No hand-offs yet.</p>';
-  panel.innerHTML='<div class="task-top"><h3>'+esc(m.goal)+'</h3>'+pill(m.taskStatus||m.status)+'</div><div class="meta"><span>'+m.usage.toolCalls+' tool calls</span><span>'+(m.usage.inputTokens+m.usage.outputTokens).toLocaleString()+' tokens</span><span>'+esc(m.agents.join(', '))+'</span></div>'+controls+'<h3>Plan</h3>'+steps+'<h3>Reports and checks</h3><div class="list">'+artifacts+'</div><h3>Tools used</h3>'+calls+'<details class="more"><summary>Hand-offs between agents</summary>'+handoffs+'</details>';
+  panel.innerHTML='<div class="task-top"><h3>'+esc(m.goal)+'</h3>'+pill(missionState(m))+'</div><div class="meta"><span>'+m.usage.toolCalls+' tool calls</span><span>'+(m.usage.inputTokens+m.usage.outputTokens).toLocaleString()+' tokens</span><span>'+esc(m.agents.join(', '))+'</span></div>'+controls+'<h3>Plan</h3>'+steps+'<h3>Reports and checks</h3><div class="list">'+artifacts+'</div><h3>Tools used</h3>'+calls+'<details class="more"><summary>Hand-offs between agents</summary>'+handoffs+'</details>';
   panel.querySelectorAll('[data-team-action]').forEach(b=>b.onclick=async()=>{
    if(b.dataset.teamAction==='cancel'&&!confirm('Cancel this mission? Steps in progress stop at their next checkpoint.'))return;
    try{await sendJson('/v1/team/missions/'+encodeURIComponent(id)+'/'+b.dataset.teamAction,'POST',{});setNotice('Mission '+b.dataset.teamAction+' requested.')}catch(error){setNotice(error.message)}

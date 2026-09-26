@@ -45,20 +45,20 @@ function scriptedModel({ plan, verdict = () => true, onStep = null }) {
   };
 }
 
-async function harness(t, model, { memory = null } = {}) {
+async function harness(t, model, { memory = null, approvals = null, policy = () => "allow" } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "atlas-team-"));
   const store = new LocalTaskStore(join(dir, "atlas.sqlite"));
   const platformStore = new PlatformTaskStore(join(dir, "platform.sqlite"));
   const family = new AgentFamilyRegistry(join(dir, "org.sqlite"));
   seedFamilies(family, "local");
   const delegation = new TaskDelegation(family);
-  const toolRegistry = new ToolRegistry({ policy: () => "allow" });
+  const toolRegistry = new ToolRegistry({ policy });
   toolRegistry.register({ name: "browser.extract", description: "Read a value from the page.", capability: "browser.read", risk: "low", timeoutMs: 1000, maxOutputCharacters: 200, requiresApproval: false, inputSchema: { type: "object", properties: {} }, async execute() { return "The page says 42."; } });
   toolRegistry.register({ name: "repository.read", description: "Read a file.", capability: "repository.read", risk: "low", timeoutMs: 1000, maxOutputCharacters: 200, requiresApproval: false, inputSchema: { type: "object", properties: {} }, async execute() { return "file contents: 42"; } });
   toolRegistry.register({ name: "communications.send", description: "Send an email.", capability: "communications.send", risk: "high", timeoutMs: 1000, maxOutputCharacters: 200, requiresApproval: false, inputSchema: { type: "object", properties: {} }, async execute() { throw new Error("must never run"); } });
   let missionService;
   const step = createAgentStepExecutor({
-    family, delegation, toolRegistry, client: model, platformStore, approvals: null, memory,
+    family, delegation, toolRegistry, client: model, platformStore, approvals, memory,
     resultsOf: (missionId, ids) => (missionService.get(missionId)?.children ?? []).filter((c) => ids.includes(c.id)).map((c) => ({ title: c.metadata.stepTitle, summary: c.result?.handoff?.report ?? "" })),
   });
   missionService = new MissionService({ store, execute: (input) => step(input) });
@@ -220,4 +220,69 @@ test("unverified work is not written to memory", async (t) => {
   const started = await team.start({ goal: "Find the published value for the launch page." });
   await until(started.mission.id, ["failed"]);
   assert.equal(memory.retrieve("local", { userId: "local-owner" }, {}).length, 0);
+});
+
+/** An in-memory approval queue shaped like the daemon's. */
+function approvalQueue() {
+  const rows = [];
+  let executed = 0;
+  return {
+    rows, pollMs: 5,
+    get executed() { return executed; },
+    request: ({ digest, capability, summary }) => { const existing = rows.find((r) => r.digest === digest && r.status === "pending"); if (existing) return existing; const row = { id: `ap-${rows.length + 1}`, digest, capability, summary, status: "pending", consumed: false }; rows.push(row); return row; },
+    status: (id) => rows.find((r) => r.id === id)?.status ?? null,
+    check: (digest) => { const row = rows.find((r) => r.digest === digest && r.status === "approved" && !r.consumed); if (!row) return false; row.consumed = true; executed += 1; return true; },
+    decide: (decision) => { const row = rows.find((r) => r.status === "pending"); if (row) row.status = decision; return row; },
+  };
+}
+const askForBrowser = (capability) => (capability === "browser.read" ? "ask" : "allow");
+const oneStep = { ...twoStepPlan, steps: [twoStepPlan.steps[0]] };
+
+test("a step waits for the owner's approval, then runs exactly the approved action once", async (t) => {
+  const approvals = approvalQueue();
+  const model = scriptedModel({ plan: oneStep });
+  const { team, until } = await harness(t, model, { approvals, policy: askForBrowser });
+  const started = await team.start({ goal: "Find the published value for the launch page." });
+  for (let i = 0; i < 200 && !approvals.rows.length; i += 1) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(approvals.rows.length, 1);
+  assert.match(approvals.rows[0].summary, /Market Research Agent wants to use browser\.extract/u);
+  assert.equal(team.detail(started.mission.id).toolCalls[0].status, "awaiting_approval", "the trace shows the step waiting");
+  approvals.decide("approved");
+  const done = await until(started.mission.id, ["completed", "failed"]);
+  assert.equal(done.status, "completed");
+  assert.equal(approvals.executed, 1, "the approval was spent once");
+  const detail = team.detail(started.mission.id);
+  assert.deepEqual(detail.toolCalls.map((c) => c.status), ["succeeded"]);
+  assert.equal(detail.steps[0].verified, true);
+});
+
+test("a denied approval fails the step without running the action", async (t) => {
+  const approvals = approvalQueue();
+  const model = scriptedModel({ plan: oneStep, verdict: (text) => !/Not done/u.test(text) && /42/u.test(text) });
+  const { team, until } = await harness(t, model, { approvals, policy: askForBrowser });
+  const started = await team.start({ goal: "Find the published value for the launch page." });
+  for (let i = 0; i < 200 && !approvals.rows.length; i += 1) await new Promise((r) => setTimeout(r, 5));
+  approvals.decide("denied");
+  // The retry asks again; deny that too.
+  for (let i = 0; i < 200 && approvals.rows.length < 2; i += 1) await new Promise((r) => setTimeout(r, 5));
+  approvals.decide("denied");
+  const done = await until(started.mission.id, ["completed", "failed"]);
+  assert.equal(done.status, "failed");
+  assert.equal(approvals.executed, 0);
+  assert.ok(team.detail(started.mission.id).toolCalls.every((c) => c.status === "denied"));
+});
+
+test("cancelling a mission that is waiting for approval stops it", async (t) => {
+  const approvals = approvalQueue();
+  const model = scriptedModel({ plan: oneStep });
+  const { team, until } = await harness(t, model, { approvals, policy: askForBrowser });
+  const started = await team.start({ goal: "Find the published value for the launch page." });
+  for (let i = 0; i < 200 && !approvals.rows.length; i += 1) await new Promise((r) => setTimeout(r, 5));
+  team.control(started.mission.id, "cancel");
+  const done = await until(started.mission.id, ["cancelled"]);
+  assert.equal(done.status, "cancelled");
+  assert.equal(approvals.executed, 0);
+  // Let the waiting step unwind at its checkpoint before the stores close.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(approvals.executed, 0, "a late approval cannot run a cancelled step");
 });

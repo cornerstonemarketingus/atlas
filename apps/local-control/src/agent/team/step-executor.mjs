@@ -20,6 +20,8 @@ import { toolsForAgent } from "./permissions.mjs";
  *   data, never as instructions.
  */
 export const MAX_TOOL_TURNS = 8;
+/** How long a step waits for the owner to decide on an approval (the step's own time budget still applies). */
+export const APPROVAL_WAIT_MS = 15 * 60 * 1000;
 const TENANT = "local";
 
 export function createAgentStepExecutor({ family, delegation, toolRegistry, client, platformStore, approvals, resultsOf, memory = null }) {
@@ -122,14 +124,14 @@ async function actLoop({ client, messages, tools, allowedTools, toolRegistry, ap
     for (const call of reply.toolCalls) {
       budget.record({ toolCalls: 1 });
       usage.toolCalls += 1;
-      const content = await runTool({ call, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, toolLog });
+      const content = await runTool({ call, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, checkpoint, toolLog });
       messages.push({ role: "tool", tool_call_id: call.id, content: `<data source="${call.name}">\n${content}\n</data>` });
     }
   }
   return "The step used all of its tool turns without finishing.";
 }
 
-async function runTool({ call, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, toolLog }) {
+async function runTool({ call, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, checkpoint = () => {}, toolLog }) {
   let input = {};
   try { input = JSON.parse(call.arguments || "{}"); } catch { /* recorded as given; the registry rejects it */ }
   const recorded = platformStore?.recordToolCall({
@@ -142,12 +144,21 @@ async function runTool({ call, allowedTools, toolRegistry, approvals, platformSt
   if (!allowedTools.has(call.name)) {
     outcome = { status: "rejected", code: "NOT_PERMITTED", message: `${agent.name} is not permitted to use ${call.name}.` };
   } else {
-    outcome = await toolRegistry.invoke({ name: call.name, rawArguments: call.arguments, sessionId: meta.rootTaskId, signal, approvals, context: { sessionId: meta.rootTaskId } });
+    const invoke = () => toolRegistry.invoke({ name: call.name, rawArguments: call.arguments, sessionId: meta.rootTaskId, signal, approvals, context: { sessionId: meta.rootTaskId } });
+    outcome = await invoke();
     if (outcome.status === "approval-required" && approvals?.request) {
-      approvals.request({ digest: outcome.digest, capability: outcome.capability, summary: `${agent.name} wants to use ${call.name}`, sessionId: meta.rootTaskId });
+      const request = approvals.request({ digest: outcome.digest, capability: outcome.capability, summary: `${agent.name} wants to use ${call.name}: ${summarizeInput(input)}`, sessionId: meta.rootTaskId });
+      // The step waits for the owner (pause and cancel still work through the
+      // checkpoint), then runs exactly the approved action once.
+      if (request?.id && approvals.status) {
+        if (recorded) platformStore.updateToolCall(TENANT, recorded.id, { status: "awaiting_approval" });
+        const decision = await waitForDecision({ approvals, id: request.id, checkpoint, signal, waitMs: approvals.waitMs ?? APPROVAL_WAIT_MS });
+        if (decision === "approved") outcome = await invoke();
+        else outcome = { status: "rejected", code: decision === "denied" ? "APPROVAL_DENIED" : "APPROVAL_TIMEOUT", message: decision === "denied" ? "The owner denied this action." : "No decision arrived in time." };
+      }
     }
   }
-  const status = outcome.status === "completed" ? "succeeded" : outcome.status === "approval-required" ? "awaiting_approval" : outcome.code === "NOT_PERMITTED" || outcome.code === "POLICY_DENIED" ? "denied" : "failed";
+  const status = outcome.status === "completed" ? "succeeded" : outcome.status === "approval-required" ? "awaiting_approval" : ["NOT_PERMITTED", "POLICY_DENIED", "APPROVAL_DENIED"].includes(outcome.code) ? "denied" : "failed";
   if (recorded) {
     platformStore.updateToolCall(TENANT, recorded.id, {
       status, durationMs: Date.now() - started,
@@ -158,6 +169,23 @@ async function runTool({ call, allowedTools, toolRegistry, approvals, platformSt
   if (outcome.status === "completed") return String(outcome.output);
   if (outcome.status === "approval-required") return "This action needs the owner's approval. It has been requested; continue without it or report that it is pending.";
   return `Not done: ${outcome.message ?? outcome.code ?? "the tool failed"}.`;
+}
+
+async function waitForDecision({ approvals, id, checkpoint, signal, waitMs }) {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    await checkpoint();
+    const status = approvals.status(id);
+    if (status === "approved" || status === "denied") return status;
+    if (Date.now() >= until || signal?.aborted) return "timeout";
+    await new Promise((resolve) => setTimeout(resolve, approvals.pollMs ?? 500));
+  }
+}
+
+/** A short, secret-free description of the exact action, for the approval prompt. */
+function summarizeInput(input) {
+  if (!input || typeof input !== "object") return "no arguments";
+  return Object.entries(input).slice(0, 4).map(([key, value]) => `${key}=${typeof value === "string" ? JSON.stringify(value.slice(0, 80)) : JSON.stringify(value)?.slice(0, 80)}`).join(", ") || "no arguments";
 }
 
 /**
