@@ -11,3 +11,9 @@ export function getDb() {
 
   return drizzle(env.DB, { schema });
 }
+
+/** The raw D1 binding, for the plain-SQL tenant-scoped modules (db/tenancy.mjs, db/sessions.mjs). */
+export function getD1() {
+  if (!env.DB) throw new Error("Cloudflare D1 binding `DB` is unavailable.");
+  return env.DB;
+}

@@ -243,6 +243,7 @@ if (metadata.mode === "inspect") {
     ["ATLAS_CODER_RETRY_MAX_DELAY_MS", "--retry-max-delay-ms", 0, 120_000],
     ["ATLAS_TOKEN_BUDGET", "--token-budget", 1, 1_000_000],
     ["ATLAS_MAX_TURNS", "--max-turns", 1, 32],
+    ["ATLAS_OUTPUT_TOKENS_PER_TURN", "--output-tokens-per-turn", 256, 32_768],
   ];
   for (const [environmentName, flag, minimum, maximum] of boundedOptions) {
     const value = (process.env[environmentName] || "").trim();

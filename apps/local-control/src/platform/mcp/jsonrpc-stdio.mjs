@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
  *
  * Two layers:
  *   - a *transport* moves JSON-RPC 2.0 messages. `createStdioTransport` spawns
+ *     (see also `createStreamableHttpTransport` in ./http-transport.mjs)
  *     a server process (argv only, never a shell) with a scrubbed environment
  *     and speaks newline-delimited JSON over its stdio; `createInMemoryTransport`
  *     routes messages to a handler function for tests.
@@ -239,7 +240,8 @@ export class McpClient {
         // Server→client requests (sampling, roots, elicitation) are not
         // supported: answer with method-not-found instead of hanging it.
         try {
-          this.transport.send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not supported by client" } });
+          const sent = this.transport.send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not supported by client" } });
+          if (sent && typeof sent.then === "function") sent.then(undefined, () => {});
         } catch { /* closed */ }
         return;
       }
@@ -270,7 +272,18 @@ export class McpClient {
       try {
         const message = { jsonrpc: "2.0", id, method };
         if (params !== undefined) message.params = params;
-        this.transport.send(message);
+        const sent = this.transport.send(message);
+        // Asynchronous transports (streamable HTTP) report delivery failures
+        // through the returned promise; they fail exactly this request.
+        if (sent && typeof sent.then === "function") {
+          sent.then(undefined, (error) => {
+            const entry = this.pending.get(id);
+            if (!entry) return;
+            this.pending.delete(id);
+            clearTimeout(entry.timer);
+            entry.reject(error);
+          });
+        }
       } catch (error) {
         clearTimeout(timer);
         this.pending.delete(id);
@@ -283,7 +296,10 @@ export class McpClient {
     if (this.closed) return;
     const message = { jsonrpc: "2.0", method };
     if (params !== undefined) message.params = params;
-    try { this.transport.send(message); } catch { /* closed */ }
+    try {
+      const sent = this.transport.send(message);
+      if (sent && typeof sent.then === "function") sent.then(undefined, () => {});
+    } catch { /* closed */ }
   }
 
   async initialize({ timeoutMs } = {}) {

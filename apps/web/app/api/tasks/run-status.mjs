@@ -235,5 +235,9 @@ export function taskOwnerKey(account) {
 export function visibleTasks(rows, account) {
   const owner = taskOwnerKey(account);
   if (owner === null) return [];
-  return (rows ?? []).filter((row) => row && typeof row.requestedBy === "string" && row.requestedBy === owner);
+  // Tenancy (#71): when the caller's tenant is known, a row must also belong to it.
+  const tenantId = account.tenantId;
+  const tenantScoped = tenantId !== undefined;
+  return (rows ?? []).filter((row) => row && typeof row.requestedBy === "string" && row.requestedBy === owner
+    && (!tenantScoped || (Number.isSafeInteger(tenantId) && row.tenantId === tenantId)));
 }

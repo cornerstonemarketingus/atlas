@@ -39,6 +39,9 @@ export class AgentRuntime {
   #instanceId;
   #leaseMs;
   #heartbeatMs;
+  #platformStore;
+  #platformTenantId;
+  #platformUserId;
   #runs = new Map();
   #listeners = new Map();
   #stopped = false;
@@ -50,6 +53,9 @@ export class AgentRuntime {
     instanceId = randomUUID(),
     leaseMs = DEFAULT_LEASE_MS,
     heartbeatMs = DEFAULT_HEARTBEAT_MS,
+    platformStore = null,
+    platformTenantId = "local",
+    platformUserId = "local-owner",
   }) {
     if (!sessions) throw new Error("An agent session store is required.");
     if (!executors || Object.keys(executors).length === 0) throw new Error("At least one executor is required.");
@@ -59,6 +65,9 @@ export class AgentRuntime {
     this.#instanceId = instanceId;
     this.#leaseMs = leaseMs;
     this.#heartbeatMs = heartbeatMs;
+    this.#platformStore = platformStore;
+    this.#platformTenantId = platformTenantId;
+    this.#platformUserId = platformUserId;
   }
 
   get instanceId() { return this.#instanceId; }
@@ -67,6 +76,13 @@ export class AgentRuntime {
   getSession(sessionId) { return this.#sessions.session(sessionId); }
   getTurns(sessionId) { return this.#sessions.turns(sessionId); }
   getEvents(sessionId, afterSequence = 0) { return this.#sessions.events(sessionId, afterSequence); }
+  healthSnapshot() {
+    const sessions = this.#sessions.sessions(10_000);
+    let queuedTurns = 0;
+    for (const session of sessions) queuedTurns += this.#sessions.turns(session.id).filter((turn) => turn.state === "pending").length;
+    const activeSessions = [...this.#runs.keys()].length;
+    return { activeAgents: activeSessions, activeSessions, queuedTurns, sessions: sessions.length };
+  }
 
   /**
    * Boot-time recovery. A session whose lease has lapsed was being run by a
@@ -90,7 +106,20 @@ export class AgentRuntime {
 
   createSession({ title, repository = null, model, executor = "local", budget = {} }) {
     if (!this.#executors[executor]) throw new AgentRuntimeError("UNKNOWN_EXECUTOR", `No executor named '${executor}' is registered.`);
-    const session = this.#sessions.createSession({ title, repository, model, executor, budget });
+    let platformTaskId = null;
+    if (this.#platformStore && executor === "conversation") {
+      const task = this.#platformStore.createTask({
+        tenantId: this.#platformTenantId,
+        userId: this.#platformUserId,
+        objective: `Conversation: ${title}`,
+        successCriteria: ["Conversation turns complete with truthful tool and model evidence."],
+        budget,
+      });
+      this.#platformStore.transitionTask(this.#platformTenantId, task.id, "authorized", { actor: this.#platformUserId });
+      this.#platformStore.transitionTask(this.#platformTenantId, task.id, "queued", { actor: this.#platformUserId });
+      platformTaskId = task.id;
+    }
+    const session = this.#sessions.createSession({ title, repository, model, executor, budget, platformTaskId });
     this.#emit(session.id, statusEvent(`Session created for ${executor} execution.`, { executor }));
     return this.#sessions.session(session.id);
   }
@@ -343,6 +372,7 @@ export class AgentRuntime {
     }, this.#heartbeatMs);
 
     this.#sessions.setStatus(sessionId, "running");
+    this.#transitionPlatform(session.platformTaskId, "running", "conversation run started");
     this.#emit(sessionId, statusEvent("Run started.", { executor: session.executor }));
 
     try {
@@ -370,6 +400,7 @@ export class AgentRuntime {
         if (result?.status === "awaiting_approval") {
           this.#sessions.setTurnState(turn.id, "awaiting_approval");
           this.#sessions.setStatus(sessionId, "awaiting_approval", result.summary ?? "Waiting for approval.");
+          this.#transitionPlatform(session.platformTaskId, "waiting_for_approval", result.summary ?? "Waiting for approval.");
           this.#emit(sessionId, completionEvent({ status: "awaiting_approval", summary: result.summary ?? "Waiting for approval." }));
           return;
         }
@@ -422,6 +453,19 @@ export class AgentRuntime {
   #finish(sessionId, status, summary, budget) {
     this.#sessions.setStatus(sessionId, status, summary);
     this.#emit(sessionId, completionEvent({ status, summary, usage: budget?.snapshot().used ?? null }));
+    const platformStatus = status === "completed" ? "verifying" : status === "cancelled" ? "cancelled" : status === "failed" ? "failed" : null;
+    if (platformStatus) this.#transitionPlatform(this.#sessions.session(sessionId)?.platformTaskId, platformStatus, summary);
+    if (platformStatus === "verifying") this.#transitionPlatform(this.#sessions.session(sessionId)?.platformTaskId, "completed", summary);
+  }
+
+  #transitionPlatform(taskId, status, reason) {
+    if (!this.#platformStore || !taskId) return;
+    try {
+      const task = this.#platformStore.getTask(this.#platformTenantId, taskId);
+      if (task && task.status !== status) this.#platformStore.transitionTask(this.#platformTenantId, taskId, status, { actor: this.#platformUserId, reason });
+    } catch (error) {
+      this.#audit("platform.session_task_sync_failed", `${taskId}: ${error.code ?? error.message}`);
+    }
   }
 
   #fail(sessionId, code, summary) {
