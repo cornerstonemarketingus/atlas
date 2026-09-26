@@ -92,6 +92,15 @@ For production GitHub access, configure a GitHub App using
 `ATLAS_GITHUB_APP_PRIVATE_KEY`, and `ATLAS_GITHUB_APP_SLUG`. Atlas exchanges the
 private key for short-lived installation tokens server-side. A personal token
 remains supported only as a single-operator fallback.
+Coder tasks run on autopilot by default: Atlas opens a pull request and merges
+it itself once every CI check on it passes (`ci-gated`), holding it for review
+if a check fails or its own verification finds a regression. A repository's
+saved merge policy overrides this; `ATLAS_DEFAULT_MERGE_POLICY` changes the
+default (`manual`, `ci-gated` or `none`). The daily self-improvement run uses
+the repository variable `ATLAS_SELF_IMPROVE_MERGE_POLICY` (`ci-gated` by
+default, or `manual`). Merged `apps/web` changes deploy to production
+automatically.
+
 Set `ATLAS_ALLOWED_REPOSITORIES` to a comma-separated list of `owner/repository`
 names that may be submitted from the hosted task composer.
 

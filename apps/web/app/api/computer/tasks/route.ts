@@ -7,6 +7,7 @@ import { currentPlan } from "../../billing/plan.mjs";
 import { cloudBrowserAccess, hostedBrowserConfigured } from "../browser-plan.mjs";
 import { computerExecutionPolicy, normalizeComputerWorkflow } from "../computer-policy.mjs";
 import { taskEvent } from "../task-events";
+import { validateStartUrl } from "../start-url.mjs";
 
 async function capabilities(account: { userId: string; dbUserId: number | null }) {
   const unrestricted = account.dbUserId === null;
@@ -44,8 +45,10 @@ export async function POST(request: Request) {
   const workflowType = normalizeComputerWorkflow(body.workflowType);
   let startUrl: string | null = null;
   if (typeof body.startUrl === "string" && body.startUrl.trim()) {
-    try { const parsed = new URL(body.startUrl.trim()); if (!["http:", "https:"].includes(parsed.protocol)) throw new Error(); startUrl = parsed.toString(); }
-    catch { return Response.json({ message: "Start URL must be an http or https address." }, { status: 400 }); }
+    // Literal-host SSRF check only (no DNS in a Worker); see start-url.mjs.
+    const checked = validateStartUrl(body.startUrl);
+    if (!checked.ok) return Response.json({ message: checked.message }, { status: 400 });
+    startUrl = checked.url ?? null;
   }
   if (!objective || (executionProvider === "windows" && !deviceId)) return Response.json({ message: "Choose a computer and describe the browser task." }, { status: 400 });
   const db = getDb();

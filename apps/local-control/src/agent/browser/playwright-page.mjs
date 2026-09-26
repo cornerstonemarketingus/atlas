@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createDestinationChecker } from "../../net/ssrf-guard.mjs";
 
 /**
  * A Playwright-backed page adapter.
@@ -19,12 +20,32 @@ export class BrowserUnavailableError extends Error {
   }
 }
 
+export class UnsafeNavigationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UnsafeNavigationError";
+    this.code = "PRIVATE_DESTINATION";
+  }
+}
+
+/**
+ * `urlPolicy` ({ lookup, allowPrivateHosts }) is the destination policy from
+ * ../../net/ssrf-guard.mjs. It is enforced twice: on every request the page
+ * makes (context.route), which stops navigations, subresources and page
+ * scripts from reaching loopback/LAN/metadata addresses; and on the URL a
+ * navigation lands on, because route interception does not see the hops of
+ * an HTTP redirect. A redirect hop to a private host is therefore still
+ * requested by the browser (a blind GET), but the page is cleared before its
+ * content can be read. Closing that residual needs a pinning egress proxy,
+ * which is what apps/browser-worker does.
+ */
 export async function createPlaywrightPage({
   profileDirectory,
   channel = process.env.ATLAS_BROWSER_CHANNEL || "msedge",
   headless = process.env.ATLAS_BROWSER_HEADLESS === "1",
   downloadDirectory,
   importPlaywright = () => import("playwright-core"),
+  urlPolicy = {},
 } = {}) {
   let playwright;
   try {
@@ -39,6 +60,16 @@ export async function createPlaywrightPage({
     headless,
     viewport: { width: 1440, height: 900 },
     acceptDownloads: true,
+  });
+  const checkDestination = createDestinationChecker(urlPolicy);
+  const blockedRequests = [];
+  await context.route("**/*", async (route) => {
+    const target = route.request().url();
+    const verdict = await checkDestination(target);
+    if (verdict.ok) return route.continue();
+    blockedRequests.push({ url: target, reason: verdict.reason });
+    if (blockedRequests.length > 100) blockedRequests.shift();
+    return route.abort("blockedbyclient");
   });
   const page = context.pages()[0] ?? (await context.newPage());
 
@@ -71,7 +102,19 @@ export async function createPlaywrightPage({
       return { text, elements };
     },
 
-    async goto({ url }) { await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 }); },
+    blockedRequests: () => [...blockedRequests],
+
+    async goto({ url }) {
+      const before = await checkDestination(url);
+      if (!before.ok) throw new UnsafeNavigationError(before.reason);
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      const landed = await checkDestination(page.url());
+      if (!landed.ok) {
+        await page.goto("about:blank").catch(() => {});
+        handles = new Map();
+        throw new UnsafeNavigationError(`The page redirected to a destination Atlas does not open. ${landed.reason}`);
+      }
+    },
     async click({ ref }) { await locatorFor(ref).click({ timeout: 30_000 }); },
     async fill({ ref, text }) { await locatorFor(ref).fill(text, { timeout: 30_000 }); },
     async press({ ref, key }) { await locatorFor(ref).press(key, { timeout: 30_000 }); },

@@ -8,9 +8,9 @@ type SetupStatus = { overall: string; completedSteps: number; totalSteps: number
 type GitHub = { connected: boolean; method: string; installUrl: string | null };
 
 const MERGE_POLICIES = [
-  { id: "manual", label: "Manual — a person merges every pull request" },
-  { id: "ci-gated", label: "Auto-merge once CI is green" },
-  { id: "none", label: "Auto-merge immediately, no check (not recommended)" },
+  { id: "manual", label: "Review first: a person merges each pull request" },
+  { id: "ci-gated", label: "Merge automatically once all tests pass (default)" },
+  { id: "none", label: "Merge right away, without waiting for tests (not recommended)" },
 ];
 
 /**
@@ -105,7 +105,7 @@ export function SetupCenter() {
         <header className="page-head">
           <p className="kicker">CONNECTIONS</p>
           <h1>Everything Atlas is plugged into.</h1>
-          <p>What is connected, what still needs you, and the two settings that decide how far Atlas may go on its own.</p>
+          <p>What is set up, what still needs you, and how far Atlas may go on its own.</p>
         </header>
 
         <section className="page-block">
@@ -114,28 +114,28 @@ export function SetupCenter() {
             <article className={github?.connected ? "status-card good" : "status-card"}>
               <small>GITHUB</small>
               <strong>{github === null ? "Checking…" : github.connected ? `Connected via ${github.method}` : "Not connected"}</strong>
-              <p>Atlas needs GitHub to read your projects and open pull requests for the Build section.</p>
+              <p>Atlas needs GitHub access to read your projects and open pull requests.</p>
               {github?.installUrl && !github.connected && <a href={github.installUrl} rel="noreferrer">Install the GitHub App ↗</a>}
             </article>
             <article className={model?.configured ? "status-card good" : "status-card"}>
               <small>CHAT MODEL</small>
               <strong>{model === null ? "Checking…" : model.configured ? "Model endpoint connected" : "No model endpoint"}</strong>
               <p>{model?.configured
-                ? "The Chat section can answer. Atlas talks to any OpenAI-compatible server you host or subscribe to."
+                ? "Chat is connected. Atlas works with any OpenAI-compatible model server, hosted or your own."
                 : model?.reason ?? "Chat cannot answer until a model endpoint is configured."}</p>
             </article>
             <article className="status-card">
               <small>COMPUTER</small>
-              <strong>Pair from Automation</strong>
-              <p>The Windows companion pairs with a one-time credential and drives a separate browser profile on your PC.</p>
-              <Link href="/automation">Open Automation →</Link>
+              <strong>Connect from Tasks</strong>
+              <p>The Windows companion app connects with a one-time pairing file and uses its own browser profile on your PC.</p>
+              <Link href="/automation">Open Tasks →</Link>
             </article>
           </div>
         </section>
 
         <section className="page-block">
           <h2><span>02</span>How far Atlas may go</h2>
-          <p className="block-hint">Build always opens a pull request. This decides what happens to it next.</p>
+          <p className="block-hint">Code changes always arrive as a pull request. Choose what happens to it next.</p>
           <div className="policy-row">
             <label>Project
               <select aria-label="Project" value={repository} onChange={(event) => setRepository(event.target.value)}>
@@ -153,7 +153,7 @@ export function SetupCenter() {
         </section>
 
         <section className="page-block">
-          <h2><span>03</span>Deployment checklist</h2>
+          <h2><span>03</span>Setup checklist</h2>
           {error && <p className="page-notice" role="alert">{error}</p>}
           {!status && !error && <p className="block-hint">Checking the live environment…</p>}
           <div className="check-list">

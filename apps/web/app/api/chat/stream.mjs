@@ -14,8 +14,16 @@
 export function createDeltaParser() {
   let buffer = "";
   let done = false;
+  // Tool calls arrive in pieces keyed by index: the name once, the JSON
+  // arguments split across many chunks. They are assembled, never streamed.
+  const calls = new Map();
   return {
     get done() { return done; },
+    /** Tool calls assembled so far, in the chat-completions message shape. */
+    get toolCalls() {
+      return [...calls.entries()].sort(([a], [b]) => a - b)
+        .map(([, call]) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }));
+    },
     push(chunk) {
       buffer += chunk;
       const deltas = [];
@@ -30,6 +38,17 @@ export function createDeltaParser() {
         let event;
         try { event = JSON.parse(data); } catch { continue; }
         const choice = Array.isArray(event?.choices) ? event.choices[0] : null;
+        const pieces = choice?.delta?.tool_calls ?? choice?.message?.tool_calls;
+        if (Array.isArray(pieces)) {
+          for (const [position, piece] of pieces.entries()) {
+            const index = Number.isInteger(piece?.index) ? piece.index : position;
+            const call = calls.get(index) ?? { id: "", name: "", arguments: "" };
+            if (typeof piece?.id === "string") call.id = piece.id;
+            if (typeof piece?.function?.name === "string") call.name += piece.function.name;
+            if (typeof piece?.function?.arguments === "string") call.arguments += piece.function.arguments;
+            calls.set(index, call);
+          }
+        }
         const content = choice?.delta?.content ?? choice?.message?.content;
         if (typeof content === "string" && content) deltas.push(content);
         else if (Array.isArray(content)) {

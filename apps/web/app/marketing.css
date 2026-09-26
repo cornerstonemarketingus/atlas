@@ -27,3 +27,37 @@
 .pillar-note{font-size:14px;border-left:2px solid var(--line);padding-left:12px;margin-top:18px}
 @media(max-width:860px){.mode-section,.capability-grid.pillars{grid-template-columns:1fr}.mode-section{padding:56px 6vw}.capability-grid.pillars article{border-right:0}}
 .capability-grid.pillars h2{font-size:clamp(28px,3vw,38px);line-height:1.08;letter-spacing:-.03em;margin:28px 0 12px}
+
+/* Landing page (signed-out home) */
+.landing .signin-shell{min-height:auto}
+.landing .signin-story{min-height:auto;padding:72px 6vw 56px;gap:48px}
+.landing .signin-story h1{font-size:clamp(46px,6vw,88px);line-height:.95;max-width:780px}
+.landing .signin-access{padding:56px 40px}
+.landing-section{background:var(--ws-bg);color:var(--ws-text);padding:72px 6vw;border-top:1px solid var(--ws-line)}
+.landing-section h2{font-size:clamp(30px,3.4vw,44px);letter-spacing:-.04em;margin:0 0 28px}
+.landing-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.landing-cards article{border:1px solid var(--ws-line);border-radius:14px;background:#111412;padding:24px}
+.landing-cards b{display:block;font-size:18px;margin-bottom:10px}
+.landing-cards p{margin:0;color:#9aa49c;line-height:1.6}
+.landing-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:0;padding:0;list-style:none;counter-reset:step}
+.landing-steps li{counter-increment:step;border-top:2px solid var(--ws-accent);padding-top:18px;display:grid;gap:8px}
+.landing-steps li:before{content:counter(step);font:700 12px var(--font-geist-mono);color:var(--ws-accent)}
+.landing-steps b{font-size:18px}
+.landing-steps span{color:#9aa49c;line-height:1.6}
+.landing-more{margin:28px 0 0}
+.landing-more a{color:var(--ws-accent);text-decoration:underline;text-underline-offset:4px;font-weight:700}
+@media(max-width:800px){
+  .marketing-nav{height:auto;flex-wrap:wrap;row-gap:10px;padding:14px 5vw}
+  .marketing-nav nav{display:flex;order:3;width:100%;margin-left:0;overflow-x:auto;gap:18px;white-space:nowrap}
+  .landing .signin-story{padding:44px 24px}
+  .landing-cards,.landing-steps{grid-template-columns:1fr}
+  .landing-section{padding:52px 24px}
+}
+
+/* About page */
+.about-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:48px;padding:64px 4vw;border-top:1px solid var(--line)}
+.about-body h2{font-size:28px;letter-spacing:-.03em;margin:0 0 14px}
+.about-body p{color:var(--muted);line-height:1.7;margin:0 0 16px}
+.about-body ul{margin:0;padding-left:18px;list-style:disc;color:var(--muted);line-height:1.9}
+.about-body a{text-decoration:underline;text-underline-offset:4px}
+@media(max-width:800px){.about-body{grid-template-columns:1fr;padding:44px 24px}}

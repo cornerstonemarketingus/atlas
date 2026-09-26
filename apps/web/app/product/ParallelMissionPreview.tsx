@@ -43,16 +43,16 @@ export function ParallelMissionPreview() {
   return (
     <section className="parallel-preview" aria-labelledby="parallel-preview-title">
       <div className="parallel-intro">
-        <p className="eyebrow"><span>PRODUCT PREVIEW</span> Parallel mission control</p>
-        <h2 id="parallel-preview-title">Child agents work in parallel.<br />You keep the whole picture.</h2>
+        <p className="eyebrow"><span>COMING SOON</span> Bigger jobs, split up</p>
+        <h2 id="parallel-preview-title">Several agents on one job.<br />One view of all of them.</h2>
         <p>
-          Atlas is building a dependency-aware mission view for coordinating specialized
-          children without turning autonomy into a black box. This interface is a product
-          preview; live orchestration is being connected to the durable mission runtime.
+          For larger requests, Atlas can split the work between a few agents that run side by side:
+          one researches, one builds, one reviews. This screen is a preview of that view; it is not
+          live in the hosted app yet.
         </p>
         <div className="parallel-principle">
           <span aria-hidden="true">◎</span>
-          <p><b>Progress, not private reasoning.</b> Atlas surfaces decisions, actions, blockers, budgets, and evidence—not hidden chain-of-thought.</p>
+          <p><b>You see what each agent is doing:</b> its step, what it is waiting on, what it has spent, and what it has proven.</p>
         </div>
       </div>
 

@@ -122,3 +122,13 @@ test("a coding task needs something concrete to change; read-only modes stay ope
   ]) assert.ok(assessCoderObjective(objective).ok, objective);
   assert.ok(!("error" in validateTask({ ...valid, mode: "inspect", objective: "hi can u look around?" }, allowlist)));
 });
+
+test("coder tasks default to CI-gated autopilot, and a bad setting never widens the policy", async () => {
+  const { defaultMergePolicy } = await import("../app/api/tasks/dispatch.mjs");
+  assert.equal(defaultMergePolicy(undefined), "ci-gated");
+  assert.equal(defaultMergePolicy(""), "ci-gated");
+  assert.equal(defaultMergePolicy("manual"), "manual");
+  assert.equal(defaultMergePolicy(" CI-Gated "), "ci-gated");
+  assert.equal(defaultMergePolicy("none"), "none");
+  assert.equal(defaultMergePolicy("yolo"), "manual");
+});

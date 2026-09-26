@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { MissionScheduler } from "./mission-scheduler.mjs";
+import { DEFAULT_BATCH_SIZE } from "./provider-throttle.mjs";
 
 export class MissionServiceError extends Error {
   constructor(code, message) {
@@ -25,7 +26,7 @@ export class MissionService {
   #schedulers = new Map();
   #listeners = new Map();
 
-  constructor({ store, execute, defaultConcurrency = 2 }) {
+  constructor({ store, execute, defaultConcurrency = DEFAULT_BATCH_SIZE }) {
     if (!store || typeof store.saveMission !== "function") throw new Error("A durable mission store is required.");
     if (typeof execute !== "function") throw new Error("A mission child executor is required.");
     if (!Number.isInteger(defaultConcurrency) || defaultConcurrency < 1 || defaultConcurrency > 8) {

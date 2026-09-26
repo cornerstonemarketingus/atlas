@@ -15,8 +15,8 @@ type Detail = { messages?: Message[]; tasks?: Task[] };
 
 const STARTERS = [
   { title: "Review my project", prompt: "Review my project and tell me what I should improve first." },
-  { title: "Fix a problem", prompt: "Fix the login bug in my project. Read the code first, run the tests, and open a pull request." },
-  { title: "Plan my next step", prompt: "Help me decide what to build next and explain the simplest useful version." },
+  { title: "Find and fix a bug", prompt: "Find the most likely bug in my project, fix it, run the tests, and open a pull request." },
+  { title: "Plan what to build next", prompt: "Help me decide what to build next and explain the simplest useful version." },
 ];
 
 type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
@@ -268,12 +268,11 @@ export function ChatSection() {
     <div className="section-scroll">
       {messages.length === 0 ? <div className="section-empty">
         <div className="empty-mark"><AtlasMark /></div>
-        <p className="kicker">CHAT</p>
         <h1>What can I help you get done?</h1>
-        <p>Ask a question, describe something to build, or tell Atlas what to do on your computer. Atlas answers here, and offers to start a task — you confirm before anything runs.</p>
+        <p>Ask a question, or tell Atlas what to build, fix, or do on your computer.</p>
         <div className="starter-grid">
           {STARTERS.map((item) => <button key={item.title} onClick={() => setDraft(item.prompt)}>
-            {item.title}<span>Fills the box below</span>
+            {item.title}
           </button>)}
         </div>
       </div> : <div className="message-stream">
@@ -284,7 +283,7 @@ export function ChatSection() {
         {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Starting…</p></div></div>}
         {suggestion && <div className="atlas-message suggestion-card"><div className="assistant-avatar"><AtlasMark /></div><div>
           <b>Atlas</b>
-          <p>{suggestion.reason} {suggestion.kind === "project_task" ? <>It will run on <strong>{repository}</strong> ({branch}).</> : <>It will run on your paired computer and pause before anything consequential.</>}</p>
+          <p>{suggestion.reason} {suggestion.kind === "project_task" ? <>It will run on <strong>{repository}</strong> ({branch}).</> : <>It will run on your computer and ask you before anything important.</>}</p>
           <div className="suggestion-actions">
             <button type="button" className="primary" onClick={() => void (suggestion.kind === "project_task" ? startProjectTask(suggestion) : startComputerTask(suggestion))}>
               {suggestion.kind === "project_task" ? (suggestion.mode === "inspect" ? "Start review" : suggestion.mode === "debug" ? "Start debugging" : "Start task") : "Start on my computer"}
@@ -292,7 +291,7 @@ export function ChatSection() {
             <button type="button" className="secondary" onClick={() => void ask(suggestion.text)}>Just answer in chat</button>
           </div>
         </div></div>}
-        {tasks.map((task) => <div className="atlas-message task-update" key={task.taskId}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p>{taskStatusLabel(task)}</p><small>{task.mode === "coder" ? "I will return a pull request for your review." : "I will return a report when the task finishes."}</small><div className="result-links">{task.pullRequest?.url && <a className="result-link" href={task.pullRequest.url} target="_blank" rel="noreferrer">Review the pull request ↗</a>}{task.run?.url && <a className="result-link" href={task.run.url} target="_blank" rel="noreferrer">Open task details ↗</a>}</div></div></div>)}
+        {tasks.map((task) => <div className="atlas-message task-update" key={task.taskId}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p>{taskStatusLabel(task)}</p><small>{task.mode === "coder" ? "I'll open a pull request when it's done." : "I'll post a report when it's done."}</small><div className="result-links">{task.pullRequest?.url && <a className="result-link" href={task.pullRequest.url} target="_blank" rel="noreferrer">Review the pull request ↗</a>}{task.run?.url && <a className="result-link" href={task.run.url} target="_blank" rel="noreferrer">Open task details ↗</a>}</div></div></div>)}
       </div>}
       <div ref={endRef} />
     </div>

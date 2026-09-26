@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { authenticatedAccount, authenticatedUserId } from "../app/api/tasks/operator-auth.mjs";
+import { readFileSync } from "node:fs";
+import { authenticatedAccount, authenticatedUserId, constantTimeEqual } from "../app/api/tasks/operator-auth.mjs";
 import { signSession, sessionCookieHeader } from "../app/api/auth/session.mjs";
 
 function request(headers) {
@@ -70,4 +71,26 @@ test("public callers cannot forge platform, GitHub, or operator identities", asy
   for (const id of ["operator", "github:owner"]) {
     assert.equal(await authenticatedAccount(request({ "oai-authenticated-user-id": id }), { ATLAS_TRUST_PLATFORM_HEADERS: "true" }), null);
   }
+});
+
+test("the operator token is compared in constant time over SHA-256 digests", async () => {
+  assert.equal(await constantTimeEqual("secret", "secret"), true);
+  assert.equal(await constantTimeEqual("secret", "secreT"), false);
+  assert.equal(await constantTimeEqual("secret", "secret-longer"), false);
+  assert.equal(await constantTimeEqual("", "secret"), false);
+  assert.equal(await constantTimeEqual(undefined, "secret"), false);
+  const source = readFileSync(new URL("../app/api/tasks/operator-auth.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /header === (?!"string")/u, "no plain string equality on the bearer header");
+  assert.match(source, /createHash\("sha256"\)/u);
+  const route = readFileSync(new URL("../app/api/auth/operator/route.ts", import.meta.url), "utf8");
+  assert.match(route, /await constantTimeEqual\(accessCode, expected\)/u);
+  assert.doesNotMatch(route, /left\.length !== right\.length/u, "the access-code check no longer leaks length");
+});
+
+test("a bearer token that only shares a prefix with the operator token is rejected", async () => {
+  const environment = { ATLAS_OPERATOR_TOKEN: "secret-operator-token" };
+  assert.equal(await authenticatedUserId(request({ authorization: "Bearer secret-operator-toke" }), environment), null);
+  assert.equal(await authenticatedUserId(request({ authorization: "Bearer secret-operator-token-x" }), environment), null);
+  assert.equal(await authenticatedUserId(request({ authorization: "bearer secret-operator-token" }), environment), null);
+  assert.equal(await authenticatedUserId(request({ authorization: "Bearer secret-operator-token" }), environment), "operator");
 });

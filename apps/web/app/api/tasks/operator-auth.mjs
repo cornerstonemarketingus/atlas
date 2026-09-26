@@ -47,9 +47,9 @@ export async function authenticatedAccount(request, environment = process.env, {
  * Compares secrets without leaking, through timing, how long a matching
  * prefix was. Hashing first gives both sides the same length.
  */
-function constantTimeEqual(actual, expected) {
-  const a = createHash("sha256").update(actual).digest();
-  const b = createHash("sha256").update(expected).digest();
+export function constantTimeEqual(actual, expected) {
+  const a = createHash("sha256").update(String(actual ?? "")).digest();
+  const b = createHash("sha256").update(String(expected ?? "")).digest();
   return timingSafeEqual(a, b);
 }
 

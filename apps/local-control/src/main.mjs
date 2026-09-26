@@ -168,6 +168,8 @@ const server = createLocalControlServer({
   memory,
   connections: () => mcpReport,
   toolCatalog: () => toolRegistry.list(),
+  // The platform write API reuses the daemon's own instances, never second copies.
+  platformServices: { family: innovation.registry, memory },
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });

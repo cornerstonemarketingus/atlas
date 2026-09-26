@@ -381,13 +381,18 @@ function usageText(usage={}){
  for(const [name,value] of Object.entries(usage))if(value!==undefined&&value!==null)parts.push(name+': '+value);
  return parts.join(' · ')||'No budget used yet';
 }
+function throttleText(mission){
+ const t=mission.throttle;if(!t)return '';
+ const batch='<p class="hint">Running up to '+esc(t.batchSize)+' of '+esc(mission.maxConcurrency)+' child agents at a time.</p>';
+ return t.waitingUntil?batch+'<p class="status interrupted">Waiting for the model provider rate limit to reset at '+esc(new Date(t.waitingUntil).toLocaleTimeString())+'; queued agents resume automatically.</p>':batch;
+}
 function renderMission(mission){
  const state=mission.status||mission.state||'unknown',children=missionChildren(mission);
  const lanes=children.map(child=>'<div class="lane"><div class="task-top"><strong>'+esc(child.id||child.name||'Child')+'</strong><span class="status '+esc(child.state||child.status||'queued')+'">'+esc(child.state||child.status||'queued')+'</span></div><p>'+esc(child.objective||'')+'</p><p class="hint">'+esc(usageText(child.usage))+'</p>'+(child.error?'<p class="status failed">'+esc(child.error.message||child.error)+'</p>':'')+(child.result?'<p>'+esc(child.result.summary||child.result)+'</p>':'')+'</div>').join('');
  const evidence=[...(mission.evidence||[]),...children.flatMap(child=>child.evidence||[])];
  const evidenceHtml=evidence.length?'<details class="evidence"><summary>Evidence ('+evidence.length+')</summary>'+evidence.map(item=>'<p>'+esc(item.summary||item.name||item.path||JSON.stringify(item))+'</p>').join('')+'</details>':'';
  const controls=state==='completed'||state==='failed'||state==='cancelled'?'':'<div class="actions"><button class="secondary" data-mission-action="pause" data-mission-id="'+esc(mission.id)+'"'+(state==='interrupted'?' disabled':'')+'>Pause</button><button class="secondary" data-mission-action="resume" data-mission-id="'+esc(mission.id)+'"'+(state!=='interrupted'?' disabled':'')+'>Resume</button><button class="secondary" data-mission-action="cancel" data-mission-id="'+esc(mission.id)+'">Cancel</button></div>';
- return '<article class="task"><div class="task-top"><h3>'+esc(mission.title||mission.objective||mission.id)+'</h3><span class="status '+esc(state)+'">'+esc(state)+'</span></div>'+(mission.reason?'<p>'+esc(mission.reason)+'</p>':'')+'<p class="hint">Mission '+esc(mission.id)+' · '+esc(usageText(mission.usage||mission.budgetUsage))+'</p><div class="mission-lanes">'+lanes+'</div>'+evidenceHtml+controls+'</article>';
+ return '<article class="task"><div class="task-top"><h3>'+esc(mission.title||mission.objective||mission.id)+'</h3><span class="status '+esc(state)+'">'+esc(state)+'</span></div>'+(mission.reason?'<p>'+esc(mission.reason)+'</p>':'')+throttleText(mission)+'<p class="hint">Mission '+esc(mission.id)+' · '+esc(usageText(mission.usage||mission.budgetUsage))+'</p><div class="mission-lanes">'+lanes+'</div>'+evidenceHtml+controls+'</article>';
 }
 async function loadMissions(){
  if(!sessionStorage.getItem('atlas-token')){missionList.innerHTML='<p class="empty">Unlock this tab to load missions.</p>';return}

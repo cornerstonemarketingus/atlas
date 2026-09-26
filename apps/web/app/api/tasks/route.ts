@@ -3,7 +3,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { conversationMessages, conversations, repositories, runEvents, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
-import { allowedRepositories, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
+import { allowedRepositories, defaultMergePolicy, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
 import { explainGitHubFailure } from "./github-diagnosis.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
 import {
@@ -73,13 +73,17 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
 
   let mergePolicy = "manual";
   if (task.mode === "coder") {
+    // A repository with no saved setting uses the deployment default. The
+    // owner chose autopilot, so unless ATLAS_DEFAULT_MERGE_POLICY says
+    // otherwise Atlas merges its own change once every CI check passes.
+    mergePolicy = defaultMergePolicy(process.env.ATLAS_DEFAULT_MERGE_POLICY);
     try {
       const [owner, name] = task.repository.split("/");
       const [row] = await getDb().select().from(repositories).where(and(eq(repositories.owner, owner), eq(repositories.name, name)));
       if (row) mergePolicy = row.mergePolicy;
     } catch {
-      // Falls back to the safe "manual" default — a settings-lookup failure
-      // should never accidentally widen how a PR gets merged.
+      // A settings-lookup failure keeps the deployment default rather than
+      // guessing: it never widens past what the operator configured.
     }
   }
 
@@ -93,7 +97,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
         return Response.json({ ...failure, message: `${failure.message} Nothing was started.` }, { status: 502 });
       }
       const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "managed", correlationId);
-      return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "managed", recorded }, { status: 202 });
+      return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "managed", recorded, mergePolicy }, { status: 202 });
     } catch {
       return Response.json({ ...explainGitHubFailure(503), message: "GitHub could not be reached, so nothing was started." }, { status: 502 });
     }
@@ -109,7 +113,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
     // the run id of — a real Actions dispatch of the same workflow. Custom-runner
     // deployments get no task history until they report runs of their own.
     const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "private", correlationId);
-    return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "private", recorded }, { status: 202 });
+    return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "private", recorded, mergePolicy }, { status: 202 });
   } catch {
     return Response.json({ message: "The autonomous task dispatcher is temporarily unavailable." }, { status: 502 });
   }

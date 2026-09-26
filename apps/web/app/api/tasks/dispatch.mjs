@@ -53,6 +53,21 @@ export function assessCoderObjective(objective) {
   return { ok: true };
 }
 
+const MERGE_POLICIES = new Set(["manual", "ci-gated", "none"]);
+
+/**
+ * The merge policy for a coder task whose repository has no saved setting.
+ * The owner chose autopilot, so the default is "ci-gated": Atlas merges its
+ * own pull request once every CI check on it passes, and holds it otherwise.
+ * ATLAS_DEFAULT_MERGE_POLICY can set "manual" (human review) or "none"; an
+ * unrecognized value falls back to "manual" rather than widening anything.
+ */
+export function defaultMergePolicy(value) {
+  if (value === undefined || value === null || String(value).trim() === "") return "ci-gated";
+  const policy = String(value).trim().toLowerCase();
+  return MERGE_POLICIES.has(policy) ? policy : "manual";
+}
+
 /**
  * coder tasks run in a separate workflow (atlas-coder.yml) with elevated
  * contents/pull-requests permissions; inspect and debug stay on the

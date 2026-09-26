@@ -1,4 +1,5 @@
 import { BudgetExceededError, BudgetLedger, normalizeBudget } from "./budget.mjs";
+import { AdaptiveBatchSize, classifyRateLimit } from "./provider-throttle.mjs";
 
 const CHILD_STATES = new Set([
   "pending",
@@ -101,6 +102,12 @@ export function normalizeMissionPlan(plan) {
  * tokens, tool calls and cost through `budget.record(...)`; elapsed time is
  * charged by the scheduler. All writing agents should name the repository or
  * worktree they mutate in `resourceLocks`, making conflicting children wait.
+ *
+ * Children run in batches of at most `maxConcurrency`. A child that ends on a
+ * provider rate limit is requeued rather than failed: the batch size halves,
+ * nothing new launches until the provider's reset time, and the batch grows
+ * back after clean completions (see provider-throttle.mjs). A child that keeps
+ * hitting the limit fails after `maxRateLimitRetries` requeues.
  */
 export class MissionScheduler {
   #plan;
@@ -122,14 +129,22 @@ export class MissionScheduler {
   #resolveDrain = null;
   #resumePromise = null;
   #pumping = false;
+  #batch;
+  #maxRateLimitRetries;
+  #throttledUntil = null;
+  #throttleTimer = null;
+  #consecutiveLimits = 0;
 
-  constructor({ plan, execute, maxConcurrency = 2, onStateChange = () => {}, clock = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout }) {
+  constructor({ plan, execute, maxConcurrency = 2, maxRateLimitRetries = 6, onStateChange = () => {}, clock = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.#plan = normalizeMissionPlan(plan);
     if (typeof execute !== "function") throw new Error("A child executor function is required.");
     if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1) throw new Error("maxConcurrency must be a positive integer.");
     if (typeof onStateChange !== "function") throw new Error("onStateChange must be a function.");
     this.#execute = execute;
     this.#maxConcurrency = maxConcurrency;
+    if (!Number.isInteger(maxRateLimitRetries) || maxRateLimitRetries < 0) throw new Error("maxRateLimitRetries must be a non-negative integer.");
+    this.#maxRateLimitRetries = maxRateLimitRetries;
+    this.#batch = new AdaptiveBatchSize({ max: maxConcurrency });
     this.#onStateChange = onStateChange;
     this.#clock = clock;
     this.#setTimer = setTimer;
@@ -138,6 +153,7 @@ export class MissionScheduler {
       ...child,
       state: "pending",
       attempts: 0,
+      rateLimits: 0,
       usage: { ...EMPTY_USAGE },
       startedAt: null,
       completedAt: null,
@@ -166,6 +182,7 @@ export class MissionScheduler {
       const child = scheduler.#children.get(saved.id);
       child.state = saved.state === "running" ? "interrupted" : saved.state;
       child.attempts = saved.attempts;
+      child.rateLimits = Number.isInteger(saved.rateLimits) ? saved.rateLimits : 0;
       child.usage = { ...EMPTY_USAGE, ...saved.usage };
       child.startedAt = saved.startedAt ?? null;
       child.completedAt = saved.completedAt ?? null;
@@ -179,6 +196,8 @@ export class MissionScheduler {
 
   get status() { return this.#status; }
   get maxConcurrency() { return this.#maxConcurrency; }
+  /** The batch size in force now: `maxConcurrency`, or less after a rate limit. */
+  get batchSize() { return this.#batch.current; }
   child(id) { return this.#children.has(id) ? publicChild(this.#children.get(id)) : null; }
   children() { return this.#plan.children.map(({ id }) => publicChild(this.#children.get(id))); }
 
@@ -229,6 +248,7 @@ export class MissionScheduler {
     if (this.#status !== "running") return this.snapshot();
     this.#status = "interrupted";
     this.#reason = String(reason);
+    this.#clearThrottle();
     for (const controller of this.#controllers.values()) {
       controller.abort(new MissionPausedError(this.#reason));
     }
@@ -241,6 +261,7 @@ export class MissionScheduler {
     if (TERMINAL_MISSION_STATES.has(this.#status)) return this.snapshot();
     this.#status = "cancelled";
     this.#reason = String(reason);
+    this.#clearThrottle();
     for (const child of this.#children.values()) {
       if (["pending", "interrupted"].includes(child.state)) {
         child.state = "cancelled";
@@ -259,6 +280,10 @@ export class MissionScheduler {
       schemaVersion: 1,
       plan: this.#plan,
       maxConcurrency: this.#maxConcurrency,
+      throttle: {
+        batchSize: this.#batch.current,
+        waitingUntil: this.#throttledUntil === null ? null : new Date(this.#throttledUntil).toISOString(),
+      },
       status: this.#status,
       reason: this.#reason,
       startedAt: this.#startedAt,
@@ -272,9 +297,9 @@ export class MissionScheduler {
     this.#pumping = true;
     try {
       this.#blockFailedDescendants();
-      if (this.#status === "running") {
+      if (this.#status === "running" && !this.#throttled()) {
         for (const child of this.#readyChildren()) {
-          if (this.#running.size >= this.#maxConcurrency) break;
+          if (this.#running.size >= this.#batch.current) break;
           if (!this.#locksAvailable(child)) continue;
           this.#launch(child);
         }
@@ -361,7 +386,9 @@ export class MissionScheduler {
       const result = await this.#execute({ child: publicChild(child), signal: controller.signal, budget, checkpoint });
       checkpoint();
       if (result?.usage) budget.record(result.usage);
-      if (result?.status === "failed") {
+      if (result?.status === "failed" && this.#requeueIfRateLimited(child, result)) {
+        // Requeued: the provider refused, the child did not fail.
+      } else if (result?.status === "failed") {
         child.state = "failed";
         child.error = { code: result.code ?? "CHILD_FAILED", message: String(result.summary ?? "Child agent failed.") };
       } else if (result?.status === "cancelled") {
@@ -370,6 +397,8 @@ export class MissionScheduler {
       } else {
         child.state = "completed";
         child.result = jsonValue(result ?? null, `Result for '${child.id}'`);
+        this.#consecutiveLimits = 0;
+        this.#batch.succeeded();
       }
     } catch (error) {
       if (this.#status === "interrupted" && controller.signal.aborted && !timedOut) {
@@ -378,6 +407,8 @@ export class MissionScheduler {
       } else if (this.#status === "cancelled" || (controller.signal.aborted && !timedOut)) {
         child.state = "cancelled";
         child.error = { code: "MISSION_CANCELLED", message: this.#reason ?? "Mission cancelled." };
+      } else if (!timedOut && this.#requeueIfRateLimited(child, error)) {
+        // Requeued: the provider refused, the child did not fail.
       } else {
         child.state = "failed";
         child.error = { code: error?.code ?? (timedOut ? "BUDGET_EXCEEDED" : "CHILD_ERROR"), message: timedOut ? "The child exceeded its elapsed-time budget." : String(error?.message ?? error) };
@@ -396,6 +427,52 @@ export class MissionScheduler {
       child.usage = budget.used;
       child.completedAt = new Date(this.#clock()).toISOString();
     }
+  }
+
+  /**
+   * Requeues a child whose failure was a provider rate limit, shrinks the
+   * batch, and holds new launches until the provider's reset time. Returns
+   * false when the failure is not a rate limit or retries are exhausted.
+   */
+  #requeueIfRateLimited(child, failure) {
+    const now = this.#clock();
+    const limit = classifyRateLimit(failure, { now, consecutive: this.#consecutiveLimits });
+    if (!limit.rateLimited) return false;
+    child.rateLimits += 1;
+    if (child.rateLimits > this.#maxRateLimitRetries) {
+      child.state = "failed";
+      child.error = { code: "RATE_LIMITED", message: `The provider kept rate limiting this child (${child.rateLimits} times); giving up.` };
+      return true;
+    }
+    this.#consecutiveLimits += 1;
+    this.#batch.rateLimited();
+    child.state = "pending";
+    child.error = { code: "RATE_LIMITED", message: "Waiting for the model provider's rate limit to reset.", retryAt: new Date(limit.retryAt).toISOString() };
+    this.#throttleUntil(limit.retryAt);
+    return true;
+  }
+
+  #throttled() {
+    return this.#throttledUntil !== null && this.#clock() < this.#throttledUntil;
+  }
+
+  /** Holds launches until `until`; a later reset extends the hold, an earlier one never shortens it. */
+  #throttleUntil(until) {
+    if (this.#throttledUntil !== null && this.#throttledUntil >= until) return;
+    this.#clearThrottle();
+    this.#throttledUntil = until;
+    this.#throttleTimer = this.#setTimer(() => {
+      this.#throttleTimer = null;
+      this.#throttledUntil = null;
+      this.#changed();
+      this.#pump();
+    }, Math.max(0, until - this.#clock()));
+  }
+
+  #clearThrottle() {
+    if (this.#throttleTimer !== null) this.#clearTimer(this.#throttleTimer);
+    this.#throttleTimer = null;
+    this.#throttledUntil = null;
   }
 
   #blockFailedDescendants() {
@@ -441,6 +518,7 @@ function publicChild(child) {
     metadata: child.metadata,
     state: child.state,
     attempts: child.attempts,
+    rateLimits: child.rateLimits,
     usage: child.usage,
     startedAt: child.startedAt,
     completedAt: child.completedAt,

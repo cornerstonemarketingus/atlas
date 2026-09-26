@@ -3,8 +3,8 @@ import { AtlasGate } from "../AtlasGate.js";
 import { BuildSection } from "./BuildSection.js";
 
 export const metadata: Metadata = {
-  title: "Build — Atlas",
-  description: "Describe a site, an app, or a change. Atlas reads the project, does the work, validates it, and opens a pull request.",
+  title: "Projects — Atlas",
+  description: "Pick a GitHub project and say what you want. Atlas makes the change or reports back, runs your tests, and opens a pull request.",
 };
 
 export default function BuildPage() {

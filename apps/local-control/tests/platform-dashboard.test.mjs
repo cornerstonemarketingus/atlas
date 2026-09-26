@@ -58,6 +58,29 @@ test("the dashboard page is served without data, and its data needs the local to
   assert.equal((await fetch(`${origin}/v1/platform/tasks`)).status, 401);
 });
 
+test("the command center page is CSP-safe: external script and style only, no inline code", async (t) => {
+  const { origin } = await harness(t);
+  const page = await fetch(`${origin}/platform`);
+  const html = await page.text();
+  const csp = page.headers.get("content-security-policy");
+  assert.match(csp, /script-src 'self'/u);
+  assert.match(csp, /style-src 'self'/u);
+  assert.doesNotMatch(html, /<script(?![^>]*\ssrc=)[^>]*>/u, "no inline scripts");
+  assert.doesNotMatch(html, /<style|\sstyle=|\son[a-z]+=/u, "no inline styles or handlers");
+  for (const id of ["composer", "tasks", "inbox", "family", "costs", "workers", "memory", "emergency-stop", "detail-blocked"]) {
+    assert.match(html, new RegExp(`id="${id}"`, "u"), `page has #${id}`);
+  }
+  const css = await fetch(`${origin}/platform.css`);
+  assert.equal(css.status, 200);
+  assert.match(css.headers.get("content-type"), /text\/css/u);
+  assert.match(await css.text(), /\.state-running/u);
+  const js = await fetch(`${origin}/platform.js`);
+  assert.match(js.headers.get("content-type"), /javascript/u);
+  const source = await js.text();
+  assert.match(source, /\/v1\/platform\/emergency-stop/u);
+  assert.doesNotMatch(source, /localStorage/u, "the token is kept per tab, not persisted");
+});
+
 test("the dashboard lists tasks and shows status, tool calls with decisions, artifacts and events", async (t) => {
   const { origin, platformStore } = await harness(t);
   const task = await seedTask(platformStore);

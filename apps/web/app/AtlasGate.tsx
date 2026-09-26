@@ -1,7 +1,7 @@
 "use client";
+import Link from "next/link";
 import { FormEvent, ReactNode, useEffect, useState } from "react";
-import { AtlasMark } from "./AtlasMark.js";
-import { MarketingNav } from "./MarketingNav.js";
+import { MarketingFooter, MarketingNav } from "./MarketingNav.js";
 
 /**
  * The sign-in gate that wraps every signed-in section.
@@ -41,28 +41,45 @@ export function AtlasGate({ children }: { readonly children: ReactNode }) {
 
   if (signedIn) return <>{children}</>;
 
-  return <main id="top"><MarketingNav /><div className="signin-shell"><section className="signin-story">
-    <div className="workspace-brand"><span><AtlasMark /></span>ATLAS</div>
+  return <main id="top" className="landing"><MarketingNav /><div className="signin-shell"><section className="signin-story">
     <div>
-      <p className="signin-kicker">AUTONOMOUS AI WORKSPACE</p>
-      <h1>Build it.<br />Run it.<br />Grow it.</h1>
-      <p>Atlas is an autonomous AI workspace that builds software, operates computers and turns successful work into persistent automations — and pauses for you before anything consequential.</p>
-      <p className="signin-demo-link"><a href="/product">See how Atlas works →</a></p>
+      <p className="signin-kicker">AI ASSISTANT FOR BUILDERS</p>
+      <h1>Ask it. Atlas does the work.</h1>
+      <p>Chat with Atlas like any AI assistant. When you ask it to build or fix something, it changes the code in your GitHub project and opens a pull request. When you ask it to do something online, it uses a browser on your computer and asks you before anything important.</p>
     </div>
-    <div className="signin-proof"><span>Create software</span><span>Operate your computer</span><span>Automate the work</span></div>
+    <div className="signin-proof"><span>Writes and tests code</span><span>Does browser tasks</span><span>Asks before important actions</span></div>
   </section><section className="signin-access"><div>
-    <p className="signin-kicker">START FREE</p>
-    <h2>Go beyond the coding assistant.</h2>
-    <p>Sign in with GitHub to chat with Atlas, connect the projects you want built and improved, and pair the computer you want it to operate. You approve every consequential action.</p>
+    <p className="signin-kicker">SIGN IN</p>
+    <h2>Start free</h2>
+    <p>Sign in with your GitHub account. You choose which projects Atlas can work on.</p>
     <div className="signin-actions">
-      <a href="/api/auth/github/start" className="signin-primary">Continue securely <span>→</span></a>
-      {!showAccessCode && <button type="button" onClick={() => setShowAccessCode(true)} className="signin-secondary">Owner access code</button>}
+      <a href="/api/auth/github/start" className="signin-primary">Continue with GitHub <span>→</span></a>
+      {!showAccessCode && <button type="button" onClick={() => setShowAccessCode(true)} className="signin-secondary">I have an owner access code</button>}
       {showAccessCode && <form onSubmit={(event) => void unlock(event)} className="access-code-form">
         <label htmlFor="operator-token">Owner access code</label>
-        <div><input id="operator-token" type="password" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="Paste your private code" autoComplete="off" /><button>Unlock</button></div>
+        <div><input id="operator-token" type="password" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="Paste your code" autoComplete="off" /><button>Unlock</button></div>
       </form>}
       {notice && <p className="notice" role="status">{notice}</p>}
     </div>
-    <small>By continuing, you agree to the <a href="/legal/terms">Terms</a> and <a href="/legal/privacy">Privacy Policy</a>. <a href="/pricing">View pricing</a>.</small>
-  </div></section></div></main>;
+    <small>By signing in you agree to the <a href="/legal/terms">Terms</a> and <a href="/legal/privacy">Privacy Policy</a>. See <a href="/pricing">pricing</a>.</small>
+  </div></section></div>
+  <section className="landing-section">
+    <h2>What Atlas does</h2>
+    <div className="landing-cards">
+      <article><b>Answers questions</b><p>Ask about your code, your plans, or anything else. Answers stay in your chat history across devices.</p></article>
+      <article><b>Writes code</b><p>Say what to build or fix. Atlas edits a copy of your repository, runs your tests, and opens a pull request with the change.</p></article>
+      <article><b>Does browser work</b><p>Research, filling in forms, updating listings. Atlas uses a separate browser on your Windows PC and stops to ask before it submits, sends, or buys anything.</p></article>
+    </div>
+  </section>
+  <section className="landing-section">
+    <h2>How it works</h2>
+    <ol className="landing-steps">
+      <li><b>Sign in with GitHub</b><span>Pick the repositories Atlas may work on.</span></li>
+      <li><b>Tell Atlas what you want</b><span>In chat, in plain words. For browser work, connect your PC once.</span></li>
+      <li><b>Review the result</b><span>A pull request for code, a report for questions, and a receipt for every browser task.</span></li>
+    </ol>
+    <p className="landing-more"><Link href="/demo">See a full example →</Link></p>
+  </section>
+  <MarketingFooter />
+  </main>;
 }

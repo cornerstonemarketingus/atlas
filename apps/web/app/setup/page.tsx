@@ -4,7 +4,7 @@ import { SetupCenter } from "./SetupCenter.js";
 
 export const metadata: Metadata = {
   title: "Connections — Atlas",
-  description: "Bring your private Atlas deployment online and verify each production dependency from one control center.",
+  description: "See what Atlas is connected to, what still needs setting up, and how far it may go on its own.",
 };
 
 export default function SetupPage() {
