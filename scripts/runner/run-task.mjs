@@ -275,9 +275,9 @@ if (metadata.mode === "inspect") {
   if (baseUrl) codeArgs.push("--base-url", baseUrl);
   if (verifyDir) codeArgs.push("--verify-dir", verifyDir);
   if (/^[0-5]$/.test(repairAttempts)) codeArgs.push("--max-repair-attempts", repairAttempts);
-  const fallbacks = codingRoutes.length > 1
-    ? codingRoutes.slice(1).map((route) => `${route.provider}:${route.model}:${PROVIDER_KEY_VARIABLES[route.provider] || ""}`)
-    : (process.env.ATLAS_CODER_FALLBACKS || "").split(",").map((item) => item.trim()).filter(Boolean);
+  const routeFallbacks = codingRoutes.slice(1).map((route) => `${route.provider}:${route.model}:${PROVIDER_KEY_VARIABLES[route.provider] || ""}`);
+  const envFallbacks = (process.env.ATLAS_CODER_FALLBACKS || "").split(",").map((item) => item.trim()).filter(Boolean);
+  const fallbacks = [...new Set([...routeFallbacks, ...envFallbacks])];
   for (const fallback of fallbacks) {
     if (!/^(?:anthropic|groq):[A-Za-z0-9._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY)$/.test(fallback)) {
       writeStatus("failed", "ATLAS_CODER_FALLBACKS contains an invalid route. Expected provider:model:API_KEY_ENV.");

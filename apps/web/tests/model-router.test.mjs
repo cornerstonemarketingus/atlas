@@ -31,7 +31,23 @@ test("reports malformed route configuration as unconfigured", () => {
   assert.match(routed.reason, /valid JSON/u);
 });
 
+test("rejects an invalid route format", () => {
+  const routed = resolveModelRoutes({ ATLAS_MODEL_ROUTES: JSON.stringify({ chat: ["openai"] }) });
+  assert.equal(routed.configured, false);
+  assert.match(routed.reason, /provider:model/u);
+});
+
+test("rejects provider routes with an invalid base URL", () => {
+  const routed = resolveModelRoutes({
+    ATLAS_MODEL_ROUTES: JSON.stringify({ chat: ["openai:gpt-5-mini"] }),
+    OPENAI_BASE_URL: "ftp://models.example/v1",
+  });
+  assert.equal(routed.configured, false);
+  assert.match(routed.reason, /HTTPS|http or https|valid URL/u);
+});
+
 test("tracks last served route label in memory", () => {
-  rememberServedRoute("chat", "groq:openai/gpt-oss-20b");
-  assert.equal(lastServedRoute("chat"), "groq:openai/gpt-oss-20b");
+  rememberServedRoute("user-123", "chat", "groq:openai/gpt-oss-20b");
+  assert.equal(lastServedRoute("user-123", "chat"), "groq:openai/gpt-oss-20b");
+  assert.equal(lastServedRoute("user-456", "chat"), null);
 });

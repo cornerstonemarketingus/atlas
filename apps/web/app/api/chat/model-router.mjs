@@ -89,7 +89,15 @@ function legacyChatRoute(environment) {
   };
 }
 
-/** @returns {{ configured: boolean, reason?: string, chatRoutes?: { provider: string, model: string, label: string, baseUrl: string, apiKey: string | null }[], routesTable?: { purpose: string, route: string, endpoint: string }[] }} */
+/**
+ * Resolves chat routes from ATLAS_MODEL_ROUTES when present.
+ *
+ * Backwards compatibility: if `ATLAS_MODEL_ROUTES.chat` is absent or empty,
+ * Atlas falls back to the existing ATLAS_CHAT_* endpoint resolution and exposes
+ * that single route as the chat route list.
+ *
+ * @returns {{ configured: boolean, reason?: string, chatRoutes?: { provider: string, model: string, label: string, baseUrl: string, apiKey: string | null }[], routesTable?: { purpose: string, route: string, endpoint: string }[] }}
+ */
 export function resolveModelRoutes(environment = process.env) {
   const parsed = parseModelRoutes(environment);
   if (!parsed.ok) return { configured: false, reason: parsed.reason, chatRoutes: [], routesTable: [] };
@@ -119,11 +127,13 @@ export function resolveModelRoutes(environment = process.env) {
   return { configured: true, chatRoutes, routesTable };
 }
 
-export function rememberServedRoute(purpose, routeLabel) {
+export function rememberServedRoute(scope, purpose, routeLabel) {
+  if (typeof scope !== "string" || !scope) return;
   if (typeof routeLabel !== "string" || !routeLabel) return;
-  LAST_SERVED.set(purpose, routeLabel);
+  LAST_SERVED.set(`${scope}:${purpose}`, routeLabel);
 }
 
-export function lastServedRoute(purpose) {
-  return LAST_SERVED.get(purpose) ?? null;
+export function lastServedRoute(scope, purpose) {
+  if (typeof scope !== "string" || !scope) return null;
+  return LAST_SERVED.get(`${scope}:${purpose}`) ?? null;
 }

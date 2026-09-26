@@ -130,11 +130,12 @@ test("falls back to the next route when the primary returns 429", async () => {
   ];
   const fetcher = async (url, init) => {
     const target = String(url);
-    if (target.startsWith("https://primary.test")) {
+    const parsed = new URL(target);
+    if (parsed.origin === "https://primary.test") {
       requests.push({ target, body: JSON.parse(init.body) });
       return new Response("rate limited", { status: 429 });
     }
-    if (target.startsWith("https://backup.test")) {
+    if (parsed.origin === "https://backup.test") {
       requests.push({ target, body: JSON.parse(init.body) });
       return sse([say("Recovered via fallback.")]);
     }

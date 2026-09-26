@@ -84,15 +84,21 @@ async function routedModelStep({ routes, turns, tools, stream, emit, toolChoice,
   let lastFailure = null;
   for (let index = 0; index < routes.length; index += 1) {
     const endpoint = routes[index];
+    const next = routes[index + 1];
     try {
       const result = await modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher });
       if (!result.ok && isRetryableStatus(result.status) && index < routes.length - 1) {
+        emit("route", { from: routeLabel(endpoint), to: routeLabel(next), reason: `status:${result.status}` });
         continue;
       }
       return { ...result, servedBy: routeLabel(endpoint) };
     } catch (error) {
       lastFailure = error;
-      if (index < routes.length - 1) continue;
+      if (index < routes.length - 1) {
+        const timedOut = error instanceof Error && error.name === "TimeoutError";
+        emit("route", { from: routeLabel(endpoint), to: routeLabel(next), reason: timedOut ? "timeout" : "transport" });
+        continue;
+      }
       throw error;
     }
   }

@@ -90,7 +90,7 @@ export async function POST(request: Request) {
 
   const outcome = await converse({ ...loop, stream: false, emit: () => {} });
   if ("error" in outcome) return Response.json({ message: outcome.error, conversationId }, { status: outcome.status });
-  rememberServedRoute("chat", outcome.answeredBy);
+  rememberServedRoute(account.userId, "chat", outcome.answeredBy);
   const reply = outcome.reply;
   if (!reply) return Response.json({ message: "The model endpoint returned an empty reply.", conversationId }, { status: 502 });
 
@@ -215,7 +215,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
         controller.close();
         return;
       }
-      rememberServedRoute("chat", outcome.answeredBy);
+      rememberServedRoute(userId, "chat", outcome.answeredBy);
       const reply = outcome.reply;
       if (!reply) {
         emit("error", { message: "The model endpoint returned an empty reply." });
@@ -251,6 +251,6 @@ export async function GET(request: Request) {
     configured: routing.configured,
     reason: routing.reason ?? null,
     routes: routing.routesTable ?? [],
-    lastServedModel: lastServedRoute("chat"),
+    lastServedModel: lastServedRoute(account.userId, "chat"),
   }, { headers: { "cache-control": "no-store" } });
 }
