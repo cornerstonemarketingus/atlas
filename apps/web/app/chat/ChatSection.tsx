@@ -3,6 +3,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { classifyIntent } from "./intent.mjs";
 import { MessageBody } from "./MessageBody.js";
+import { TaskActivity } from "./TaskActivity.js";
 import { createEventParser } from "../api/chat/stream.mjs";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
@@ -10,7 +11,7 @@ import { PROJECT_CHANGE_EVENT, PROJECT_STORAGE_KEY } from "../ProjectSwitcher.js
 import { ThreadRail, useThreads } from "../ThreadRail.js";
 
 type Message = { id: string; role: string; content: string; createdAt: string };
-type Task = { taskId: string; objective: string; mode: string; status?: string; repository?: string; branch?: string; run?: { url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
+type Task = { taskId: string; objective: string; mode: string; status?: string; repository?: string; branch?: string; run?: { id?: number; url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
 type Detail = { messages?: Message[]; tasks?: Task[] };
 
 const STARTERS = [
@@ -35,14 +36,6 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
 type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
 
-function taskStatusLabel(task: Task) {
-  const status = task.status ?? "dispatched";
-  if (["succeeded", "completed"].includes(status)) return "Task completed.";
-  if (["failed", "timed_out", "cancelled"].includes(status)) return `Task ${status.replaceAll("_", " ")}.`;
-  if (["running", "queued", "dispatched"].includes(status)) return "Atlas is working on this task.";
-  return "Task received.";
-}
-
 /**
  * Chat is the main Atlas workspace. Questions stay in the conversation;
  * clear project requests use the existing approved task dispatcher.
@@ -61,6 +54,9 @@ export function ChatSection() {
   const { threads, close } = useThreads(version);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [streaming, setStreaming] = useState<string | null>(null);
+  // What the model thought before answering: streamed live, then kept (not stored) beside the reply it led to.
+  const [thinking, setThinking] = useState("");
+  const [thoughts, setThoughts] = useState<Record<string, string>>({});
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -147,7 +143,7 @@ export function ChatSection() {
       } catch { /* Keep the last known conversation when offline. */ }
     };
     void refresh();
-    const timer = setInterval(() => { void refresh(); }, 12_000);
+    const timer = setInterval(() => { void refresh(); }, 5_000);
     return () => { active = false; clearInterval(timer); };
   }, [conversationId]);
 
@@ -200,15 +196,22 @@ export function ChatSection() {
       const decoder = new TextDecoder();
       const parser = createEventParser();
       let partial = "";
+      let thought = "";
+      setThinking("");
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
           const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message } | null;
           if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
+          else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
           else if (item.type === "error") setNotice(data?.message ?? "Atlas could not finish that reply.");
-          else if (item.type === "done" && data?.reply) setMessages((items) => [...items, data.reply!]);
+          else if (item.type === "done" && data?.reply) {
+            const reply = data.reply;
+            if (thought) setThoughts((items) => ({ ...items, [reply.id]: thought }));
+            setMessages((items) => [...items, reply]);
+          }
         }
       }
       setVersion((value) => value + 1);
@@ -217,6 +220,7 @@ export function ChatSection() {
     } finally {
       abortRef.current = null;
       setStreaming(null);
+      setThinking("");
       setSending(false);
     }
   }
@@ -297,8 +301,12 @@ export function ChatSection() {
       </div> : <div className="message-stream">
         {messages.map((item) => item.role === "user"
           ? <div className="user-message" key={item.id}><p>{item.content}</p></div>
-          : <div className="atlas-message" key={item.id}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><MessageBody text={item.content} /></div></div>)}
-        {streaming !== null && <div className="atlas-message" aria-live="polite"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>{streaming ? <MessageBody text={streaming} /> : <p className="thinking">Thinking…</p>}</div></div>}
+          : <div className="atlas-message" key={item.id}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>
+            {thoughts[item.id] && <details className="thinking-block"><summary>Thought process</summary><p>{thoughts[item.id]}</p></details>}
+            <MessageBody text={item.content} /></div></div>)}
+        {streaming !== null && <div className="atlas-message" aria-live="polite"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>
+          {thinking && <details className="thinking-block" open={!streaming}><summary>{streaming ? "Thought process" : "Thinking…"}</summary><p>{thinking}</p></details>}
+          {streaming ? <MessageBody text={streaming} /> : !thinking && <p className="thinking">Thinking…</p>}</div></div>}
         {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Starting…</p></div></div>}
         {suggestion && <div className="atlas-message suggestion-card"><div className="assistant-avatar"><AtlasMark /></div><div>
           <b>Atlas</b>
@@ -310,7 +318,7 @@ export function ChatSection() {
             <button type="button" className="secondary" onClick={() => void ask(suggestion.text)}>Just answer in chat</button>
           </div>
         </div></div>}
-        {tasks.map((task) => <div className="atlas-message task-update" key={task.taskId}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p>{taskStatusLabel(task)}</p><small>{task.mode === "coder" ? "I'll open a pull request when it's done." : "I'll post a report when it's done."}</small><div className="result-links">{task.pullRequest?.url && <a className="result-link" href={task.pullRequest.url} target="_blank" rel="noreferrer">Review the pull request ↗</a>}{task.run?.url && <a className="result-link" href={task.run.url} target="_blank" rel="noreferrer">Open task details ↗</a>}</div></div></div>)}
+        {tasks.map((task) => <TaskActivity key={task.taskId} task={task} />)}
       </div>}
       <div ref={endRef} />
     </div>

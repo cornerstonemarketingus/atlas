@@ -35,6 +35,7 @@ export function atlasSystemPrompt({ isOwner = false, repository = "" } = {}) {
     "You are Atlas: an AI software engineering agent and the product this person is using right now. When someone says \"you\", \"yourself\", \"this app\" or \"Atlas\", they mean you and your own codebase, not a hypothetical app.",
     ARCHITECTURE,
     "You can act, not just advise. Call the start_atlas_task tool to do real work. Choose the mode yourself from what the person asked for; never ask them to pick a mode, a section, or a tool. Modes: \"coder\" edits code in a GitHub repository, verifies it, and opens a pull request that merges itself once CI passes; \"inspect\" reads a repository and reports; \"debug\" runs a repository's checks and finds what fails; \"computer\" does browser or desktop work on the person's paired computer (visit a site, fill in and submit a form, collect information from web pages), pausing for their approval before anything consequential.",
+    "If the person asks you to fix something, change code, or open a pull request, the mode is \"coder\" (it finds the problem, fixes it, runs the tests and opens the pull request in one run); \"inspect\" and \"debug\" only report and never change anything.",
     "Capabilities you do not have yet, so say so plainly instead of pretending: creating a brand-new repository from scratch (offer to build it inside an existing connected repository instead), running something on a schedule such as \"every Monday\" (offer to do it once now), and producing downloadable spreadsheets or documents (a computer task can gather the information and report it in chat).",
     `To work on yourself, call start_atlas_task with repository "${SELF_REPOSITORY}". ${selfWork}${selected}`,
     "When the person asks you to build, fix, improve, audit or work on something, start the task instead of writing a generic plan for them to carry out. Write the objective as one concrete, checkable change grounded in the parts of the codebase above (name the app, module or file area). If the request is broad, like \"work on yourself\", pick the single most valuable concrete change you can justify, say which one and why in one sentence, and start it. Split large requests into one task per concrete change.",
@@ -113,8 +114,20 @@ export function taskRequestsFrom(payload, options = {}) {
   return taskRequestsFromCalls(payload?.choices?.[0]?.message?.tool_calls, options);
 }
 
+/**
+ * A person who asks for a fix or a pull request wants code changed. When the
+ * model nonetheless picks a read-only mode for that request, it is upgraded
+ * to coder: the model choosing the capability must not mean the person gets
+ * less than they asked for.
+ */
+const ASKS_FOR_CHANGE = /\b(fix|fixes|fixing|implement|open (?:a |the )?(?:pull request|pr)|make (?:the|that|this) change|patch it)\b/iu;
+
+export function upgradeForRequest(mode, userMessage) {
+  return (mode === "inspect" || mode === "debug") && ASKS_FOR_CHANGE.test(String(userMessage ?? "")) ? "coder" : mode;
+}
+
 /** The same, for tool calls already assembled from a streamed reply. */
-export function taskRequestsFromCalls(calls, { defaultRepository = "" } = {}) {
+export function taskRequestsFromCalls(calls, { defaultRepository = "", userMessage = "" } = {}) {
   const requests = [];
   const errors = [];
   if (!Array.isArray(calls)) return { requests, errors };
@@ -130,7 +143,8 @@ export function taskRequestsFromCalls(calls, { defaultRepository = "" } = {}) {
       errors.push("A task request had unreadable arguments.");
       continue;
     }
-    const mode = TASK_MODES.includes(args?.mode) ? args.mode : null;
+    const chosen = TASK_MODES.includes(args?.mode) ? args.mode : null;
+    const mode = chosen ? upgradeForRequest(chosen, userMessage) : null;
     const objective = typeof args?.objective === "string" ? args.objective.trim().slice(0, mode === "computer" ? 2000 : 4000) : "";
     if (!mode || !objective) {
       errors.push("A task request was missing its mode or objective.");

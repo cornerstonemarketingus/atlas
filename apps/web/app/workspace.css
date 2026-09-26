@@ -147,3 +147,23 @@ html[data-atlas-theme="light"] .md-body code{background:#0000000d}
 html[data-atlas-theme="light"] .suggestion-card>div:last-child{background:#fff;border-color:#d7d4cb}
 @media(prefers-color-scheme:light){html[data-atlas-theme="system"] .md-body{color:#2b312c}html[data-atlas-theme="system"] .md-body .md-code{background:#f3f1ea;border-color:#d7d4cb}html[data-atlas-theme="system"] .suggestion-card>div:last-child{background:#fff;border-color:#d7d4cb}}
 .task-now{color:var(--ws-accent,#c8f169);font-size:13px;margin:6px 0 0}
+
+/* Live run activity and thinking, shown inside the conversation. */
+.task-activity .activity-head{display:flex;align-items:center;gap:9px;width:100%;margin:4px 0 2px;padding:0;border:0;background:none;color:var(--ws-text);font:inherit;text-align:left;cursor:pointer}
+.activity-dot{width:8px;height:8px;border-radius:50%;background:#556059;flex:none}
+.activity-dot.live{background:var(--ws-accent);box-shadow:0 0 0 4px #b9f45c22;animation:activity-pulse 1.4s ease-in-out infinite}
+@keyframes activity-pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.activity-dot.live{animation:none}}
+.activity-toggle{margin-left:auto;color:var(--ws-muted)}
+.activity-objective{margin:2px 0 8px;color:var(--ws-muted);font-size:13px}
+.activity-steps{list-style:none;margin:0 0 8px;padding:10px 12px;border:1px solid var(--ws-line);border-radius:10px;background:#0f1210;display:grid;gap:6px;font-size:13px}
+.activity-steps li{display:grid;grid-template-columns:18px 1fr auto;gap:8px;align-items:baseline;color:#c4ccc6}
+.activity-steps li small{color:#69726c;font:550 10px var(--font-geist-mono)}
+.activity-steps li.done span{color:var(--ws-accent)}
+.activity-steps li.running{color:var(--ws-text);font-weight:600}.activity-steps li.running span{color:var(--ws-accent)}
+.activity-steps li.pending{color:#69726c}
+.activity-steps li.failed{color:#f0a8a0}.activity-steps li.failed span{color:#f0a8a0}
+.activity-now{margin:0 0 6px;color:var(--ws-muted);font-size:12px}
+.thinking-block{margin:4px 0 10px;border-left:2px solid var(--ws-line);padding:2px 0 2px 12px;color:var(--ws-muted);font-size:13px}
+.thinking-block summary{cursor:pointer;color:#8b958e;font-size:12px}
+.thinking-block p{margin:6px 0 0;white-space:pre-wrap;line-height:1.5;max-height:260px;overflow:auto}
