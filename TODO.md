@@ -579,10 +579,11 @@ What still stops Atlas from doing a job end to end, with who owns each item.
 
 ### Claude (local daemon and agent runtime)
 
-- [ ] Prompt-injection provenance (SEC-11, P7-4): tag untrusted spans
-      (web pages, repository files, tool output, MCP results) at the point
-      they enter a model turn, and add a regression corpus of injection
-      fixtures that must never produce a tool call.
+- [x] Prompt-injection provenance (SEC-11, P7-4): tool output, memory and
+      earlier-step reports enter daemon model turns as a labelled
+      `<data source>` block they cannot close; instruction-shaped text is
+      flagged; `tests/fixtures/injection-corpus.json` guards regressions.
+      Still open: the Windows companion and hosted chat.
 - [ ] `AuthorizedToolExecutor` as the only execution path for daemon tools,
       with durable budgets and idempotency keys.
 - [ ] Connect the platform capability router so tasks, not only chat turns,
