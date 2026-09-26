@@ -20,6 +20,24 @@ interface ExecutionContext {
   passThroughOnException(): void;
 }
 
+type HTMLRewriterElement = {
+  getAttribute(name: string): string | null;
+  setAttribute(name: string, value: string): void;
+};
+
+type HTMLRewriterInstance = {
+  on(
+    selector: string,
+    handlers: { element(element: HTMLRewriterElement): void },
+  ): { transform(response: Response): Response };
+};
+
+function responseWithoutContentLength(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 // Image security config. SVG sources with .svg extension auto-skip the
 // optimization endpoint on the client side (served directly, no proxy).
 // To route SVGs through the optimizer (with security headers), set
@@ -50,13 +68,23 @@ const worker = {
 
     if (!contentType.includes("text/html")) return withSecurityHeaders(response);
 
+    const HTMLRewriterCtor = (globalThis as {
+      HTMLRewriter?: new () => HTMLRewriterInstance;
+    }).HTMLRewriter;
+    if (HTMLRewriterCtor) {
+      const streamed = new HTMLRewriterCtor().on("script", {
+        element(element) {
+          if (!element.getAttribute("nonce")) element.setAttribute("nonce", scriptNonce);
+        },
+      }).transform(responseWithoutContentLength(response));
+      return withSecurityHeaders(streamed, { scriptNonce });
+    }
+
     const html = await response.text();
     const scriptNonceHtml = html.replace(/<script(?=[\s>])(?![^>]*\bnonce=)/giu, `<script nonce="${scriptNonce}"`);
-    return withSecurityHeaders(new Response(scriptNonceHtml, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    }), { scriptNonce });
+    const headers = new Headers(response.headers);
+    headers.delete("content-length");
+    return withSecurityHeaders(new Response(scriptNonceHtml, { status: response.status, statusText: response.statusText, headers }), { scriptNonce });
   },
 };
 
