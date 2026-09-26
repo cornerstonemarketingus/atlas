@@ -241,7 +241,22 @@ function buildToolRegistry() {
   const registry = new ToolRegistry({
     policy: createLegacyPolicyBridge({
       policyForCapability: (capability) => store.policy(capability),
-      audit: (event) => store.audit("policy.decision", `${event.tool} ${event.effect}: ${event.reasons.join("; ")}`),
+      audit: (event) => {
+        store.audit("policy.decision", `${event.tool} ${event.effect}: ${event.reasons.join("; ")}`);
+        if (event.taskId && event.toolCallId && event.decision) {
+          try {
+            platformStore.transaction(() => {
+              platformStore.recordPolicyDecision(event.decision, {
+                toolCallId: event.toolCallId,
+                correlationId: event.correlationId,
+              });
+              platformStore.updateToolCall(event.tenantId, event.toolCallId, { policyDecisionId: event.decision.id });
+            });
+          } catch (error) {
+            store.audit("policy.persistence_failed", `${event.tool}: ${error.code ?? "POLICY_AUDIT_FAILED"}`);
+          }
+        }
+      },
     }),
     // Secrets resolve by reference, from the OS-backed credential vault first
     // and the process environment only as a fallback for existing setups

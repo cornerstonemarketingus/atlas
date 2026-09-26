@@ -38,11 +38,14 @@ export function createLegacyPolicyBridge({ policyForCapability, audit = () => {}
       userId,
       agentId: record.agentId,
       taskId: record.taskId,
+      toolCallId: typeof context.toolCallId === "string" ? context.toolCallId : null,
+      correlationId: typeof context.correlationId === "string" ? context.correlationId : null,
       tool: record.tool,
       effect: record.effect,
       reasons: record.reasons,
       policyVersion: record.policyVersion,
       decidedAt: record.decidedAt,
+      decision: record,
     });
     if (record.effect === "deny") return "deny";
     if (record.effect === "require_approval") return "ask";

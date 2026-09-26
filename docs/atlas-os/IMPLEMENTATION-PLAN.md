@@ -48,9 +48,10 @@ observable.
 1.3 **One policy path.** The live `ToolRegistry` now uses
   `PolicyEngine` through `platform/legacy-policy-bridge.mjs`; existing
   operator allow/ask/deny preferences and digest-bound approvals are
-  preserved. Remaining: move handlers and all conversation/team execution
-  through `AuthorizedToolExecutor` so durable budget, idempotency, approval,
-  and event records share one dispatcher.
+  preserved. Team tool calls link the durable policy decision to their
+  platform tool-call row. Remaining: move handlers and all conversation/team
+  execution through `AuthorizedToolExecutor` so durable budget, idempotency,
+  approval, and event records share one dispatcher.
 1.4 ~~Model router for conversation turns~~ — done; extend to coding and
     vision tasks and persist the model on each platform tool call.
 

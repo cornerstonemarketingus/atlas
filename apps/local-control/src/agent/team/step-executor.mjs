@@ -152,7 +152,13 @@ async function runTool({ call, allowedTools, toolRegistry, approvals, platformSt
       sessionId: meta.rootTaskId,
       signal,
       approvals,
-      context: { sessionId: meta.rootTaskId, agentId: agent.id, taskId: meta.platformTaskId },
+      context: {
+        sessionId: meta.rootTaskId,
+        agentId: agent.id,
+        taskId: meta.platformTaskId,
+        toolCallId: recorded?.id ?? null,
+        correlationId: platformStore?.getTask(TENANT, meta.platformTaskId)?.correlationId ?? null,
+      },
     });
     outcome = await invoke();
     if (outcome.status === "approval-required" && approvals?.request) {

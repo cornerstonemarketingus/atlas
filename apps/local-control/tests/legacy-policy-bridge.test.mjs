@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { createLegacyPolicyBridge } from "../src/platform/legacy-policy-bridge.mjs";
 import { ToolRegistry } from "../src/agent/tool-registry.mjs";
+import { PlatformTaskStore } from "../src/platform/task-store.mjs";
 
 function setup(decision) {
   const events = [];
@@ -68,4 +72,31 @@ test("live ToolRegistry invocations use the bridge while retaining digest approv
   assert.equal(allowed.status, "completed");
   assert.equal(executed, 1);
   assert.equal(events.at(-1).effect, "allow");
+});
+
+test("team tool policy decisions attach to the durable platform tool-call row", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-policy-bridge-"));
+  const store = new PlatformTaskStore(join(directory, "platform.sqlite"));
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  const task = store.createTask({ tenantId: "local", userId: "owner", objective: "Read a file.", successCriteria: ["The content is reported."], budget: { toolCalls: 2 } });
+  for (const status of ["authorized", "queued", "running"]) store.transitionTask("local", task.id, status, { actor: "test" });
+  const call = store.recordToolCall({ tenantId: "local", taskId: task.id, userId: "owner", agentId: "agent-reader", tool: "demo.read", input: {}, status: "requested", idempotencyKey: "test-read" });
+  const registry = new ToolRegistry({
+    policy: createLegacyPolicyBridge({
+      policyForCapability: () => ({ decision: "allow" }),
+      audit: (event) => store.transaction(() => {
+        store.recordPolicyDecision(event.decision, { toolCallId: event.toolCallId, correlationId: event.correlationId });
+        store.updateToolCall(event.tenantId, event.toolCallId, { policyDecisionId: event.decision.id });
+      }),
+    }),
+  });
+  registry.register({ name: "demo.read", description: "Read safely.", capability: "demo.read", risk: "low", timeoutMs: 1000, maxOutputCharacters: 100, requiresApproval: false, inputSchema: { type: "object", properties: {} }, async execute() { return "safe"; } });
+  const result = await registry.invoke({ name: "demo.read", rawArguments: "{}", sessionId: "mission:1", context: { taskId: task.id, agentId: "agent-reader", toolCallId: call.id, correlationId: task.correlationId } });
+  assert.equal(result.status, "completed");
+  const persisted = store.getToolCall("local", call.id);
+  assert.ok(persisted.policyDecisionId);
+  const decision = store.getPolicyDecision("local", persisted.policyDecisionId);
+  assert.equal(decision.effect, "allow");
+  assert.equal(decision.taskId, task.id);
+  assert.equal(decision.agentId, "agent-reader");
 });
