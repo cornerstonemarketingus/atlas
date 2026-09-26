@@ -13,6 +13,7 @@ import { capabilitiesFor } from "../src/agent/team/permissions.mjs";
 import { AgentFamilyRegistry, TaskDelegation, seedFamilies } from "../src/platform/family/index.mjs";
 import { PlatformTaskStore } from "../src/platform/task-store.mjs";
 import { LocalTaskStore } from "../src/store.mjs";
+import { ScopedMemoryStore } from "../src/platform/memory/memory-store.mjs";
 
 /**
  * A scripted model: it answers by what the request is (planning, a step,
@@ -44,7 +45,7 @@ function scriptedModel({ plan, verdict = () => true, onStep = null }) {
   };
 }
 
-async function harness(t, model) {
+async function harness(t, model, { memory = null } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "atlas-team-"));
   const store = new LocalTaskStore(join(dir, "atlas.sqlite"));
   const platformStore = new PlatformTaskStore(join(dir, "platform.sqlite"));
@@ -57,7 +58,7 @@ async function harness(t, model) {
   toolRegistry.register({ name: "communications.send", description: "Send an email.", capability: "communications.send", risk: "high", timeoutMs: 1000, maxOutputCharacters: 200, requiresApproval: false, inputSchema: { type: "object", properties: {} }, async execute() { throw new Error("must never run"); } });
   let missionService;
   const step = createAgentStepExecutor({
-    family, delegation, toolRegistry, client: model, platformStore, approvals: null,
+    family, delegation, toolRegistry, client: model, platformStore, approvals: null, memory,
     resultsOf: (missionId, ids) => (missionService.get(missionId)?.children ?? []).filter((c) => ids.includes(c.id)).map((c) => ({ title: c.metadata.stepTitle, summary: c.result?.handoff?.report ?? "" })),
   });
   missionService = new MissionService({ store, execute: (input) => step(input) });
@@ -183,4 +184,40 @@ test("without a model, starting a mission explains what to configure", async (t)
   const noModel = createTeamService({ family: null, delegation: null, missionService: null, platformStore: null, toolRegistry: null, client: null, model: "m", workspace: "/tmp" });
   await assert.rejects(noModel.start({ goal: "Do something useful today." }), (e) => e.blocked === "BLOCKED_BY_CAPABILITY" && /ATLAS_MODEL_ENDPOINT/u.test(e.unblock));
   await assert.rejects(team.start({ goal: "hi" }), (e) => e.code === "INVALID_GOAL");
+});
+
+test("verified work is remembered by the agent's family and recalled on the next mission, with provenance", async (t) => {
+  const memory = new ScopedMemoryStore(":memory:");
+  t.after(() => memory.close());
+  const plan = { ...twoStepPlan, steps: [twoStepPlan.steps[0]] };
+  const model = scriptedModel({ plan });
+  const { team, family, until } = await harness(t, model, { memory });
+  const first = await team.start({ goal: "Find the published value for the launch page." });
+  await until(first.mission.id, ["completed", "failed"]);
+  const researcher = family.listAgents("local").find((a) => a.name === "Market Research Agent");
+  const remembered = memory.retrieve("local", { agentId: researcher.id, family: researcher.family }, { query: "published value" });
+  assert.equal(remembered.length, 1);
+  assert.equal(remembered[0].scope, "family");
+  assert.equal(remembered[0].provenance.source, "mission_step");
+  assert.ok(remembered[0].provenance.sourceRefs.includes(first.mission.id));
+  // Another family cannot read it; the owner can.
+  const engineer = family.listAgents("local").find((a) => a.name === "Backend Agent");
+  assert.equal(memory.retrieve("local", { agentId: engineer.id, family: engineer.family }, { query: "published value" }).length, 0);
+  assert.equal(memory.retrieve("local", { userId: "local-owner" }, { query: "published value" }).length, 1);
+
+  const second = await team.start({ goal: "Find the published value again for the pricing page." });
+  await until(second.mission.id, ["completed", "failed"]);
+  assert.ok(model.seen.some((s) => s.last.includes(`<data source="family memory">`) && s.last.includes(remembered[0].id)), "the second run recalls the first as data");
+  const detail = team.detail(second.mission.id);
+  assert.equal(detail.steps[0].state, "completed");
+});
+
+test("unverified work is not written to memory", async (t) => {
+  const memory = new ScopedMemoryStore(":memory:");
+  t.after(() => memory.close());
+  const model = scriptedModel({ plan: { ...twoStepPlan, steps: [twoStepPlan.steps[0]] }, verdict: () => false });
+  const { team, until } = await harness(t, model, { memory });
+  const started = await team.start({ goal: "Find the published value for the launch page." });
+  await until(started.mission.id, ["failed"]);
+  assert.equal(memory.retrieve("local", { userId: "local-owner" }, {}).length, 0);
 });

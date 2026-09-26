@@ -26,6 +26,8 @@ import { createRoutedClient } from "./agent/models/routed-client.mjs";
 import { createTeamService } from "./agent/team/team-service.mjs";
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
+import { ScopedMemoryStore } from "./platform/memory/memory-store.mjs";
+import { connectMcpServers, parseMcpServers } from "./platform/mcp/daemon-bridge.mjs";
 import { registerRepositoryTools } from "./agent/tools/repository-tools.mjs";
 import { registerRepositoryWriteTools } from "./agent/tools/repository-write-tools.mjs";
 import { registerFilesystemTools } from "./agent/tools/filesystem-tools.mjs";
@@ -85,6 +87,30 @@ const toolApprovals = {
   request: ({ digest, capability, summary, sessionId }) =>
     store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
 };
+// Scoped, provenance-carrying memory: agents recall their family's verified
+// work and the owner can search, inspect and delete it under Knowledge.
+const memory = new ScopedMemoryStore(join(dataDirectory, "memory.sqlite"));
+memory.expire();
+setInterval(() => { try { memory.expire(); } catch { /* retried next hour */ } }, 60 * 60 * 1000).unref();
+// MCP servers the owner configured. Their tools join the same registry, so
+// they are denied until the owner allows the server's `mcp.<id>` capability.
+let mcpReport = [];
+try {
+  const servers = parseMcpServers(process.env.ATLAS_MCP_SERVERS);
+  if (servers.length) {
+    connectMcpServers({
+      registry: toolRegistry,
+      servers,
+      audit: (event) => store.audit(event.type ?? "mcp", `${event.serverId}${event.tool ? `/${event.tool}` : ""} ${event.outcome ?? ""}${event.reason ? ` (${event.reason})` : ""}`.trim()),
+    }).then(({ report }) => {
+      mcpReport = report;
+      for (const entry of report) console.log(`MCP server ${entry.id}: ${entry.status}${entry.tools ? ` (${entry.tools.length} tools)` : entry.message ? ` — ${entry.message}` : ""}`);
+    }, (error) => { mcpReport = [{ id: "*", status: "failed", message: error.message }]; });
+  }
+} catch (error) {
+  mcpReport = [{ id: "*", status: "failed", message: error.message }];
+  console.error(error.message);
+}
 const runtime = new AgentRuntime({
   sessions,
   executors: buildExecutors(),
@@ -106,6 +132,7 @@ const teamStep = createAgentStepExecutor({
   client: modelClient,
   platformStore,
   approvals: toolApprovals,
+  memory,
   resultsOf: (missionId, ids) => (missionService.get(missionId)?.children ?? [])
     .filter((c) => ids.includes(c.id))
     .map((c) => ({ title: c.metadata?.stepTitle ?? c.id, summary: c.result?.handoff?.report ?? c.result?.summary ?? "" })),
@@ -135,6 +162,8 @@ const server = createLocalControlServer({
   innovation,
   platformStream,
   team,
+  memory,
+  connections: () => mcpReport,
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
