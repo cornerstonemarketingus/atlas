@@ -23,7 +23,8 @@ function fixtureRepository({ broken = true, todo = false } = {}) {
   const repository = join(root, "repo");
   mkdirSync(join(repository, "src"), { recursive: true });
   mkdirSync(join(repository, "tests"), { recursive: true });
-  writeFileSync(join(repository, "package.json"), JSON.stringify({ name: "fixture", type: "module", scripts: { test: "node --test tests/*.test.mjs" } }));
+  // No npm script: checks are detected as `node --test`, which runs the same on Windows (npm there is a .cmd shim the shell-free runner will not start).
+  writeFileSync(join(repository, "package.json"), JSON.stringify({ name: "fixture", type: "module" }));
   writeFileSync(join(repository, "src", "math.mjs"), `${todo ? "// TODO: support adding more than two numbers at once\n" : ""}export function add(a, b) { return a ${broken ? "-" : "+"} b; }\n`);
   writeFileSync(join(repository, "tests", "math.test.mjs"), "import assert from 'node:assert/strict';\nimport test from 'node:test';\nimport { add } from '../src/math.mjs';\ntest('adds', () => assert.equal(add(2, 3), 5));\n");
   sh(repository, "init", "-q", "-b", "main");
@@ -34,7 +35,7 @@ function fixtureRepository({ broken = true, todo = false } = {}) {
 
 const runCheck = async (argv, cwd) => {
   const [command, ...args] = argv;
-  const result = await runCommand(command === "npm" ? "npm" : command, args, { cwd, timeoutMs: 60_000, env: safeEnvironment() });
+  const result = await runCommand(command === "node" ? process.execPath : command, args, { cwd, timeoutMs: 60_000, env: safeEnvironment() });
   return { exitCode: result.status ?? (result.ok ? 0 : 1), stdout: result.stdout, stderr: result.stderr, timedOut: result.timedOut };
 };
 

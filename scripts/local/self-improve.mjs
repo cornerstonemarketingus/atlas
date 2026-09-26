@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,8 +96,21 @@ async function builder({ worktree, objective, verifyDirectory: verifyDir }) {
   return { ok: !run.error && run.status === 0, summary: `coder exited ${run.status ?? "abnormally"}; audit ${auditLog}` };
 }
 
+/**
+ * The shell-free runner cannot start npm's .cmd shim on Windows, so `node`
+ * and `npm` run through this Node binary and npm's own CLI script instead.
+ */
+function resolveCheck([command, ...args]) {
+  if (command === "node") return [process.execPath, args];
+  if (command === "npm" && process.platform === "win32") {
+    const npmCli = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+    if (existsSync(npmCli)) return [process.execPath, [npmCli, ...args]];
+  }
+  return [command, args];
+}
+
 async function runCheck(argv, cwd) {
-  const [command, ...args] = argv;
+  const [command, args] = resolveCheck(argv);
   const result = await runCommand(command, args, { cwd, timeoutMs: 900_000, maxBytes: 2_000_000, env: safeEnvironment() });
   return { exitCode: result.status ?? (result.ok ? 0 : 1), stdout: result.stdout, stderr: result.stderr, timedOut: result.timedOut };
 }
