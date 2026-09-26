@@ -188,7 +188,7 @@ export class AgentSessionStore {
       .prepare(
         `SELECT id, session_id AS sessionId, role, text, attachments_json AS attachmentsJson, state,
                 created_at AS createdAt, started_at AS startedAt, completed_at AS completedAt
-           FROM agent_turns WHERE session_id = ? ORDER BY created_at, id LIMIT ?`,
+           FROM agent_turns WHERE session_id = ? ORDER BY created_at, rowid LIMIT ?`,
       )
       .all(sessionId, limit)
       .map((row) => ({ ...row, attachments: JSON.parse(row.attachmentsJson), attachmentsJson: undefined }));
@@ -200,7 +200,9 @@ export class AgentSessionStore {
       .prepare(
         `SELECT id, session_id AS sessionId, role, text, attachments_json AS attachmentsJson, state, created_at AS createdAt
            FROM agent_turns WHERE session_id = ? AND state = 'pending' AND role = 'user'
-           ORDER BY created_at, id LIMIT 1`,
+           -- Turns sent in the same millisecond share created_at; rowid keeps
+           -- them in the order they were submitted (ids are random).
+           ORDER BY created_at, rowid LIMIT 1`,
       )
       .get(sessionId);
     return row ? { ...row, attachments: JSON.parse(row.attachmentsJson), attachmentsJson: undefined } : null;
