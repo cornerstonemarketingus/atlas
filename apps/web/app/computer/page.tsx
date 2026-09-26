@@ -5,8 +5,8 @@ import { AutomationSection } from "../automation/AutomationSection.js";
 // Kept as an alias of /automation: the Windows companion's setup instructions,
 // the marketing navigation, and the owner sign-in redirect all point here.
 export const metadata: Metadata = {
-  title: "Computer operator — Atlas",
-  description: "Give Atlas a browser mission. It researches and prepares autonomously, then pauses before consequential actions.",
+  title: "Tasks — Atlas",
+  description: "Browser tasks Atlas does on your computer, with approval before anything important.",
 };
 
 export default function ComputerPage() {

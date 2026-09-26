@@ -11,61 +11,52 @@ import { ParallelMissionPreview } from "./ParallelMissionPreview.js";
  * Anything not built yet is written as not built yet.
  */
 export const metadata: Metadata = {
-  title: "Atlas — Build the product. Operate the work.",
-  description: "Describe an outcome. Atlas opens a reviewable pull request, or tells you plainly that it did not — and pauses before any consequential computer action.",
+  title: "Product — Atlas",
+  description: "Atlas answers questions, changes code in your GitHub projects through pull requests, and does browser tasks on your computer, asking before anything important.",
 };
 
 const capabilities = [
-  ["Describe the outcome", "Say what you want in plain language. Atlas turns it into a bounded job against a real repository and branch you choose."],
-  ["Engineer against the real codebase", "Atlas reads the project, edits on its own branch, runs the repository's builds and tests, and opens a pull request you review before anything merges."],
-  ["Operate the browser", "Research, fill forms, navigate portals, and complete repeatable browser work on a Windows computer you pair — or a hosted browser on paid plans."],
-  ["Keep the thread", "Conversations, the jobs started from them, and their results persist across sessions and devices instead of vanishing with the tab."],
-  ["Run on your own model", "Point Atlas at any OpenAI-compatible server — Ollama, llama.cpp, vLLM, LM Studio — or a hosted one. The provider is configuration, not architecture."],
-  ["Stop before it costs you", "Sends, submissions, purchases, uploads, publishing, and account changes pause for a one-time approval bound to that exact action."],
+  ["Chat", "Ask anything. Conversations are saved and available on every device you sign in from."],
+  ["Code changes", "Ask for a fix or a feature. Atlas edits a branch of your repository, runs your tests, and opens a pull request."],
+  ["Project reviews", "Ask Atlas to look through a project and report what to improve, or to find why a test is failing."],
+  ["Browser tasks", "Research, forms, listings and portals, done in a separate browser profile on your Windows PC."],
+  ["Your choice of model", "Use a hosted model or one running on your own machine (Ollama, LM Studio, vLLM and others)."],
+  ["Approvals", "Atlas stops and asks before it sends, submits, buys, publishes, uploads, or changes an account."],
 ];
 
 export default function ProductPage() {
   return <main>
     <MarketingNav />
     <section className="marketing-hero">
-      <p className="eyebrow"><span>ATLAS</span> An operator that builds software and works a browser</p>
-      <h1>Build the product.<br /><em>Operate the work.</em></h1>
-      <p>Describe the outcome once. Atlas works against your real repository on its own branch, runs the project&rsquo;s own checks, and opens a pull request for you to review — then carries the browser work around the launch, pausing before anything with a consequence. You keep the approvals, the credentials, and the receipts.</p>
-      <div className="hero-actions"><Link href="/demo">Walk through a mission</Link><Link href="/api/auth/github/start" className="quiet">Start building</Link></div>
+      <p className="eyebrow"><span>PRODUCT</span> What Atlas does</p>
+      <h1>One assistant for code<br /><em>and browser work.</em></h1>
+      <p>Atlas is a chat assistant that can also do the work you ask for. It changes code in your GitHub projects through pull requests, and it handles browser tasks on your computer. It shows you what it did, and asks before anything important.</p>
+      <div className="hero-actions"><Link href="/">Start free</Link><Link href="/demo" className="quiet">See how it works</Link></div>
     </section>
-
-    <section className="category-section">
-      <p className="eyebrow"><span>ONE SYSTEM</span> Beyond the point solutions</p>
-      <div>
-        <article><b>It does not stop at the first screen.</b><p>Atlas works in the repository you already have — architecture, tests, and a pull request against your branch — rather than generating a project you then have to adopt.</p></article>
-        <article><b>It reports what actually happened.</b><p>Every job links its run and its pull request. When a run finishes without changing anything, Atlas says exactly that instead of reporting success.</p></article>
-        <article><b>It stops before it acts on your behalf.</b><p>Browser work pauses at a one-action approval bound to the specific step, with an activity receipt you can read afterwards.</p></article>
-      </div>
-    </section>
-
-    <ParallelMissionPreview />
 
     <section className="capability-grid">
       {capabilities.map(([title, copy], index) => <article key={title}><span>0{index + 1}</span><h2>{title}</h2><p>{copy}</p></article>)}
     </section>
 
+    <ParallelMissionPreview />
+
     <section className="proof-section">
       <div>
-        <p className="eyebrow"><span>THE ADVANTAGE</span> Autonomy you can inspect</p>
-        <h2>Atlas does not ask you to trust a magic box. It shows the work — and admits when there is none.</h2>
+        <p className="eyebrow"><span>WHAT YOU GET BACK</span> Proof, not promises</p>
+        <h2>Every task ends with something you can check.</h2>
       </div>
       <div>
-        <article><b>Evidence, not assurances</b><p>A job shows the state of its run and links the log and the pull request. Atlas reports what it can observe and nothing beyond it.</p></article>
-        <article><b>Consequential-action control</b><p>Sending, submitting, publishing, purchasing, uploading, and account changes pause at an exact approval boundary that expires.</p></article>
-        <article><b>Review before merge</b><p>Build mode always opens a pull request. Whether it may then merge itself is a per-project setting that defaults to a person doing it.</p></article>
-        <article><b>Portable by construction</b><p>Run the models locally and keep the repository and credentials yours. Hosted capacity is an adapter you can remove.</p></article>
+        <article><b>Code</b><p>A pull request with the diff and the test results. If nothing needed to change, Atlas says so.</p></article>
+        <article><b>Browser tasks</b><p>An activity log of each step, and an approval request before anything that can&rsquo;t be undone.</p></article>
+        <article><b>Merging</b><p>Per project, you choose: merge after you review, merge automatically once all tests pass, or merge right away.</p></article>
+        <article><b>Your data</b><p>Your repositories and credentials stay in your own accounts. Remove Atlas&rsquo;s access at any time.</p></article>
       </div>
     </section>
 
     <section className="closing-cta">
-      <p>Run findings and validation evidence return to the thread. Detailed step-by-step progress inside a run is still being built.</p>
-      <h2>Give Atlas the outcome.<br />Keep control of the mission.</h2>
-      <Link href="/guide">See how access and safeguards work →</Link>
+      <p>Free to start. No card needed.</p>
+      <h2>Tell Atlas what you need.</h2>
+      <Link href="/">Start free →</Link>
     </section>
     <MarketingFooter />
   </main>;

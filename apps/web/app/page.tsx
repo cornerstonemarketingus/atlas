@@ -3,8 +3,8 @@ import { AtlasGate } from "./AtlasGate.js";
 import { ChatSection } from "./chat/ChatSection.js";
 
 export const metadata: Metadata = {
-  title: "Atlas — The private AI operator",
-  description: "Give Atlas a software or computer mission. It builds, operates, verifies, and pauses before consequential actions.",
+  title: "Atlas — AI assistant that writes code and does browser work",
+  description: "Chat with Atlas. It changes code in your GitHub projects through pull requests and does browser tasks on your computer, asking before anything important.",
 };
 
 export default function Home() {

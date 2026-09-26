@@ -30,19 +30,19 @@ const TERMINAL = new Set(["succeeded", "failed", "cancelled", "timed_out", "skip
  * that back yet.
  */
 const PROGRESS: Record<string, string[]> = {
-  dispatched: ["Request sent to the runner", "Waiting for the run to appear"],
-  queued: ["Request sent to the runner", "Run queued on GitHub Actions"],
-  running: ["Request sent to the runner", "Run started", "Running now"],
-  succeeded: ["Request sent to the runner", "Run started", "Run finished"],
-  failed: ["Request sent to the runner", "Run started", "Run finished with a failure"],
-  cancelled: ["Request sent to the runner", "Run started", "Run cancelled"],
-  timed_out: ["Request sent to the runner", "Run started", "Run timed out"],
+  dispatched: ["Request sent", "Waiting for the run to appear"],
+  queued: ["Request sent", "Run queued on GitHub Actions"],
+  running: ["Request sent", "Run started", "Running now"],
+  succeeded: ["Request sent", "Run started", "Run finished"],
+  failed: ["Request sent", "Run started", "Run finished with a failure"],
+  cancelled: ["Request sent", "Run started", "Run cancelled"],
+  timed_out: ["Request sent", "Run started", "Run timed out"],
 };
 
 const MODES = [
   { id: "inspect", label: "Review", hint: "Read the project and report findings. Changes nothing." },
   { id: "debug", label: "Debug", hint: "Build and run the tests to find what is actually broken." },
-  { id: "coder", label: "Make changes", hint: "Write the change and open a pull request for review." },
+  { id: "coder", label: "Make changes", hint: "Write the change, run the tests, and open a pull request." },
 ];
 
 const STARTERS = [
@@ -212,7 +212,7 @@ export function BuildSection() {
           <div className="empty-mark"><AtlasMark /></div>
           <p className="kicker">PROJECTS</p>
           <h1>What should Atlas work on?</h1>
-          <p>Choose a project and describe the outcome. Atlas reads the code, reviews or changes it, runs the requested checks, and returns a report or pull request for you to review.</p>
+          <p>Pick a project and say what you want. Atlas reads the code, makes the change or reports back, runs your tests, and opens a pull request when it changes something.</p>
           <div className="starter-grid">
             {STARTERS.map((item) => <button key={item.title} onClick={() => setObjective(item.prompt)}>
               {item.title}<span>{item.detail}</span>
@@ -259,7 +259,7 @@ export function BuildSection() {
         <div className="composer-context">
           <label>Project<select aria-label="Project" value={repository} onChange={(event) => setRepository(event.target.value)}>{repositoryOptions.map((value) => <option key={value}>{value}</option>)}</select></label>
           <label>Branch<select aria-label="Branch" value={branch} onChange={(event) => setBranch(event.target.value)}>{branchOptions.map((value) => <option key={value}>{value}{value === defaultBranch ? " · default" : ""}</option>)}</select></label>
-          <span>Atlas can make mistakes. Review consequential actions.</span>
+          <span>Atlas can make mistakes. Check important changes.</span>
         </div>
         {notice && <p className="composer-notice" role="status">{notice}</p>}
       </form>
@@ -279,17 +279,17 @@ export function BuildSection() {
           </div>
           <small>LIVE WORK</small>
           {(thread?.events?.length ? thread.events.map((event) => event.label) : steps).map((item) => <div className="panel-event" key={item}><i />{item}</div>)}
-          <p className="panel-note">Run status comes from GitHub. The runner sends its findings here after execution; missing findings do not mean validation passed.</p>
+          <p className="panel-note">Status comes from GitHub. Findings appear here when the run finishes. No findings does not mean the tests passed.</p>
           {current.run?.url && <a className="result-link" href={current.run.url} target="_blank" rel="noreferrer">Open the run log ↗</a>}
         </> : <div className="panel-empty">
           <span aria-hidden="true">◌</span>
           <h2>Your work will appear here</h2>
-          <p>Runs, validation, and the pull request stay beside the conversation.</p>
+          <p>Progress, test results, and the pull request appear here.</p>
         </div>}
       </div>}
       {panelTab === "changes" && <div className="panel-section" role="tabpanel">
-        <small>RECENT BUILDS</small>
-        {tasks.length === 0 && <p className="panel-note">Nothing built yet. The pull request Atlas opens will be listed here.</p>}
+        <small>RECENT WORK</small>
+        {tasks.length === 0 && <p className="panel-note">Nothing yet. Pull requests Atlas opens are listed here.</p>}
         {tasks.map((task) => <div className="panel-task" key={task.taskId}>
           <span className={`run-state ${task.status}`}>{task.status}</span>
           <p>{task.objective}</p>

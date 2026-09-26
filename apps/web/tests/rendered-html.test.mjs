@@ -6,9 +6,10 @@ test("server-renders the Atlas control plane", async () => {
   const response = await worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /Tell Atlas what you need/);
-  assert.match(html, /computer operator/i);
-  assert.match(html, /Continue securely/);
+  assert.match(html, /Ask it\. Atlas does the work\./);
+  assert.match(html, /What Atlas does/);
+  assert.match(html, /href="\/about"/);
+  assert.match(html, /Continue with GitHub/);
   assert.match(html, /access code/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
   assert.doesNotMatch(html, /GitHub Actions runner/);
@@ -20,7 +21,7 @@ test("server-renders the secure owner access page", async () => {
   const response = await worker.fetch(new Request("http://localhost/owner", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /deployment-owner role/i);
+  assert.match(html, /set as the owner of this Atlas deployment/i);
   assert.match(html, /Continue with GitHub/i);
   assert.doesNotMatch(html, /ATLAS_OPERATOR_TOKEN/);
 });
@@ -31,8 +32,8 @@ test("server-renders the public investor thesis", async () => {
   const response = await worker.fetch(new Request("http://localhost/investors", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /execution layer after chat/i);
-  assert.match(html, /ideas should not stop.*at an answer/is);
+  assert.match(html, /Where Atlas is headed/i);
+  assert.match(html, /From answers.*to finished work/is);
 });
 
 test("server-renders an honest parallel mission preview", async () => {
@@ -41,12 +42,13 @@ test("server-renders an honest parallel mission preview", async () => {
   const response = await worker.fetch(new Request("http://localhost/product", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /Parallel mission control/i);
+  assert.match(html, /Several agents on one job/i);
   assert.match(html, /Research child/);
   assert.match(html, /Budget envelope/);
   assert.match(html, /Evidence stream/);
-  assert.match(html, /product preview/i);
-  assert.match(html, /not hidden chain-of-thought/i);
+  // Honest labelling: the preview must say it is not live yet.
+  assert.match(html, /not live in the hosted app yet/i);
+  assert.match(html, /what each agent is doing/i);
 });
 
 test("server-renders the login, controls, and self-protection guide", async () => {
@@ -55,10 +57,11 @@ test("server-renders the login, controls, and self-protection guide", async () =
   const response = await worker.fetch(new Request("http://localhost/guide", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /Three access paths/i);
-  assert.match(html, /Buying a plan.*does not create owner or deployment authority/is);
-  assert.match(html, /What blocks a random client/i);
-  assert.match(html, /Treat model output as untrusted/i);
+  assert.match(html, /Three ways in/i);
+  assert.match(html, /Upgrading your plan raises your limits; it never gives you admin access/is);
+  assert.match(html, /What it can.*t do/is);
+  assert.match(html, /Merge its own change without every check passing/i);
+  assert.match(html, /AI can be wrong or misled/i);
 });
 
 // Every signed-in section is reachable by URL and gated the same way. A route
@@ -71,7 +74,18 @@ for (const path of ["/build", "/automation", "/computer", "/setup", "/account"])
     const response = await worker.fetch(new Request(`http://localhost${path}`, { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
     assert.equal(response.status, 200);
     const html = await response.text();
-    assert.match(html, /Continue securely/);
-    assert.match(html, /Owner access code/);
+    assert.match(html, /Continue with GitHub/);
+    assert.match(html, /owner access code/i);
   });
 }
+
+test("server-renders the About page with the bio and the shared header", async () => {
+  const workerUrl = new URL(`../dist/server/index.js?test=${Date.now()}`, import.meta.url);
+  const { default: worker } = await import(workerUrl.href);
+  const response = await worker.fetch(new Request("http://localhost/about", { headers: { accept: "text/html" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Who builds Atlas/);
+  assert.match(html, /Why Atlas exists/);
+  for (const label of ["Product", "How it works", "Pricing", "Safety", "About"]) assert.match(html, new RegExp(`>${label}<`));
+});
