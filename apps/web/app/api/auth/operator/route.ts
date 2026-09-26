@@ -1,11 +1,24 @@
+import { getDb } from "../../../../db";
+import { requestRateLimits } from "../../../../db/schema";
 import { sessionCookieHeader, signSession } from "../session.mjs";
 import { constantTimeEqual } from "../../tasks/operator-auth.mjs";
+import { enforceRateLimit, rateLimitSubjectForIp } from "../../rate-limit.mjs";
 
 export async function POST(request: Request) {
   const origin = request.headers.get("origin");
   if (origin && origin !== new URL(request.url).origin) {
     return Response.json({ message: "Cross-origin operator sign-in is not allowed." }, { status: 403 });
   }
+  const limited = await enforceRateLimit({
+    db: getDb,
+    table: requestRateLimits,
+    subject: rateLimitSubjectForIp(request),
+    route: "auth_operator",
+    limit: 5,
+    windowSeconds: 15 * 60,
+    failClosed: true,
+  });
+  if (limited) return limited;
   const expected = process.env.ATLAS_OPERATOR_TOKEN ?? "";
   const sessionSecret = process.env.ATLAS_SESSION_SECRET ?? "";
   if (!expected || !sessionSecret) {

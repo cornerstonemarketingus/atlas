@@ -1,13 +1,23 @@
 import { and, eq, gt } from "drizzle-orm";
 import { getDb } from "../../../../../db";
-import { computerApprovals, computerTaskEvents } from "../../../../../db/schema";
+import { computerApprovals, computerTaskEvents, requestRateLimits } from "../../../../../db/schema";
 import { authenticatedAccount } from "../../../tasks/operator-auth.mjs";
+import { enforceRateLimit, rateLimitSubjectForAccount } from "../../../rate-limit.mjs";
 import { taskEvent } from "../../task-events";
 import { computerTenant } from "../../tenant";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  const limited = await enforceRateLimit({
+    db: getDb,
+    table: requestRateLimits,
+    subject: rateLimitSubjectForAccount(account),
+    route: "computer_approval_decision",
+    limit: 30,
+    windowSeconds: 15 * 60,
+  });
+  if (limited) return limited;
   const tenant = await computerTenant(request, account);
   if (tenant instanceof Response) return tenant;
   let body: { decision?: unknown };

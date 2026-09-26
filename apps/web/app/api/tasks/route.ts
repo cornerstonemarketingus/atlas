@@ -3,7 +3,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { getD1, getDb } from "../../../db";
 import { conversationWritable, tenantAllowlist } from "../../../db/tenancy.mjs";
 import { NO_TENANT_MESSAGE, resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
-import { conversationMessages, conversations, repositories, runEvents, tasks } from "../../../db/schema";
+import { conversationMessages, conversations, repositories, requestRateLimits, runEvents, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, defaultMergePolicy, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
 import { explainGitHubFailure } from "./github-diagnosis.mjs";
@@ -18,6 +18,7 @@ import {
 } from "./github-runs.mjs";
 import { authenticatedAccount } from "./operator-auth.mjs";
 import { CORRELATION_HEADER, correlationIdFromRequest } from "./correlation.mjs";
+import { enforceRateLimit, rateLimitSubjectForAccount } from "../rate-limit.mjs";
 import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun, visibleTasks } from "./run-status.mjs";
 import { selfModificationDecision } from "./self-protection.mjs";
 import { repositoryAccessDecision } from "./repository-access.mjs";
@@ -37,6 +38,15 @@ export async function POST(request: Request) {
 async function dispatchTask(request: Request, correlationId: string): Promise<Response> {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required to create a task." }, { status: 401 });
+  const limited = await enforceRateLimit({
+    db: getDb,
+    table: requestRateLimits,
+    subject: rateLimitSubjectForAccount(account),
+    route: "tasks_post",
+    limit: 20,
+    windowSeconds: 15 * 60,
+  });
+  if (limited) return limited;
   let body: unknown;
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
   // Tenancy (#71): the caller's tenant bounds which repositories they may use

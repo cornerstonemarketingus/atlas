@@ -3,8 +3,9 @@ import { and, asc, eq } from "drizzle-orm";
 import { getD1, getDb } from "../../../db";
 import { conversationWritable, recallForMemory, tenantAllowlist } from "../../../db/tenancy.mjs";
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
-import { conversationMessages, conversations } from "../../../db/schema";
+import { conversationMessages, conversations, requestRateLimits } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
+import { enforceRateLimit, rateLimitSubjectForAccount } from "../rate-limit.mjs";
 import { isDeploymentOwner } from "../tasks/self-protection.mjs";
 import { POST as startTask } from "../tasks/route";
 import { allowedRepositories } from "../tasks/dispatch.mjs";
@@ -26,6 +27,19 @@ const MAX_MESSAGE = 8000;
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  const limited = await enforceRateLimit({
+    db: getDb,
+    table: requestRateLimits,
+    subject: rateLimitSubjectForAccount(account),
+    route: "chat_post",
+    limit: 20,
+    windowSeconds: 60,
+    responseBody: {
+      error: "rate_limited",
+      message: "Too many chat requests. Atlas currently allows up to 20 messages per minute per user.",
+    },
+  });
+  if (limited) return limited;
 
   let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown; stream?: unknown };
   try { body = await request.json() as typeof body; } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
