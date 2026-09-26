@@ -65,12 +65,33 @@ export function assertAgentBranch(branch) {
 }
 
 function isInside(parent, child) {
-  const rel = relative(parent, child);
+  // Windows paths are case-insensitive; comparing them case-sensitively lets
+  // "C:\Repo\nested" pass as outside "c:/repo".
+  const fold = (value) => (process.platform === "win32" ? value.toLowerCase() : value);
+  const rel = relative(fold(parent), fold(child));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
+/**
+ * The canonical form of a path that may not exist yet: the nearest existing
+ * ancestor is resolved by the operating system (which also expands Windows
+ * 8.3 short names such as RUNNER~1), and the missing tail is appended. Without
+ * this a not-yet-created folder inside the checkout would compare as outside
+ * it whenever the two paths were spelled differently.
+ */
 function realOrResolved(path) {
-  try { return realpathSync(path); } catch { return resolve(path); }
+  const absolute = resolve(path);
+  const tail = [];
+  let current = absolute;
+  for (;;) {
+    try { return join(realpathSync.native(current), ...tail.reverse()); }
+    catch {
+      const parent = dirname(current);
+      if (parent === current) return absolute;
+      tail.push(current.slice(parent.length).replace(/^[\\/]+/u, ""));
+      current = parent;
+    }
+  }
 }
 
 export class WorktreeManager {
