@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { MissionService } from "../src/agent/mission-service.mjs";
 import { ToolRegistry } from "../src/agent/tool-registry.mjs";
-import { createAgentStepExecutor } from "../src/agent/team/step-executor.mjs";
+import { createAgentStepExecutor, verifyStep } from "../src/agent/team/step-executor.mjs";
 import { createTeamService } from "../src/agent/team/team-service.mjs";
 import { validatePlan } from "../src/agent/team/planner.mjs";
 import { capabilitiesFor } from "../src/agent/team/permissions.mjs";
@@ -86,6 +86,80 @@ const twoStepPlan = {
   ],
 };
 
+test("a model cannot verify a step when an action in that attempt failed", async () => {
+  const client = { async *stream() { yield { type: "text", delta: JSON.stringify({ passed: true, reason: "The report says it is done." }) }; yield { type: "done", usage: { prompt_tokens: 1, completion_tokens: 1 } }; } };
+  const verdict = await verifyStep({
+    client,
+    meta: { model: "test", doneWhen: "the tool action succeeded" },
+    report: "The action succeeded.",
+    toolLog: [{ tool: "terminal.run", status: "failed", code: "APPROVAL_REQUIRED" }],
+    toolOutcomes: [{ actionKey: "failed-action", status: "failed" }],
+    usage: { inputTokens: 0, outputTokens: 0 },
+  });
+  assert.equal(verdict.passed, false);
+  assert.match(verdict.reason, /failed or were denied/u);
+});
+
+test("a model cannot verify a step while an action awaits approval", async () => {
+  const client = { async *stream() { yield { type: "text", delta: JSON.stringify({ passed: true, reason: "The report says it is done." }) }; yield { type: "done", usage: { prompt_tokens: 1, completion_tokens: 1 } }; } };
+  const verdict = await verifyStep({
+    client,
+    meta: { model: "test", doneWhen: "the approved action completed" },
+    report: "The action completed.",
+    toolLog: [{ tool: "browser.submit", status: "awaiting_approval", code: "APPROVAL_REQUIRED" }],
+    toolOutcomes: [{ actionKey: "pending-action", status: "awaiting_approval" }],
+    usage: { inputTokens: 0, outputTokens: 0 },
+  });
+  assert.equal(verdict.passed, false);
+  assert.match(verdict.reason, /waiting for approval/u);
+});
+
+test("verification accepts a report only when the recorded action succeeded", async () => {
+  const client = { async *stream() { yield { type: "text", delta: JSON.stringify({ passed: true, reason: "The action succeeded." }) }; yield { type: "done", usage: { prompt_tokens: 1, completion_tokens: 1 } }; } };
+  const verdict = await verifyStep({
+    client,
+    meta: { model: "test", doneWhen: "the action succeeded" },
+    report: "The action succeeded.",
+    toolLog: [{ tool: "terminal.run", status: "succeeded", code: null }],
+    toolOutcomes: [{ actionKey: "successful-action", status: "succeeded" }],
+    usage: { inputTokens: 0, outputTokens: 0 },
+  });
+  assert.equal(verdict.passed, true);
+});
+
+test("a successful retry resolves the exact earlier failed action", async () => {
+  const client = { async *stream() { yield { type: "text", delta: JSON.stringify({ passed: true, reason: "The action succeeded on retry." }) }; yield { type: "done", usage: { prompt_tokens: 1, completion_tokens: 1 } }; } };
+  const actionKey = "same-action";
+  const verdict = await verifyStep({
+    client,
+    meta: { model: "test", doneWhen: "the action succeeded" },
+    report: "The action succeeded after recovery.",
+    toolLog: [
+      { tool: "terminal.run", status: "failed", code: "APPROVAL_REQUIRED" },
+      { tool: "terminal.run", status: "succeeded", code: null },
+    ],
+    toolOutcomes: [
+      { actionKey, status: "failed" },
+      { actionKey, status: "succeeded" },
+    ],
+    usage: { inputTokens: 0, outputTokens: 0 },
+  });
+  assert.equal(verdict.passed, true);
+});
+
+test("a no-op retry cannot clear an earlier failed action", async () => {
+  const client = { async *stream() { yield { type: "text", delta: JSON.stringify({ passed: true, reason: "The report says done." }) }; yield { type: "done", usage: { prompt_tokens: 1, completion_tokens: 1 } }; } };
+  const verdict = await verifyStep({
+    client,
+    meta: { model: "test", doneWhen: "the action succeeded" },
+    report: "The action succeeded.",
+    toolLog: [{ tool: "terminal.run", status: "failed", code: "APPROVAL_REQUIRED" }],
+    toolOutcomes: [{ actionKey: "failed-action", status: "failed" }],
+    usage: { inputTokens: 0, outputTokens: 0 },
+  });
+  assert.equal(verdict.passed, false);
+});
+
 test("a goal becomes a plan the agents carry out, with delegation, traces, verified artifacts and costs", async (t) => {
   const model = scriptedModel({ plan: twoStepPlan });
   const { team, family, delegation, platformStore, until } = await harness(t, model);
@@ -109,6 +183,8 @@ test("a goal becomes a plan the agents carry out, with delegation, traces, verif
   // Verified artifacts with evidence, and spending charged to the agents that worked.
   assert.equal(detail.artifacts.length, 2);
   assert.ok(detail.artifacts.every((a) => a.verification === "verified" && a.evidence[0].kind === "step_check"));
+  const storedArtifacts = platformStore.listArtifacts("local", { taskId: detail.taskId });
+  assert.ok(storedArtifacts.every((a) => a.content.toolLog.every((entry) => !("actionKey" in entry))), "ephemeral action fingerprints are not persisted in artifacts");
   const researcher = family.listAgents("local").find((a) => a.name === "Market Research Agent");
   assert.ok(researcher.consumed.toolCalls >= 1 && researcher.consumed.inputTokens > 0);
   assert.ok(detail.usage.toolCalls >= 2);
@@ -143,7 +219,10 @@ test("an agent cannot use a tool outside its permissions, even if the model asks
   const started = await team.start({ goal: "Find the published value and email it." });
   await until(started.mission.id, ["completed", "failed"]);
   const detail = team.detail(started.mission.id);
-  assert.deepEqual(detail.toolCalls.map((c) => [c.tool, c.status, c.error?.code]), [["communications.send", "denied", "NOT_PERMITTED"]]);
+  assert.deepEqual(detail.toolCalls.map((c) => [c.tool, c.status, c.error?.code]), [
+    ["communications.send", "denied", "NOT_PERMITTED"],
+    ["communications.send", "denied", "NOT_PERMITTED"],
+  ]);
 });
 
 test("a running mission can be cancelled, and the platform task says so", async (t) => {
