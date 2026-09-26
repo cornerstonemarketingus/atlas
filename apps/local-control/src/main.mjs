@@ -9,7 +9,9 @@ import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { PlatformTaskStore } from "./platform/task-store.mjs";
-import { createLegacyPolicyBridge } from "./platform/legacy-policy-bridge.mjs";
+import { createLegacyPolicyBridge, createLegacyPolicyEngine } from "./platform/legacy-policy-bridge.mjs";
+import { AuthorizedToolExecutor } from "./platform/executor.mjs";
+import { adaptRegistryTool } from "./platform/adapters.mjs";
 import { bootstrapInnovation } from "./platform/innovation/bootstrap.mjs";
 import { OutboxDispatcher, createEventStream } from "./platform/outbox-dispatcher.mjs";
 import { LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
@@ -81,6 +83,7 @@ const modelClient = createRoutedClient({
   onRoute: (route, { failedOver }) => store.audit("model.route", `${route.model} served a model turn${failedOver ? " after failover" : ""}`),
 });
 const toolRegistry = buildToolRegistry();
+const authorizedToolExecutor = buildAuthorizedToolExecutor(toolRegistry);
 const toolApprovals = {
   // One-time and digest-bound: spending an approval consumes it, and it
   // only matches the exact action it was granted for.
@@ -132,6 +135,7 @@ const teamStep = createAgentStepExecutor({
   family: innovation.registry,
   delegation: innovation.pipeline.delegation,
   toolRegistry,
+  authorizedExecutor: authorizedToolExecutor,
   client: modelClient,
   platformStore,
   approvals: toolApprovals,
@@ -282,6 +286,21 @@ function buildToolRegistry() {
   registerTerminalTools(registry, { controller: buildTerminalController });
   registerInfrastructureTools(registry, { providers: buildInfrastructureProviders(), vault });
   return registry;
+}
+
+function buildAuthorizedToolExecutor(registry) {
+  const capabilityByTool = new Map(registry.list().map((tool) => [tool.name, tool.capability]));
+  const policy = createLegacyPolicyEngine({
+    capabilityForTool: (name) => capabilityByTool.get(name) ?? name,
+    policyForCapability: (capability) => store.policy(capability),
+    audit: (event) => store.audit("policy.decision", `${event.tool} ${event.effect}: ${event.reasons.join("; ")}`),
+  });
+  const executor = new AuthorizedToolExecutor({ store: platformStore, policy });
+  for (const definition of registry.list()) {
+    const adapted = adaptRegistryTool(registry.get(definition.name));
+    executor.register(adapted.tool, { timeoutMs: adapted.timeoutMs });
+  }
+  return executor;
 }
 
 /**

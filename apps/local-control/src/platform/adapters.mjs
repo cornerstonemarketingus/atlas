@@ -21,9 +21,9 @@ export function adaptRegistryTool(legacy, { context = {}, risk = undefined, cons
     risk: risk ?? (readOnly ? "read" : legacy.risk),
     consequential: consequential || legacy.requiresApproval === true,
     inputSchema: { ...legacy.inputSchema, additionalProperties: false },
-    async execute(input, { signal }) {
+    async execute(input, runtimeContext) {
       const prepared = validateAgainstSchema(legacy.inputSchema, input);
-      const output = await legacy.execute({ input: prepared, context: { ...context, signal } });
+      const output = await legacy.execute({ input: prepared, context: { ...context, ...runtimeContext, signal: runtimeContext.signal } });
       return { output, evidence: [{ kind: "legacy_tool", tool: legacy.name, capability: legacy.capability ?? null }] };
     },
   });
