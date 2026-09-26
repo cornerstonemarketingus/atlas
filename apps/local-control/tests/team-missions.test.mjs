@@ -11,6 +11,9 @@ import { createTeamService } from "../src/agent/team/team-service.mjs";
 import { validatePlan } from "../src/agent/team/planner.mjs";
 import { capabilitiesFor } from "../src/agent/team/permissions.mjs";
 import { AgentFamilyRegistry, TaskDelegation, seedFamilies } from "../src/platform/family/index.mjs";
+import { AuthorizedToolExecutor } from "../src/platform/executor.mjs";
+import { adaptRegistryTool } from "../src/platform/adapters.mjs";
+import { PolicyEngine } from "../src/platform/policy.mjs";
 import { PlatformTaskStore } from "../src/platform/task-store.mjs";
 import { LocalTaskStore } from "../src/store.mjs";
 import { ScopedMemoryStore } from "../src/platform/memory/memory-store.mjs";
@@ -45,7 +48,7 @@ function scriptedModel({ plan, verdict = () => true, onStep = null }) {
   };
 }
 
-async function harness(t, model, { memory = null, approvals = null, policy = () => "allow" } = {}) {
+async function harness(t, model, { memory = null, approvals = null, policy = () => "allow", authorized = false } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "atlas-team-"));
   const store = new LocalTaskStore(join(dir, "atlas.sqlite"));
   const platformStore = new PlatformTaskStore(join(dir, "platform.sqlite"));
@@ -56,9 +59,17 @@ async function harness(t, model, { memory = null, approvals = null, policy = () 
   toolRegistry.register({ name: "browser.extract", description: "Read a value from the page.", capability: "browser.read", risk: "low", timeoutMs: 1000, maxOutputCharacters: 200, requiresApproval: false, inputSchema: { type: "object", properties: {} }, async execute() { return "The page says 42."; } });
   toolRegistry.register({ name: "repository.read", description: "Read a file.", capability: "repository.read", risk: "low", timeoutMs: 1000, maxOutputCharacters: 200, requiresApproval: false, inputSchema: { type: "object", properties: {} }, async execute() { return "file contents: 42"; } });
   toolRegistry.register({ name: "communications.send", description: "Send an email.", capability: "communications.send", risk: "high", timeoutMs: 1000, maxOutputCharacters: 200, requiresApproval: false, inputSchema: { type: "object", properties: {} }, async execute() { throw new Error("must never run"); } });
+  let authorizedExecutor = null;
+  if (authorized) {
+    authorizedExecutor = new AuthorizedToolExecutor({ store: platformStore, policy: new PolicyEngine({ version: "test-policy", rules: [] }) });
+    for (const definition of toolRegistry.list()) {
+      const adapted = adaptRegistryTool(toolRegistry.get(definition.name));
+      authorizedExecutor.register(adapted.tool, { timeoutMs: adapted.timeoutMs });
+    }
+  }
   let missionService;
   const step = createAgentStepExecutor({
-    family, delegation, toolRegistry, client: model, platformStore, approvals, memory,
+    family, delegation, toolRegistry, authorizedExecutor, client: model, platformStore, approvals, memory,
     resultsOf: (missionId, ids) => (missionService.get(missionId)?.children ?? []).filter((c) => ids.includes(c.id)).map((c) => ({ title: c.metadata.stepTitle, summary: c.result?.handoff?.report ?? "" })),
   });
   missionService = new MissionService({ store, execute: (input) => step(input) });
@@ -190,6 +201,19 @@ test("a goal becomes a plan the agents carry out, with delegation, traces, verif
   assert.ok(detail.usage.toolCalls >= 2);
   assert.equal(delegation.getAssignment("local", `mission:${started.mission.id}`).state, "completed");
   assert.deepEqual(platformStore.listTransitions("local", detail.taskId).map((x) => x.to), ["authorized", "queued", "running", "verifying", "completed"]);
+});
+
+test("team tool calls use the durable authorized executor when configured", async (t) => {
+  const model = scriptedModel({ plan: oneStep });
+  const { team, platformStore, until } = await harness(t, model, { authorized: true });
+  const started = await team.start({ goal: "Confirm the published value." });
+  const done = await until(started.mission.id, ["completed", "failed"]);
+  assert.equal(done.status, "completed");
+  const detail = team.detail(started.mission.id);
+  assert.equal(detail.toolCalls.length, 1);
+  assert.equal(detail.toolCalls[0].status, "succeeded");
+  assert.ok(platformStore.listEvents("local", { taskId: started.task.id }).some((event) => event.type === "tool_call.completed"));
+  assert.ok(platformStore.listEvents("local", { taskId: started.task.id }).some((event) => event.type === "tool_call.decided"));
 });
 
 test("an unverified step fails the mission honestly after one retry", async (t) => {

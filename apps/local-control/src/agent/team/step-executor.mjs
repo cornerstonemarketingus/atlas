@@ -25,7 +25,7 @@ export const MAX_TOOL_TURNS = 8;
 export const APPROVAL_WAIT_MS = 15 * 60 * 1000;
 const TENANT = "local";
 
-export function createAgentStepExecutor({ family, delegation, toolRegistry, client, platformStore, approvals, resultsOf, memory = null }) {
+export function createAgentStepExecutor({ family, delegation, toolRegistry, authorizedExecutor = null, client, platformStore, approvals, resultsOf, memory = null }) {
   return async function executeAgentStep({ child, signal, budget, checkpoint }) {
     const meta = child.metadata ?? {};
     const agent = family.getAgent(TENANT, meta.agentId);
@@ -56,7 +56,7 @@ export function createAgentStepExecutor({ family, delegation, toolRegistry, clie
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (feedback) messages.push({ role: "user", content: `A reviewer checked your report and it does not yet satisfy "${meta.doneWhen}": ${feedback} Continue the step and report again.` });
-      report = await actLoop({ client, messages, tools, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, budget, checkpoint, usage, toolLog, toolOutcomes });
+      report = await actLoop({ client, messages, tools, allowedTools, toolRegistry, authorizedExecutor, approvals, platformStore, meta, agent, signal, budget, checkpoint, usage, toolLog, toolOutcomes });
       await checkpoint();
       const verdict = await verifyStep({ client, meta, report, toolLog, toolOutcomes, signal, usage });
       if (verdict.passed) {
@@ -113,7 +113,7 @@ function ensureDelegated({ family, delegation, meta, agent, stepTaskId }) {
   }
 }
 
-async function actLoop({ client, messages, tools, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, budget, checkpoint, usage, toolLog, toolOutcomes }) {
+async function actLoop({ client, messages, tools, allowedTools, toolRegistry, authorizedExecutor, approvals, platformStore, meta, agent, signal, budget, checkpoint, usage, toolLog, toolOutcomes }) {
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn += 1) {
     await checkpoint();
     const reply = await completeTurn(client, { model: meta.model, messages, tools, maxOutputTokens: 1500, signal });
@@ -126,14 +126,15 @@ async function actLoop({ client, messages, tools, allowedTools, toolRegistry, ap
     for (const call of reply.toolCalls) {
       budget.record({ toolCalls: 1 });
       usage.toolCalls += 1;
-      const content = await runTool({ call, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, checkpoint, toolLog, toolOutcomes });
+      const content = await runTool({ call, allowedTools, toolRegistry, authorizedExecutor, approvals, platformStore, meta, agent, signal, checkpoint, toolLog, toolOutcomes });
       messages.push({ role: "tool", tool_call_id: call.id, content: `<data source="${call.name}">\n${content}\n</data>` });
     }
   }
   return "The step used all of its tool turns without finishing.";
 }
 
-async function runTool({ call, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, checkpoint = () => {}, toolLog, toolOutcomes }) {
+async function runTool({ call, allowedTools, toolRegistry, authorizedExecutor, approvals, platformStore, meta, agent, signal, checkpoint = () => {}, toolLog, toolOutcomes }) {
+  if (authorizedExecutor) return runAuthorizedTool({ call, allowedTools, authorizedExecutor, approvals, platformStore, meta, agent, signal, checkpoint, toolLog, toolOutcomes });
   let input = {};
   try { input = JSON.parse(call.arguments || "{}"); } catch { /* recorded as given; the registry rejects it */ }
   const recorded = platformStore?.recordToolCall({
@@ -188,6 +189,55 @@ async function runTool({ call, allowedTools, toolRegistry, approvals, platformSt
   if (outcome.status === "completed") return String(outcome.output);
   if (outcome.status === "approval-required") return "This action needs the owner's approval. It has been requested; continue without it or report that it is pending.";
   return `Not done: ${outcome.message ?? outcome.code ?? "the tool failed"}.`;
+}
+
+async function runAuthorizedTool({ call, allowedTools, authorizedExecutor, approvals, platformStore, meta, agent, signal, checkpoint, toolLog, toolOutcomes }) {
+  if (!allowedTools.has(call.name)) {
+    const outcome = { status: "rejected", code: "NOT_PERMITTED", message: `${agent.name} is not permitted to use ${call.name}.` };
+    toolOutcomes.push({ actionKey: actionKey(call), status: "denied" });
+    toolLog.push({ tool: call.name, status: "denied", code: outcome.code });
+    return `Not done: ${outcome.message}`;
+  }
+  let input = {};
+  try { input = JSON.parse(call.arguments || "{}"); } catch { input = { raw: String(call.arguments).slice(0, 2000) }; }
+  const request = {
+    tenantId: TENANT,
+    userId: "local-owner",
+    agentId: agent.id,
+    taskId: meta.platformTaskId,
+    tool: call.name,
+    input,
+    grantedPermissions: [...allowedTools],
+  };
+  let result = await authorizedExecutor.invoke({ ...request, signal });
+  if (result.status === "awaiting_approval" && approvals?.request && result.approvalId) {
+    const approval = approvals.request({
+      digest: result.approvalId,
+      capability: call.name,
+      summary: `${agent.name} wants to use ${call.name}: ${summarizeInput(input)}`,
+      sessionId: meta.rootTaskId,
+    });
+    if (approval?.id && approvals.status) {
+      const decision = await waitForDecision({ approvals, id: approval.id, checkpoint, signal, waitMs: approvals.waitMs ?? APPROVAL_WAIT_MS });
+      if (decision === "approved") {
+        platformStore.resolveApproval(TENANT, result.approvalId, { decision: "approved", resolvedBy: "local-owner" });
+        result = await authorizedExecutor.invoke({ ...request, approvalId: result.approvalId, signal });
+      } else {
+        platformStore.resolveApproval(TENANT, result.approvalId, { decision: decision === "denied" ? "rejected" : "expired", resolvedBy: "local-owner" });
+      }
+    }
+  }
+  const status = result.status === "succeeded" ? "succeeded" : result.status === "awaiting_approval" ? "awaiting_approval" : result.status === "denied" ? "denied" : "failed";
+  const code = result.result?.error?.code ?? (status === "awaiting_approval" ? "APPROVAL_REQUIRED" : status === "denied" ? "POLICY_DENIED" : "TOOL_FAILED");
+  toolOutcomes.push({ actionKey: actionKey(call), status });
+  toolLog.push({ tool: call.name, status, code: status === "succeeded" ? null : code });
+  if (status === "succeeded") return String(result.result.output ?? "");
+  if (status === "awaiting_approval") return "This action needs the owner's approval. It has been requested; continue without it or report that it is pending.";
+  return `Not done: ${result.result?.error?.message ?? code}.`;
+}
+
+function actionKey(call) {
+  return createHash("sha256").update(`${call.name}\0${call.arguments ?? "{}"}`).digest("hex");
 }
 
 async function waitForDecision({ approvals, id, checkpoint, signal, waitMs }) {
