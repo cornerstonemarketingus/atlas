@@ -35,7 +35,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   let body: unknown;
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
   const validated = validateTask(body, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES));
-  if ("error" in validated) return Response.json({ message: validated.error }, { status: validated.status });
+  if ("error" in validated) return Response.json({ message: validated.error, ...(validated.needsClarification ? { needsClarification: true } : {}) }, { status: validated.status });
   const task = validated.task;
   const selfModification = selfModificationDecision(account, task);
   if (!selfModification.allowed) return Response.json({ message: selfModification.reason }, { status: selfModification.status });

@@ -18,7 +18,39 @@ export function validateTask(body, allowlist) {
   if (typeof branch !== "string" || !branchPattern.test(branch)) return { error: "Branch name is invalid.", status: 400 };
   if (typeof mode !== "string" || !modes.has(mode)) return { error: "Task mode is invalid.", status: 400 };
   if (typeof objective !== "string" || !objective.trim() || objective.length > 4_000) return { error: "Objective is invalid.", status: 400 };
+  if (mode === "coder") {
+    const assessment = assessCoderObjective(objective);
+    if (!assessment.ok) return { error: assessment.reason, status: 422, needsClarification: true };
+  }
   return { task: { repository: repository.toLowerCase(), branch, mode, objective: objective.trim() } };
+}
+
+const LEAD_IN = /^(?:(?:hey|hi|hello|yo|ok(?:ay)?|so|atlas)[,!.:\s]+)*/iu;
+const CONVERSATIONAL = /^(?:can|could|would|will)\s+(?:you|u)\b|^(?:what|why|how|is|are|do|does|should)\b/iu;
+/** Something concrete to change: a file, a path, an identifier, or a named part of a product. */
+const CONCRETE_TARGET = new RegExp([
+  String.raw`\b[\w-]+\.[a-z]{1,5}\b`,
+  String.raw`\b[\w.-]+\/[\w./-]+`,
+  "`[^`]+`",
+  String.raw`\b(?:page|screen|button|link|form|field|input|modal|dialog|menu|nav(?:bar)?|header|footer|sidebar|layout|style|css|theme|dark mode|component|function|method|class|module|endpoint|route|api|query|schema|table|migration|test|tests|spec|lint|type(?:s|script)?|build|script|workflow|dependency|package|readme|docs?|documentation|log(?:s|ging)?|login|log[- ]?in|sign[- ]?(?:in|up)|signup|checkout|cart|dashboard|settings|profile|search|upload|download|email|notification|error|bug|crash|exception|timeout|leak|regression|warning|message|copy|text|label|title|icon|image|chart|report|export|import|cache|retry|config(?:uration)?|env(?:ironment)? var(?:iable)?s?|secret|permission|auth(?:entication|orization)?|token|session|webhook|cron|job|queue|worker)\b`,
+].join("|"), "iu");
+
+/**
+ * A coding run is bounded and expensive; an objective with nothing concrete
+ * to change sends the agent exploring until its turn budget runs out (see
+ * docs/atlas-os/RECOVERY.md §1 — "hi can u debug yourself?"). Such an
+ * objective is sent back with a request for the missing detail instead.
+ * Read-only modes (inspect, debug) stay open-ended on purpose.
+ */
+export function assessCoderObjective(objective) {
+  const text = String(objective ?? "").trim();
+  const body = text.replace(LEAD_IN, "");
+  const words = body.split(/\s+/u).filter(Boolean);
+  const concrete = CONCRETE_TARGET.test(text);
+  const reason = "Atlas needs a concrete change to make. Say which part of the project and what should be different when it is done — for example “Fix the login form so an empty password shows an error”. To explore first, ask in chat or start a review.";
+  if (words.length < 4) return { ok: false, reason };
+  if (!concrete && (CONVERSATIONAL.test(body) || text.includes("?"))) return { ok: false, reason };
+  return { ok: true };
 }
 
 /**
