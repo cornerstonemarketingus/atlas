@@ -20,8 +20,8 @@
 export const INSTANT_TOOL_NAMES = Object.freeze(["read_web_page", "web_search", "read_repository_file", "search_repository_code"]);
 
 const MAX_PAGE_BYTES = 600_000;
-const MAX_TOOL_CHARS = 12_000;
-const MAX_FILE_CHARS = 20_000;
+const MAX_TOOL_CHARS = 7_000;
+const MAX_FILE_CHARS = 12_000;
 const TOOL_TIMEOUT_MS = 12_000;
 const REPOSITORY_PATTERN = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/u;
 
