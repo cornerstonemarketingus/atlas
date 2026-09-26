@@ -31,7 +31,7 @@ type NavItem = { id: Section; href: string; label: string; glyph: string; hint?:
 const SECTION_LABELS: Record<Section, string> = {
   chat: "Atlas",
   build: "Code",
-  automation: "Computer",
+  automation: "Computer control",
   connections: "Connections",
   settings: "Settings",
 };

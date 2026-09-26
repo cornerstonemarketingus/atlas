@@ -28,7 +28,7 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
   if (tasks.length && conversationId) items.push({ label: "Code", href: `/build?conversation=${encodeURIComponent(conversationId)}` });
   const pullRequest = tasks.find((task) => task.pullRequest?.url)?.pullRequest?.url;
   if (pullRequest) items.push({ label: "Pull request ↗", href: pullRequest });
-  if (messages.some((message) => message.role === "assistant" && message.content.includes("](/automation)"))) items.push({ label: "Computer", href: "/automation" });
+  if (messages.some((message) => message.role === "assistant" && message.content.includes("](/automation)"))) items.push({ label: "Computer control", href: "/automation" });
   return items;
 }
 
@@ -260,7 +260,7 @@ export function ChatSection() {
       const result = await response.json() as { message?: string };
       if (!response.ok) { setNotice(result.message ?? "Atlas could not start that computer task."); return; }
       setMessages((items) => [...items, { id: `local-${Date.now()}-task`, role: "assistant", createdAt: new Date().toISOString(),
-        content: `Started on **${device.name}**${device.status === "online" ? "" : " (it will begin when that computer comes online)"}. I will pause for your approval before anything consequential. Follow it in [Computer](/automation).` }]);
+        content: `Started on **${device.name}**${device.status === "online" ? "" : " (it will begin when that computer comes online)"}. I will pause for your approval before anything consequential. Follow it in [Computer control](/automation).` }]);
     } catch {
       setNotice("Atlas could not reach the computer service. Nothing was started.");
     } finally {

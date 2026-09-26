@@ -21,6 +21,7 @@ import { CORRELATION_HEADER, correlationIdFromRequest } from "./correlation.mjs"
 import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun, visibleTasks } from "./run-status.mjs";
 import { selfModificationDecision } from "./self-protection.mjs";
 import { repositoryAccessDecision } from "./repository-access.mjs";
+import { platformGitHubToken } from "./github-token.mjs";
 
 export async function POST(request: Request) {
   // A caller-supplied x-atlas-correlation-id is honoured only when it is
@@ -59,7 +60,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   // Never append to a conversation owned by another tenant or principal.
   try { if (!(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) conversationId = randomUUID(); } catch { conversationId = randomUUID(); }
 
-  let githubToken = process.env.ATLAS_GITHUB_TOKEN;
+  let githubToken = platformGitHubToken();
   try {
     const githubApp = githubAppConfiguration();
     if (githubApp.configured) githubToken = await createInstallationToken(githubApp);
@@ -338,7 +339,7 @@ async function readToken(): Promise<string | undefined> {
   } catch {
     // Falls through to the personal token, then to no live status at all.
   }
-  return process.env.ATLAS_GITHUB_TOKEN;
+  return platformGitHubToken();
 }
 
 function taskView(row: TaskRow, runId: number | null, run: Run | null, pullRequest: PullRequest | null) {

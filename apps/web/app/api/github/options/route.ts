@@ -4,6 +4,7 @@ import { NO_TENANT_MESSAGE, resolveTenantContext } from "../../auth/tenant-conte
 import { allowedRepositories } from "../../tasks/dispatch.mjs";
 import { createInstallationToken, githubAppConfiguration } from "../../tasks/github-app.mjs";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
+import { platformGitHubToken } from "../../tasks/github-token.mjs";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -28,7 +29,7 @@ export async function GET(request: Request) {
     return Response.json({ message: "That repository is not on your Atlas allowlist." }, { status: 403 });
   }
 
-  let token = process.env.ATLAS_GITHUB_TOKEN;
+  let token = platformGitHubToken();
   try {
     const configuration = githubAppConfiguration();
     if (configuration.configured) token = await createInstallationToken(configuration);

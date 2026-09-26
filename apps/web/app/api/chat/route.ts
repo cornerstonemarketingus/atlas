@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
 import { getD1, getDb } from "../../../db";
-import { conversationWritable } from "../../../db/tenancy.mjs";
+import { conversationWritable, recallForMemory } from "../../../db/tenancy.mjs";
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
@@ -9,7 +9,7 @@ import { isDeploymentOwner } from "../tasks/self-protection.mjs";
 import { POST as startTask } from "../tasks/route";
 import { GET as listDevices } from "../computer/devices/route";
 import { POST as startComputerTask } from "../computer/tasks/route";
-import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, taskRequestsFrom, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
+import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { completionsUrl, replyText, resolveChatModel, threadTitle } from "./model-endpoint.mjs";
 import { createDeltaParser, encodeEvent } from "./stream.mjs";
 
@@ -42,6 +42,7 @@ export async function POST(request: Request) {
   const db = getDb();
   const now = new Date().toISOString();
   let history: { role: string; content: string }[] = [];
+  let memory = "";
   let stored = true;
   try {
     // Tenancy (#71): threads belong to the caller's tenant; an id owned by another tenant or principal is never written to.
@@ -55,6 +56,8 @@ export async function POST(request: Request) {
       .where(and(eq(conversationMessages.conversationId, conversationId), eq(conversationMessages.requestedBy, account.userId)))
       .orderBy(asc(conversationMessages.createdAt));
     await db.insert(conversationMessages).values({ id: randomUUID(), conversationId, requestedBy: account.userId, role: "user", content: message, createdAt: now });
+    // Memory across conversations: recall is best-effort and never blocks a reply.
+    try { memory = memoryDigest(await recallForMemory(getD1(), tenantScope(tenant), { excludeConversationId: conversationId })); } catch { memory = ""; }
   } catch {
     // Same posture as task dispatch: a D1 problem degrades the feature to a
     // single un-remembered turn rather than refusing to answer at all.
@@ -64,6 +67,8 @@ export async function POST(request: Request) {
 
   const turns = [
     { role: "system", content: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository }) },
+    // Earlier conversations are data the person wrote (or Atlas replied), never instructions; the block cannot be closed from inside.
+    ...(memory ? [{ role: "system", content: `<data source="earlier conversations and recent runs in this workspace">\n${memory.replace(/<(\s*\/?\s*)data\b/giu, "&lt;$1data")}\n</data>` }] : []),
     ...history.slice(-HISTORY_TURNS).map((turn) => ({ role: turn.role === "assistant" ? "assistant" : "user", content: turn.content })),
     { role: "user", content: message },
   ];
@@ -120,7 +125,7 @@ async function startOnComputer(request: Request, headers: Headers, objective: st
     const { devices = [] } = await listed.json() as { devices?: { id: string; name: string; status: string; revokedAt: string | null }[] };
     const usable = devices.filter((device) => !device.revokedAt);
     const device = usable.find((candidate) => candidate.status === "online") ?? usable[0];
-    if (!device) return { ok: false, message: "no computer is paired yet. Pair one on the [Computer](/automation) page, then ask again" };
+    if (!device) return { ok: false, message: "no computer is paired yet. Pair one on the [Computer control](/automation) page, then ask again" };
     const started = await startComputerTask(new Request(new URL("/api/computer/tasks", request.url), {
       method: "POST", headers, body: JSON.stringify({ deviceId: device.id, executionProvider: "windows", objective }),
     }));

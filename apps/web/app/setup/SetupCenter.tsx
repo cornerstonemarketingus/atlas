@@ -126,9 +126,9 @@ export function SetupCenter() {
             </article>
             <article className="status-card">
               <small>COMPUTER</small>
-              <strong>Connect from Computer</strong>
+              <strong>Connect from Computer control</strong>
               <p>The Windows companion app connects with a one-time pairing file and uses its own browser profile on your PC.</p>
-              <Link href="/automation">Open Computer →</Link>
+              <Link href="/automation">Open Computer control →</Link>
             </article>
           </div>
         </section>

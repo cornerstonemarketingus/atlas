@@ -195,6 +195,30 @@ export async function conversationWritable(d1, scope, id) {
   return !existing || (existing.tenantId === scope.tenantId && existing.requestedBy === scope.principal);
 }
 
+/**
+ * What Atlas recalls from this person's other conversations in the same
+ * workspace: the most recent threads with their last few messages, and
+ * their most recent runs. Bounded here (rows) and again when formatted
+ * (characters), so recall never crowds out the current conversation.
+ */
+export async function recallForMemory(d1, scope, { excludeConversationId = "", conversationLimit = 8, messagesPerConversation = 4, taskLimit = 8 } = {}) {
+  requireScope(scope);
+  const { results: threads } = await d1.prepare(
+    `SELECT id, title, repository, updated_at AS updatedAt FROM conversations
+      WHERE tenant_id = ? AND requested_by = ? AND archived_at IS NULL AND id != ?
+      ORDER BY updated_at DESC LIMIT ?`,
+  ).bind(scope.tenantId, scope.principal, excludeConversationId, conversationLimit).all();
+  const conversations = await Promise.all(threads.map(async (thread) => {
+    const { results } = await d1.prepare(
+      `SELECT role, content, created_at AS createdAt FROM conversation_messages
+        WHERE conversation_id = ? AND requested_by = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+    ).bind(thread.id, scope.principal, messagesPerConversation).all();
+    return { ...thread, messages: results.reverse() };
+  }));
+  const tasks = await listTasks(d1, scope, taskLimit);
+  return { conversations, tasks };
+}
+
 // ---- Tasks ---------------------------------------------------------------
 
 export async function listTasks(d1, scope, limit = 10) {

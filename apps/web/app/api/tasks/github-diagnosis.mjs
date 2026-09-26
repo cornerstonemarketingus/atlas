@@ -10,7 +10,7 @@
 export function explainGitHubFailure(status, { workflow = "the Atlas workflow", repository = "the repository" } = {}) {
   switch (status) {
     case 401:
-      return { code: "GITHUB_TOKEN_INVALID", blocked: "BLOCKED_BY_MISSING_CREDENTIAL", message: "GitHub rejected Atlas's credential: it has expired or been revoked.", unblock: "Create a new token (or reinstall the GitHub App), save it as the ATLAS_GITHUB_TOKEN repository secret, and redeploy." };
+      return { code: "GITHUB_TOKEN_INVALID", blocked: "BLOCKED_BY_MISSING_CREDENTIAL", message: "GitHub rejected Atlas's credential: it has expired or been revoked.", unblock: "Save a valid token (Actions: read and write, Contents: read on the repository) as the ATLAS_GITHUB_TOKEN repository secret, then run the \"Deploy Atlas web to Cloudflare Workers\" workflow: the website only picks up the new token when that workflow runs." };
     case 403:
       return { code: "GITHUB_PERMISSION_MISSING", blocked: "BLOCKED_BY_PERMISSION", message: `Atlas's GitHub credential cannot run workflows on ${repository}.`, unblock: "Give the token or GitHub App Actions: read and write permission on this repository (a rate limit also answers 403 — if so, wait and retry)." };
     case 404:
