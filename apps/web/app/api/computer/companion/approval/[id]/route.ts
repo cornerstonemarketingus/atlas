@@ -1,10 +1,21 @@
 import { createHash } from "node:crypto";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { getDb } from "../../../../../../db";
-import { computerApprovals, computerTasks } from "../../../../../../db/schema";
+import { computerApprovals, computerTasks, requestRateLimits } from "../../../../../../db/schema";
 import { authenticatedDevice } from "../../../companion-auth";
+import { enforceRateLimit, rateLimitSubjectForIp } from "../../../../rate-limit.mjs";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+  const limited = await enforceRateLimit({
+    db: getDb,
+    table: requestRateLimits,
+    request,
+    subject: rateLimitSubjectForIp(request),
+    route: "computer_companion_approval",
+    limit: 30,
+    windowSeconds: 15 * 60,
+  });
+  if (limited) return limited;
   const device = await authenticatedDevice(request);
   if (!device) return Response.json({ message: "Device authentication failed." }, { status: 401 });
   let body: { action?: unknown };

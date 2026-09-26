@@ -141,6 +141,7 @@ measurable quality, and transparent cost control.
       mutation approvals are intentionally out of scope.
 - [x] Add bounded, expiring, one-time approval-resume tokens bound to session,
       repository, tool, and tool-call identifiers.
+- [x] Add hosted web-route rate limiting for sign-in, task, chat, and approval APIs.
 - [ ] Prevent repository instructions from modifying platform policy.
 - [ ] Add policy simulation and explain-why-denied output.
 - [x] Add a capability-enforced read-only tool registry that does not invoke

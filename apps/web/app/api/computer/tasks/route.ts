@@ -1,9 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "../../../../db";
-import { computerApprovals, computerDevices, computerTaskEvents, computerTasks } from "../../../../db/schema";
+import { computerApprovals, computerDevices, computerTaskEvents, computerTasks, requestRateLimits } from "../../../../db/schema";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { currentPlan } from "../../billing/plan.mjs";
+import { enforceRateLimit, rateLimitSubjectForAccount } from "../../rate-limit.mjs";
 import { cloudBrowserAccess, hostedBrowserConfigured } from "../browser-plan.mjs";
 import { computerExecutionPolicy, normalizeComputerWorkflow } from "../computer-policy.mjs";
 import { taskEvent } from "../task-events";
@@ -37,6 +38,16 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  const limited = await enforceRateLimit({
+    db: getDb,
+    table: requestRateLimits,
+    request,
+    subject: rateLimitSubjectForAccount(account),
+    route: "computer_tasks_post",
+    limit: 20,
+    windowSeconds: 15 * 60,
+  });
+  if (limited) return limited;
   let body: { deviceId?: unknown; objective?: unknown; startUrl?: unknown; executionProvider?: unknown; workflowType?: unknown };
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
   let deviceId = typeof body.deviceId === "string" ? body.deviceId : "";

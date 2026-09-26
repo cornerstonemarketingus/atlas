@@ -102,7 +102,7 @@ still not provided; the interface deliberately remains shell-free.
 | # | Gap | Status |
 |---|---|---|
 | SEC-5 | Hosted approval consumption not atomic | **Fixed on this branch** — conditional update with `.returning()`; decisions on expired approvals refused |
-| SEC-6 | Operator bearer compared with `===` | **Fixed on this branch** — SHA-256 + `timingSafeEqual`; rate limiting still open |
+| SEC-6 | Operator bearer compared with `===` | **Fixed on this branch** — SHA-256 + `timingSafeEqual`, plus D1-backed fixed-window rate limiting on hosted auth, task, chat, and approval APIs |
 | SEC-14 | Two workflows without `permissions:` | **Fixed on this branch**, and `check-workflows.py` now fails any workflow that omits it |
 | SEC-1, 2 | Tenant model, revocable sessions | Open (High) — required before multi-tenant expansion |
 | SEC-3 | SSRF in daemon browser tools | Partially addressed in `apps/browser-worker` egress policy; daemon tools still scheme-only |

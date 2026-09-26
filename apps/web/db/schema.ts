@@ -88,6 +88,17 @@ export const taskUsage = sqliteTable("task_usage", {
   userPeriodIndex: uniqueIndex("task_usage_user_period_idx").on(table.userId, table.periodStart),
 }));
 
+export const requestRateLimits = sqliteTable("request_rate_limits", {
+  subject: text("subject").notNull(),
+  route: text("route").notNull(),
+  bucketStart: integer("bucket_start").notNull(),
+  requestCount: integer("request_count").notNull().default(1),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  bucketIndex: uniqueIndex("request_rate_limits_subject_route_bucket_idx").on(table.subject, table.route, table.bucketStart),
+  updatedAtIndex: index("request_rate_limits_updated_at_idx").on(table.updatedAt),
+}));
+
 export const installations = sqliteTable("installations", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   githubInstallationId: integer("github_installation_id").notNull(),

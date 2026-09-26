@@ -1,10 +1,21 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
-import { subscriptions, users } from "../../../../../db/schema";
+import { requestRateLimits, subscriptions, users } from "../../../../../db/schema";
 import { exchangeCodeForToken, fetchGitHubProfile, githubOAuthConfiguration, clearStateCookieHeader, isOwnerGitHubLogin, readStateCookie, publicOrigin } from "../../github-oauth.mjs";
+import { enforceRateLimit, rateLimitSubjectForIp } from "../../../rate-limit.mjs";
 import { OWNER_SESSION_TTL_SECONDS, signSession, sessionCookieHeader } from "../../session.mjs";
 
 export async function GET(request: Request) {
+  const limited = await enforceRateLimit({
+    db: getDb,
+    table: requestRateLimits,
+    request,
+    subject: rateLimitSubjectForIp(request),
+    route: "auth_github_callback",
+    limit: 20,
+    windowSeconds: 15 * 60,
+  });
+  if (limited) return limited;
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
