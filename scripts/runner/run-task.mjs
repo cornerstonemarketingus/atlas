@@ -77,6 +77,19 @@ function parseCodingRoutes(raw) {
   } catch {
     throw new Error("ATLAS_MODEL_ROUTES must be valid JSON.");
   }
+
+  function parseFallbackRoute(specification) {
+    const first = specification.indexOf(":");
+    const last = specification.lastIndexOf(":");
+    if (first <= 0 || last <= first + 1 || last >= specification.length - 1) {
+      return null;
+    }
+    return {
+      provider: specification.slice(0, first).trim().toLowerCase(),
+      model: specification.slice(first + 1, last).trim(),
+      apiKeyEnvironmentVariable: specification.slice(last + 1).trim(),
+    };
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("ATLAS_MODEL_ROUTES must be a JSON object.");
   }
@@ -279,7 +292,18 @@ if (metadata.mode === "inspect") {
   const envFallbacks = (process.env.ATLAS_CODER_FALLBACKS || "").split(",").map((item) => item.trim()).filter(Boolean);
   const fallbacks = [...new Set([...routeFallbacks, ...envFallbacks])];
   for (const fallback of fallbacks) {
-    if (!/^(?:anthropic|groq):[A-Za-z0-9._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY)$/.test(fallback)) {
+    const parsed = parseFallbackRoute(fallback);
+    if (!parsed) {
+      writeStatus("failed", "ATLAS_CODER_FALLBACKS contains an invalid route. Expected provider:model:API_KEY_ENV.");
+      console.error("Atlas coder mode: invalid fallback route.");
+      process.exit(2);
+    }
+    if (!Object.hasOwn(PROVIDER_KEY_VARIABLES, parsed.provider)) {
+      writeStatus("failed", `ATLAS_CODER_FALLBACKS contains unknown provider '${parsed.provider}'.`);
+      console.error("Atlas coder mode: invalid fallback provider.");
+      process.exit(2);
+    }
+    if (!/^(?:ANTHROPIC_API_KEY|GROQ_API_KEY)$/.test(parsed.apiKeyEnvironmentVariable)) {
       writeStatus("failed", "ATLAS_CODER_FALLBACKS contains an invalid route. Expected provider:model:API_KEY_ENV.");
       console.error("Atlas coder mode: invalid fallback route.");
       process.exit(2);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { lastServedRoute, rememberServedRoute, resolveModelRoutes } from "../app/api/chat/model-router.mjs";
+import { resolveModelRoutes } from "../app/api/chat/model-router.mjs";
 
 test("falls back to legacy chat endpoint when ATLAS_MODEL_ROUTES is unset", () => {
   const env = { ATLAS_CHAT_BASE_URL: "https://api.example/v1", ATLAS_CHAT_MODEL: "legacy-model", ATLAS_MODEL_API_KEY: "secret" };
@@ -44,10 +44,4 @@ test("rejects provider routes with an invalid base URL", () => {
   });
   assert.equal(routed.configured, false);
   assert.match(routed.reason, /HTTPS|http or https|valid URL/u);
-});
-
-test("tracks last served route label in memory", () => {
-  rememberServedRoute("user-123", "chat", "groq:openai/gpt-oss-20b");
-  assert.equal(lastServedRoute("user-123", "chat"), "groq:openai/gpt-oss-20b");
-  assert.equal(lastServedRoute("user-456", "chat"), null);
 });

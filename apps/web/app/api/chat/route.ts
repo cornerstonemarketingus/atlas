@@ -14,7 +14,7 @@ import { GET as listDevices } from "../computer/devices/route";
 import { POST as startComputerTask } from "../computer/tasks/route";
 import { SELF_REPOSITORY, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom } from "./atlas-knowledge.mjs";
 import { threadTitle } from "./model-endpoint.mjs";
-import { lastServedRoute, rememberServedRoute, resolveModelRoutes } from "./model-router.mjs";
+import { resolveModelRoutes } from "./model-router.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
 
@@ -90,7 +90,6 @@ export async function POST(request: Request) {
 
   const outcome = await converse({ ...loop, stream: false, emit: () => {} });
   if ("error" in outcome) return Response.json({ message: outcome.error, conversationId }, { status: outcome.status });
-  rememberServedRoute(account.userId, "chat", outcome.answeredBy);
   const reply = outcome.reply;
   if (!reply) return Response.json({ message: "The model endpoint returned an empty reply.", conversationId }, { status: 502 });
 
@@ -215,7 +214,6 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
         controller.close();
         return;
       }
-      rememberServedRoute(userId, "chat", outcome.answeredBy);
       const reply = outcome.reply;
       if (!reply) {
         emit("error", { message: "The model endpoint returned an empty reply." });
@@ -251,6 +249,6 @@ export async function GET(request: Request) {
     configured: routing.configured,
     reason: routing.reason ?? null,
     routes: routing.routesTable ?? [],
-    lastServedModel: lastServedRoute(account.userId, "chat"),
+    lastServedModel: null,
   }, { headers: { "cache-control": "no-store" } });
 }

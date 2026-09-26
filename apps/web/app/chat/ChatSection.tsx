@@ -206,7 +206,7 @@ export function ChatSection() {
         const { value, done } = await reader.read();
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: ToolStep["state"] } | null;
+          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: ToolStep["state"]; answeredBy?: string | null } | null;
           if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
           else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
@@ -221,6 +221,7 @@ export function ChatSection() {
             const reply = data.reply;
             if (thought) setThoughts((items) => ({ ...items, [reply.id]: thought }));
             if (steps.length) setStepLogs((items) => ({ ...items, [reply.id]: steps }));
+            if (typeof data.answeredBy === "string" && data.answeredBy) window.localStorage.setItem("atlas.lastServedModel", data.answeredBy);
             setMessages((items) => [...items, reply]);
           }
         }

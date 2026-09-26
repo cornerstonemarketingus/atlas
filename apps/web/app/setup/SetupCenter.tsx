@@ -59,7 +59,11 @@ export function SetupCenter() {
     ]).then(([status, chat, options]) => {
       if (!active) return;
       if (status) setGitHub(status as GitHub);
-      if (chat) setModel(chat as ChatModelStatus);
+      if (chat) {
+        const next = chat as ChatModelStatus;
+        const last = window.localStorage.getItem("atlas.lastServedModel");
+        setModel(next.lastServedModel ? next : { ...next, ...(last ? { lastServedModel: last } : {}) });
+      }
       const names = (options as { repositories?: string[] } | null)?.repositories ?? [];
       if (names.length) { setRepositoryOptions(names); setRepository((current) => current || names[0]); }
     });
@@ -126,6 +130,7 @@ export function SetupCenter() {
                 : model?.reason ?? "Chat cannot answer until a model endpoint is configured."}</p>
               {model?.lastServedModel && <p>Last served: <code>{model.lastServedModel}</code></p>}
               {!!model?.routes?.length && <table>
+                <caption>Configured model routes</caption>
                 <thead><tr><th>Purpose</th><th>Route</th><th>Endpoint</th></tr></thead>
                 <tbody>
                   {model.routes.map((item, index) => <tr key={`${item.purpose}:${item.route}:${index}`}>

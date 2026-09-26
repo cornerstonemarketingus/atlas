@@ -5,8 +5,6 @@ const PURPOSES = ["chat", "reasoning", "vision", "summarize", "coding"];
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 
-const LAST_SERVED = new Map();
-
 function normalizeBaseUrl(baseUrl) {
   let url;
   try {
@@ -125,15 +123,4 @@ export function resolveModelRoutes(environment = process.env) {
     else routesTable.push({ purpose: "chat", route: resolved.route.label, endpoint: resolved.route.baseUrl });
   }
   return { configured: true, chatRoutes, routesTable };
-}
-
-export function rememberServedRoute(scope, purpose, routeLabel) {
-  if (typeof scope !== "string" || !scope) return;
-  if (typeof routeLabel !== "string" || !routeLabel) return;
-  LAST_SERVED.set(`${scope}:${purpose}`, routeLabel);
-}
-
-export function lastServedRoute(scope, purpose) {
-  if (typeof scope !== "string" || !scope) return null;
-  return LAST_SERVED.get(`${scope}:${purpose}`) ?? null;
 }
