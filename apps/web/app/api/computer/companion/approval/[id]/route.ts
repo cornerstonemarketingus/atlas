@@ -3,20 +3,20 @@ import { and, eq, gt, isNull } from "drizzle-orm";
 import { getDb } from "../../../../../../db";
 import { computerApprovals, computerTasks, requestRateLimits } from "../../../../../../db/schema";
 import { authenticatedDevice } from "../../../companion-auth";
-import { enforceRateLimit, rateLimitSubjectForIp } from "../../../../rate-limit.mjs";
+import { enforceRateLimit, rateLimitSubjectForDevice, rateLimitSubjectForIp } from "../../../../rate-limit.mjs";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+  const device = await authenticatedDevice(request);
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
     request,
-    subject: rateLimitSubjectForIp(request),
+    subject: device ? rateLimitSubjectForDevice(device) : rateLimitSubjectForIp(request),
     route: "computer_companion_approval",
     limit: 30,
     windowSeconds: 15 * 60,
   });
   if (limited) return limited;
-  const device = await authenticatedDevice(request);
   if (!device) return Response.json({ message: "Device authentication failed." }, { status: 401 });
   let body: { action?: unknown };
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }

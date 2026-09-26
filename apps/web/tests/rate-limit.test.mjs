@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
-import { consumeRateLimit, enforceRateLimit, rateLimitSubjectForAccount, rateLimitSubjectForIp } from "../app/api/rate-limit.mjs";
+import { consumeRateLimit, enforceRateLimit, rateLimitSubjectForAccount, rateLimitSubjectForDevice, rateLimitSubjectForIp } from "../app/api/rate-limit.mjs";
 
 const requestRateLimits = sqliteTable("request_rate_limits", {
   subject: text("subject").notNull(),
@@ -98,6 +98,18 @@ test("over-budget requests get a 429 with Retry-After", async () => {
     assert.equal(limited?.status, 429);
     assert.equal(limited?.headers.get("retry-after"), "60");
     assert.deepEqual(await limited?.json(), { error: "rate_limited" });
+    const stillLimited = await enforceRateLimit({
+      db,
+      table: requestRateLimits,
+      request,
+      subject,
+      route: "auth_operator",
+      limit: 1,
+      windowSeconds: 60,
+      now: 180_002,
+    });
+    assert.equal(stillLimited?.status, 429);
+    assert.equal(sqlite.prepare("SELECT request_count FROM request_rate_limits").get().request_count, 2);
   } finally {
     sqlite.close();
   }
@@ -159,6 +171,10 @@ test("account and IP buckets are independent", async () => {
   } finally {
     sqlite.close();
   }
+});
+
+test("authenticated devices get their own limiter buckets", () => {
+  assert.equal(rateLimitSubjectForDevice({ id: "device-123" }), "device:device-123");
 });
 
 test("operator sign-in fails closed when limiter storage is unavailable", async () => {

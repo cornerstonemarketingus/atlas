@@ -4,6 +4,10 @@ export function rateLimitSubjectForAccount(account) {
   return `account:${account.userId}`;
 }
 
+export function rateLimitSubjectForDevice(device) {
+  return `device:${device.id}`;
+}
+
 export function rateLimitSubjectForIp(request) {
   const forwarded = request.headers.get("cf-connecting-ip");
   const ip = typeof forwarded === "string" && forwarded.trim() ? forwarded.trim() : "unknown";
@@ -21,9 +25,13 @@ export async function consumeRateLimit(db, table, { subject, route, limit, windo
   const currentSecond = Math.floor(now / 1000);
   const bucketStart = currentSecond - (currentSecond % windowSeconds);
   const updatedAt = new Date(now).toISOString();
+  const maxStoredCount = limit + 1;
   const rows = await db.insert(table).values({ subject, route, bucketStart, requestCount: 1, updatedAt }).onConflictDoUpdate({
     target: [table.subject, table.route, table.bucketStart],
-    set: { requestCount: sql`${table.requestCount} + 1`, updatedAt },
+    set: {
+      requestCount: sql`CASE WHEN ${table.requestCount} < ${maxStoredCount} THEN ${table.requestCount} + 1 ELSE ${table.requestCount} END`,
+      updatedAt,
+    },
   }).returning({ requestCount: table.requestCount });
   const requestCount = rows[0]?.requestCount ?? limit + 1;
   return {
