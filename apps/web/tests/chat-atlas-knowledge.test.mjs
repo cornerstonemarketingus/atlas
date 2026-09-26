@@ -61,3 +61,21 @@ test("started-task lines are honest about what will happen", () => {
   assert.match(describeStartedTask(request, { ok: false, message: "Only the Atlas deployment owner can run coder mode" }), /^I could not start a coder run/u);
   assert.doesNotMatch(describeStartedTask({ ...request, mode: "inspect" }, { ok: true }), /merge/u);
 });
+
+test("streamed tool calls are assembled from pieces and become task requests", async () => {
+  const { createDeltaParser } = await import("../app/api/chat/stream.mjs");
+  const { taskRequestsFromCalls } = await import("../app/api/chat/atlas-knowledge.mjs");
+  const parser = createDeltaParser();
+  const chunk = (delta) => `data: ${JSON.stringify({ choices: [{ delta }] })}\n`;
+  const deltas = parser.push([
+    chunk({ content: "Starting that now." }),
+    chunk({ tool_calls: [{ index: 0, id: "c1", function: { name: "start_atlas_task", arguments: "{\"mode\":\"co" } }] }),
+    chunk({ tool_calls: [{ index: 0, function: { arguments: "der\",\"objective\":\"Add a test for defaultMergePolicy.\"}" } }] }),
+    "data: [DONE]\n",
+  ].join(""));
+  assert.deepEqual(deltas, ["Starting that now."]);
+  assert.equal(parser.done, true);
+  const { requests, errors } = taskRequestsFromCalls(parser.toolCalls);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests, [{ mode: "coder", objective: "Add a test for defaultMergePolicy.", repository: SELF_REPOSITORY }]);
+});

@@ -1,26 +1,9 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import { readSessionCookie, verifySession } from "../auth/session.mjs";
+import { checkRevocation } from "../auth/revocation.mjs";
 
 const BEARER_PREFIX = "Bearer ";
-
-/**
- * Constant-time secret comparison that works in a Worker (no node:crypto
- * timingSafeEqual). Both sides are hashed first, so the XOR loop always runs
- * over 32 bytes and neither the secret's length nor the position of the first
- * differing byte shows up in the timing.
- */
-export async function constantTimeEqual(left, right) {
-  if (typeof left !== "string" || typeof right !== "string") return false;
-  const encoder = new TextEncoder();
-  const [a, b] = await Promise.all([
-    crypto.subtle.digest("SHA-256", encoder.encode(left)),
-    crypto.subtle.digest("SHA-256", encoder.encode(right)),
-  ]);
-  const x = new Uint8Array(a);
-  const y = new Uint8Array(b);
-  let difference = 0;
-  for (let index = 0; index < x.length; index += 1) difference |= x[index] ^ y[index];
-  return difference === 0;
-}
 
 /**
  * Resolves the full authenticated account, including the internal D1 `users.id`
@@ -29,7 +12,7 @@ export async function constantTimeEqual(left, right) {
  * account, so plan gating treats them as unrestricted rather than guessing at
  * a tier for them.
  */
-export async function authenticatedAccount(request, environment = process.env) {
+export async function authenticatedAccount(request, environment = process.env, { revocationStore = undefined } = {}) {
   const platformUserId = request.headers.get("oai-authenticated-user-id");
   // Only opt in behind an ingress that strips/replaces client-supplied headers.
   // Public workers.dev requests are not a trusted identity provider.
@@ -41,15 +24,14 @@ export async function authenticatedAccount(request, environment = process.env) {
   const operatorToken = environment.ATLAS_OPERATOR_TOKEN;
   if (operatorToken) {
     const header = request.headers.get("authorization");
-    if (header && header.startsWith(BEARER_PREFIX) && await constantTimeEqual(header.slice(BEARER_PREFIX.length), operatorToken)) {
-      return { userId: "operator", dbUserId: null };
-    }
+    if (typeof header === "string" && constantTimeEqual(header, `${BEARER_PREFIX}${operatorToken}`)) return { userId: "operator", dbUserId: null };
   }
 
   const sessionSecret = environment.ATLAS_SESSION_SECRET;
   if (sessionSecret) {
     const cookie = readSessionCookie(request);
-    const payload = cookie ? await verifySession(cookie, sessionSecret) : null;
+    const verified = cookie ? await verifySession(cookie, sessionSecret) : null;
+    const payload = verified && !(await isRevoked(verified, revocationStore)) ? verified : null;
     if (payload?.role === "operator") {
       return { userId: "operator", dbUserId: null };
     }
@@ -59,6 +41,38 @@ export async function authenticatedAccount(request, environment = process.env) {
   }
 
   return null;
+}
+
+/**
+ * Compares secrets without leaking, through timing, how long a matching
+ * prefix was. Hashing first gives both sides the same length.
+ */
+export function constantTimeEqual(actual, expected) {
+  const a = createHash("sha256").update(String(actual ?? "")).digest();
+  const b = createHash("sha256").update(String(expected ?? "")).digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * A signed-out or "signed out everywhere" session is refused server-side
+ * (SEC-2). Before migration 0014 exists the check degrades to allowing the
+ * session, as before; any other lookup failure refuses it, because a session
+ * that cannot be checked is not trusted.
+ */
+async function isRevoked(payload, store) {
+  let resolved = store;
+  if (resolved === undefined) {
+    // The D1 store only loads inside the Worker; outside it (plain Node, as in
+    // unit tests) there is no database to consult, which is not a verdict.
+    try { resolved = (await import("../auth/revocation-store")).d1RevocationStore(); }
+    catch { return false; }
+  }
+  if (!resolved) return false;
+  try {
+    return (await checkRevocation(payload, resolved)).revoked;
+  } catch {
+    return true;
+  }
 }
 
 export async function authenticatedUserId(request, environment = process.env) {

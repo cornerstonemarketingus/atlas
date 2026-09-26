@@ -90,9 +90,12 @@ test("an owner can decide a pending approval once, and not after it expires", as
 
 test("the routes authorize on the conditional update, not on the earlier read", () => {
   const consume = readFileSync(new URL("../app/api/computer/companion/approval/[id]/route.ts", import.meta.url), "utf8");
-  assert.match(consume, /const consumed = await consumeApproval\(/u);
-  assert.match(consume, /if \(!consumed\) return Response\.json\(\{ status: "already-consumed" \}, \{ status: 409 \}\)/u);
-  assert.doesNotMatch(consume, /db\.update\(/u);
+  // Consumption is one conditional UPDATE that only matches an approved,
+  // unconsumed, unexpired row; its result, not the earlier read, decides.
+  assert.match(consume, /eq\(computerApprovals\.status, "approved"\), isNull\(computerApprovals\.consumedAt\)/u);
+  assert.match(consume, /if \(!consumed\.length\) return Response\.json\(\{ status: "already-consumed" \}, \{ status: 409 \}\)/u);
   const decide = readFileSync(new URL("../app/api/computer/approvals/[id]/route.ts", import.meta.url), "utf8");
-  assert.match(decide, /decideApproval\(/u);
+  // A decision only lands on a still-pending, unexpired approval of the requester.
+  assert.match(decide, /eq\(computerApprovals\.status, "pending"\)/u);
+  assert.match(decide, /if \(!rows\.length\) return Response\.json\(/u);
 });

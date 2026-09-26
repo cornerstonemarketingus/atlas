@@ -148,7 +148,7 @@ export function createConversationExecutor({
             sessionId: session.id,
             signal,
             approvals,
-            context: { repository: session.repository },
+            context: { repository: session.repository, sessionId: session.id },
           });
           const durationMs = now() - startedAtMs;
 

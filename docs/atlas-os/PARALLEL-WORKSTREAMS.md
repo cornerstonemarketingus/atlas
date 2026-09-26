@@ -1,48 +1,160 @@
-# Atlas parallel workstreams
+# Atlas capability roadmap and parallel workstreams
 
-Each workstream is sized for one Claude Code session. They own **disjoint
-files**, so several can run at once without merge conflicts. Start every
-session from the latest `main`, work on its own branch, run the listed tests,
-and open a PR. Do not auto-merge or deploy.
+Updated 2026-09-25 against PR #59 (`claude/atlas-platform-development-o9znpd`)
+and observed Windows test results. This is a dependency plan, not a claim that
+the listed product is complete. Every workstream must land as a tested,
+reviewable PR. Do not merge or deploy without owner authorization.
 
-Shared rules for every workstream:
+## Product promise
 
-- `apps/local-control` stays zero-dependency (Node 22, `node:sqlite`, `node:test`).
-- Import contracts from `packages/atlas-contracts/src/index.mjs`; do not change them without a separate PR.
-- Every tool goes through `AuthorizedToolExecutor` (policy → budget → audit). Default deny; role labels grant nothing.
-- Success is proven by tool output and tests, never by prose.
-- Run `cd apps/local-control && npm test` (plus the suite named below) before opening a PR.
+**Atlas gets work done and proves it.** Chat is the command surface. Create,
+Operate, Automate, and Activity are concurrent workspaces over one runtime,
+not separate agent modes. Policies, budgets, approvals, leases, and audit stay
+inside the trusted kernel. No model may approve its own action or verify a
+failed action by assertion.
 
-Status key: ✅ merged · ☑️ done on `claude/atlas-implementation-eah694` (tests green, not yet merged) · 🔄 an agent is building it now · ⬜ not started.
+## Verified baseline
 
-## Already merged (PR #55)
+PR #59 adds substantial runtime integration: durable outbox delivery, team
+mission execution over the existing scheduler, approvals during a step,
+recovery, local desktop tools, a platform terminal tool, MCP stdio, scoped
+memory recall, model fallback for conversation, innovation briefs, and a local
+console. PR #59 remains a draft. Its CI is green, but that is not production
+validation. The hosted task dispatcher still has a documented owner credential
+blocker. The local Windows run of `apps/local-control` yielded 299 pass, 19
+fail, 3 skipped; terminal tests assume Unix binaries/POSIX paths and the MCP
+env test omits Windows baseline variables. See `CURRENT-STATE.md` and
+`RECOVERY.md`.
 
-✅ Contracts, task store, policy engine, budgets, authorized executor · ✅ Playwright browser worker + verified vertical slice · ✅ Terminal controller (process-level) · ✅ Agent family graph · ✅ MCP stdio gateway · ✅ Scoped memory + model router + Ollama adapter · ✅ Read-only task dashboard · ✅ Correlation IDs through coder dispatch · ✅ Phase 0 audit docs.
+The first verification-safety defect found during this pass is fixed on the
+stacked branch: a model's `passed: true` can no longer override a failed,
+denied, or pending tool action. Fingerprints remain in memory and are not
+written to artifacts or audit events. Focused mission tests pass 16/16.
 
-## Workstreams
+## Backlog map for the 200-item capability list
 
-| # | Workstream | Owns (files) | Acceptance | Status |
+| Requested item groups | Status from inspected code | Next dependency / workstream |
+|---|---|---|
+| 1, 17, 21–24, 35, 44–49, 83–89, 169, 174, 177–184 | Persistent sessions, mission scheduler, family graph, outbox, leases, approval gates and evidence exist in pieces; PR #59 connects a local team mission path. Full hosted unification, replay/re-execution, notification delivery, and conflict-aware leases remain incomplete. | A — finish canonical runtime and strict verification; B — durable scheduling after task lifecycle contract |
+| 2, 112–118, 153–157, 186–188 | Chat-first shell was deployed; PR #59 has a local nine-section console. Hosted/local surfaces are not one synchronized workspace; full workspaces, activity replay, and global search are incomplete. | C — product shell / task activity; depends on real runtime events |
+| 3, 96–104, 131 | No complete Project Genesis/full-stack builder, preview, DB/auth provisioning or domain workflow. Existing coder loop and deploy adapters are foundations only. | D — Create vertical slice after runtime, sandbox, preview service, and approvals |
+| 4, 10–16, 86–88, 92–95, 105–111 | CLI coding and validation are real; heuristic code navigation exists; compiler/LSP, DAP, robust CI repair and broad language coverage are absent. | E — IDE/code intelligence, after filesystem and terminal portability |
+| 5–6, 13, 51, 118 | Safe repository edits, worktrees, restricted terminal controller and command policy exist. Generic Windows terminal currently fails locally; containers/VM isolation, PTY, quotas and durable terminal sessions remain. | F — Windows terminal adapter/tests; G — isolated Linux/container runner |
+| 7–9, 40, 42, 52–53, 167, 170–171 | Browser automation, companion pairing, cloud browser package and PR #59 Windows desktop driver exist. Hosted browser consumer, multi-session takeover, macOS/Linux desktop and secure session recording remain partial/missing. | H — Operate sessions and takeover; separate OS-specific adapters |
+| 12, 14–15, 34, 37, 121–130 | GitHub Actions/App and MCP stdio exist; review comments, issues, remote MCP OAuth, other git hosts, connector catalog, marketplace and stable APIs remain incomplete. | I — connector/ACP/API slices after authz and tenant boundaries |
+| 18–20, 22, 28–31, 116, 145–148, 179–182 | Families, specialists, delegation and bounded parallel mission execution exist in PR #59. Agent worker pool, dynamic creation, leases, user-visible Teams, Skill builder/evals and marketplace are incomplete. | J — worker lifecycle/team supervision; K — Skill lifecycle only after verified task outcomes |
+| 25–27, 80–81, 139, 185–186 | Scoped local memory and family recall exist; user/project/org UI, semantic/vector/graph retrieval, provenance controls and broad research citations remain incomplete. | L — Atlas Brain controls, after tenancy/access model |
+| 32–33, 36–39 | MCP stdio client/runtime integration exists; HTTP transports, OAuth connectors, Atlas MCP server, channels and unified cross-channel identity are missing/partial. | I — connector framework, after policy model |
+| 41–43, 61–79 | Local Ollama discovery/adapters and model routing foundations exist; local model distribution, hardware-aware runtime, multimodal and Atlas-managed inference are largely missing. | M — model runtime based on privacy/cost evaluations |
+| 90–95, 141–147, 194–198 | Self-improve workflow and innovation pipeline exist, but fully autonomous self-modification must stay isolated, benchmarked, approval-gated and rollbackable. | N — self-improvement evaluation/rollback, after benchmark suite |
+| 99–110, 131, 163–165, 176 | Cloudflare deployment and local infrastructure adapters exist. Domain/DNS, preview promotion, rollback, managed data services, one-click provisioning and desktop/mobile product are incomplete. | D — deployment/provider adapters with explicit approval |
+| 119–128, 198–200 | Token/tool budgets, billing and owner controls exist in partial form; full multi-tenant SaaS, governance, analytics, residency and marketplace remain absent. | O — tenancy/security before customer expansion |
+
+## Parallel workstreams
+
+Each item below owns the named files/API area. A session must not edit files
+owned by another active session; shared contracts require an integration PR.
+
+| ID | Workstream | Owns | Depends on | Acceptance criteria |
 |---|---|---|---|---|
-| 1 | **Security fixes** | `apps/local-control/src/agent/tools/browser-tools.mjs`, `src/agent/browser/**`, `src/runner.mjs`, `src/net/ssrf-guard.mjs`, `scripts/local/**`, `apps/web/app/api/computer/**`, `apps/web/app/api/tasks/operator-auth.mjs`, `apps/browser-worker/src/address-guard.mjs` | Private/metadata addresses blocked (incl. DNS rebinding in the browser worker); local coder gets an allowlisted env; hosted approval consumed atomically (concurrent test: exactly one wins); operator token compared in constant time | ☑️ (coder env was already fixed on main) |
-| 2 | **Orchestrator** | `apps/local-control/src/platform/orchestrator/**` | Task DAG with cycle refusal; outbox dispatcher with backoff + dead-letter + escalation; cron/event scheduler with dedup; model-driven agent loop that cannot complete without verifier evidence; replay report; pause/cancel propagation; restart recovery | 🔄 |
-| 3 | **Platform API + command center UI** | `src/platform/api-routes.mjs`, `src/platform/dashboard.mjs`, `src/server.mjs`, `src/main.mjs` | Authenticated `/v1/platform/*` write API (tasks, approvals, family, memory, costs, workers, emergency stop); `/platform` UI with composer, approvals inbox, family tree, costs, worker health, memory inspector, "why blocked" | ☑️ |
-| 4 | **Desktop control** | `src/platform/desktop/**` | Enrollment + approved short-lived sessions + visible indicator + emergency stop + audit; observe→act→verify loop; simulated desktop passes "moved window" recovery; Xvfb adapter reports real capabilities | 🔄 |
-| 5 | **Terminal isolation** | `src/platform/terminal/**` | `namespaces` backend (no network, own PID namespace, read-only root, non-root uid) verified by tests; `docker` backend detected; honest `isolation` report | 🔄 |
-| 6 | **Engineering workflow** | `src/platform/engineering/**` | Per-agent worktrees; file-ownership + conflict escalation; inspect→criteria→plan→code→checks→diff/security review→PR payload; no merge capability exists | ☑️ |
-| 7 | **MCP HTTP + Atlas MCP server** | `src/platform/mcp/**`, `src/platform/mcp-server/**` | Streamable HTTP client with enforced credential scopes + SSRF guard + reconnect; Atlas MCP server (stdio + HTTP) for status/list/create-proposed-task | 🔄 |
-| 8 | **Skills marketplace** | `src/platform/skills/**` | Signed (ed25519) versioned skill packages; install needs trusted signature + passing tests + approval; rollback; agent proposals never self-install; workflow templates from verified tasks; redacted knowledge exchange | ☑️ |
-| 9 | **Web multi-tenancy + sessions** | `apps/web/db/**`, `apps/web/drizzle/0014+`, `apps/web/app/api/auth/session.mjs`, `settings/**`, `github/**`, `conversations/**`, `tasks/route.ts` | Tenants + memberships; tenant-scoped queries with cross-tenant tests; revocable server-side sessions; shorter TTLs; migrations with deploy order | 🔄 |
-| 10 | **Planning, voice, federated workers** | `src/platform/planning/**`, `src/platform/voice/**`, `src/platform/workers/**` | Verified-performance team selection; cost-aware plan ranking; debate judged by executable checks; voice commands with bound spoken confirmation; worker registry with trust levels; per-task observability rollup | 🔄 |
+| A | Verified mission correctness | `apps/local-control/src/agent/team/*`, `tests/team-missions.test.mjs` | None | **PR #60 open**; failed/pending actions never verify; retries reconcile exact actions; fingerprints are not persisted; focused suite 16/16 passes. Atlas CI passes; only external Vercel preview status has failed. |
+| B | Canonical task lifecycle / outbox | `apps/local-control/src/platform/task-store.mjs`, `platform/outbox-dispatcher.mjs`, dedicated tests only | A | At-least-once delivery, idempotent consumers, DLQ/recovery; no second scheduler; crash/restart E2E. |
+| C | Hosted workspace UX | `apps/web/app/AtlasShell.tsx`, chat/tasks/projects/activity UI and web UI tests | Runtime event API from B | Chat remains command center; Create/Operate/Automate/Activity can coexist; no fake status; mobile + browser tests. Avoid local console files. |
+| D | Create / preview / publish | New Project Genesis and preview routes in `apps/web` plus browser-worker adapters | A, B, sandbox policy | Real project artifact, isolated preview, tests, approval before deploy/domain/DNS mutation, rollback evidence. |
+| E | Code intelligence / IDE panels | `packages/atlas-cli/src/domain/*` and `apps/web` Create code panels | None, but keep contracts backward compatible | Compiler/LSP-backed symbols where available; evidence-linked diff/file views; tests across a fixture repo. Coordinate web shell changes through C. |
+| F | Windows terminal support | `apps/local-control/src/platform/terminal/*`, terminal tests, Windows CI config | A | **Implemented on `copilot/windows-terminal-portability`**; focused Windows terminal/MCP 40/40 and full local-control 321 passed, 0 failed, 1 file-symlink privilege skip. Windows CI job added; awaiting CI. Process-level only; not container isolation. |
+| G | Container/VM isolation | New isolated runner package and its tests/docs | F interfaces frozen | Untrusted execution in disposable environment with resource/egress controls, cleanup, crash tests. No host credentials. |
+| H | Operate sessions / takeover | `apps/windows-companion/src/desktop/*`, browser session API/UI under Operate, own tests | A, B | Multiple isolated sessions, genuine status, pause/stop/takeover where supported, approval/audit and ownership checks. Do not claim cloud browser is available without a consumer. |
+| I | Connectors and protocols | `apps/local-control/src/platform/mcp/*`, connector APIs, focused tests | A policy interface | Streamable HTTP/OAuth with credential references, per-agent scopes, deterministic policy, redaction, reconnect and audit; Atlas MCP server separately versioned. |
+| J | Team runtime / supervision | `apps/local-control/src/agent/team/*` outside A-owned verifier, family worker lifecycle and tests | A, B | Bounded specialists, scoped messages, budgets, restart recovery, cancellation and parent verification; no self-granting permissions. |
+| K | Skills and workflow learning | New skills package and APIs, not family runtime files | A, J, audit/provenance | Verified task→reviewable skill proposal→eval→human approval→versioned private install; rollback and no auto-publish. |
+| L | Atlas Brain | memory package/API/UI under Knowledge; separate tests | O tenancy boundary | Scoped retrieval, evidence provenance, inspect/correct/delete/export, retention tests; no cross-user reads. |
+| M | Models/runtime | `apps/local-control/src/agent/models/*` and model tests | A | Real routing in every execution path, health/fallback/cost/privacy accounting; no credentials in child processes. |
+| N | Controlled self-improvement | `.github/atlas/*`, self-improve workflow and eval packages | A, O, benchmarks | Admin-only activation; isolated branch/worktree; baseline/eval/security review; draft PR; explicit owner merge; rollback. Atlas cannot alter its own approval gates. |
+| O | Auth, tenancy, and governance | `apps/web/db/schema.ts`, migrations, auth/session/repository APIs and security tests | None; coordinate migrations with owner | Tenant/member isolation; session revocation; per-repository authorization; rate limits; audit; migration and restore tests. No broader autonomous access before this. |
+| P | Windows test portability | `apps/local-control/tests/platform-terminal.test.mjs`, MCP env tests, Windows CI | F | **Implemented on `copilot/windows-terminal-portability`**; POSIX command/path assumptions removed from terminal fixtures; only the file-symlink privilege check skips explicitly. |
 
-## Next wave (not started — good candidates for new sessions)
+## Immediate sequence
 
-| # | Workstream | Owns | Acceptance | Depends on |
-|---|---|---|---|---|
-| 11 | Wire subsystems into the daemon runtime | `src/main.mjs`, new `src/platform/runtime-wiring.mjs` | Orchestrator dispatcher + scheduler run in the daemon; browser/terminal/desktop/MCP tools registered with the executor under one policy file | 2, 3 |
-| 12 | Policy file + admin UI | `src/platform/policy-config/**` | Versioned policy document on disk, validated on load, edit via API with audit | 3 |
-| 13 | Execution replay UI | `src/platform/dashboard.mjs` (replay section only) | Step-through timeline from the replay report, with cost | 2, 3 |
-| 14 | Human take-over of browser/desktop sessions | `apps/browser-worker/src/takeover.mjs`, `src/platform/desktop/takeover.mjs` | Pause agent, hand live session to user, return control with audit | 4 |
-| 15 | Model capability benchmark run | `src/platform/models/benchmarks/**` | Run capability suite against configured local/cloud models; store measured profiles | — |
-| 16 | Load and tenancy tests | `tests/load/**` | Concurrent tasks, budget and isolation hold under load | 9, 11 |
+1. Finish CI review for A (strict verification) in PR #60; keep PR #59 draft
+   until this and owner actions are resolved.
+2. Review P/F (Windows terminal portability) in the stacked PR; its local full
+   suite is green, and the new Windows CI job must confirm it.
+3. Resolve PR #59 owner actions (hosted GitHub credential recovery and D1
+   migration `0014`) only with the owner; do not read or print secrets.
+4. Run the recorded E2E journey and hosted verification after recovery.
+5. Land O security/tenant controls before widening users or self-improvement.
+6. Build B/J, then C/H/D, then E/K/L/I/M, then N and broader SaaS features.
 
-Cortex / construction is out of scope for this repository.
+## Current execution split: this session vs Claude Code
+
+These assignments are deliberately disjoint. Both should work from separate
+branches/worktrees and open PRs. Claude Code's mobile-only lane must not edit
+the PR #59 desktop, team, terminal, auth, or migration files while this
+session owns those integration areas.
+
+### This session (owner: current Copilot coding session)
+
+1. **PR #60: strict step verification**, stacked on PR #59. The implementation
+    rejects model-asserted success when an action failed, was denied, or is
+    awaiting approval. Exact-action fingerprints remain in memory only. Focused
+    team mission tests pass 16/16. Next: finish CI, resolve any findings, then
+    ask the owner before merging PR #59/#60 or deploying.
+2. **Windows terminal portability:** implementation and local Windows suite
+   are complete on `copilot/windows-terminal-portability`: native allowlisted
+   executable resolution, shell-free npm/npx invocation, portable fixtures,
+   explicit process-tree cleanup, and MCP OS-variable allowlisting. Full suite
+   passes locally (318 passed, 3 symlink-privilege skips); next step is PR/CI
+   confirmation. Process-level limits are not a sandbox.
+3. **PR #59 integration review:** validate migration `0014`, hosted task
+    credential diagnosis, Windows desktop approval behavior, and the full
+    mission recovery E2E. Owner-only credentials/migrations remain owner
+    actions; do not request, print, or alter secret values.
+
+### Claude Code parallel assignment (mobile-only)
+
+Use a fresh worktree based on the verified PR #59 head, then open a PR targeting
+`claude/atlas-platform-development-o9znpd` (stacked). Own only:
+
+- `mobile/src/**`
+- `mobile/tests/**`
+- `mobile/README.md` and mobile release docs when required
+- A new web API route only if necessary, with a proposal first; do not change
+   `apps/local-control/src/agent/team/**`, terminal, desktop, D1 schema/migrations,
+   auth/session, or `.github/workflows/**` in this parallel slice.
+
+Goal: make the existing Capacitor shell a useful remote companion for
+monitoring real Atlas missions and reviewing/deciding real approvals from a
+phone. Reuse the signed-in web/API session and the existing daemon/web mission
+and approval contracts. Keep credentials in the existing Keychain/Keystore
+bridge; never localStorage. Add accessible mission list/detail, live/polling
+status with reconnect/error/empty states, approval explanation and exact
+single-use decision, push/deep-link routing only when its signing/verification
+contract is present, and biometric re-authentication for high-risk decisions.
+Do not show simulated agent progress or offer remote computer takeover unless
+the current APIs actually implement it.
+
+Acceptance: mobile unit tests cover auth/session expiration, secure storage,
+mission refresh/offline states, approval allow/deny/expiry/replay, deep-link
+validation, and sensitive-action biometric gating. Run the mobile shell tests;
+add a native build/test where available and document the unavailable device
+validation. Return a focused PR; do not merge or deploy.
+
+### Next independent Claude Code work after mobile PR
+
+- **Web workspace UX** only after PR #59 is merged and its route names/API
+   contracts are stable; own `apps/web/app/**` UI files, not local-console files.
+- **Automations/scheduler** only after the canonical task/outbox contract is
+   settled; use a distinct scheduler package and no second task state machine.
+
+## Status discipline
+
+- PR #59 has green Linux CI, but is still a draft and not deployed.
+- Before F/P: Windows local-control suite had 19 failures from POSIX terminal
+   assumptions. After the portability changes: 321 passed, 0 failed, 1
+   file-symlink privilege skip. The new Windows CI job remains to be confirmed.
+- Production task dispatch previously returned 502; owner must rotate or
+  replace GitHub credentials and verify before declaring hosted coding usable.
+- Do not label the 200-item roadmap complete by counting libraries, mocks,
+  demos or checkboxes. Require wired runtime, tests, security boundaries and
+  end-to-end evidence for every workstream.

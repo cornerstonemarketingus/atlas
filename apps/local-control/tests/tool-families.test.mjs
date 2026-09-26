@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +11,7 @@ import { registerRepositoryTools } from "../src/agent/tools/repository-tools.mjs
 import { registerRepositoryWriteTools, APPROVED_TEST_COMMANDS } from "../src/agent/tools/repository-write-tools.mjs";
 import { registerFilesystemTools, confineToRoots } from "../src/agent/tools/filesystem-tools.mjs";
 import { registerBrowserTools, assertNavigableUrl } from "../src/agent/tools/browser-tools.mjs";
+import { assertPublicUrl } from "../../windows-companion/src/url-safety.mjs";
 import { registerCommunicationsTools, messageDigest } from "../src/agent/tools/communications-tools.mjs";
 import { registerWorkflowTools } from "../src/agent/tools/workflow-tools.mjs";
 import { createZipArchive, sanitizeEntryName } from "../src/agent/tools/archive.mjs";
@@ -21,9 +22,13 @@ import { normalizeAttachment, loadAttachment } from "../src/agent/attachments.mj
 import { symlink } from "node:fs/promises";
 
 async function symlinkOrSkip(t, target, path) {
-  try { await symlink(target, path); return true; }
+  try {
+    const type = process.platform === "win32" && existsSync(target) && statSync(target).isDirectory() ? "junction" : "file";
+    await symlink(target, path, type);
+    return true;
+  }
   catch (error) {
-    if (error?.code === "EPERM") { t.skip("Windows Developer Mode or symlink privilege is required for this fixture."); return false; }
+    if (["EPERM", "EACCES"].includes(error?.code)) { t.skip("Windows Developer Mode or symlink privilege is required for this fixture."); return false; }
     throw error;
   }
 }
@@ -207,9 +212,8 @@ test("browser tools only open http(s) and gate sends and uploads behind approval
   };
 
   const { registry, approvals, approved } = registryFor();
-  // `.invalid` never resolves; a public answer is injected so this test stays
-  // about scheme and approval gating (destination policy: ssrf-guard.test.mjs).
-  registerBrowserTools(registry, { session, uploadRoot: directory, urlPolicy: { lookup: async () => [{ address: "93.184.215.14", family: 4 }], allowPrivateHosts: "" } });
+  // Resolve every host to a public address so the real guard runs without network access.
+  registerBrowserTools(registry, { session, uploadRoot: directory, urlGuard: (url) => assertPublicUrl(url, { resolve: async () => [{ address: "93.184.216.34" }] }) });
   const run = call(registry, approvals, {});
 
   assert.match((await run("browser.navigate", { url: "https://example.invalid/jobs" })).output, /Opened https:\/\/example\.invalid\/jobs/u);
@@ -415,7 +419,7 @@ test("a symlink inside a root cannot be used to read or write outside it", async
   // A symlink pointing out of the repository, and one to an absolute system
   // path. Both are things a cloned repository can legitimately contain.
   if (!await symlinkOrSkip(t, outside, join(repo, "escape"))) return;
-  if (!await symlinkOrSkip(t, "/etc/passwd", join(repo, "passwd-link"))) return;
+  if (!await symlinkOrSkip(t, join(outside, "secret.txt"), join(repo, "passwd-link"))) return;
 
   const { registry, approvals } = registryFor();
   registerRepositoryTools(registry);
@@ -486,9 +490,49 @@ test("a root that is itself a symlink still accepts its own contents", async (t)
   // for instance. Resolving the root too is what stops every path under it
   // looking like an escape.
   const confined = confineRealPath(linked, "file.txt", (code, message) => new Error(`${code}: ${message}`));
-  assert.equal(confined, join(await import("node:fs/promises").then((fs) => fs.realpath(real)), "file.txt"));
+  assert.equal(await readFile(confined, "utf8"), "content", "the resolved path points to the root's own file despite Windows short-path normalization");
 
   const { registry, approvals } = registryFor();
   registerRepositoryTools(registry);
   assert.equal((await call(registry, approvals, { repository: linked })("repository.read", { path: "file.txt" })).status, "completed");
+});
+
+test("browser.navigate refuses private addresses and redirects into them (SEC-3)", async () => {
+  const visited = [];
+  let redirectTo = null;
+  const session = { navigate: async ({ url }) => { visited.push(url); return { url: redirectTo ?? url, title: "t" }; } };
+  const registry = new ToolRegistry({ policy: () => "allow" });
+  const resolve = async (host) => [{ address: host === "rebind.example" ? "10.0.0.5" : "93.184.216.34" }];
+  registerBrowserTools(registry, { session, urlGuard: (url) => assertPublicUrl(url, { resolve }) });
+  const run = (url) => registry.invoke({ name: "browser.navigate", rawArguments: JSON.stringify({ url }), sessionId: "s" });
+  for (const url of ["http://169.254.169.254/latest/meta-data", "http://127.0.0.1:4317/v1/tasks", "http://[::1]/", "https://rebind.example/"]) {
+    const result = await run(url);
+    assert.equal(result.status, "failed", url);
+    assert.equal(result.code, "PRIVATE_ADDRESS", url);
+  }
+  assert.deepEqual(visited, [], "the browser never saw a refused address");
+  redirectTo = "http://192.168.0.1/admin";
+  const redirected = await run("https://example.com/login");
+  assert.equal(redirected.status, "failed");
+  assert.match(redirected.message, /redirected to a refused address/u);
+  assert.deepEqual(visited, ["https://example.com/login", "about:blank"]);
+});
+
+test("tool credentials resolve asynchronously, from the vault first, only when declared (SEC-8)", async () => {
+  const vault = new Map([["SERVICE_TOKEN", "from-vault"]]);
+  const asked = [];
+  const registry = new ToolRegistry({ policy: () => "allow", secrets: async (name) => { asked.push(name); return vault.get(name) ?? null; } });
+  registry.register({
+    name: "service.ping", description: "Ping a service.", capability: "service.use", risk: "low", timeoutMs: 1000, maxOutputCharacters: 100,
+    requiresApproval: false, credentials: ["SERVICE_TOKEN"], inputSchema: { type: "object", properties: {} },
+    async execute({ credentials }) { return `token length ${credentials.SERVICE_TOKEN.length}`; },
+  });
+  registry.register({
+    name: "service.other", description: "Needs a missing secret.", capability: "service.use", risk: "low", timeoutMs: 1000, maxOutputCharacters: 100,
+    requiresApproval: false, credentials: ["MISSING_TOKEN"], inputSchema: { type: "object", properties: {} },
+    async execute() { return "unreachable"; },
+  });
+  assert.equal((await registry.invoke({ name: "service.ping", rawArguments: "{}", sessionId: "s" })).output, "token length 10");
+  assert.equal((await registry.invoke({ name: "service.other", rawArguments: "{}", sessionId: "s" })).code, "MISSING_CREDENTIAL");
+  assert.deepEqual(asked, ["SERVICE_TOKEN", "MISSING_TOKEN"], "only declared credentials are ever looked up");
 });

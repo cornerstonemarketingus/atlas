@@ -209,8 +209,9 @@ test("env scrubbing: server cannot see host secrets, only granted vars", async (
   const out = await gateway.callTool(ctx, "testsrv", "env_probe", {});
   assert.equal(out.structuredContent.hostSecretVisible, false);
   assert.equal(out.structuredContent.grantedVisible, "granted-value");
+  const allowedKeys = ["PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT", "WINDIR", "HOMEDRIVE", "HOMEPATH", "USERPROFILE", "USERDOMAIN", "USERDOMAIN_ROAMINGPROFILE", "USERNAME", "COMSPEC", "PATHEXT", "LOGONSERVER", "SYSTEMDRIVE", "TEMP", "TMP", "MCP_TEST_CALL_LOG", "MCP_TEST_GRANTED"];
   for (const key of out.structuredContent.keys) {
-    assert.ok(["PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT", "MCP_TEST_CALL_LOG", "MCP_TEST_GRANTED"].includes(key), `unexpected env var ${key}`);
+    assert.ok(allowedKeys.includes(key), `unexpected env var ${key}`);
   }
   assert.deepEqual(buildScrubbedEnv({ hostEnv: { SECRET: "x", PATH: "/bin" }, inheritEnv: [] }), { PATH: "/bin" });
   assert.deepEqual(buildScrubbedEnv({ hostEnv: { SECRET: "x" }, inheritEnv: ["SECRET"], baseline: [] }), { SECRET: "x" });

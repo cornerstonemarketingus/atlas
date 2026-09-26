@@ -82,6 +82,16 @@ export function validateAgainstSchema(schema, value, path = "input") {
     return value;
   }
 
+  // Any JSON value, bounded in size. Used for arguments whose full schema is
+  // enforced elsewhere (MCP tools are validated by the MCP gateway against the
+  // server's own schema); the registry still refuses oversized input.
+  if (type === "json") {
+    let size;
+    try { size = JSON.stringify(value ?? null).length; } catch { throw new ToolError("INVALID_INPUT", `${path} is not valid JSON.`); }
+    if (size > (schema.maxBytes ?? 64 * 1024)) throw new ToolError("INVALID_INPUT", `${path} is too large.`);
+    return value;
+  }
+
   throw new ToolError("BAD_SCHEMA", `${path} declares an unsupported schema type: ${String(type)}.`);
 }
 
@@ -205,7 +215,7 @@ export class ToolRegistry {
 
     const credentials = {};
     for (const reference of tool.credentials) {
-      const value = this.#secrets(reference);
+      const value = await this.#secrets(reference);
       if (value === null || value === undefined) {
         return { status: "rejected", code: "MISSING_CREDENTIAL", message: `This tool needs the credential '${reference}', which is not configured on this machine.`, input };
       }

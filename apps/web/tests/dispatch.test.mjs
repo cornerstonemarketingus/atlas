@@ -3,6 +3,8 @@ import test from "node:test";
 import { allowedRepositories, dispatchGitHub, githubDispatchRequest, validateTask, workflowForMode } from "../app/api/tasks/dispatch.mjs";
 
 const valid = { repository: "Cornerstonemarketingus/atlas", branch: "main", mode: "inspect", objective: " Map the API. " };
+// Coding tasks must name something concrete to change (see assessCoderObjective).
+const validCoder = { ...valid, mode: "coder", objective: "Add rate limiting to the API endpoints." };
 
 test("validates and normalizes a task against a case-insensitive allowlist", () => {
   const result = validateTask(valid, allowedRepositories("cornerstonemarketingus/atlas"));
@@ -26,7 +28,7 @@ test("accepts debug mode alongside inspect", () => {
 
 test("accepts coder mode alongside inspect and debug", () => {
   const allowlist = allowedRepositories("cornerstonemarketingus/atlas");
-  const result = validateTask({ ...valid, mode: "coder" }, allowlist);
+  const result = validateTask(validCoder, allowlist);
   assert.equal("error" in result, false);
   assert.equal(result.task.mode, "coder");
 });
@@ -51,7 +53,7 @@ test("builds a GitHub workflow dispatch without putting the token in its URL or 
 });
 
 test("includes merge_policy only for coder-mode dispatches", () => {
-  const coderTask = validateTask({ ...valid, mode: "coder" }, allowedRepositories()).task;
+  const coderTask = validateTask(validCoder, allowedRepositories()).task;
   const coderRequest = githubDispatchRequest({ token: "t", workflow: "atlas-coder.yml", task: coderTask, taskId: "task-123", mergePolicy: "ci-gated" });
   assert.equal(JSON.parse(coderRequest.init.body).inputs.merge_policy, "ci-gated");
 
@@ -75,7 +77,7 @@ test("dispatch helper accepts an injected fetch implementation", async () => {
 test("sends a valid correlation_id to both Atlas workflows, and never a malformed one", () => {
   const correlationId = `cor_${"9e".repeat(16)}`;
   const inspectTask = validateTask(valid, allowedRepositories()).task;
-  const coderTask = validateTask({ ...valid, mode: "coder" }, allowedRepositories()).task;
+  const coderTask = validateTask(validCoder, allowedRepositories()).task;
   const inspect = JSON.parse(githubDispatchRequest({ token: "t", workflow: "atlas-runner.yml", task: inspectTask, taskId: "task-123", correlationId }).init.body);
   assert.equal(inspect.inputs.correlation_id, correlationId);
   const coder = JSON.parse(githubDispatchRequest({ token: "t", workflow: "atlas-coder.yml", task: coderTask, taskId: "task-123", correlationId }).init.body);
@@ -98,6 +100,27 @@ test("both Atlas workflows declare correlation_id as optional and pass it only t
       assert.match(line, /^\s+ATLAS_CORRELATION_ID: \$\{\{ (?:github\.event\.)?inputs\.correlation_id \}\}$/, `${name}: ${line}`);
     }
   }
+});
+
+test("a coding task needs something concrete to change; read-only modes stay open-ended", async () => {
+  const { assessCoderObjective } = await import("../app/api/tasks/dispatch.mjs");
+  const allowlist = allowedRepositories("cornerstonemarketingus/atlas");
+  const coder = (objective) => validateTask({ ...valid, mode: "coder", objective }, allowlist);
+  // The objective that exhausted a coder run's turn budget (RECOVERY.md §1).
+  const vague = coder("hi can u debug yourself? formy atlas repo can u make direct changes");
+  assert.equal(vague.status, 422);
+  assert.equal(vague.needsClarification, true);
+  assert.match(vague.error, /concrete change/u);
+  assert.equal(coder("fix it").status, 422);
+  assert.equal(coder("Can you improve things?").status, 422);
+  for (const objective of [
+    "Fix the login bug in my project. Read the code first, run the tests, and open a pull request.",
+    "Create docs/ATLAS-SMOKE-CHECK.md containing exactly one line: Atlas coding smoke check.",
+    "Make the navbar sticky on scroll",
+    "The checkout page crashes when the cart is empty, please fix",
+    "Refactor `parseRoutes` to reject duplicate models",
+  ]) assert.ok(assessCoderObjective(objective).ok, objective);
+  assert.ok(!("error" in validateTask({ ...valid, mode: "inspect", objective: "hi can u look around?" }, allowlist)));
 });
 
 test("coder tasks default to CI-gated autopilot, and a bad setting never widens the policy", async () => {

@@ -80,8 +80,8 @@ test("the operator token is compared in constant time over SHA-256 digests", asy
   assert.equal(await constantTimeEqual("", "secret"), false);
   assert.equal(await constantTimeEqual(undefined, "secret"), false);
   const source = readFileSync(new URL("../app/api/tasks/operator-auth.mjs", import.meta.url), "utf8");
-  assert.doesNotMatch(source, /header === /u, "no plain string equality on the bearer header");
-  assert.match(source, /crypto\.subtle\.digest\("SHA-256"/u);
+  assert.doesNotMatch(source, /header === (?!"string")/u, "no plain string equality on the bearer header");
+  assert.match(source, /createHash\("sha256"\)/u);
   const route = readFileSync(new URL("../app/api/auth/operator/route.ts", import.meta.url), "utf8");
   assert.match(route, /await constantTimeEqual\(accessCode, expected\)/u);
   assert.doesNotMatch(route, /left\.length !== right\.length/u, "the access-code check no longer leaks length");

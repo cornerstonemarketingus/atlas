@@ -14,7 +14,7 @@ const WORKFLOWS: Array<{ id: Workflow; title: string; summary: string; startUrl:
   { id: "job-application", title: "Apply for jobs", summary: "Find matching jobs and fill in applications.", startUrl: "https://www.linkedin.com/jobs/", objective: "Find roles matching my profile and preferences. For each strong match, summarize why it fits, prepare accurate tailored application answers, fill the form, and pause before every final submission.", guardrail: "Asks before submitting each application" },
   { id: "sales-outreach", title: "Find leads", summary: "Research prospects and draft personal messages.", startUrl: "https://www.linkedin.com/", objective: "Research qualified prospects for my offer, capture the source for each personalization detail, draft one-to-one outreach, and pause before sending or enrolling anyone in a sequence. Do not send bulk unsolicited messages.", guardrail: "Asks before sending anything" },
   { id: "marketing", title: "Marketing", summary: "Draft posts and update listings.", startUrl: "", objective: "Prepare the requested marketing work, verify claims against the provided source material, and pause before publishing, launching a campaign, or changing any spend.", guardrail: "Asks before publishing or spending" },
-  { id: "custom", title: "Something else", summary: "Any other task in a browser.", startUrl: "", objective: "", guardrail: "Asks before anything important" },
+  { id: "custom", title: "Something else", summary: "Any other task on your computer, in the browser or a desktop app.", startUrl: "", objective: "", guardrail: "Asks before anything important" },
 ];
 
 const STATUS_LABELS: Record<string, string> = {
@@ -23,7 +23,14 @@ const STATUS_LABELS: Record<string, string> = {
 };
 const statusLabel = (status: string) => STATUS_LABELS[status] ?? status.replaceAll("_", " ");
 
-/** Tasks: supervised browser work on a paired computer or an entitled hosted browser. */
+/** The most recent step the companion reported, for the "Now:" line on a running task. */
+function latestStep(task: Task) {
+  // Events arrive newest first.
+  const step = task.events?.find((event) => event.kind === "progress") ?? null;
+  return step ? step.summary : null;
+}
+
+/** Tasks: supervised browser and desktop work on a paired computer, or an entitled hosted browser. */
 export function AutomationSection() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -139,7 +146,7 @@ export function AutomationSection() {
       <div className="section-page">
         <header className="page-head">
           <h1>Tasks</h1>
-          <p>Browser work Atlas does for you on your computer.</p>
+          <p>Work Atlas does for you on your computer, in the browser or in desktop apps.</p>
           <button className="page-action task-primary" type="button" onClick={startTask}>＋ New task</button>
         </header>
 
@@ -148,7 +155,7 @@ export function AutomationSection() {
         {approvals.length > 0 && <section className="approval-panel">
           <p className="kicker">WAITING FOR YOU</p>
           {approvals.map((approval) => <article key={approval.id}>
-            <div><strong>{approval.summary}</strong><small>{approval.domain ?? "Browser task"} · expires {new Date(approval.expiresAt).toLocaleTimeString()}</small></div>
+            <div><strong>{approval.summary}</strong><small>{approval.domain === "desktop" ? "Desktop app" : approval.domain ?? "Computer task"} · expires {new Date(approval.expiresAt).toLocaleTimeString()}</small></div>
             <div><button className="quiet" onClick={() => void decide(approval.id, "rejected")}>Reject</button><button onClick={() => void decide(approval.id, "approved")}>Approve</button></div>
           </article>)}
         </section>}
@@ -164,7 +171,7 @@ export function AutomationSection() {
             ? <div className="task-empty"><strong>{tab === "attention" ? "Nothing is waiting for you." : tab === "running" ? "Nothing is running." : "No finished tasks yet."}</strong></div>
             : visibleTasks.map((task) => <article className="task-card" key={task.id}>
               <div className={`run-state ${task.status}`}>{statusLabel(task.status)}</div>
-              <div className="task-card-main"><small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Browser task"}</small><h2>{task.objective}</h2>{(task.result || task.error) && <p>{task.result ?? task.error}</p>}<button className="task-detail" type="button" onClick={() => document.getElementById(`task-${task.id}`)?.scrollIntoView({ behavior: "smooth" })}>Details</button></div>
+              <div className="task-card-main"><small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Computer task"}</small><h2>{task.objective}</h2>{task.status === "running" && latestStep(task) && <p className="task-now">Now: {latestStep(task)}</p>}{(task.result || task.error) && <p>{task.result ?? task.error}</p>}<button className="task-detail" type="button" onClick={() => document.getElementById(`task-${task.id}`)?.scrollIntoView({ behavior: "smooth" })}>Details</button></div>
               <time>{new Date(task.createdAt).toLocaleString()}</time>
             </article>)}
         </section>
@@ -211,7 +218,7 @@ export function AutomationSection() {
           <h2>Your computers</h2>
           <div className="pair-grid">
             <article className="pair-card">
-              <p>Atlas runs browser tasks on a Windows PC with the <Link href="/setup">Atlas companion app</Link>, in its own browser profile.</p>
+              <p>Atlas does tasks on a Windows PC through the <Link href="/setup">Atlas companion app</Link>: in its own browser profile, or in desktop apps you allow. Screenshots stay on your computer.</p>
               <ol>
                 <li>Name the PC and click Connect.</li>
                 <li>Download the pairing file.</li>
@@ -241,7 +248,7 @@ export function AutomationSection() {
           {tasks.map((task) => <article className="run-row" id={`task-${task.id}`} key={task.id}>
             <span className={`run-state ${task.status}`}>{statusLabel(task.status)}</span>
             <div>
-              <small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Browser task"}</small>
+              <small>{WORKFLOWS.find((item) => item.id === task.workflowType)?.title ?? "Computer task"}</small>
               <strong>{task.objective}</strong>
               {(task.result || task.error) && <p>{task.result ?? task.error}</p>}
               {task.events?.length > 0 && <details className="task-timeline">

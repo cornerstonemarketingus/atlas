@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, statSync } from "node:fs";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join, sep } from "node:path";
 import test from "node:test";
 
 import { TerminalController } from "../src/platform/terminal/terminal-controller.mjs";
@@ -24,10 +24,14 @@ async function run(controller, workspaceId, request) {
   return handle.result;
 }
 
+const readFileCommand = (path) => ["node", "-e", "process.stdout.write(require('node:fs').readFileSync(process.argv[1], 'utf8'))", path];
+const successCommand = ["node", "-e", "process.exit(0)"];
+const failureCommand = ["node", "-e", "process.exit(1)"];
+
 test("creates a 0700 workspace directly under the root, named from sanitized ids", async (t) => {
   const { controller, workspace } = await fixture(t);
   assert.match(workspace.id, /^wks_[0-9a-f]{32}$/);
-  assert.equal(join(controller.rootDirectory, workspace.directory.split("/").at(-1)), workspace.directory);
+  assert.equal(join(controller.rootDirectory, basename(workspace.directory)), workspace.directory);
   assert.match(workspace.directory, /tenant-1--task_1--[0-9a-f]{12}$/);
   if (process.platform !== "win32") assert.equal(statSync(workspace.directory).mode & 0o777, 0o700);
   assert.ok(existsSync(join(workspace.directory, ".tmp")));
@@ -36,7 +40,7 @@ test("creates a 0700 workspace directly under the root, named from sanitized ids
 test("template files are written inside the workspace and escapes are refused", async (t) => {
   const { controller } = await fixture(t);
   const seeded = controller.createWorkspace({ tenantId: "t", taskId: "k", template: { files: { "src/a.txt": "hello" } } });
-  const result = await run(controller, seeded.id, { argv: ["cat", "src/a.txt"] });
+  const result = await run(controller, seeded.id, { argv: readFileCommand("src/a.txt") });
   assert.equal(result.stdout, "hello");
   assert.throws(() => controller.createWorkspace({ tenantId: "t", taskId: "k2", template: { files: { "../../evil": "x" } } }), { code: "INVALID_TEMPLATE" });
 });
@@ -57,7 +61,7 @@ test("reports a nonzero exit code", async (t) => {
   const { controller, workspace } = await fixture(t);
   const result = await run(controller, workspace.id, { argv: ["node", "-e", "process.exit(3)"] });
   assert.equal(result.exitCode, 3);
-  const falseResult = await run(controller, workspace.id, { argv: ["false"] });
+  const falseResult = await run(controller, workspace.id, { argv: failureCommand });
   assert.equal(falseResult.exitCode, 1);
 });
 
@@ -78,19 +82,30 @@ test("timeout kills a process that never exits and reports timedOut", async (t) 
   const { controller, workspace } = await fixture(t);
   const result = await run(controller, workspace.id, { argv: ["node", "-e", "setInterval(()=>{},1000)"], timeoutMs: 300 });
   assert.equal(result.timedOut, true);
-  assert.equal(result.exitCode, null);
-  assert.ok(["SIGTERM", "SIGKILL"].includes(result.signal));
+  if (process.platform === "win32") {
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.signal, "SIGKILL");
+  } else {
+    assert.equal(result.exitCode, null);
+    assert.ok(["SIGTERM", "SIGKILL"].includes(result.signal));
+  }
   assert.ok(result.durationMs < 5000);
 });
 
-test("SIGKILL follows SIGTERM when the process ignores it", async (t) => {
+test("timeout force-stops a process that ignores graceful termination", async (t) => {
   const { controller, workspace } = await fixture(t);
   const result = await run(controller, workspace.id, {
     argv: ["node", "-e", "process.on('SIGTERM', () => {}); setInterval(()=>{},1000); console.log('ready')"],
     timeoutMs: 300,
   });
   assert.equal(result.timedOut, true);
-  assert.equal(result.signal, "SIGKILL");
+  if (process.platform === "win32") {
+    assert.equal(result.signal, "SIGKILL");
+    assert.equal(result.isolation.processTreeCleanup, "taskkill /T /F");
+  } else {
+    assert.equal(result.signal, "SIGKILL");
+    assert.equal(result.isolation.processTreeCleanup, "process group signals");
+  }
 });
 
 test("cancel kills the process group", async (t) => {
@@ -119,31 +134,41 @@ test("output beyond the per-stream cap is truncated with a marker", async (t) =>
 
 test("filesystem confinement: cwd escapes, outside absolute paths and .. arguments are refused", async (t) => {
   const { base, controller, workspace } = await fixture(t);
+  const outsideFile = join(base, "outside-secret.txt");
+  await writeFile(outsideFile, "outside");
   await assert.rejects(controller.runCommand(workspace.id, { argv: ["ls"], cwd: "../.." }), { code: "CWD_OUTSIDE_WORKSPACE" });
-  await assert.rejects(controller.runCommand(workspace.id, { argv: ["ls"], cwd: "/etc" }), { code: "CWD_OUTSIDE_WORKSPACE" });
-  await assert.rejects(controller.runCommand(workspace.id, { argv: ["cat", "/etc/passwd"] }), { code: "PATH_OUTSIDE_WORKSPACE" });
+  await assert.rejects(controller.runCommand(workspace.id, { argv: ["ls"], cwd: base }), { code: "CWD_OUTSIDE_WORKSPACE" });
+  await assert.rejects(controller.runCommand(workspace.id, { argv: readFileCommand(outsideFile) }), { code: "PATH_OUTSIDE_WORKSPACE" });
   await assert.rejects(controller.runCommand(workspace.id, { argv: ["ls", base] }), { code: "PATH_OUTSIDE_WORKSPACE" });
-  await assert.rejects(controller.runCommand(workspace.id, { argv: ["cat", "../../secret"] }), { code: "PATH_OUTSIDE_WORKSPACE" });
-  await assert.rejects(controller.runCommand(workspace.id, { argv: ["grep", "--file=/etc/passwd", "x"] }), { code: "PATH_OUTSIDE_WORKSPACE" });
+  await assert.rejects(controller.runCommand(workspace.id, { argv: readFileCommand("../../secret") }), { code: "PATH_OUTSIDE_WORKSPACE" });
+  await assert.rejects(controller.runCommand(workspace.id, { argv: ["grep", `--file=${outsideFile}`, "x"] }), { code: "PATH_OUTSIDE_WORKSPACE" });
   await assert.rejects(
-    controller.runCommand(workspace.id, { argv: ["node", "-e", "require('fs').readFileSync('/etc/passwd')"] }),
+    controller.runCommand(workspace.id, { argv: ["node", "-e", `require('node:fs').readFileSync('${outsideFile.replace(/\\/gu, "\\\\")}')`] }),
     { code: "PATH_OUTSIDE_WORKSPACE" },
   );
-  await assert.rejects(controller.runCommand(workspace.id, { argv: ["rm", "-rf", "/"] }), { code: "PATH_OUTSIDE_WORKSPACE" });
+  await assert.rejects(controller.runCommand(workspace.id, { argv: ["rm", "-rf", base] }), { code: "PATH_OUTSIDE_WORKSPACE" });
   await assert.rejects(controller.runCommand(workspace.id, { argv: ["rm", "-rf", "."] }), { code: "RM_DENIED" });
-  await assert.rejects(controller.runCommand(workspace.id, { argv: ["cat", "~/.ssh/id_rsa"] }), { code: "PATH_OUTSIDE_WORKSPACE" });
+  await assert.rejects(controller.runCommand(workspace.id, { argv: readFileCommand("~/.ssh/id_rsa") }), { code: "PATH_OUTSIDE_WORKSPACE" });
 
   // A symlink inside the workspace that points outside is followed and refused.
-  await symlink("/etc", join(workspace.directory, "link"));
-  await assert.rejects(controller.runCommand(workspace.id, { argv: ["cat", "link/passwd"] }), { code: "PATH_OUTSIDE_WORKSPACE" });
-  await assert.rejects(controller.runCommand(workspace.id, { argv: ["ls"], cwd: "link" }), { code: "CWD_OUTSIDE_WORKSPACE" });
+  const outsideDirectory = join(base, "outside-directory");
+  await mkdir(outsideDirectory);
+  await writeFile(join(outsideDirectory, "passwd"), "outside");
+  try {
+    await symlink(outsideDirectory, join(workspace.directory, "link"), process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(controller.runCommand(workspace.id, { argv: readFileCommand(join("link", "passwd")) }), { code: "PATH_OUTSIDE_WORKSPACE" });
+    await assert.rejects(controller.runCommand(workspace.id, { argv: ["ls"], cwd: "link" }), { code: "CWD_OUTSIDE_WORKSPACE" });
+  } catch (error) {
+    if (process.platform !== "win32" || !["EPERM", "EACCES"].includes(error.code)) throw error;
+    t.diagnostic("Windows symlink privilege unavailable; symlink-specific checks skipped.");
+  }
 
   // Paths inside the workspace are fine, relative and absolute.
   await mkdir(join(workspace.directory, "sub"));
   await writeFile(join(workspace.directory, "sub", "f.txt"), "inside");
-  assert.equal((await run(controller, workspace.id, { argv: ["cat", "../sub/f.txt"], cwd: "sub" })).stdout, "inside");
-  assert.equal((await run(controller, workspace.id, { argv: ["cat", join(workspace.directory, "sub", "f.txt")] })).stdout, "inside");
-  assert.equal((await run(controller, workspace.id, { argv: ["pwd"], cwd: "sub" })).stdout.trim().endsWith("/sub"), true);
+  assert.equal((await run(controller, workspace.id, { argv: readFileCommand("../sub/f.txt"), cwd: "sub" })).stdout, "inside");
+  assert.equal((await run(controller, workspace.id, { argv: readFileCommand(join(workspace.directory, "sub", "f.txt")) })).stdout, "inside");
+  assert.equal((await run(controller, workspace.id, { argv: ["node", "-e", "process.stdout.write(process.cwd())"], cwd: "sub" })).stdout.endsWith(`${sep}sub`), true);
 });
 
 test("blocked executables are refused regardless of the allowlist", async (t) => {
@@ -157,6 +182,18 @@ test("blocked executables are refused regardless of the allowlist", async (t) =>
   const { controller: defaults, workspace: other } = await fixture(t);
   await assert.rejects(defaults.runCommand(other.id, { argv: ["wget", "x"], network: true }), { code: "EXECUTABLE_NOT_ALLOWED" });
   await assert.rejects(defaults.runCommand(other.id, { argv: ["find", "."] }), { code: "EXECUTABLE_NOT_ALLOWED" });
+});
+
+test("Windows never executes command shims through a shell", async (t) => {
+  if (process.platform !== "win32") return t.skip("Windows executable shim policy");
+  const base = await mkdtemp(join(tmpdir(), "atlas-terminal-shim-"));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const bin = join(base, "bin");
+  await mkdir(bin);
+  await writeFile(join(bin, "fake.cmd"), "@echo off\r\necho SHOULD_NOT_RUN\r\n");
+  const controller = new TerminalController({ rootDirectory: join(base, "workspaces"), allowedExecutables: ["fake"], pathDirectories: [bin] });
+  const workspace = controller.createWorkspace({ tenantId: "t", taskId: "shim" });
+  await assert.rejects(controller.runCommand(workspace.id, { argv: ["fake"] }), { code: "EXECUTABLE_NOT_FOUND" });
 });
 
 test("privileged and publishing subcommands are denied", () => {
@@ -223,14 +260,14 @@ test("the child environment is rebuilt from nothing: host secrets are not visibl
   assert.equal(childEnv.TMPDIR, join(workspace.directory, ".tmp"));
   assert.equal(childEnv.NODE_ENV, "test");
   assert.ok(!result.stdout.includes("fake-secret-value-123456"));
-  await assert.rejects(controller.runCommand(workspace.id, { argv: ["true"], env: { AWS_SECRET_ACCESS_KEY: "x" } }), { code: "ENV_KEY_NOT_ALLOWED" });
-  await assert.rejects(controller.runCommand(workspace.id, { argv: ["true"], env: { NODE_OPTIONS: "--require x" } }), { code: "ENV_KEY_NOT_ALLOWED" });
+  await assert.rejects(controller.runCommand(workspace.id, { argv: [...successCommand], env: { AWS_SECRET_ACCESS_KEY: "x" } }), { code: "ENV_KEY_NOT_ALLOWED" });
+  await assert.rejects(controller.runCommand(workspace.id, { argv: [...successCommand], env: { NODE_OPTIONS: "--require x" } }), { code: "ENV_KEY_NOT_ALLOWED" });
 });
 
 test("secret-shaped output and known secret values are redacted", async (t) => {
   const { controller, workspace } = await fixture(t, { knownSecrets: ["hunter2-but-longer"] });
   const token = `ghp_${"a".repeat(36)}`;
-  const result = await run(controller, workspace.id, { argv: ["echo", `token ${token} and hunter2-but-longer`] });
+  const result = await run(controller, workspace.id, { argv: ["node", "-e", "console.log(process.argv[1])", `token ${token} and hunter2-but-longer`] });
   assert.ok(!result.stdout.includes(token));
   assert.match(result.stdout, /\[redacted:github-token\]/);
   assert.match(result.stdout, /\[redacted:known-secret\]/);
@@ -248,10 +285,10 @@ test("the per-workspace concurrency limit is enforced", async (t) => {
   await assert.rejects(controller.runCommand(workspace.id, forever), { code: "CONCURRENCY_LIMIT" });
   // Another workspace has its own budget.
   const other = controller.createWorkspace({ tenantId: "t", taskId: "other" });
-  assert.equal((await run(controller, other.id, { argv: ["true"] })).exitCode, 0);
+  assert.equal((await run(controller, other.id, { argv: successCommand })).exitCode, 0);
   await controller.cancel(first.id);
   await first.result;
-  const third = await controller.runCommand(workspace.id, { argv: ["true"] });
+  const third = await controller.runCommand(workspace.id, { argv: successCommand });
   assert.equal((await third.result).exitCode, 0);
   await controller.cancel(second.id);
 });
@@ -269,14 +306,19 @@ test("destroyWorkspace removes the directory and refuses a workspace swapped for
   await writeFile(join(victim, "keep.txt"), "precious");
   const swapped = controller.createWorkspace({ tenantId: "t", taskId: "swap" });
   await rm(swapped.directory, { recursive: true });
-  await symlink(victim, swapped.directory);
-  await assert.rejects(controller.destroyWorkspace(swapped.id), { code: "WORKSPACE_OUTSIDE_ROOT" });
-  assert.equal(existsSync(join(victim, "keep.txt")), true);
+  try {
+    await symlink(victim, swapped.directory, process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(controller.destroyWorkspace(swapped.id), { code: "WORKSPACE_OUTSIDE_ROOT" });
+    assert.equal(existsSync(join(victim, "keep.txt")), true);
+  } catch (error) {
+    if (process.platform !== "win32" || !["EPERM", "EACCES"].includes(error.code)) throw error;
+    t.diagnostic("Windows symlink privilege unavailable; workspace-swap check skipped.");
+  }
 });
 
 test("isolation report states what was actually applied", async (t) => {
   const { controller, workspace } = await fixture(t);
-  const result = await run(controller, workspace.id, { argv: ["true"] });
+  const result = await run(controller, workspace.id, { argv: successCommand });
   const capabilities = controller.capabilities();
   assert.equal(result.isolation.level, "process");
   assert.equal(result.isolation.rlimits.applied, capabilities.rlimits.tool === "prlimit");
@@ -292,7 +334,7 @@ test("isolation report states what was actually applied", async (t) => {
     assert.equal(typeof result.isolation.rlimits.reason, "string");
   }
   const { controller: plain, workspace: plainWorkspace } = await fixture(t, { prlimit: false });
-  const plainResult = await run(plain, plainWorkspace.id, { argv: ["true"] });
+  const plainResult = await run(plain, plainWorkspace.id, { argv: successCommand });
   assert.equal(plainResult.isolation.rlimits.applied, false);
 });
 

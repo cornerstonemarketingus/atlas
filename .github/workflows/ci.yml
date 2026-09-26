@@ -99,6 +99,32 @@ jobs:
       - name: Test sovereign control plane
         run: npm test
 
+      # The owner journey against a real daemon process: plan, delegate,
+      # authorized tools, approvals, pause/resume/cancel, and recovery after
+      # the daemon is killed mid-step. The model is scripted.
+      - name: End-to-end journey
+        run: npm run e2e
+
+  local-control-windows:
+    name: apps/local-control (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/local-control
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Exercise the restricted terminal controller, MCP environment handling,
+      # and daemon tests on the desktop OS Atlas users actually run.
+      - name: Test local control on Windows
+        run: npm test
+
   contracts:
     name: packages/atlas-contracts
     runs-on: ubuntu-latest

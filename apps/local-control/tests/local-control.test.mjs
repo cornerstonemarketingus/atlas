@@ -28,7 +28,14 @@ test("local control plane authenticates, persists, and completes tasks", async (
   assert.equal((await fetch(`${origin}/health`)).status, 200);
   const page = await fetch(origin);
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /Atlas Local/u);
+  const html = await page.text();
+  assert.match(html, /What should Atlas do\?/u);
+  for (const section of ["home", "missions", "families", "computer", "projects", "knowledge", "connections", "approvals", "settings"]) {
+    assert.ok(html.includes(`data-view="${section}"`), `the console has a ${section} section`);
+  }
+  const icon = await fetch(`${origin}/favicon.ico`);
+  assert.equal(icon.status, 200, "the browser's icon request is not an authentication failure");
+  assert.match(icon.headers.get("content-type"), /svg/u);
   assert.match(page.headers.get("content-security-policy"), /frame-ancestors 'none'/u);
   assert.equal((await fetch(`${origin}/v1/tasks`)).status, 401);
   await fetch(`${origin}/v1/policies`, { method: "PUT", headers: { ...admin, "content-type": "application/json" }, body: JSON.stringify({ capability: "code.write", decision: "allow" }) });
@@ -122,4 +129,34 @@ test("Git worktree command accepts an ordinary repository path", async (t) => {
   assert.equal(spawnSync("git", ["init", directory], { encoding: "utf8" }).status, 0);
   const check = spawnSync("git", ["-C", directory, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
   assert.equal(check.stdout.trim(), "true");
+});
+
+test("the audit log is append-only and a restored backup can never authorize an action (SEC-12)", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { DatabaseSync } = await import("node:sqlite");
+  const dir = await mkdtemp(join(tmpdir(), "atlas-audit-"));
+  try {
+    const source = new LocalTaskStore(join(dir, "source.sqlite"));
+    const approval = source.createApproval({ capability: "desktop.control", summary: "Press alt+f4", actionDigest: "digest-1" });
+    source.decideApproval(approval.id, "approved");
+    source.createApproval({ capability: "code.write", summary: "Write", actionDigest: "digest-2" });
+    const snapshot = source.snapshot();
+    source.close();
+
+    const target = new LocalTaskStore(join(dir, "target.sqlite"));
+    target.importSnapshot(snapshot);
+    assert.equal(target.consumeApprovedDigest("digest-1"), false, "an imported approval is history, not authority");
+    assert.ok(target.approvals().every((a) => a.status !== "pending"), "imported pending approvals expire");
+    assert.ok(target.auditEvents().filter((e) => e.id.startsWith("imported:")).every((e) => e.category.startsWith("imported:")));
+    target.close();
+
+    const db = new DatabaseSync(join(dir, "target.sqlite"));
+    assert.throws(() => db.prepare("DELETE FROM local_audit").run(), /append-only/u);
+    assert.throws(() => db.prepare("UPDATE local_audit SET summary = 'x'").run(), /append-only/u);
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

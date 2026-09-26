@@ -1,8 +1,8 @@
+import { and, eq, gt } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { computerApprovals, computerTaskEvents } from "../../../../../db/schema";
 import { authenticatedAccount } from "../../../tasks/operator-auth.mjs";
 import { taskEvent } from "../../task-events";
-import { decideApproval } from "../../approval-state.mjs";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const account = await authenticatedAccount(request);
@@ -13,7 +13,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const { id } = await context.params;
   const now = new Date().toISOString();
   const db = getDb();
-  const rows = await decideApproval(db, computerApprovals, { id, owner: account.userId, decision: body.decision, now });
+  const rows = await db.update(computerApprovals).set({ status: body.decision, decidedAt: now }).where(and(eq(computerApprovals.id, id), eq(computerApprovals.requestedBy, account.userId), eq(computerApprovals.status, "pending"), gt(computerApprovals.expiresAt, now)))
+    .returning({ taskId: computerApprovals.taskId, summary: computerApprovals.summary });
   if (!rows.length) return Response.json({ message: "That approval was already decided, has expired, or is unavailable." }, { status: 409 });
   await db.insert(computerTaskEvents).values(taskEvent(rows[0].taskId, account.userId, body.decision, `Action ${body.decision}`, rows[0].summary));
   return Response.json({ decision: body.decision });

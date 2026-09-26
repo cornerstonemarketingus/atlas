@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { accessSync, constants, lstatSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep, isAbsolute } from "node:path";
 import { randomBytes } from "node:crypto";
 import { newId } from "../../../../../packages/atlas-contracts/src/index.mjs";
 import { confineRealPath } from "../../agent/tools/path-confinement.mjs";
@@ -23,7 +23,9 @@ import { createRedactor, hostSecretValues } from "./redaction.mjs";
  * - Commands are spawned from an argv array with `shell: false`. There is no
  *   shell anywhere on the path, so no string the model writes is ever parsed
  *   as shell syntax. The executable must be a bare allowlisted name and is
- *   resolved against a minimal PATH owned by the controller.
+ *   resolved against controller-owned directories, never the workspace. On
+ *   Windows only native .exe/.com binaries are eligible; .cmd/.bat shims are
+ *   never invoked through a shell.
  * - The policy (command-policy.mjs) refuses privilege changers, shells,
  *   container and process-control tools, network tools unless enabled,
  *   publishing and global-config commands, and any argument path — absolute
@@ -145,7 +147,7 @@ export class TerminalController {
     this.#allowedExecutables = [...allowedExecutables];
     this.#allowedEnvKeys = new Set(allowedEnvKeys);
     this.#approve = approve;
-    this.#pathDirectories = pathDirectories ?? [...new Set([dirname(process.execPath), "/usr/local/bin", "/usr/bin", "/bin"])];
+    this.#pathDirectories = pathDirectories ?? defaultPathDirectories();
     this.#redact = createRedactor({ knownSecrets: [...knownSecrets, ...hostSecretValues()] });
     this.#options = {
       timeoutMs, maxTimeoutMs, killGraceMs, maxOutputBytes, maxConcurrentPerWorkspace,
@@ -264,8 +266,8 @@ export class TerminalController {
       throw new TerminalError("CONCURRENCY_LIMIT", `This workspace already has ${workspace.running.size} running commands.`);
     }
 
-    const executablePath = this.#resolveExecutable(decision.executable);
-    return this.#spawn(workspace, { argv, executablePath, cwd: cwdReal, env: childEnv, timeout, stdin, decision, network: network === true });
+    const resolvedExecutable = this.#resolveExecutable(decision.executable);
+    return this.#spawn(workspace, { argv, ...resolvedExecutable, cwd: cwdReal, env: childEnv, timeout, stdin, decision, network: network === true });
   }
 
   /** Cancels a running command by killing its whole process group. */
@@ -312,6 +314,7 @@ export class TerminalController {
       npm_config_update_notifier: "false",
       npm_config_fund: "false",
     };
+    if (process.platform === "win32" && process.env.SystemRoot) environment.SYSTEMROOT = process.env.SystemRoot;
     for (const [key, value] of Object.entries(extra)) {
       if (!this.#allowedEnvKeys.has(key)) throw new TerminalError("ENV_KEY_NOT_ALLOWED", `Environment variable '${key}' is not on the allowlist.`);
       if (typeof value !== "string" || value.length > 4096 || value.includes("\0")) {
@@ -331,13 +334,24 @@ export class TerminalController {
   }
 
   #resolveExecutable(name) {
-    for (const directory of this.#pathDirectories) {
-      const candidate = join(directory, name);
+    // Prefer direct Node invocation over Windows npm/npx launch shims. Some
+    // PATH entries expose .exe/.cmd wrappers that depend on shell semantics.
+    if (process.platform === "win32" && ["npm", "npx"].includes(name)) {
+      const script = join(dirname(process.execPath), "node_modules", "npm", "bin", name === "npm" ? "npm-cli.js" : "npx-cli.js");
       try {
-        accessSync(candidate, constants.X_OK);
-        if (isFile(candidate)) return candidate;
-      } catch {
-        // Not in this directory.
+        accessSync(script, constants.F_OK);
+        return { executablePath: process.execPath, prefixArgs: [script] };
+      } catch { /* try explicit native executables below */ }
+    }
+    for (const directory of this.#pathDirectories) {
+      for (const candidateName of executableCandidates(name)) {
+        const candidate = join(directory, candidateName);
+        try {
+          accessSync(candidate, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+          if (isFile(candidate)) return { executablePath: candidate, prefixArgs: [] };
+        } catch {
+          // Not in this directory.
+        }
       }
     }
     throw new TerminalError("EXECUTABLE_NOT_FOUND", `'${name}' is allowlisted but not installed on this host.`);
@@ -358,15 +372,15 @@ export class TerminalController {
     return { args, applied };
   }
 
-  #spawn(workspace, { argv, executablePath, cwd, env, timeout, stdin, decision, network }) {
+  #spawn(workspace, { argv, executablePath, prefixArgs = [], cwd, env, timeout, stdin, decision, network }) {
     const id = newId("toolCall");
     const useGroups = process.platform !== "win32";
     const rlimits = this.#prlimit ? this.#rlimitArgs() : null;
     // prlimit sets the limits on itself and then execs the command, so the pid
     // (and process group) is the command's own.
     const [file, args] = rlimits && rlimits.args.length > 0
-      ? [this.#prlimit, [...rlimits.args, "--", executablePath, ...argv.slice(1)]]
-      : [executablePath, argv.slice(1)];
+      ? [this.#prlimit, [...rlimits.args, "--", executablePath, ...prefixArgs, ...argv.slice(1)]]
+      : [executablePath, [...prefixArgs, ...argv.slice(1)]];
 
     const isolation = {
       level: "process",
@@ -376,6 +390,7 @@ export class TerminalController {
       cwdConfined: true,
       argumentPathPolicy: true,
       processGroup: useGroups,
+      processTreeCleanup: process.platform === "win32" ? "taskkill /T /F" : "process group signals",
       timeoutMs: timeout,
       maxOutputBytes: this.#options.maxOutputBytes,
       rlimits: rlimits && rlimits.args.length > 0
@@ -455,7 +470,7 @@ export class TerminalController {
           argv: [...argv],
           risk: decision.risk,
           exitCode: spawnError ? null : exitCode,
-          signal: signal ?? null,
+          signal: record.forceKilled ? "SIGKILL" : signal ?? null,
           timedOut: record.timedOut,
           cancelled: record.cancelled,
           spawnError: spawnError ? spawnError.code ?? spawnError.message : null,
@@ -480,8 +495,16 @@ export class TerminalController {
     if (record.state === "running") {
       record.state = "terminating";
       if (reason === "cancelled") record.cancelled = true;
-      signalGroup(record.child, "SIGTERM");
-      record.killTimer = setTimeout(() => signalGroup(record.child, "SIGKILL"), this.#options.killGraceMs);
+      if (process.platform === "win32") {
+        // Node's Windows child.kill(SIGTERM) maps to TerminateProcess and does
+        // not reliably clean descendants. Kill only this managed PID tree,
+        // using a fixed system executable and argv (never a shell).
+        record.forceKilled = terminateWindowsTree(record.child.pid);
+        if (!record.forceKilled) signalGroup(record.child, "SIGKILL");
+      } else {
+        signalGroup(record.child, "SIGTERM");
+        record.killTimer = setTimeout(() => signalGroup(record.child, "SIGKILL"), this.#options.killGraceMs);
+      }
     }
     await record.done;
   }
@@ -497,6 +520,16 @@ function signalGroup(child, signal) {
   } catch {
     // Already gone.
   }
+}
+
+function terminateWindowsTree(pid) {
+  if (process.platform !== "win32" || !Number.isInteger(pid)) return false;
+  const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
+  const taskkill = join(systemRoot, "System32", "taskkill.exe");
+  const result = spawnSync(taskkill, ["/PID", String(pid), "/T", "/F"], {
+    encoding: "utf8", timeout: 5000, windowsHide: true, shell: false, stdio: "ignore",
+  });
+  return !result.error && result.status === 0;
 }
 
 function createEventQueue() {
@@ -537,6 +570,22 @@ function truncationMarker(maxBytes) {
 
 function segment(value) {
   return value.replace(ID_SEGMENT, "_").slice(0, 48) || "_";
+}
+
+function defaultPathDirectories() {
+  const platformPaths = process.platform === "win32"
+    ? String(process.env.PATH ?? "").split(delimiter)
+    : ["/usr/local/bin", "/usr/bin", "/bin"];
+  const candidates = [dirname(process.execPath), ...platformPaths];
+  return [...new Set(candidates.map((item) => item.trim()).filter((item) => isAbsolute(item)))];
+}
+
+function executableCandidates(name) {
+  if (process.platform !== "win32") return [name];
+  if (/\.[A-Za-z0-9]+$/u.test(name)) return [name];
+  // Deliberately omit .bat/.cmd: Node would need a shell to invoke them.
+  const aliases = name === "python3" ? ["python3", "python"] : [name];
+  return aliases.flatMap((alias) => [alias, `${alias}.exe`, `${alias}.com`]);
 }
 
 function describe(workspace) {

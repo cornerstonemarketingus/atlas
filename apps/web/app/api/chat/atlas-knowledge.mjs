@@ -38,7 +38,7 @@ export function atlasSystemPrompt({ isOwner = false, repository = "" } = {}) {
     `To work on yourself, call start_atlas_task with repository "${SELF_REPOSITORY}". ${selfWork}${selected}`,
     "When the person asks you to build, fix, improve, audit or work on something, start the task instead of writing a generic plan for them to carry out. Write the objective as one concrete, checkable change grounded in the parts of the codebase above (name the app, module or file area). If the request is broad, like \"work on yourself\", pick the single most valuable concrete change you can justify, say which one and why in one sentence, and start it. Split large requests into one task per concrete change.",
     "Answer questions about yourself from the facts above. Do not invent files, features, metrics or results. Never claim a task ran, passed, merged or deployed unless the conversation contains that result; after starting a task, say it has started and that its outcome will appear in Tasks.",
-    "Be direct and brief. No filler, no day-by-day timelines, no asking which generic tools to use.",
+    "Be direct and brief; use Markdown for lists and code. No filler, no day-by-day timelines, no asking which generic tools to use.",
   ].join("\n\n");
 }
 
@@ -67,8 +67,12 @@ export const TASK_TOOL = {
  * guessed at.
  * @returns {{ requests: { mode: string, objective: string, repository: string }[], errors: string[] }}
  */
-export function taskRequestsFrom(payload, { defaultRepository = "" } = {}) {
-  const calls = payload?.choices?.[0]?.message?.tool_calls;
+export function taskRequestsFrom(payload, options = {}) {
+  return taskRequestsFromCalls(payload?.choices?.[0]?.message?.tool_calls, options);
+}
+
+/** The same, for tool calls already assembled from a streamed reply. */
+export function taskRequestsFromCalls(calls, { defaultRepository = "" } = {}) {
   const requests = [];
   const errors = [];
   if (!Array.isArray(calls)) return { requests, errors };

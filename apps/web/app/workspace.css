@@ -125,3 +125,25 @@
   .signin-proof{display:none}
   .signin-access{border-left:0;border-top:1px solid var(--ws-line);padding:55px 24px}
 }
+/* Chat replies: Markdown subset, streaming, task suggestions */
+.md-body{color:#c3cbc5}
+.md-body p{margin:6px 0 0;white-space:pre-wrap}
+.md-body .md-heading{margin-top:14px}
+.md-body .md-list{margin:6px 0 0;padding-left:22px}
+.md-body .md-list li{margin:3px 0}
+.md-body code{font:13px/1.4 var(--font-geist-mono,ui-monospace,monospace);background:#ffffff12;border-radius:5px;padding:1px 5px}
+.md-body .md-code{margin:10px 0 0;padding:12px 14px;background:#0c0e0d;border:1px solid #2a302c;border-radius:10px;overflow-x:auto}
+.md-body .md-code code{background:none;padding:0;font-size:13px;white-space:pre}
+.md-body a{color:var(--ws-accent,#c8f169);text-underline-offset:3px}
+.suggestion-card>div:last-child{border:1px solid #323934;border-radius:14px;padding:12px 14px;background:#141715}
+.suggestion-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.suggestion-actions button{border-radius:999px;padding:8px 14px;font:600 13px/1 var(--font-geist-sans);cursor:pointer;border:1px solid #3a423c}
+.suggestion-actions .primary{background:var(--ws-accent,#c8f169);color:#11140f;border-color:transparent}
+.suggestion-actions .secondary{background:transparent;color:inherit}
+.suggestion-actions button:focus-visible,.send:focus-visible{outline:2px solid var(--ws-accent,#c8f169);outline-offset:2px}
+html[data-atlas-theme="light"] .md-body{color:#2b312c}
+html[data-atlas-theme="light"] .md-body .md-code{background:#f3f1ea;border-color:#d7d4cb}
+html[data-atlas-theme="light"] .md-body code{background:#0000000d}
+html[data-atlas-theme="light"] .suggestion-card>div:last-child{background:#fff;border-color:#d7d4cb}
+@media(prefers-color-scheme:light){html[data-atlas-theme="system"] .md-body{color:#2b312c}html[data-atlas-theme="system"] .md-body .md-code{background:#f3f1ea;border-color:#d7d4cb}html[data-atlas-theme="system"] .suggestion-card>div:last-child{background:#fff;border-color:#d7d4cb}}
+.task-now{color:var(--ws-accent,#c8f169);font-size:13px;margin:6px 0 0}

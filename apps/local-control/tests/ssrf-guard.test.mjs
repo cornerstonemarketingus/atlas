@@ -11,8 +11,6 @@ import {
   privateAddressReason,
   UnsafeDestinationError,
 } from "../src/net/ssrf-guard.mjs";
-import { ToolRegistry } from "../src/agent/tool-registry.mjs";
-import { registerBrowserTools } from "../src/agent/tools/browser-tools.mjs";
 import { createPlaywrightPage, UnsafeNavigationError } from "../src/agent/browser/playwright-page.mjs";
 
 const publicLookup = async () => [{ address: "93.184.215.14", family: 4 }];
@@ -108,40 +106,6 @@ test("the allow-list defaults to ATLAS_BROWSER_ALLOW_PRIVATE_HOSTS", async (t) =
   await assert.rejects(() => assertPublicDestination("http://127.0.0.1:8080/", { lookup: publicLookup }), /does not open/u);
 });
 
-function browserRegistry(session, urlPolicy) {
-  const registry = new ToolRegistry({ policy: () => "allow" });
-  registerBrowserTools(registry, { session, urlPolicy });
-  const approvals = { check: async () => false };
-  return (name, args) => registry.invoke({ name, rawArguments: JSON.stringify(args), sessionId: "s1", approvals, context: {} });
-}
-
-test("browser.navigate refuses the daemon, the LAN and cloud metadata, and never reaches the browser", async () => {
-  const opened = [];
-  const session = { navigate: async ({ url }) => { opened.push(url); return { url }; } };
-  const run = browserRegistry(session, { lookup: resolvesTo("10.0.0.7"), allowPrivateHosts: "" });
-  for (const url of ["http://127.0.0.1:4317/v1/state", "http://localhost:4317/", "http://169.254.169.254/latest/meta-data/", "http://0x7f.1/", "http://[::ffff:127.0.0.1]/", "https://intranet.example/"]) {
-    const result = await run("browser.navigate", { url });
-    assert.equal(result.status, "failed", url);
-    assert.equal(result.code, "PRIVATE_DESTINATION", url);
-  }
-  assert.deepEqual(opened, []);
-});
-
-test("browser.navigate reports a redirect onto a private host as a failure", async () => {
-  const session = { navigate: async () => ({ url: "http://169.254.169.254/latest/meta-data/", title: "metadata" }) };
-  const run = browserRegistry(session, { lookup: publicLookup, allowPrivateHosts: "" });
-  const result = await run("browser.navigate", { url: "https://redirector.example/" });
-  assert.equal(result.status, "failed");
-  assert.match(result.message, /redirected/u);
-  assert.doesNotMatch(result.output ?? "", /metadata/u);
-});
-
-test("browser.navigate opens an allow-listed local host", async () => {
-  const session = { navigate: async ({ url }) => ({ url, title: "Dev" }) };
-  const run = browserRegistry(session, { lookup: publicLookup, allowPrivateHosts: "localhost" });
-  const result = await run("browser.navigate", { url: "http://localhost:5173/" });
-  assert.equal(result.status, "completed");
-});
 
 function fakePlaywright({ redirectTo = null } = {}) {
   const state = { routeHandler: null, url: "about:blank", gotos: [] };

@@ -1,5 +1,7 @@
 const SESSION_COOKIE_NAME = "atlas_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
+/** Owner (operator-role) sessions carry deployment authority, so they are short-lived. */
+export const OWNER_SESSION_TTL_SECONDS = 60 * 60 * 12; // 12 hours
 
 function base64Url(value) {
   const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
@@ -30,7 +32,8 @@ export async function signSession(payload, secret, now = Date.now(), ttlSeconds 
   }
   const issuedAt = Math.floor(now / 1000);
   const header = base64Url(JSON.stringify({ alg: "HS256", typ: "ATLAS-SESSION" }));
-  const body = base64Url(JSON.stringify({ ...payload, iat: issuedAt, exp: issuedAt + ttlSeconds }));
+  // Every session has an id, so it can be revoked on its own (SEC-2).
+  const body = base64Url(JSON.stringify({ sid: crypto.randomUUID(), ...payload, iat: issuedAt, exp: issuedAt + ttlSeconds }));
   const unsigned = `${header}.${body}`;
   const key = await hmacKey(secret);
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(unsigned));

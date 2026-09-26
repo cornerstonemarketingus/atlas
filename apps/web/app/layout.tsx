@@ -16,8 +16,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Atlas — The private AI operator",
-  description: "Build software, operate your computer, and verify every consequential action with one private AI operator.",
+  title: "Atlas — Build it. Run it. Grow it.",
+  description: "Atlas is an autonomous AI workspace that builds software, operates computers and turns successful work into persistent automations.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
@@ -28,8 +28,8 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Atlas" },
   formatDetection: { telephone: false },
   openGraph: {
-    title: "Atlas — The private AI operator",
-    description: "One persistent operator for software and computer work. Local-first, evidence-driven, and under your control.",
+    title: "Atlas — Build it. Run it. Grow it.",
+    description: "An autonomous AI workspace that builds software, operates computers and turns successful work into persistent automations — with you approving every consequential action.",
     type: "website",
   },
 };
