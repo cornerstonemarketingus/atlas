@@ -60,19 +60,21 @@ export class AgentSessionStore {
       );
       CREATE INDEX IF NOT EXISTS agent_turns_session_idx ON agent_turns(session_id, created_at);
     `);
+    const columns = this.#db.prepare("PRAGMA table_info(agent_sessions)").all().map((column) => column.name);
+    if (!columns.includes("platform_task_id")) this.#db.exec("ALTER TABLE agent_sessions ADD COLUMN platform_task_id TEXT");
   }
 
-  createSession({ title, repository = null, model, executor = "local", budget = {}, status = "idle" }) {
+  createSession({ title, repository = null, model, executor = "local", budget = {}, status = "idle", platformTaskId = null }) {
     const now = new Date().toISOString();
     const id = randomUUID();
     this.#db
       .prepare(
         `INSERT INTO agent_sessions
-           (id, title, repository, model, executor, status, summary, budget_json, usage_json,
+            (id, title, repository, model, executor, status, summary, budget_json, usage_json, platform_task_id,
             lease_owner, lease_expires_at, last_sequence, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, '{}', NULL, NULL, 0, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, NULL, ?, '{}', ?, NULL, NULL, 0, ?, ?)`
       )
-      .run(id, title, repository, model, executor, status, JSON.stringify(normalizeBudget(budget)), now, now);
+        .run(id, title, repository, model, executor, status, JSON.stringify(normalizeBudget(budget)), platformTaskId, now, now);
     return this.session(id);
   }
 
@@ -81,7 +83,7 @@ export class AgentSessionStore {
       .prepare(
         `SELECT id, title, repository, model, executor, status, summary,
                 budget_json AS budgetJson, usage_json AS usageJson,
-                lease_owner AS leaseOwner, lease_expires_at AS leaseExpiresAt,
+                platform_task_id AS platformTaskId, lease_owner AS leaseOwner, lease_expires_at AS leaseExpiresAt,
                 last_sequence AS lastSequence, created_at AS createdAt, updated_at AS updatedAt
            FROM agent_sessions WHERE id = ?`,
       )
@@ -89,12 +91,17 @@ export class AgentSessionStore {
     return row ? hydrate(row) : null;
   }
 
+  setPlatformTaskId(id, platformTaskId) {
+    this.#db.prepare("UPDATE agent_sessions SET platform_task_id = ?, updated_at = ? WHERE id = ?").run(platformTaskId, new Date().toISOString(), id);
+    return this.session(id);
+  }
+
   sessions(limit = 50) {
     return this.#db
       .prepare(
         `SELECT id, title, repository, model, executor, status, summary,
                 budget_json AS budgetJson, usage_json AS usageJson,
-                lease_owner AS leaseOwner, lease_expires_at AS leaseExpiresAt,
+                platform_task_id AS platformTaskId, lease_owner AS leaseOwner, lease_expires_at AS leaseExpiresAt,
                 last_sequence AS lastSequence, created_at AS createdAt, updated_at AS updatedAt
            FROM agent_sessions ORDER BY updated_at DESC LIMIT ?`,
       )

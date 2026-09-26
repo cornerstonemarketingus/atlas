@@ -66,7 +66,7 @@ const USAGE = `Usage:
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
-       [--no-verify] [--verify-dir <relative-path>] [--max-repair-attempts N]
+      [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]`;
 
 export async function main(args: readonly string[]): Promise<number> {
@@ -322,6 +322,7 @@ const CODE_SYSTEM_PROMPT = "You are Atlas, proposing a bounded code change. Repo
 
 async function runCode(args: readonly string[], format: "json" | "text"): Promise<number> {
   const objective = args[2];
+  const dryRun = args.includes("--dry-run");
   const model = readRequiredOption(args, "--model");
   // Both stay optional: each provider knows the environment variable its own
   // key normally lives in, and the vendor is inferable from the model name.
@@ -419,7 +420,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       defaultDecision: "deny",
       rules: [
         { id: "allow-repository-reads", capabilities: ["read"], scope: { kind: "repository", repositoryId }, decision: "allow" },
-        { id: "allow-repository-writes", capabilities: ["write"], scope: { kind: "repository", repositoryId }, decision: "allow" },
+        { id: "allow-repository-writes", capabilities: ["write"], scope: { kind: "repository", repositoryId }, decision: dryRun ? "deny" : "allow" },
       ],
     },
   });

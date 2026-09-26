@@ -43,7 +43,13 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (platformRoutes?.handlePage(request, response)) return;
     if (innovationRoutes?.handlePage(request, response)) return;
     response.setHeader("content-type", "application/json; charset=utf-8");
-    if (request.method === "GET" && request.url === "/health") return send(response, 200, { status: "ok", mode: "sovereign", model, license, runtime: runtime ? { running: true, executors: runtime.executorIds() } : { running: false, executors: [] } });
+    if (request.method === "GET" && request.url === "/health") return send(response, 200, {
+      status: "ok", mode: "sovereign", model, license,
+      memory: process.memoryUsage(),
+      runtime: runtime ? { running: true, executors: runtime.executorIds() } : { running: false, executors: [] },
+      health: runtime ? runtime.healthSnapshot() : { activeAgents: 0, activeSessions: 0, queuedTurns: 0, sessions: 0 },
+      batchQueueDepth: missionService?.list?.().filter((mission) => ["queued", "running", "paused"].includes(mission.status)).length ?? 0,
+    });
     if (request.method === "POST" && request.url === "/v1/pair/claim") {
       const client = request.socket.remoteAddress ?? "unknown";
       const pairLimit = limiter.check({ bucket: "pairing", client, ...LIMITS.pairing });

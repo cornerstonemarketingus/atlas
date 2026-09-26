@@ -42,6 +42,8 @@ const HARD_MAX_ACTION_TIMEOUT_MS = 120_000;
 const SENSITIVE_KEY = /passw(or)?d|passcode|token|secret|api[-_]?key|authorization|cookie|credential|otp/i;
 const MAX_TRACE_ENTRIES = 500;
 const MAX_BLOCKED_RECORDS = 100;
+const ACTION_RETRY_ATTEMPTS = 3;
+const ACTION_RETRY_BASE_MS = 150;
 
 /** Normalizes an origin string; only http(s) origins can be allowed. */
 export function normalizeOrigin(candidate) {
@@ -385,7 +387,16 @@ export class BrowserWorker {
     const run = async () => {
       if (session.closed) throw new BrowserWorkerError("SESSION_CLOSED", `Browser session '${sessionId}' is closed (${session.closeReason}).`);
       try {
-        const result = await fn(session);
+        let result;
+        for (let attempt = 1; ; attempt += 1) {
+          try { result = await fn(session); break; }
+          catch (error) {
+            const message = String(error?.message ?? "");
+            const retryable = !session.closed && (error?.name === "TimeoutError" || error?.code === "ECONNRESET" || error?.code === "ETIMEDOUT" || error?.code === "EAI_AGAIN" || /^net::ERR_(ABORTED|CONNECTION_RESET|CONNECTION_CLOSED|TIMED_OUT)/u.test(message));
+            if (!retryable || attempt >= ACTION_RETRY_ATTEMPTS) throw error;
+            await new Promise((resolve) => setTimeout(resolve, ACTION_RETRY_BASE_MS * 2 ** (attempt - 1)));
+          }
+        }
         this.#record(session, action, args, { ok: true });
         return result;
       } catch (error) {

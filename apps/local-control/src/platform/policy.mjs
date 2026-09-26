@@ -126,10 +126,14 @@ function validatePolicyDocument(document) {
 export class PolicyEngine {
   #policy;
   #clock;
+  #cache;
+  #cacheSize;
 
-  constructor(document, { clock = () => new Date() } = {}) {
+  constructor(document, { clock = () => new Date(), cacheSize = 256 } = {}) {
     this.#policy = validatePolicyDocument(document);
     this.#clock = clock;
+    this.#cache = new Map();
+    this.#cacheSize = Number.isInteger(cacheSize) && cacheSize > 0 ? cacheSize : 256;
   }
 
   get version() { return this.#policy.version; }
@@ -146,19 +150,24 @@ export class PolicyEngine {
     if (!tenantId || !userId) return { effect: "deny", reasons: ["request is missing tenant or user identity"] };
     if (!tool || typeof tool.name !== "string") return { effect: "deny", reasons: ["request names no tool definition"] };
     const request = { tenantId, userId, agentId, tool };
+    const cacheKey = JSON.stringify({ tenantId, userId, agentId, tool, input, grantedPermissions, approval });
+    if (!approval) {
+      const cached = this.#cache.get(cacheKey);
+      if (cached) { this.#cache.delete(cacheKey); this.#cache.set(cacheKey, cached); return { ...cached, reasons: [...cached.reasons] }; }
+    }
     const applicable = this.#policy.rules.filter((rule) => ruleApplies(rule, request));
 
     const denials = applicable.filter((rule) => rule.effect === "deny");
     if (denials.length > 0) {
-      return { effect: "deny", reasons: denials.map((rule) => `explicit deny by rule '${rule.id}'${rule.reason ? `: ${rule.reason}` : ""}`) };
+      return this.#remember(cacheKey, { effect: "deny", reasons: denials.map((rule) => `explicit deny by rule '${rule.id}'${rule.reason ? `: ${rule.reason}` : ""}`) }, approval);
     }
 
     const violations = applicable.map((rule) => constraintViolation(rule, input)).filter(Boolean);
-    if (violations.length > 0) return { effect: "deny", reasons: violations };
+    if (violations.length > 0) return this.#remember(cacheKey, { effect: "deny", reasons: violations }, approval);
 
     const grants = Array.isArray(grantedPermissions) ? grantedPermissions : [];
     const grant = grants.find((pattern) => matchesPermission(pattern, tool.name));
-    if (!grant) return { effect: "deny", reasons: [`default deny: no granted permission covers '${tool.name}'`] };
+    if (!grant) return this.#remember(cacheKey, { effect: "deny", reasons: [`default deny: no granted permission covers '${tool.name}'`] }, approval);
 
     const reasons = [`permission '${grant}' covers '${tool.name}'`];
     const approvalRules = applicable.filter((rule) => rule.effect === "require_approval");
@@ -172,9 +181,17 @@ export class PolicyEngine {
       if (approval?.verified === true && typeof approval.id === "string") {
         return { effect: "allow", reasons: [...reasons, ...why, `approval '${approval.id}' granted for this exact action`] };
       }
-      return { effect: "require_approval", reasons: [...reasons, ...why] };
+      return this.#remember(cacheKey, { effect: "require_approval", reasons: [...reasons, ...why] }, approval);
     }
-    return { effect: "allow", reasons };
+    return this.#remember(cacheKey, { effect: "allow", reasons }, approval);
+  }
+
+  #remember(key, result, approval) {
+    if (!approval) {
+      this.#cache.set(key, result);
+      while (this.#cache.size > this.#cacheSize) this.#cache.delete(this.#cache.keys().next().value);
+    }
+    return result;
   }
 
   /** A full PolicyDecision record, valid against the shared contract. */

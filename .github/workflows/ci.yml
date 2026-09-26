@@ -41,6 +41,14 @@ jobs:
           cache: npm
           cache-dependency-path: packages/atlas-cli/package-lock.json
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            packages/atlas-cli/node_modules
+            ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-atlas-cli-deps-${{ hashFiles('packages/atlas-cli/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-atlas-cli-deps-
+
       # --ignore-scripts: dependency install must not run arbitrary lifecycle
       # scripts, matching how atlas-coder.yml already installs this package.
       - run: npm ci --ignore-scripts
@@ -67,6 +75,14 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/web/node_modules
+            ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-apps-web-deps-${{ hashFiles('apps/web/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-apps-web-deps-
 
       - run: npm ci
 
@@ -163,6 +179,14 @@ jobs:
           cache: npm
           cache-dependency-path: apps/browser-worker/package-lock.json
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/browser-worker/node_modules
+            ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-browser-worker-deps-${{ hashFiles('apps/browser-worker/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-browser-worker-deps-
+
       - run: npm ci --ignore-scripts
 
       # The worker drives a real Chromium against a local fixture site; the
@@ -189,6 +213,14 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/windows-companion/package-lock.json
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/windows-companion/node_modules
+            ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-windows-companion-deps-${{ hashFiles('apps/windows-companion/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-windows-companion-deps-
 
       # Browser automation is a security boundary. Exercise the companion on
       # Windows—the platform customers run—on every pull request, rather than

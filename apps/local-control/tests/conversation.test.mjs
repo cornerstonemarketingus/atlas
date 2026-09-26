@@ -14,6 +14,7 @@ import { compactConversation, ContextTooLargeError, measure } from "../src/agent
 import { ReasoningAccumulator, publicErrorMessage, stripInlineReasoning } from "../src/agent/reasoning.mjs";
 import { extractPdfText, loadAttachment, normalizeAttachment, toModelContent, AttachmentError } from "../src/agent/attachments.mjs";
 import { createSpeechTranscriber } from "../src/agent/speech.mjs";
+import { PlatformTaskStore } from "../src/platform/task-store.mjs";
 
 /** Builds an SSE body the way an OpenAI-compatible server streams one. */
 function sseResponse(frames) {
@@ -36,12 +37,13 @@ function scriptedClient(turns) {
   return { client: createModelClient({ baseUrl: "http://127.0.0.1:11434/v1", fetchImpl }), seen, calls: () => call };
 }
 
-async function harness(t, { executor, registry }) {
+async function harness(t, { executor, registry, platformStore = null }) {
   const directory = await mkdtemp(join(tmpdir(), "atlas-conv-"));
   const sessions = new AgentSessionStore(join(directory, "agent.sqlite"));
-  const runtime = new AgentRuntime({ sessions, executors: { conversation: executor } });
-  t.after(async () => { await runtime.stop(); sessions.close(); await rm(directory, { recursive: true, force: true }); });
-  return { directory, sessions, runtime, registry };
+  const durableStore = platformStore ?? null;
+  const runtime = new AgentRuntime({ sessions, executors: { conversation: executor }, platformStore: durableStore });
+  t.after(async () => { await runtime.stop(); sessions.close(); durableStore?.close(); await rm(directory, { recursive: true, force: true }); });
+  return { directory, sessions, runtime, registry, platformStore: durableStore };
 }
 
 function openRegistry() {
@@ -397,6 +399,23 @@ test("the conversation loop streams incrementally, calls a tool, and answers", a
 
   // The tool result was fed back to the model on the second call.
   assert.match(JSON.stringify(seen[1].messages), /file contents: 42/u);
+});
+
+test("a platform-backed conversation keeps a durable task identity and lifecycle", async (t) => {
+  const registry = openRegistry();
+  const { client } = scriptedClient([[textFrame("Ready."), doneFrame("stop")]]);
+  const executor = createConversationExecutor({ client, registry });
+  const directory = await mkdtemp(join(tmpdir(), "atlas-conv-platform-"));
+  const platformStore = new PlatformTaskStore(join(directory, "platform.sqlite"));
+  const { runtime } = await harness(t, { executor, registry, platformStore });
+  const session = runtime.createSession({ title: "Durable Chat", repository: "/tmp/repo", model: "local", executor: "conversation" });
+  assert.match(session.platformTaskId, /^tsk_[0-9a-f]{32}$/u);
+  runtime.submitTurn(session.id, { text: "Say ready." });
+  await runtime.drain();
+
+  const task = platformStore.getTask("local", session.platformTaskId);
+  assert.equal(task.status, "completed");
+  assert.deepEqual(platformStore.listTransitions("local", task.id).map((transition) => transition.to), ["authorized", "queued", "running", "verifying", "completed"]);
 });
 
 test("a tool needing approval pauses the session and emits an approval request", async (t) => {
