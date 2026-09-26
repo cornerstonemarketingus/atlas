@@ -78,7 +78,6 @@ test("over-budget requests get a 429 with Retry-After", async () => {
     assert.equal(await enforceRateLimit({
       db,
       table: requestRateLimits,
-      request,
       subject,
       route: "auth_operator",
       limit: 1,
@@ -88,7 +87,6 @@ test("over-budget requests get a 429 with Retry-After", async () => {
     const limited = await enforceRateLimit({
       db,
       table: requestRateLimits,
-      request,
       subject,
       route: "auth_operator",
       limit: 1,
@@ -101,7 +99,6 @@ test("over-budget requests get a 429 with Retry-After", async () => {
     const stillLimited = await enforceRateLimit({
       db,
       table: requestRateLimits,
-      request,
       subject,
       route: "auth_operator",
       limit: 1,

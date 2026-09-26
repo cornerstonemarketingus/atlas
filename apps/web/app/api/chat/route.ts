@@ -21,7 +21,6 @@ export async function POST(request: Request) {
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
-    request,
     subject: rateLimitSubjectForAccount(account),
     route: "chat_post",
     limit: 40,

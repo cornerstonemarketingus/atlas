@@ -7,7 +7,6 @@ export async function GET(request: Request) {
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
-    request,
     subject: rateLimitSubjectForIp(request),
     route: "auth_github_start",
     limit: 20,

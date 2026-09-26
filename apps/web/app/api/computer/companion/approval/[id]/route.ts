@@ -6,20 +6,28 @@ import { authenticatedDevice } from "../../../companion-auth";
 import { enforceRateLimit, rateLimitSubjectForDevice, rateLimitSubjectForIp, rateLimitedResponse } from "../../../../rate-limit.mjs";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+  const ipSubject = rateLimitSubjectForIp(request);
+  if (!ipSubject) return rateLimitedResponse(15 * 60);
+  const preAuthLimited = await enforceRateLimit({
+    db: getDb,
+    table: requestRateLimits,
+    subject: ipSubject,
+    route: "computer_companion_approval_ip",
+    limit: 30,
+    windowSeconds: 15 * 60,
+  });
+  if (preAuthLimited) return preAuthLimited;
   const device = await authenticatedDevice(request);
-  const subject = device ? rateLimitSubjectForDevice(device) : rateLimitSubjectForIp(request);
-  if (!subject) return rateLimitedResponse(15 * 60);
+  if (!device) return Response.json({ message: "Device authentication failed." }, { status: 401 });
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
-    request,
-    subject,
-    route: "computer_companion_approval",
+    subject: rateLimitSubjectForDevice(device),
+    route: "computer_companion_approval_device",
     limit: 30,
     windowSeconds: 15 * 60,
   });
   if (limited) return limited;
-  if (!device) return Response.json({ message: "Device authentication failed." }, { status: 401 });
   let body: { action?: unknown };
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
   const action = typeof body.action === "string" ? body.action : JSON.stringify(body.action ?? null);

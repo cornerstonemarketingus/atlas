@@ -12,7 +12,6 @@ export async function POST(request: Request) {
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
-    request,
     subject: rateLimitSubjectForIp(request),
     route: "auth_operator",
     limit: 5,

@@ -53,7 +53,7 @@ export async function consumeRateLimit(db, table, { subject, route, limit, windo
   };
 }
 
-export async function enforceRateLimit({ db, table, request, subject, route, limit, windowSeconds, failClosed = false, now = Date.now() }) {
+export async function enforceRateLimit({ db, table, subject, route, limit, windowSeconds, failClosed = false, now = Date.now() }) {
   if (!subject) return null;
   try {
     const outcome = await consumeRateLimit(typeof db === "function" ? db() : db, table, { subject, route, limit, windowSeconds, now });

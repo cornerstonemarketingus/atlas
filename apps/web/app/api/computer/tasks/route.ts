@@ -41,7 +41,6 @@ export async function POST(request: Request) {
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
-    request,
     subject: rateLimitSubjectForAccount(account),
     route: "computer_tasks_post",
     limit: 20,

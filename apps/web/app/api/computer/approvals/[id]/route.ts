@@ -11,7 +11,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
-    request,
     subject: rateLimitSubjectForAccount(account),
     route: "computer_approval_decision",
     limit: 30,

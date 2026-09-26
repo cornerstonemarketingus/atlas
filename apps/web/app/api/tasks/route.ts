@@ -38,7 +38,6 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
-    request,
     subject: rateLimitSubjectForAccount(account),
     route: "tasks_post",
     limit: 20,
