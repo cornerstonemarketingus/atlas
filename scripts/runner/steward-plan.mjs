@@ -6,7 +6,7 @@ import {
 
 /**
  * Plans one PR-steward run: finds the Atlas pull request that needs work
- * (from a finished CI run, a manual dispatch, or the hourly sweep), gathers
+ * (from a finished CI run, a manual dispatch, or the 6-hourly sweep), gathers
  * its failing job logs and new review feedback, decides with steward.mjs,
  * and hands the workflow either a repair objective or nothing. Stop notices
  * are posted here, once per commit. Runs before any untrusted checkout.

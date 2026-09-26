@@ -10,15 +10,17 @@ name: Atlas PR Steward
 # GitHub runs the workflow file from the PR's own branch, which here is code
 # Atlas wrote, and it would run with secrets. workflow_run and schedule always
 # use this file as it is on the default branch. Review comments are picked up
-# by the hourly sweep (or a manual run).
+# by the 6-hourly sweep (or a manual run).
 run-name: Atlas PR Steward · ${{ github.event.workflow_run.head_branch || inputs.pr_number || 'sweep' }}
 
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  # Every 6 hours: picks up review comments (CI failures arrive immediately
+  # through workflow_run). Each sweep is a short job; hourly was wasteful.
   schedule:
-    - cron: "17 * * * *"
+    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
       pr_number:
