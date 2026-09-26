@@ -9,6 +9,7 @@ import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { PlatformTaskStore } from "./platform/task-store.mjs";
+import { createLegacyPolicyBridge } from "./platform/legacy-policy-bridge.mjs";
 import { bootstrapInnovation } from "./platform/innovation/bootstrap.mjs";
 import { OutboxDispatcher, createEventStream } from "./platform/outbox-dispatcher.mjs";
 import { LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
@@ -238,7 +239,10 @@ function buildExecutors() {
  */
 function buildToolRegistry() {
   const registry = new ToolRegistry({
-    policy: (capability) => store.policy(capability).decision,
+    policy: createLegacyPolicyBridge({
+      policyForCapability: (capability) => store.policy(capability),
+      audit: (event) => store.audit("policy.decision", `${event.tool} ${event.effect}: ${event.reasons.join("; ")}`),
+    }),
     // Secrets resolve by reference, from the OS-backed credential vault first
     // and the process environment only as a fallback for existing setups
     // (SECURITY-REVIEW SEC-8). No tool receives a value it did not declare.
