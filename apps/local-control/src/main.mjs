@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,22 +45,14 @@ import { registerCommunicationsTools } from "./agent/tools/communications-tools.
 import { registerWorkflowTools } from "./agent/tools/workflow-tools.mjs";
 import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.mjs";
 import { createCredentialVault } from "./agent/credential-vault.mjs";
+import { openInBrowser, ownerAccount, resolveOwnerToken, signInUrl } from "./identity/owner.mjs";
+import { RemoteAccess } from "./remote/access.mjs";
 import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
 import { createVercelAdapter } from "./agent/infrastructure/vercel.mjs";
 import { createGitHostAdapter } from "./agent/infrastructure/git-hosts.mjs";
 
 const dataDirectory = process.env.ATLAS_LOCAL_DATA_DIR || join(homedir(), ".atlas");
-const tokenFile = join(dataDirectory, "local-token");
 mkdirSync(dataDirectory, { recursive: true });
-let token = process.env.ATLAS_LOCAL_TOKEN;
-if (!token) {
-  try { token = readFileSync(tokenFile, "utf8").trim(); }
-  catch {
-    token = randomBytes(32).toString("base64url");
-    writeFileSync(tokenFile, `${token}\n`, { mode: 0o600, flag: "wx" });
-    console.log(`Local access token (saved to ${tokenFile}):\n${token}`);
-  }
-}
 
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
 const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
@@ -76,6 +68,12 @@ const outbox = new OutboxDispatcher({ store: platformStore, onError: (error) => 
 outbox.subscribe("*", (event) => platformStream.publish(event));
 outbox.start();
 const vault = createCredentialVault({ filePath: join(dataDirectory, "credentials.vault.json") });
+// Local identity: the OS account that runs Atlas owns it; its token lives in that account's vault.
+const owner = ownerAccount();
+const ownerToken = await resolveOwnerToken({ dataDirectory, vault, log: (line) => console.log(line) });
+const token = ownerToken.token;
+if (ownerToken.created) console.log(`Created the owner token for ${owner.user} (stored in ${ownerToken.storage === "file" ? join(dataDirectory, "local-token") : `the ${ownerToken.storage} vault`}). Sign in with: node scripts/local/open-atlas.mjs`);
+
 const license = loadLicense();
 // One model client (routed, with fallback) and one tool registry serve both
 // conversations and agent missions, so policy and approvals are identical.
@@ -168,6 +166,9 @@ const recoveredMissions = missionService.recover();
 team.reattach();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
 
+const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
+// Remote access stays customer-managed (your VPN or HTTPS proxy); Atlas itself keeps listening on loopback.
+const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, "remote-access.json") });
 const server = createLocalControlServer({
   store,
   token,
@@ -183,6 +184,8 @@ const server = createLocalControlServer({
   connections: () => mcpReport,
   toolCatalog: () => toolRegistry.list(),
   selfImprove,
+  identity: { owner, tokenStorage: ownerToken.storage },
+  remoteAccess,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -190,8 +193,10 @@ const server = createLocalControlServer({
   modelHealth: reportModelHealth,
 });
 const host = process.env.ATLAS_LOCAL_HOST || "127.0.0.1";
-const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
-server.listen(port, host, () => console.log(`Atlas sovereign control plane: http://${host}:${port}\nAgent runtime ${runtime.instanceId} executors: ${runtime.executorIds().join(", ")}`));
+server.listen(port, host, () => {
+  console.log(`Atlas sovereign control plane: http://${host}:${port}\nAgent runtime ${runtime.instanceId} executors: ${runtime.executorIds().join(", ")}`);
+  if (process.env.ATLAS_OPEN_BROWSER === "1") openInBrowser(signInUrl(`http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${port}`, token));
+});
 
 async function runMissionChild({ child, signal, budget, checkpoint }) {
   if (child.metadata?.kind === "agent_step") return teamStep({ child, signal, budget, checkpoint });
