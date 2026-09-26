@@ -718,7 +718,11 @@ function actionsRunJobsRequest(repository, runId) {
 
 function chooseFailedJob(payload) {
   const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-  return jobs.find((job) => ["failure", "timed_out", "cancelled", "action_required"].includes(String(job?.conclusion ?? ""))) ?? null;
+  return jobs.find((job) => isFailedJob(job)) ?? null;
+}
+
+function isFailedJob(job) {
+  return ["failure", "timed_out", "cancelled", "action_required"].includes(String(job?.conclusion ?? ""));
 }
 
 function firstInterestingLogLine(lines) {
@@ -759,7 +763,7 @@ async function readCiLogs(args, fetcher, context) {
   const job = jobId !== null
     ? await fetchGitHubJson({ ...actionsJobRequest(access.repository, jobId), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher)
     : chooseFailedJob(await fetchGitHubJson({ ...actionsRunJobsRequest(access.repository, runId), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher));
-  if (!job) return { ok: false, label: `No failed job found in ${access.repository}`, content: "GitHub did not report a failed job for that run." };
+  if (!job || !isFailedJob(job)) return { ok: false, label: `No failed job found in ${access.repository}`, content: "GitHub did not report a failed job for that run." };
   const logs = await fetchGitHubText({ ...actionsJobRequest(access.repository, job.id, "/logs"), init: { method: "GET", headers: githubHeaders(access.token) } }, fetcher);
   if (logs === null) return { ok: false, label: `Could not read CI logs for job ${job.id}`, content: "GitHub did not return that job log." };
   const payload = {
