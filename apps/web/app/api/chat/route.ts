@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { getD1, getDb } from "../../../db";
 import { conversationWritable, memoryPromptContext, recallForMemory, tenantAllowlist } from "../../../db/tenancy.mjs";
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
@@ -30,8 +30,10 @@ export async function POST(request: Request) {
 
   const message = typeof body.message === "string" ? body.message.trim().slice(0, MAX_MESSAGE) : "";
   if (!message) return Response.json({ message: "Say something for Atlas to reply to." }, { status: 400 });
-  const repository = typeof body.repository === "string" ? body.repository.slice(0, 140) : "";
-  const branch = typeof body.branch === "string" ? body.branch.slice(0, 140) : "";
+  const repositoryProvided = typeof body.repository === "string";
+  const branchProvided = typeof body.branch === "string";
+  const repository = repositoryProvided ? (body.repository as string).slice(0, 140) : "";
+  const branch = branchProvided ? (body.branch as string).slice(0, 140) : "";
   const requested = typeof body.conversationId === "string" ? body.conversationId : "";
   const conversationId = /^[0-9a-f-]{36}$/u.test(requested) ? requested : randomUUID();
 
@@ -58,7 +60,15 @@ export async function POST(request: Request) {
     if (!tenant || !scope || !(await conversationWritable(d1, scope, conversationId))) throw new Error("Conversation is not writable in this workspace.");
     await db.insert(conversations)
       .values({ id: conversationId, tenantId: tenant.tenantId, requestedBy: account.userId, title: threadTitle(message), repository, branch, createdAt: now, updatedAt: now })
-      .onConflictDoUpdate({ target: conversations.id, set: { repository, branch, updatedAt: now }, setWhere: and(eq(conversations.tenantId, tenant.tenantId), eq(conversations.requestedBy, account.userId)) });
+      .onConflictDoUpdate({
+        target: conversations.id,
+        set: {
+          repository: repositoryProvided ? repository : sql`${conversations.repository}`,
+          branch: branchProvided ? branch : sql`${conversations.branch}`,
+          updatedAt: now,
+        },
+        setWhere: and(eq(conversations.tenantId, tenant.tenantId), eq(conversations.requestedBy, account.userId)),
+      });
     history = await db.select({ role: conversationMessages.role, content: conversationMessages.content })
       .from(conversationMessages)
       .where(and(eq(conversationMessages.conversationId, conversationId), eq(conversationMessages.requestedBy, account.userId)))

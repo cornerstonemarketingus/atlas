@@ -143,6 +143,7 @@ export function MemorySection() {
                   <div className="memory-meta">
                     <strong>{memory.kind}</strong>
                     <span>{memory.repository ?? "shared across this workspace"}</span>
+                    <span>{memory.lastUsedAt ? "Last used" : "Updated"}</span>
                     <time dateTime={memory.lastUsedAt ?? memory.updatedAt ?? ""}>
                       {memory.lastUsedAt || memory.updatedAt ? new Date(memory.lastUsedAt ?? memory.updatedAt ?? "").toLocaleString() : "Unknown time"}
                     </time>

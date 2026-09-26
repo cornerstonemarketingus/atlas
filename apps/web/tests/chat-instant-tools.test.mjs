@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
 
 import { asData, htmlToText, instantToolDefinitions, isInstantTool, pendingLabel, publicPageUrl, runInstantTool } from "../app/api/chat/instant-tools.mjs";
 import { resolveTenant } from "../db/tenancy.mjs";
-import { migratedDatabase } from "./helpers/d1-sqlite.mjs";
+import { applyMigrations, d1FromSqlite, migratedDatabase } from "./helpers/d1-sqlite.mjs";
 
 const call = (name, args) => ({ id: "c1", type: "function", function: { name, arguments: JSON.stringify(args) } });
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -125,6 +126,30 @@ test("memory tools save, search, refuse secrets and delete durable memories", as
   const deleted = await runInstantTool(call("forget", { id }), context);
   assert.equal(deleted.ok, true);
   assert.match(deleted.content, new RegExp(id, "u"));
+});
+
+test("memory tools degrade safely before migration 0016 exists", async () => {
+  const sqlite = new DatabaseSync(":memory:");
+  try {
+    applyMigrations(sqlite, { until: 15 });
+    sqlite.prepare("INSERT INTO users (id, github_user_id, github_login) VALUES (1, 101, 'alice')").run();
+    const d1 = d1FromSqlite(sqlite);
+    const tenant = await resolveTenant(d1, alice);
+    const context = { d1, memoryScope: { tenantId: tenant.tenantId, principal: alice.userId } };
+
+    const remembered = await runInstantTool(call("remember", { kind: "fact", content: "Use pnpm." }), context);
+    const recalled = await runInstantTool(call("recall", { query: "pnpm" }), context);
+    const forgotten = await runInstantTool(call("forget", { id: "abc" }), context);
+
+    assert.equal(remembered.ok, false);
+    assert.equal(recalled.ok, false);
+    assert.equal(forgotten.ok, false);
+    assert.match(remembered.content, /not been migrated yet/u);
+    assert.match(recalled.content, /not been migrated yet/u);
+    assert.match(forgotten.content, /not been migrated yet/u);
+  } finally {
+    sqlite.close();
+  }
 });
 
 test("pending labels describe what is running", () => {

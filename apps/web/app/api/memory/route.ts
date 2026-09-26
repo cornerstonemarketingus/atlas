@@ -45,13 +45,16 @@ export async function PATCH(request: Request) {
   let body: { id?: unknown; content?: unknown; kind?: unknown; repository?: unknown };
   try { body = await request.json() as typeof body; } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
   const id = typeof body.id === "string" ? body.id.trim() : "";
-  const content = typeof body.content === "string" ? body.content.trim().slice(0, 1000) : "";
+  const content = body.content === undefined ? undefined : typeof body.content === "string" ? body.content.trim().slice(0, 1000) : "";
   const kind = body.kind === undefined ? undefined : typeof body.kind === "string" ? body.kind.trim() : "";
   const repository = repositoryInput(body.repository);
-  if (!id || !content) return Response.json({ message: "Memory id and content are required." }, { status: 400 });
+  if (!id) return Response.json({ message: "Memory id is required." }, { status: 400 });
+  if (content === "" || (content === undefined && kind === undefined && body.repository === undefined)) {
+    return Response.json({ message: "Provide content, kind or repository to update." }, { status: 400 });
+  }
   if (kind !== undefined && !MEMORY_KINDS.includes(kind)) return Response.json({ message: "Memory kind is not valid." }, { status: 400 });
   if (!repository.valid) return Response.json({ message: "Repository must use the owner/name form." }, { status: 400 });
-  if (memoryContentLooksSecret(content)) return Response.json({ message: "Atlas will not store secrets in memory." }, { status: 400 });
+  if (content !== undefined && memoryContentLooksSecret(content)) return Response.json({ message: "Atlas will not store secrets in memory." }, { status: 400 });
   try {
     const d1 = getD1();
     const tenant = await resolveTenantContext(request, account, d1);
