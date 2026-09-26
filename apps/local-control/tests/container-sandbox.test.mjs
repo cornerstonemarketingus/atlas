@@ -115,13 +115,16 @@ const dockerUsable = (() => {
   return !probe.error && probe.status === 0;
 })();
 
-test("with a real runtime, the host is not visible and the network is off", { skip: !dockerUsable && "no usable docker daemon" }, async (t) => {
+test("with a real runtime, the host is not visible and the network is off", { skip: (process.platform !== "linux" && "Linux containers only") || (!dockerUsable && "no usable docker daemon") }, async (t) => {
   const base = await mkdtemp(join(tmpdir(), "atlas-sandbox-real-"));
   t.after(() => rm(base, { recursive: true, force: true }));
   const controller = new TerminalController({ rootDirectory: join(base, "ws"), container: { runtime: "/usr/bin/docker", image: "node:22-bookworm-slim" }, timeoutMs: 120_000 });
   const workspace = controller.createWorkspace({ tenantId: "t", taskId: "real" });
-  // The host path is inside the script, not argv, so only the container can stop it.
-  const script = `const fs=require('node:fs');let home=false;try{fs.readdirSync(${JSON.stringify(base)});home=true}catch{};require('node:dns').lookup('example.com',(e)=>{console.log(JSON.stringify({home,net:!e}))})`;
+  // The host path is assembled at run time from its segments: written out
+  // literally, the command policy (correctly) refuses it before any container
+  // starts. Built this way, only the container can stop the read.
+  const segments = JSON.stringify(base.split("/"));
+  const script = `const fs=require('node:fs');let home=false;try{fs.readdirSync(${segments}.join(String.fromCharCode(47)));home=true}catch{};require('node:dns').lookup('example.com',(e)=>{console.log(JSON.stringify({home,net:!e}))})`;
   const handle = await controller.runCommand(workspace.id, { argv: ["node", "-e", script] });
   const result = await handle.result;
   assert.equal(result.exitCode, 0, result.stderr);
