@@ -21,7 +21,13 @@ export const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 /** Variables a server process gets by default; everything else must be granted. */
-const BASELINE_ENV = Object.freeze(["PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT"]);
+// Windows adds/requires these OS variables for child-process startup. They
+// contain paths/configuration only; application credentials remain excluded.
+const BASELINE_ENV = Object.freeze([
+  "PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT",
+  "WINDIR", "HOMEDRIVE", "HOMEPATH", "USERPROFILE", "USERDOMAIN", "USERDOMAIN_ROAMINGPROFILE", "USERNAME",
+  "COMSPEC", "PATHEXT", "LOGONSERVER", "SYSTEMDRIVE", "TEMP", "TMP",
+]);
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class McpProtocolError extends Error {

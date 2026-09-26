@@ -79,15 +79,23 @@ Legend: **IMPLEMENTED** (wired into a running entry point and tested),
 
 ### Windows execution verification
 
-The Windows companion desktop driver is covered by its Windows CI integration
-test, but the separate platform terminal controller is not yet Windows-ready.
-Its executable search defaults to `/usr/local/bin`, `/usr/bin`, and `/bin`,
-its process-group/termination behavior is POSIX-specific, and terminal fixtures
-use Unix commands and slash-based paths. On the Windows development host this
-causes the terminal tests to fail before command execution. Treat Windows
-terminal execution as **missing/unsupported**, not as a passing capability,
-until a native adapter and platform-specific tests land. MCP's scrubbed child
-environment also needs a Windows-specific baseline allowlist/test.
+The platform terminal controller now resolves only allowlisted native
+executables from configured absolute search directories on Windows; `.cmd` and
+`.bat` shims are never passed to a shell. `npm`/`npx` use their packaged JS
+entrypoints through Node. Timeout/cancel uses a fixed `taskkill /T /F` call for
+the managed PID tree. MCP inherits only an explicit set of non-secret Windows
+OS variables in addition to granted values. Terminal and MCP tests now use
+portable fixtures. Focused Windows-hosted tests passed 40/40 and the full local
+control suite passed 321 with 1 file-symlink privilege skip on the development
+machine. The latest full suite contains 322 tests: 321 passed, 0 failed, 1
+file-symlink privilege skip. CI now runs the full local-control test suite on
+`windows-latest`.
+
+This does **not** make terminal execution a sandbox: commands run as the
+operator, and filesystem/network isolation is not provided by process-level
+policy. Do not use it for untrusted workloads until a container/VM runner is
+implemented and validated. Native PowerShell/CMD shell sessions and PTY are
+still not provided; the interface deliberately remains shell-free.
 
 ## Security review backlog
 

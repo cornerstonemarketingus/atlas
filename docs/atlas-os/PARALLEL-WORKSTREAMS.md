@@ -57,12 +57,12 @@ owned by another active session; shared contracts require an integration PR.
 
 | ID | Workstream | Owns | Depends on | Acceptance criteria |
 |---|---|---|---|---|
-| A | Verified mission correctness | `apps/local-control/src/agent/team/*`, `tests/team-missions.test.mjs` | None | Failed/pending actions never verify; retries reconcile exact actions; audit output contains no action fingerprint; resume/cancel tests pass. Current strict-verification changes are on the stacked branch and need PR/CI. |
+| A | Verified mission correctness | `apps/local-control/src/agent/team/*`, `tests/team-missions.test.mjs` | None | **PR #60 open**; failed/pending actions never verify; retries reconcile exact actions; fingerprints are not persisted; focused suite 16/16 passes. Atlas CI passes; only external Vercel preview status has failed. |
 | B | Canonical task lifecycle / outbox | `apps/local-control/src/platform/task-store.mjs`, `platform/outbox-dispatcher.mjs`, dedicated tests only | A | At-least-once delivery, idempotent consumers, DLQ/recovery; no second scheduler; crash/restart E2E. |
 | C | Hosted workspace UX | `apps/web/app/AtlasShell.tsx`, chat/tasks/projects/activity UI and web UI tests | Runtime event API from B | Chat remains command center; Create/Operate/Automate/Activity can coexist; no fake status; mobile + browser tests. Avoid local console files. |
 | D | Create / preview / publish | New Project Genesis and preview routes in `apps/web` plus browser-worker adapters | A, B, sandbox policy | Real project artifact, isolated preview, tests, approval before deploy/domain/DNS mutation, rollback evidence. |
 | E | Code intelligence / IDE panels | `packages/atlas-cli/src/domain/*` and `apps/web` Create code panels | None, but keep contracts backward compatible | Compiler/LSP-backed symbols where available; evidence-linked diff/file views; tests across a fixture repo. Coordinate web shell changes through C. |
-| F | Windows terminal support | `apps/local-control/src/platform/terminal/*`, terminal tests, Windows CI config | A | Native executable resolution and environment baseline are explicit, command invocation stays no-shell, approvals and containment work, Windows tests pass; unsupported isolation is clearly reported. |
+| F | Windows terminal support | `apps/local-control/src/platform/terminal/*`, terminal tests, Windows CI config | A | **Implemented on `copilot/windows-terminal-portability`**; focused Windows terminal/MCP 40/40 and full local-control 321 passed, 0 failed, 1 file-symlink privilege skip. Windows CI job added; awaiting CI. Process-level only; not container isolation. |
 | G | Container/VM isolation | New isolated runner package and its tests/docs | F interfaces frozen | Untrusted execution in disposable environment with resource/egress controls, cleanup, crash tests. No host credentials. |
 | H | Operate sessions / takeover | `apps/windows-companion/src/desktop/*`, browser session API/UI under Operate, own tests | A, B | Multiple isolated sessions, genuine status, pause/stop/takeover where supported, approval/audit and ownership checks. Do not claim cloud browser is available without a consumer. |
 | I | Connectors and protocols | `apps/local-control/src/platform/mcp/*`, connector APIs, focused tests | A policy interface | Streamable HTTP/OAuth with credential references, per-agent scopes, deterministic policy, redaction, reconnect and audit; Atlas MCP server separately versioned. |
@@ -72,14 +72,14 @@ owned by another active session; shared contracts require an integration PR.
 | M | Models/runtime | `apps/local-control/src/agent/models/*` and model tests | A | Real routing in every execution path, health/fallback/cost/privacy accounting; no credentials in child processes. |
 | N | Controlled self-improvement | `.github/atlas/*`, self-improve workflow and eval packages | A, O, benchmarks | Admin-only activation; isolated branch/worktree; baseline/eval/security review; draft PR; explicit owner merge; rollback. Atlas cannot alter its own approval gates. |
 | O | Auth, tenancy, and governance | `apps/web/db/schema.ts`, migrations, auth/session/repository APIs and security tests | None; coordinate migrations with owner | Tenant/member isolation; session revocation; per-repository authorization; rate limits; audit; migration and restore tests. No broader autonomous access before this. |
-| P | Windows test portability | `apps/local-control/tests/platform-terminal.test.mjs`, MCP env tests, Windows CI | F | Tests use platform-appropriate fixtures; POSIX-only behavior skips explicitly; Windows behavior has actual Windows integration coverage; no suppressing real errors. |
+| P | Windows test portability | `apps/local-control/tests/platform-terminal.test.mjs`, MCP env tests, Windows CI | F | **Implemented on `copilot/windows-terminal-portability`**; POSIX command/path assumptions removed from terminal fixtures; only the file-symlink privilege check skips explicitly. |
 
 ## Immediate sequence
 
-1. Finish and publish A (strict verification) as a stacked review PR; keep PR
-   #59 draft until this and owner actions are resolved.
-2. Complete P/F: Windows terminal behavior currently blocks reliable local
-   developer use and was the source of 19 failures on this host.
+1. Finish CI review for A (strict verification) in PR #60; keep PR #59 draft
+   until this and owner actions are resolved.
+2. Review P/F (Windows terminal portability) in the stacked PR; its local full
+   suite is green, and the new Windows CI job must confirm it.
 3. Resolve PR #59 owner actions (hosted GitHub credential recovery and D1
    migration `0014`) only with the owner; do not read or print secrets.
 4. Run the recorded E2E journey and hosted verification after recovery.
@@ -89,9 +89,9 @@ owned by another active session; shared contracts require an integration PR.
 ## Current execution split: this session vs Claude Code
 
 These assignments are deliberately disjoint. Both should work from separate
-branches/worktrees and open PRs. Copilot should not edit the PR #59 desktop,
-team, terminal, auth, or migration files while this session owns their
-integration review.
+branches/worktrees and open PRs. Claude Code's mobile-only lane must not edit
+the PR #59 desktop, team, terminal, auth, or migration files while this
+session owns those integration areas.
 
 ### This session (owner: current Copilot coding session)
 
@@ -100,13 +100,12 @@ integration review.
     awaiting approval. Exact-action fingerprints remain in memory only. Focused
     team mission tests pass 16/16. Next: finish CI, resolve any findings, then
     ask the owner before merging PR #59/#60 or deploying.
-2. **Windows terminal audit/fix:** own the platform terminal controller and
-    its Windows-specific tests after the verification PR is settled. Replace
-    POSIX-only executable lookup/process assumptions with a safe Windows
-    adapter; do not weaken command policy or label process-only containment a
-    sandbox. Acceptance: focused Windows terminal tests pass on Windows CI,
-    including environment scrubbing, cwd confinement, approvals, cancellation,
-    and explicit unsupported resource-isolation reporting.
+2. **Windows terminal portability:** implementation and local Windows suite
+   are complete on `copilot/windows-terminal-portability`: native allowlisted
+   executable resolution, shell-free npm/npx invocation, portable fixtures,
+   explicit process-tree cleanup, and MCP OS-variable allowlisting. Full suite
+   passes locally (318 passed, 3 symlink-privilege skips); next step is PR/CI
+   confirmation. Process-level limits are not a sandbox.
 3. **PR #59 integration review:** validate migration `0014`, hosted task
     credential diagnosis, Windows desktop approval behavior, and the full
     mission recovery E2E. Owner-only credentials/migrations remain owner
@@ -143,9 +142,6 @@ validation. Return a focused PR; do not merge or deploy.
 
 ### Next independent Claude Code work after mobile PR
 
-- **Windows execution portability** only after this session freezes the
-   terminal adapter interface; otherwise avoid concurrent edits to the same
-   terminal files.
 - **Web workspace UX** only after PR #59 is merged and its route names/API
    contracts are stable; own `apps/web/app/**` UI files, not local-console files.
 - **Automations/scheduler** only after the canonical task/outbox contract is
@@ -154,9 +150,9 @@ validation. Return a focused PR; do not merge or deploy.
 ## Status discipline
 
 - PR #59 has green Linux CI, but is still a draft and not deployed.
-- The Windows local-control suite on this host: 299 passed, 19 failed, 3
-  skipped. Failures are concentrated in POSIX terminal executable/path
-  assumptions and Windows process environment; they are not counted as passes.
+- Before F/P: Windows local-control suite had 19 failures from POSIX terminal
+   assumptions. After the portability changes: 321 passed, 0 failed, 1
+   file-symlink privilege skip. The new Windows CI job remains to be confirmed.
 - Production task dispatch previously returned 502; owner must rotate or
   replace GitHub credentials and verify before declaring hosted coding usable.
 - Do not label the 200-item roadmap complete by counting libraries, mocks,
