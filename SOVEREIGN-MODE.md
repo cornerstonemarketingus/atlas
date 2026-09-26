@@ -16,17 +16,55 @@ cd apps/local-control
 npm start
 ```
 
-It creates a local access token on first launch, stores tasks in SQLite under
-the user's `.atlas` directory, restores interrupted runs safely after a restart,
-and invokes the local coder without a hosted queue. The UI includes local
-allow/ask/deny policies, approval decisions, an audit viewer, encrypted
-export/import, local model discovery, and revocable phone credentials. It binds
-to `127.0.0.1` by default; expose it only through customer-managed HTTPS or a
-VPN, never by forwarding the owner-token endpoint directly.
+It stores tasks in SQLite under the user's `.atlas` directory, restores
+interrupted runs safely after a restart, and invokes the local coder without a
+hosted queue. The UI includes local allow/ask/deny policies, approval
+decisions, an audit viewer, encrypted export/import, local model hosting, and
+revocable phone credentials. It binds to `127.0.0.1` only.
 
-Open `http://127.0.0.1:4317` for the responsive local task interface. Paste the
-first-launch token to unlock the current browser tab, then queue and monitor
-isolated coding tasks without visiting an Atlas-hosted site.
+### Local identity (no GitHub account)
+
+The owner of a local Atlas is the operating-system account that runs it.
+
+- The owner token is created on first launch and kept in that account's own
+  vault: DPAPI on Windows, the Keychain on macOS, and the Secret Service
+  (`secret-tool`) on Linux desktops. Only the same OS user can read it. Where
+  no vault works, such as headless Linux or a locked keyring, it falls back to
+  a `0600` file, `~/.atlas/local-token`. An existing token file is moved into
+  the vault unchanged.
+- **Signing in needs no copy-paste.** Start Atlas from the Start menu, which
+  sets `ATLAS_OPEN_BROWSER=1`, or run `node scripts/local/open-atlas.mjs`.
+  Either one opens the app signed in as the owner. The token travels in the URL
+  fragment, which browsers never send to a server, and the page removes it
+  from the address bar and keeps it for that tab only.
+- `GET /v1/identity` reports who is signed in: the owner, with their OS account
+  and host, or a paired device, with its name. Nothing local requires GitHub
+  OAuth. GitHub is only an optional publishing target.
+- `ATLAS_LOCAL_TOKEN` still overrides everything (services, tests), and
+  `ATLAS_OWNER_TOKEN_STORAGE=file` forces the file.
+
+### Remote access from your phone (no Atlas cloud)
+
+Atlas never opens a LAN port. In **Settings → Reach Atlas from your phone**,
+choose one of these paths; each one is something you own:
+
+1. **Your private network (Tailscale, or Headscale if you self-host the
+   control server).** Install Tailscale on the computer and on your phone and
+   sign both in, then press **Use my Tailscale network**. Atlas runs
+   `tailscale serve --bg --https=443 http://127.0.0.1:4317`, which gives an
+   HTTPS address such as `https://desk.tailnet.ts.net` that only your tailnet
+   can reach. Atlas never uses `funnel`. **Turn off remote access** removes it.
+2. **Your own HTTPS reverse proxy** (Caddy, nginx, or any proxy on your VPN or
+   domain) in front of `127.0.0.1:4317`. The page generates the Caddy and
+   nginx configuration. Enter the HTTPS address and Atlas checks that it
+   reaches this Atlas.
+
+Then press **Pair a device**. Open the link it shows on your phone (or enter
+the 6-digit code on the phone's unlock screen). The phone gets its own token,
+which you can revoke under Approvals → Phones. The owner token is refused on
+any request that arrives through a proxy or from another machine, unless you
+tick "Also accept the owner token remotely". The API is `/v1/remote`, and it
+is owner-only.
 
 ### Persistent agent runtime
 
@@ -177,8 +215,8 @@ and hosted-browser APIs entirely.
 
 - [x] Complete approvals, policies, device revocation, and audit browsing in
       the local companion.
-- [ ] Add local identity backed by the operating-system account and device
-      keychain; GitHub OAuth must be optional.
+- [x] Add local identity backed by the operating-system account and device
+      keychain; GitHub OAuth is not needed locally.
 - [x] Add authenticated AES-256-GCM export/import for the local SQLite state.
 - [x] Add GitHub/GitLab/Forgejo publishing adapters on top of the implemented
       host-independent isolated-worktree and portable-patch delivery path.
@@ -192,8 +230,10 @@ and hosted-browser APIs entirely.
       installed separately.
 - [x] Add one-use, expiring phone pairing codes and separately revocable device
       credentials without transferring the owner token.
-- [ ] Add a guided customer-managed HTTPS/VPN enrollment flow. Loopback remains
-      the secure default and Atlas does not silently open a LAN port.
+- [x] Add a guided customer-managed HTTPS/VPN enrollment flow (Tailscale/Headscale
+      serve or your own HTTPS proxy, device pairing links, owner token refused
+      remotely by default). Loopback remains the secure default and Atlas does
+      not open a LAN port.
 - [x] Add release checksums, optional Authenticode signing, and offline Ed25519
       license verification.
 - [ ] Build and sign native iOS/Android apps. This requires app identifiers,

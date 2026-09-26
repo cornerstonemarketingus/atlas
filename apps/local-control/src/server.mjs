@@ -14,10 +14,11 @@ import { createPlatformApiRoutes } from "./platform/api-routes.mjs";
 import { createRateLimiter, LIMITS } from "./rate-limit.mjs";
 import { createSelfImproveRoutes } from "./platform/self-improve/service.mjs";
 import { createModelHostingRoutes } from "./agent/models/hosting.mjs";
+import { createRemoteRoutes, isRemoteRequest } from "./remote/access.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -29,6 +30,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const innovationRoutes = innovation ? createInnovationRoutes({ pipeline: innovation.pipeline, organization: innovation.organization, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const selfImproveRoutes = selfImprove ? createSelfImproveRoutes({ service: selfImprove, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const modelHostingRoutes = modelHosting ? createModelHostingRoutes({ ...modelHosting, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const remoteRoutes = remoteAccess ? createRemoteRoutes({ remote: remoteAccess, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
 
   async function startTask(taskId) {
@@ -69,6 +71,11 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     }
     const identity = authenticate(request.headers.authorization, expected, store);
     if (!identity) return send(response, 401, { message: "A valid local Atlas or paired-device token is required." });
+    // Off this machine, phones and laptops use their own paired, revocable token, not the owner's.
+    if (identity.role === "admin" && isRemoteRequest(request) && !remoteAccess?.ownerAllowedRemotely()) {
+      return send(response, 403, { message: "The owner token only works on this computer.", unblock: "Pair this device from Settings on the computer running Atlas, or allow owner access remotely there." });
+    }
+    if (remoteRoutes && (request.url ?? "").startsWith("/v1/remote")) { if (await remoteRoutes(request, response, identity)) return; }
 
     if (platformApi && await platformApi.handle(request, response, identity)) return;
     if (platformRoutes && platformRoutes.handle(request, response, identity)) return;
@@ -83,6 +90,12 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if ((request.url ?? "").startsWith("/v1/self-improve")) {
       if (!selfImproveRoutes) return send(response, 503, { message: "Self-improvement needs Atlas running from a git checkout of its own source." });
       if (await selfImproveRoutes(request, response, identity)) return;
+    }
+    // Who is signed in: the owner is this computer's OS account; GitHub is never required locally.
+    if (request.method === "GET" && request.url === "/v1/identity") {
+      return send(response, 200, identity.role === "admin"
+        ? { role: "owner", account: localIdentity?.owner ?? null, tokenStorage: localIdentity?.tokenStorage ?? "unknown", requiresGitHub: false }
+        : { role: "device", device: { id: identity.device?.id ?? null, name: identity.device?.name ?? null }, requiresGitHub: false });
     }
     if ((request.url ?? "").startsWith("/v1/models/hosting")) {
       if (!modelHostingRoutes) return send(response, 503, { message: "Model hosting is not available in this process." });

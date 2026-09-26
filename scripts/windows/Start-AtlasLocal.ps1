@@ -19,13 +19,18 @@ foreach ($commandName in @("node", "git")) {
 
 if (-not $SkipModelCheck) {
   $ollama = Get-Command "ollama" -ErrorAction SilentlyContinue
-  if (-not $ollama) { throw "Ollama is not installed. Install it from https://ollama.com/download/windows and rerun Atlas Local." }
+  if (-not $ollama) {
+    Write-Host "No local model runtime yet. Open Models in Atlas to install one, or get Ollama from https://ollama.com/download/windows." -ForegroundColor Yellow
+  } else {
   $installedModels = @(& $ollama.Source list 2>$null | Select-Object -Skip 1 | ForEach-Object { ($_ -split '\s+')[0] })
   if ($installedModels -notcontains $Model) {
-    Write-Host "Local model '$Model' was not found. Download it with: ollama pull $Model" -ForegroundColor Yellow
+    Write-Host "Local model '$Model' was not found. Install it from Models in Atlas, or run: ollama pull $Model" -ForegroundColor Yellow
+  }
   }
 }
 
 Set-Location -LiteralPath $controlPath
+# Signs the browser in as this Windows account: the owner token stays in DPAPI and goes to the page in the URL fragment.
+$env:ATLAS_OPEN_BROWSER = "1"
 & node "src\main.mjs"
 
