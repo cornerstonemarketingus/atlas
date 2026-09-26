@@ -112,6 +112,36 @@ test("over-budget requests get a 429 with Retry-After", async () => {
   }
 });
 
+test("chat can return a clearer rate-limit message without changing retry-after", async () => {
+  const { db, sqlite } = database();
+  try {
+    const limited = await enforceRateLimit({
+      db,
+      table: requestRateLimits,
+      subject: "account:github:chatty",
+      route: "chat_post",
+      limit: 0,
+      windowSeconds: 60,
+      now: 240_000,
+      responseBody: { error: "rate_limited", message: "Too many chat requests." },
+    });
+    assert.equal(limited?.status, 429);
+    assert.equal(limited?.headers.get("retry-after"), "60");
+    assert.deepEqual(await limited?.json(), { error: "rate_limited", message: "Too many chat requests." });
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("chat route applies a 20-per-minute account limit with clear copy", () => {
+  const source = fs.readFileSync(new URL("../app/api/chat/route.ts", import.meta.url), "utf8");
+  assert.match(source, /subject:\s*rateLimitSubjectForAccount\(account\)/u);
+  assert.match(source, /route:\s*"chat_post"/u);
+  assert.match(source, /limit:\s*20/u);
+  assert.match(source, /windowSeconds:\s*60/u);
+  assert.match(source, /Too many chat requests\./u);
+});
+
 test("fixed windows reset after the bucket expires", async () => {
   const { db, sqlite } = database();
   try {
@@ -183,7 +213,6 @@ test("operator sign-in fails closed when limiter storage is unavailable", async 
   const limited = await enforceRateLimit({
     db() { throw new Error("D1 unavailable"); },
     table: requestRateLimits,
-    request: new Request("https://atlas.test/api/auth/operator", { headers: { "cf-connecting-ip": "203.0.113.13" } }),
     subject: "ip:203.0.113.13",
     route: "auth_operator",
     limit: 5,
@@ -195,11 +224,11 @@ test("operator sign-in fails closed when limiter storage is unavailable", async 
   assert.deepEqual(await limited?.json(), { error: "rate_limited" });
 });
 
-test("migration 0015 creates the hosted rate-limit table and journal entry", () => {
-  const sql = fs.readFileSync(new URL("../drizzle/0015_hosted_rate_limits.sql", import.meta.url), "utf8");
+test("migration 0018 creates the hosted rate-limit table and journal entry", () => {
+  const sql = fs.readFileSync(new URL("../drizzle/0018_hosted_rate_limits.sql", import.meta.url), "utf8");
   const journal = JSON.parse(fs.readFileSync(new URL("../drizzle/meta/_journal.json", import.meta.url), "utf8"));
-  const entry = journal.entries.find((item) => item.tag === "0015_hosted_rate_limits");
-  assert.equal(entry?.idx, 15);
+  const entry = journal.entries.find((item) => item.tag === "0018_hosted_rate_limits");
+  assert.equal(entry?.idx, 18);
   const sqlite = new DatabaseSync(":memory:");
   try {
     sqlite.exec(sql);

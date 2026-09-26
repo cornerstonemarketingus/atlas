@@ -26,8 +26,8 @@ export function rateLimitSubjectForIp(request) {
   return ip ? `ip:${ip}` : null;
 }
 
-export function rateLimitedResponse(retryAfterSeconds) {
-  return Response.json({ error: "rate_limited" }, {
+export function rateLimitedResponse(retryAfterSeconds, body = { error: "rate_limited" }) {
+  return Response.json(body, {
     status: 429,
     headers: { "retry-after": String(Math.max(1, Math.ceil(retryAfterSeconds))) },
   });
@@ -53,13 +53,13 @@ export async function consumeRateLimit(db, table, { subject, route, limit, windo
   };
 }
 
-export async function enforceRateLimit({ db, table, subject, route, limit, windowSeconds, failClosed = false, now = Date.now() }) {
+export async function enforceRateLimit({ db, table, subject, route, limit, windowSeconds, failClosed = false, now = Date.now(), responseBody = undefined }) {
   if (!subject) return null;
   try {
     const outcome = await consumeRateLimit(typeof db === "function" ? db() : db, table, { subject, route, limit, windowSeconds, now });
-    return outcome.allowed ? null : rateLimitedResponse(outcome.retryAfter);
+    return outcome.allowed ? null : rateLimitedResponse(outcome.retryAfter, responseBody);
   } catch (error) {
     console.warn("Rate limit check failed.", { route, subject, failClosed, error: error instanceof Error ? error.message : String(error) });
-    return failClosed ? rateLimitedResponse(windowSeconds) : null;
+    return failClosed ? rateLimitedResponse(windowSeconds, responseBody) : null;
   }
 }

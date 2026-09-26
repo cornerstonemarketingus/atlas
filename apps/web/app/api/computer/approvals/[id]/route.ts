@@ -9,7 +9,6 @@ import { computerTenant } from "../../tenant";
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-<<<<<<< HEAD
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
@@ -19,10 +18,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     windowSeconds: 15 * 60,
   });
   if (limited) return limited;
-=======
   const tenant = await computerTenant(request, account);
   if (tenant instanceof Response) return tenant;
->>>>>>> origin/main
   let body: { decision?: unknown };
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
   if (body.decision !== "approved" && body.decision !== "rejected") return Response.json({ message: "Decision must be approved or rejected." }, { status: 400 });

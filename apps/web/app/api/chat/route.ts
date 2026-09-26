@@ -1,14 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
-<<<<<<< HEAD
-import { getDb } from "../../../db";
-import { conversationMessages, conversations, requestRateLimits } from "../../../db/schema";
-=======
 import { getD1, getDb } from "../../../db";
 import { conversationWritable, recallForMemory, tenantAllowlist } from "../../../db/tenancy.mjs";
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
-import { conversationMessages, conversations } from "../../../db/schema";
->>>>>>> origin/main
+import { conversationMessages, conversations, requestRateLimits } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
 import { enforceRateLimit, rateLimitSubjectForAccount } from "../rate-limit.mjs";
 import { isDeploymentOwner } from "../tasks/self-protection.mjs";
@@ -37,8 +32,12 @@ export async function POST(request: Request) {
     table: requestRateLimits,
     subject: rateLimitSubjectForAccount(account),
     route: "chat_post",
-    limit: 40,
-    windowSeconds: 15 * 60,
+    limit: 20,
+    windowSeconds: 60,
+    responseBody: {
+      error: "rate_limited",
+      message: "Too many chat requests. Atlas currently allows up to 20 messages per minute per user.",
+    },
   });
   if (limited) return limited;
 

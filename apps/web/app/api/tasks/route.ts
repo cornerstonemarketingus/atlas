@@ -1,14 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { eq, and, desc } from "drizzle-orm";
-<<<<<<< HEAD
-import { getDb } from "../../../db";
-import { conversationMessages, conversations, repositories, requestRateLimits, runEvents, tasks } from "../../../db/schema";
-=======
 import { getD1, getDb } from "../../../db";
 import { conversationWritable, tenantAllowlist } from "../../../db/tenancy.mjs";
 import { NO_TENANT_MESSAGE, resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
-import { conversationMessages, conversations, repositories, runEvents, tasks } from "../../../db/schema";
->>>>>>> origin/main
+import { conversationMessages, conversations, repositories, requestRateLimits, runEvents, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, defaultMergePolicy, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
 import { explainGitHubFailure } from "./github-diagnosis.mjs";

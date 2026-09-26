@@ -43,7 +43,6 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-<<<<<<< HEAD
   const limited = await enforceRateLimit({
     db: getDb,
     table: requestRateLimits,
@@ -53,10 +52,8 @@ export async function POST(request: Request) {
     windowSeconds: 15 * 60,
   });
   if (limited) return limited;
-=======
   const tenant = await computerTenant(request, account);
   if (tenant instanceof Response) return tenant;
->>>>>>> origin/main
   let body: { deviceId?: unknown; objective?: unknown; startUrl?: unknown; executionProvider?: unknown; workflowType?: unknown };
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
   let deviceId = typeof body.deviceId === "string" ? body.deviceId : "";

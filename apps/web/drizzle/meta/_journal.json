@@ -111,11 +111,14 @@
       "idx": 15,
       "version": "6",
       "when": 1790300000004,
-<<<<<<< HEAD
-      "tag": "0015_hosted_rate_limits",
-=======
       "tag": "0015_tenants",
->>>>>>> origin/main
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1790300000007,
+      "tag": "0018_hosted_rate_limits",
       "breakpoints": true
     }
   ]
