@@ -23,7 +23,7 @@ import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provide
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
 import { FallbackModelProvider } from "./infrastructure/fallback-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
-import { selectCoderProvider } from "./model/coder-provider-selection.js";
+import { OUTPUT_TOKENS_PER_TURN_RANGE, selectCoderProvider } from "./model/coder-provider-selection.js";
 import { compactRepositorySummary } from "./model/compact-repository-summary.js";
 import { resolveCoderEndpoint, resolveSelfHostedLimits } from "./model/coder-endpoint.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
@@ -64,7 +64,7 @@ const USAGE = `Usage:
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
-       [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--token-budget N] [--max-turns N]
+       [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
        [--no-verify] [--verify-dir <relative-path>] [--max-repair-attempts N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]`;
@@ -351,13 +351,15 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const verifyTimeoutOption = readOptionalInteger(args, "--verify-timeout-ms", 1_000, 1_800_000);
   const retryAttemptsOption = readOptionalInteger(args, "--retry-attempts", 1, 5);
   const retryMaxDelayOption = readOptionalInteger(args, "--retry-max-delay-ms", 0, 120_000);
-  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null || retryAttemptsOption === null || retryMaxDelayOption === null) return 2;
+  const outputTokensPerTurn = readOptionalInteger(args, "--output-tokens-per-turn", OUTPUT_TOKENS_PER_TURN_RANGE.minimum, OUTPUT_TOKENS_PER_TURN_RANGE.maximum);
+  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null || retryAttemptsOption === null || retryMaxDelayOption === null || outputTokensPerTurn === null) return 2;
   const tokenBudget = tokenBudgetOption ?? 16_384;
   const selection = selectCoderProvider({
     provider: providerOption,
     model,
     apiKeyEnvironmentVariable: apiKeyEnvOption,
     tokenBudget,
+    outputTokensPerTurn,
   });
   if (!selection.ok) {
     console.error(selection.message);
@@ -499,7 +501,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       return 2;
     }
     const [fallbackProvider, fallbackModel, fallbackKeyEnvironment] = parts as [string, string, string];
-    const fallbackSelection = selectCoderProvider({ provider: fallbackProvider, model: fallbackModel, apiKeyEnvironmentVariable: fallbackKeyEnvironment, tokenBudget });
+    const fallbackSelection = selectCoderProvider({ provider: fallbackProvider, model: fallbackModel, apiKeyEnvironmentVariable: fallbackKeyEnvironment, tokenBudget, outputTokensPerTurn });
     if (!fallbackSelection.ok) { console.error(fallbackSelection.message); return 2; }
     const fallbackKey = process.env[fallbackSelection.selection.apiKeyEnvironmentVariable];
     if (!fallbackKey?.trim()) {
