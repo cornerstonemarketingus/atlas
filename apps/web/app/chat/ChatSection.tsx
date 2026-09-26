@@ -57,6 +57,8 @@ export function ChatSection() {
   // What the model thought before answering: streamed live, then kept (not stored) beside the reply it led to.
   const [thinking, setThinking] = useState("");
   const [thoughts, setThoughts] = useState<Record<string, string>>({});
+  const [liveSteps, setLiveSteps] = useState<ToolStep[]>([]);
+  const [stepLogs, setStepLogs] = useState<Record<string, ToolStep[]>>({});
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -197,19 +199,28 @@ export function ChatSection() {
       const parser = createEventParser();
       let partial = "";
       let thought = "";
+      let steps: ToolStep[] = [];
       setThinking("");
+      setLiveSteps([]);
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message } | null;
+          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: ToolStep["state"] } | null;
           if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
           else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
+          else if (item.type === "tool" && data?.id && data.label && data.state) {
+            const step: ToolStep = { id: data.id, label: data.label, state: data.state };
+            steps = steps.some((existing) => existing.id === step.id) ? steps.map((existing) => existing.id === step.id ? step : existing) : [...steps, step];
+            setLiveSteps(steps);
+            setStreaming((current) => current ?? "");
+          }
           else if (item.type === "error") setNotice(data?.message ?? "Atlas could not finish that reply.");
           else if (item.type === "done" && data?.reply) {
             const reply = data.reply;
             if (thought) setThoughts((items) => ({ ...items, [reply.id]: thought }));
+            if (steps.length) setStepLogs((items) => ({ ...items, [reply.id]: steps }));
             setMessages((items) => [...items, reply]);
           }
         }
@@ -221,6 +232,7 @@ export function ChatSection() {
       abortRef.current = null;
       setStreaming(null);
       setThinking("");
+      setLiveSteps([]);
       setSending(false);
     }
   }
@@ -303,10 +315,12 @@ export function ChatSection() {
           ? <div className="user-message" key={item.id}><p>{item.content}</p></div>
           : <div className="atlas-message" key={item.id}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>
             {thoughts[item.id] && <details className="thinking-block"><summary>Thought process</summary><p>{thoughts[item.id]}</p></details>}
+            {stepLogs[item.id] && <ToolSteps steps={stepLogs[item.id]} collapsed />}
             <MessageBody text={item.content} /></div></div>)}
         {streaming !== null && <div className="atlas-message" aria-live="polite"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>
           {thinking && <details className="thinking-block" open={!streaming}><summary>{streaming ? "Thought process" : "Thinking…"}</summary><p>{thinking}</p></details>}
-          {streaming ? <MessageBody text={streaming} /> : !thinking && <p className="thinking">Thinking…</p>}</div></div>}
+          {liveSteps.length > 0 && <ToolSteps steps={liveSteps} />}
+          {streaming ? <MessageBody text={streaming} /> : !thinking && liveSteps.length === 0 && <p className="thinking">Thinking…</p>}</div></div>}
         {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Starting…</p></div></div>}
         {suggestion && <div className="atlas-message suggestion-card"><div className="assistant-avatar"><AtlasMark /></div><div>
           <b>Atlas</b>
@@ -338,4 +352,16 @@ export function ChatSection() {
       {notice && <p className="composer-notice" role="status">{notice}</p>}
     </form>
   </AtlasShell>;
+}
+
+type ToolStep = { id: string; label: string; state: "running" | "done" | "failed" };
+const STEP_MARK: Record<ToolStep["state"], string> = { running: "●", done: "✓", failed: "✕" };
+
+/** The lookups Atlas made while writing a reply: live while it works, then folded away beside the answer. */
+function ToolSteps({ steps, collapsed = false }: { readonly steps: ToolStep[]; readonly collapsed?: boolean }) {
+  const list = <ol className="activity-steps tool-steps">
+    {steps.map((step) => <li key={step.id} className={step.state === "running" ? "running" : step.state}><span aria-hidden="true">{STEP_MARK[step.state]}</span>{step.label}</li>)}
+  </ol>;
+  if (!collapsed) return list;
+  return <details className="thinking-block"><summary>{steps.length === 1 ? "1 step" : `${steps.length} steps`}</summary>{list}</details>;
 }

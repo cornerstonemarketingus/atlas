@@ -1,22 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
 import { getD1, getDb } from "../../../db";
-import { conversationWritable, recallForMemory } from "../../../db/tenancy.mjs";
+import { conversationWritable, recallForMemory, tenantAllowlist } from "../../../db/tenancy.mjs";
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
 import { isDeploymentOwner } from "../tasks/self-protection.mjs";
 import { POST as startTask } from "../tasks/route";
+import { allowedRepositories } from "../tasks/dispatch.mjs";
+import { createInstallationToken, githubAppConfiguration } from "../tasks/github-app.mjs";
+import { platformGitHubToken } from "../tasks/github-token.mjs";
 import { GET as listDevices } from "../computer/devices/route";
 import { POST as startComputerTask } from "../computer/tasks/route";
-import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
-import { completionsUrl, replyText, resolveChatModel, threadTitle } from "./model-endpoint.mjs";
-import { createDeltaParser, encodeEvent } from "./stream.mjs";
+import { SELF_REPOSITORY, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom } from "./atlas-knowledge.mjs";
+import { resolveChatModel, threadTitle } from "./model-endpoint.mjs";
+import { encodeEvent } from "./stream.mjs";
+import { converse } from "./agent-loop.mjs";
 
 /** How much of a thread is replayed to the model. Enough for continuity, bounded so a long thread cannot grow a request without limit. */
 const HISTORY_TURNS = 20;
 const MAX_MESSAGE = 8000;
-const REQUEST_TIMEOUT_MS = 60_000;
 
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
@@ -44,6 +47,7 @@ export async function POST(request: Request) {
   let history: { role: string; content: string }[] = [];
   let memory = "";
   let stored = true;
+  let allowlist = new Set<string>();
   try {
     // Tenancy (#71): threads belong to the caller's tenant; an id owned by another tenant or principal is never written to.
     const tenant = await resolveTenantContext(request, account, getD1());
@@ -56,6 +60,8 @@ export async function POST(request: Request) {
       .where(and(eq(conversationMessages.conversationId, conversationId), eq(conversationMessages.requestedBy, account.userId)))
       .orderBy(asc(conversationMessages.createdAt));
     await db.insert(conversationMessages).values({ id: randomUUID(), conversationId, requestedBy: account.userId, role: "user", content: message, createdAt: now });
+    // Repositories the chat tools may read: the workspace's allowlist, bounded by the deployment's.
+    try { allowlist = await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)); } catch { allowlist = new Set(); }
     // Memory across conversations: recall is best-effort and never blocks a reply.
     try { memory = memoryDigest(await recallForMemory(getD1(), tenantScope(tenant), { excludeConversationId: conversationId })); } catch { memory = ""; }
   } catch {
@@ -74,28 +80,16 @@ export async function POST(request: Request) {
   ];
 
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
+  const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
+  const loop = { endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks };
 
   if (body.stream === true) {
-    return streamReply({ endpoint, turns, conversationId, stored, db, userId: account.userId, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks });
+    return streamReply({ ...loop, conversationId, stored, db, userId: account.userId });
   }
 
-  let payload: unknown;
-  try {
-    let response = await callModel(endpoint, turns, { stream: false, tools: true });
-    if (response.status === 400 || response.status === 422) response = await callModel(endpoint, turns, { stream: false, tools: false });
-    if (!response.ok) {
-      // The status is the actionable part; the body can contain the prompt
-      // echoed back, which does not belong in a client-facing message.
-      return Response.json({ message: `The model endpoint answered ${response.status}.`, conversationId }, { status: 502 });
-    }
-    payload = await response.json();
-  } catch (error) {
-    const timedOut = error instanceof Error && error.name === "TimeoutError";
-    return Response.json({ message: timedOut ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.", conversationId }, { status: 504 });
-  }
-
-  const started = await startTasks(taskRequestsFrom(payload, { defaultRepository: repository || SELF_REPOSITORY, userMessage: message }));
-  const reply = [replyText(payload), ...started].filter(Boolean).join("\n\n");
+  const outcome = await converse({ ...loop, stream: false, emit: () => {} });
+  if ("error" in outcome) return Response.json({ message: outcome.error, conversationId }, { status: outcome.status });
+  const reply = outcome.reply;
   if (!reply) return Response.json({ message: "The model endpoint returned an empty reply.", conversationId }, { status: 502 });
 
   const replyId = randomUUID();
@@ -107,7 +101,22 @@ export async function POST(request: Request) {
     } catch { stored = false; }
   }
 
-  return Response.json({ conversationId, stored, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+  return Response.json({ conversationId, stored, steps: outcome.steps, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+}
+
+/** A GitHub credential for the read-only chat tools: the GitHub App's installation token when configured, else the platform token. Fetched once per request, only if a tool needs it. */
+function memoizedGitHubToken() {
+  let pending: Promise<string | undefined> | null = null;
+  return () => {
+    pending ??= (async () => {
+      try {
+        const configuration = githubAppConfiguration();
+        if (configuration.configured) return await createInstallationToken(configuration);
+      } catch { /* fall back to the platform token */ }
+      return platformGitHubToken();
+    })();
+    return pending;
+  };
 }
 
 type Endpoint = ReturnType<typeof resolveChatModel>;
@@ -140,18 +149,8 @@ async function startOnComputer(request: Request, headers: Headers, objective: st
 }
 type TaskRequests = ReturnType<typeof taskRequestsFrom>;
 
-/**
- * Tools first; an endpoint that does not support tool calling answers 400 or
- * 422, and the caller then retries without them rather than failing.
- */
-function callModel(endpoint: Endpoint, turns: { role: string; content: string }[], { stream, tools }: { stream: boolean; tools: boolean }) {
-  return fetch(completionsUrl(endpoint.baseUrl!), {
-    method: "POST",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
-    body: JSON.stringify({ model: endpoint.model, messages: turns, stream, temperature: 0.2, max_tokens: 1200, ...(tools ? { tools: [TASK_TOOL], tool_choice: "auto" } : {}) }),
-  });
-}
+type ChatTurn = { role: string; content: string | null };
+type ToolContext = Parameters<typeof converse>[0]["toolContext"];
 
 /**
  * Starts each run the model asked for through /api/tasks exactly as the task
@@ -195,12 +194,13 @@ async function startRequestedTasks(request: Request, { requests, errors }: TaskR
 
 /**
  * Streams the reply as server-sent events: `meta` first (the conversation
- * id), then `delta` chunks, then `done` with the stored reply — or `error`
- * with a message a person can act on. The reply is persisted once, when the
- * model finishes, while the request is still open.
+ * id), then `thinking`, `tool` (a step starting or finishing) and `delta`
+ * events as they happen, then `done` with the stored reply — or `error` with
+ * a message a person can act on. The reply is persisted once, when the model
+ * finishes, while the request is still open.
  */
-function streamReply({ endpoint, turns, conversationId, stored, db, userId, defaultRepository, userMessage, startTasks }: {
-  endpoint: Endpoint; turns: { role: string; content: string }[]; conversationId: string; stored: boolean;
+function streamReply({ conversationId, stored, db, userId, ...loop }: {
+  endpoint: Endpoint; turns: ChatTurn[]; toolContext: ToolContext; conversationId: string; stored: boolean;
   db: ReturnType<typeof getDb>; userId: string; defaultRepository: string; userMessage: string;
   startTasks: (calls: TaskRequests) => Promise<string[]>;
 }) {
@@ -209,55 +209,13 @@ function streamReply({ endpoint, turns, conversationId, stored, db, userId, defa
     async start(controller) {
       const emit = (type: string, data: unknown) => controller.enqueue(encoder.encode(encodeEvent(type, data)));
       emit("meta", { conversationId });
-      let text = "";
-      let calls: TaskRequests = { requests: [], errors: [] };
-      try {
-        let response = await callModel(endpoint, turns, { stream: true, tools: true });
-        if (response.status === 400 || response.status === 422) response = await callModel(endpoint, turns, { stream: true, tools: false });
-        if (!response.ok || !response.body) {
-          emit("error", { message: `The model endpoint answered ${response.status}.` });
-          controller.close();
-          return;
-        }
-        if (!(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
-          // Some servers ignore stream:true; forward the whole reply as one delta.
-          const payload = await response.json();
-          text = replyText(payload);
-          if (text) emit("delta", { text });
-          calls = taskRequestsFrom(payload, { defaultRepository, userMessage });
-        } else {
-          const parser = createDeltaParser();
-          const decoder = new TextDecoder();
-          const reader = response.body.getReader();
-          for (;;) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            const deltas = parser.push(decoder.decode(value, { stream: true }));
-            // Thinking is streamed as its own event, before the words it led to; it is shown, never stored.
-            const thought = parser.drainReasoning();
-            if (thought) emit("thinking", { text: thought });
-            for (const delta of deltas) {
-              text += delta;
-              emit("delta", { text: delta });
-            }
-          }
-          calls = taskRequestsFromCalls(parser.toolCalls, { defaultRepository, userMessage });
-        }
-      } catch (error) {
-        const timedOut = error instanceof Error && error.name === "TimeoutError";
-        emit("error", { message: timedOut ? "The model endpoint stopped answering before the reply finished." : "No model server answered. Check the endpoint in Connections." });
+      const outcome = await converse({ ...loop, stream: true, emit });
+      if ("error" in outcome) {
+        emit("error", { message: outcome.error });
         controller.close();
         return;
       }
-      // Runs the model asked for start after its words have streamed, and
-      // each gets one line saying whether it started.
-      const started = await startTasks(calls);
-      if (started.length) {
-        const addition = `${text.trim() ? "\n\n" : ""}${started.join("\n\n")}`;
-        text += addition;
-        emit("delta", { text: addition });
-      }
-      const reply = text.trim();
+      const reply = outcome.reply;
       if (!reply) {
         emit("error", { message: "The model endpoint returned an empty reply." });
         controller.close();
@@ -272,7 +230,7 @@ function streamReply({ endpoint, turns, conversationId, stored, db, userId, defa
           await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, userId)));
         } catch { persisted = false; }
       }
-      emit("done", { conversationId, stored: persisted, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+      emit("done", { conversationId, stored: persisted, steps: outcome.steps, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
       controller.close();
     },
   });
