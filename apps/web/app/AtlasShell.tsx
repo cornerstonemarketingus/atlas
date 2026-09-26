@@ -23,9 +23,9 @@ export type Section = "chat" | "build" | "automation" | "connections" | "setting
 type NavItem = { id: Section; href: string; label: string; glyph: string; hint?: string };
 
 export const PRIMARY_SECTIONS: readonly NavItem[] = [
-  { id: "chat", href: "/", label: "Home", hint: "Ask, plan, decide", glyph: "◇" },
-  { id: "build", href: "/build", label: "Projects", hint: "Build and improve software", glyph: "⬢" },
-  { id: "automation", href: "/automation", label: "Computer", hint: "Work on your computer", glyph: "◈" },
+  { id: "chat", href: "/", label: "Chat", hint: "Ask anything", glyph: "◇" },
+  { id: "build", href: "/build", label: "Projects", hint: "Code changes and reviews", glyph: "⬢" },
+  { id: "automation", href: "/automation", label: "Tasks", hint: "Work on your computer", glyph: "◈" },
 ];
 
 /** Sections served by Atlas on the owner's computer (the local daemon's console). */
@@ -93,7 +93,7 @@ export function AtlasShell({ section, rail, headerContext, children, wide = fals
       </nav>
       {rail}
       <nav className="rail-local" aria-label="On your computer">
-        <p>On your computer <small>needs Atlas running there</small></p>
+        <p>Local tools <small>open when the Atlas app is running on this computer</small></p>
         {LOCAL_SECTIONS.map((item) => (
           <a key={item.href} className="rail-utility" href={item.href} target="_blank" rel="noopener noreferrer">
             <span aria-hidden="true">↗</span>{item.label}
