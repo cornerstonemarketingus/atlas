@@ -595,9 +595,11 @@ What still stops Atlas from doing a job end to end, with who owns each item.
       delete scoped memory through the existing `GET/DELETE /v1/knowledge`.
 - [ ] Actions-minutes visibility (SEC-15, P7-5): report the budget guard's
       state, including when it failed open, with the task result.
-- [ ] Finish the six in-progress workstreams (orchestrator, terminal
-      sessions, desktop control, tenancy, MCP over HTTP, planning) and land
-      them on top of main.
+- [ ] Finish the six in-progress workstreams and land them on top of main.
+      Done on this branch: planning/voice/workers, MCP over HTTP and the Atlas
+      MCP server, orchestrator adapters, namespace terminal runner, desktop
+      safety layer (not yet registered in `main.mjs`). Remaining: tenancy
+      (#71).
 
 ### Queued (larger product work, one GitHub issue each)
 
@@ -607,8 +609,12 @@ What still stops Atlas from doing a job end to end, with who owns each item.
       operator's account — #72. Container runner done: set
       `ATLAS_TERMINAL_CONTAINER_RUNTIME` (and optionally `_IMAGE`) and every
       `terminal.run` command runs in a disposable container with only its
-      workspace mounted and no network. Still open: requiring it by policy
-      for untrusted repositories, and the engineering workflow's checks.
+      workspace mounted and no network. A Linux-namespace runner covers
+      hosts without a container runtime, and callers can require isolation
+      (`requireIsolation`). Still open: git worktrees link to the main
+      repository's `.git` outside the workspace, so git writes inside either
+      sandbox likely fail; the engineering workflow's checks need that fixed
+      before they can run sandboxed.
 - [ ] Project Genesis: prompt → requirements → plan → new repository →
       deployed preview — #73.
 - [ ] Visual builder: live preview with click-to-edit mapped to source — #74.
