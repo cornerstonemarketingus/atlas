@@ -598,13 +598,14 @@ What still stops Atlas from doing a job end to end, with who owns each item.
 - [ ] Finish the six in-progress workstreams and land them on top of main.
       Done on this branch: planning/voice/workers, MCP over HTTP and the Atlas
       MCP server, orchestrator adapters, namespace terminal runner, desktop
-      safety layer (not yet registered in `main.mjs`). Remaining: tenancy
-      (#71).
+      safety layer (not yet registered in `main.mjs`), tenancy (#71).
 
 ### Queued (larger product work, one GitHub issue each)
 
 - [ ] Tenant model (SEC-1, P9-1) beyond the per-user GitHub permission
-      check — #71.
+      check — #71. Built: tenants, members, migration 0015, tenant-scoped
+      repositories, tasks, conversations, computer devices and approvals.
+      Still open: a workspace switcher and member management UI.
 - [ ] Container or VM runner so terminal commands are isolated from the
       operator's account — #72. Container runner done: set
       `ATLAS_TERMINAL_CONTAINER_RUNTIME` (and optionally `_IMAGE`) and every

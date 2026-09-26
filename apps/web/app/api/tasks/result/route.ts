@@ -3,6 +3,7 @@ import { getDb } from "../../../../db";
 import { conversationMessages, conversations, runEvents, tasks } from "../../../../db/schema";
 import { createInstallationToken, githubAppConfiguration } from "../github-app.mjs";
 import { correlationMatchesTask, resultBelongsToTask, validateRunnerResult, verifyRunnerIdentity } from "../runner-result.mjs";
+import { platformGitHubToken } from "../github-token.mjs";
 
 export async function POST(request: Request) {
   let identity;
@@ -38,7 +39,7 @@ export async function POST(request: Request) {
     // this task's result, whatever the run verification would say.
     if (!correlationMatchesTask(body, task)) return Response.json({ message: "Result correlation id does not match dispatch." }, { status: 409 });
     const app = githubAppConfiguration();
-    const token = app.configured ? await createInstallationToken(app) : process.env.ATLAS_GITHUB_TOKEN;
+    const token = app.configured ? await createInstallationToken(app) : platformGitHubToken();
     if (!token) return Response.json({ message: "Run verification unavailable." }, { status: 503 });
     const response = await fetch(`https://api.github.com/repos/${task.repository}/actions/runs/${identity.run_id}`, {
       headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "atlas-control-plane" },

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { computerApprovals, computerDevices, computerTaskEvents, computerTasks } from "../../../../db/schema";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
@@ -8,6 +8,7 @@ import { cloudBrowserAccess, hostedBrowserConfigured } from "../browser-plan.mjs
 import { computerExecutionPolicy, normalizeComputerWorkflow } from "../computer-policy.mjs";
 import { taskEvent } from "../task-events";
 import { validateStartUrl } from "../start-url.mjs";
+import { computerTenant } from "../tenant";
 
 async function capabilities(account: { userId: string; dbUserId: number | null }) {
   const unrestricted = account.dbUserId === null;
@@ -25,10 +26,14 @@ async function capabilities(account: { userId: string; dbUserId: number | null }
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  const tenant = await computerTenant(request, account);
+  if (tenant instanceof Response) return tenant;
   const db = getDb();
+  // Tasks carry no tenant column; they belong to the workspace of their device.
+  const deviceIds = (await db.select({ id: computerDevices.id }).from(computerDevices).where(and(eq(computerDevices.tenantId, tenant.tenantId), eq(computerDevices.requestedBy, account.userId)))).map((row) => row.id);
   const [tasks, approvals, events] = await Promise.all([
-    db.select().from(computerTasks).where(eq(computerTasks.requestedBy, account.userId)).orderBy(desc(computerTasks.createdAt)).limit(20),
-    db.select().from(computerApprovals).where(and(eq(computerApprovals.requestedBy, account.userId), eq(computerApprovals.status, "pending"), isNull(computerApprovals.decidedAt))).orderBy(desc(computerApprovals.createdAt)),
+    deviceIds.length ? db.select().from(computerTasks).where(and(eq(computerTasks.requestedBy, account.userId), inArray(computerTasks.deviceId, deviceIds))).orderBy(desc(computerTasks.createdAt)).limit(20) : Promise.resolve([]),
+    db.select().from(computerApprovals).where(and(eq(computerApprovals.tenantId, tenant.tenantId), eq(computerApprovals.requestedBy, account.userId), eq(computerApprovals.status, "pending"), isNull(computerApprovals.decidedAt))).orderBy(desc(computerApprovals.createdAt)),
     db.select().from(computerTaskEvents).where(eq(computerTaskEvents.requestedBy, account.userId)).orderBy(desc(computerTaskEvents.createdAt)).limit(100),
   ]);
   return Response.json({ tasks: tasks.map((task) => ({ ...task, policy: computerExecutionPolicy(task.workflowType), events: events.filter((event) => event.taskId === task.id) })), approvals, capabilities: await capabilities(account) }, { headers: { "cache-control": "no-store" } });
@@ -37,6 +42,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  const tenant = await computerTenant(request, account);
+  if (tenant instanceof Response) return tenant;
   let body: { deviceId?: unknown; objective?: unknown; startUrl?: unknown; executionProvider?: unknown; workflowType?: unknown };
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
   let deviceId = typeof body.deviceId === "string" ? body.deviceId : "";
@@ -56,10 +63,10 @@ export async function POST(request: Request) {
     const access = (await capabilities(account)).providers.cloudflare;
     if (!access.entitled) return Response.json({ message: "Cloudflare hosted browsing requires a Pro or Team plan." }, { status: 402 });
     if (!access.configured) return Response.json({ message: "Hosted browsing is not running yet, so Atlas did not queue this task. Pair your computer in Operate and run it there instead.", blocked: "BLOCKED_BY_CAPABILITY" }, { status: 503 });
-    deviceId = `cloudflare-${createHash("sha256").update(account.userId).digest("hex").slice(0, 24)}`;
-    await db.insert(computerDevices).values({ id: deviceId, requestedBy: account.userId, name: "Cloudflare Browser", platform: "cloudflare", status: "online", secretHash: createHash("sha256").update(randomBytes(32)).digest("hex") }).onConflictDoNothing();
+    deviceId = `cloudflare-${createHash("sha256").update(`${tenant.tenantId}:${account.userId}`).digest("hex").slice(0, 24)}`;
+    await db.insert(computerDevices).values({ id: deviceId, tenantId: tenant.tenantId, requestedBy: account.userId, name: "Cloudflare Browser", platform: "cloudflare", status: "online", secretHash: createHash("sha256").update(randomBytes(32)).digest("hex") }).onConflictDoNothing();
   }
-  const [device] = await db.select().from(computerDevices).where(and(eq(computerDevices.id, deviceId), eq(computerDevices.requestedBy, account.userId), isNull(computerDevices.revokedAt))).limit(1);
+  const [device] = await db.select().from(computerDevices).where(and(eq(computerDevices.id, deviceId), eq(computerDevices.tenantId, tenant.tenantId), eq(computerDevices.requestedBy, account.userId), isNull(computerDevices.revokedAt))).limit(1);
   if (!device || device.platform !== executionProvider) return Response.json({ message: "That execution provider is not available." }, { status: 404 });
   const id = randomUUID();
   await db.insert(computerTasks).values({ id, requestedBy: account.userId, deviceId, executionProvider, workflowType, approvalPolicy: "consequential", objective, startUrl });
