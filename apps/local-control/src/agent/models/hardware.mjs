@@ -1,4 +1,4 @@
-import { availableParallelism, cpus, totalmem } from "node:os";
+import { arch, availableParallelism, cpus, freemem, platform, totalmem } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -13,17 +13,37 @@ async function runCommand(command, args) {
   }
 }
 
-export async function detectHardware({ runCommandImpl = runCommand } = {}) {
+/**
+ * What this machine can give a local model.
+ * - NVIDIA (nvidia-smi) and AMD (rocm-smi) GPUs: the largest card's memory.
+ * - Apple Silicon: memory is unified, and macOS lets the GPU wire about three
+ *   quarters of it by default, so that share is what a model can use.
+ * - Otherwise the CPU runs the model from system memory.
+ * `freeMemoryGiB` is reported so the UI can warn when other programs already
+ * hold the memory a model would need.
+ */
+export async function detectHardware({ runCommandImpl = runCommand, os = { platform: platform(), arch: arch(), totalmem: totalmem(), freemem: freemem() } } = {}) {
   const cpuCount = typeof availableParallelism === "function" ? availableParallelism() : cpus().length;
-  const totalMemoryGiB = roundGiB(totalmem());
-  const result = await runCommandImpl("nvidia-smi", ["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]);
-  const gpus = result.ok ? parseNvidia(result.stdout) : [];
+  const totalMemoryGiB = roundGiB(os.totalmem);
+  const unifiedMemory = os.platform === "darwin" && os.arch === "arm64";
+  let gpus = [];
+  if (!unifiedMemory) {
+    const nvidia = await runCommandImpl("nvidia-smi", ["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]);
+    gpus = nvidia.ok ? parseNvidia(nvidia.stdout) : [];
+    if (!gpus.length) {
+      const amd = await runCommandImpl("rocm-smi", ["--showmeminfo", "vram", "--showproductname", "--json"]);
+      gpus = amd.ok ? parseRocm(amd.stdout) : [];
+    }
+  }
   const discreteMemory = gpus.reduce((largest, gpu) => Math.max(largest, gpu.memoryGiB), 0);
   return {
     cpuCount: Math.max(1, cpuCount),
     totalMemoryGiB,
+    freeMemoryGiB: Math.max(0, Math.round(os.freemem / 1024 ** 3)),
     gpus,
-    usableModelMemoryGiB: discreteMemory || totalMemoryGiB,
+    unifiedMemory,
+    accelerator: discreteMemory ? gpus[0].vendor : unifiedMemory ? "apple" : "cpu",
+    usableModelMemoryGiB: discreteMemory || (unifiedMemory ? Math.max(1, Math.round(totalMemoryGiB * 0.75)) : totalMemoryGiB),
   };
 }
 
@@ -32,6 +52,17 @@ function parseNvidia(output) {
     const match = line.match(/^(.*),\s*([\d.]+)\s*$/u);
     if (!match) return null;
     return { vendor: "nvidia", name: match[1].trim(), memoryGiB: Math.round(Number(match[2]) / 1024) };
+  }).filter(Boolean);
+}
+
+/** rocm-smi --json: { card0: { "VRAM Total Memory (B)": "...", "Card series": "..." }, … } */
+export function parseRocm(output) {
+  let parsed;
+  try { parsed = JSON.parse(String(output)); } catch { return []; }
+  return Object.entries(parsed ?? {}).filter(([key]) => key.startsWith("card")).map(([, card]) => {
+    const bytes = Number(card?.["VRAM Total Memory (B)"]);
+    if (!Number.isFinite(bytes) || bytes <= 0) return null;
+    return { vendor: "amd", name: String(card["Card series"] ?? card["Card model"] ?? "AMD GPU"), memoryGiB: Math.round(bytes / 1024 ** 3) };
   }).filter(Boolean);
 }
 

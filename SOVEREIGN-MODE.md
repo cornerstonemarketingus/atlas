@@ -81,6 +81,41 @@ tool calls, edits, and validation remain on the machine. Audit records are
 written under the user's `.atlas/runs` directory. Use `--help` for model,
 context-window, verification-directory, and endpoint options.
 
+### Local models (Models → Install → Run)
+
+Open **Models** in the local app. Atlas:
+
+- detects what the machine can give a model: NVIDIA (`nvidia-smi`) or AMD
+  (`rocm-smi`) GPU memory, Apple Silicon unified memory (about three quarters
+  is usable by the GPU), or system memory for CPU inference, plus free memory;
+- shows a catalog of open models (Qwen2.5-Coder 1.5B–32B, Qwen3 8B–32B,
+  Qwen3-Coder 30B, Devstral 24B, gpt-oss 20B, DeepSeek-R1 14B, Llama 3.1 8B,
+  Qwen2.5-VL 7B) with estimated memory at 4-bit quantization, the largest
+  context (32k/16k/8k) that fits, and whether each can drive tools;
+- recommends a plan for this machine: a **coder** (best coding model with tool
+  calls that fits), a **reviewer** (best reasoning model, preferably from a
+  different family) and a **fast** model for simple tasks. **Use this plan**
+  stores it in `~/.atlas/model-plan.json`;
+- **Install** downloads a model with live progress, **Run** loads it with the
+  fitting context length and keeps it warm, **Remove** deletes it;
+- **Start model server** starts `ollama serve` bound to 127.0.0.1 when no
+  server is running, and stops it when Atlas exits. Atlas never stops a server
+  it did not start.
+
+The engine today is Ollama; if it is not installed the page links the official
+installer. Mixture-of-experts models (Qwen3 30B, Qwen3-Coder 30B, gpt-oss 20B)
+run far faster on a CPU than their size suggests, so a 32 GB CPU-only machine
+can run a stronger coder than qwen2.5-coder:7b. The API is `/v1/models/hosting`:
+anyone signed in can read it, and changing anything needs the owner.
+
+**Routing by difficulty.** With a plan applied (and no
+`ATLAS_SELF_IMPROVE_MODEL` override), each self-improvement attempt picks its
+model: TODOs and wording-level changes go to the fast model, and failing checks
+and ordinary changes go to the coder. Broad changes (refactors, security,
+three or more files) and any retry of a task that already failed also go to the
+coder, as an escalation. The reviewer uses the plan's reviewer. The ledger
+records which model and difficulty each attempt used.
+
 ### Self-improvement ("Atlas, improve yourself")
 
 With Ollama running, Atlas can pick and make its own improvements locally:
@@ -149,6 +184,12 @@ and hosted-browser APIs entirely.
       host-independent isolated-worktree and portable-patch delivery path.
 - [x] Add Windows packaging, Ollama-compatible model discovery, health checks,
       and a Start menu launcher. Model downloads remain an explicit owner action.
+- [x] Atlas-managed model hosting: hardware detection (NVIDIA, AMD, Apple
+      Silicon, CPU), a model catalog with memory/context fitting, a recommended
+      coder/reviewer/fast plan, install/run/remove with progress, a managed
+      loopback Ollama server, and routing by task difficulty.
+- [ ] Bundle an inference engine (llama.cpp) so Atlas does not need Ollama
+      installed separately.
 - [x] Add one-use, expiring phone pairing codes and separately revocable device
       credentials without transferring the owner token.
 - [ ] Add a guided customer-managed HTTPS/VPN enrollment flow. Loopback remains

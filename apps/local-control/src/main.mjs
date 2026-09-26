@@ -23,6 +23,8 @@ import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
+import { ModelManager } from "./agent/models/manager.mjs";
+import { ModelPlanStore } from "./agent/models/hosting.mjs";
 import { discoverModelServers } from "./agent/models/discovery.mjs";
 import { recommendModels } from "./agent/models/recommend.mjs";
 import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/router.mjs";
@@ -84,8 +86,11 @@ const modelClient = createRoutedClient({
   fallback: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
   onRoute: (route, { failedOver }) => store.audit("model.route", `${route.model} served a model turn${failedOver ? " after failover" : ""}`),
 });
+// Models → Install → Run: Atlas manages a loopback model server and the applied model plan.
+const modelManager = new ModelManager({ log: (line) => store.audit("model.hosting", line) });
+const modelPlan = new ModelPlanStore(join(dataDirectory, "model-plan.json"));
 // "Atlas, improve yourself": only when running from a git checkout of Atlas itself.
-const selfImprove = createDaemonSelfImprovement({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory });
+const selfImprove = createDaemonSelfImprovement({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan });
 const toolRegistry = buildToolRegistry();
 const authorizedToolExecutor = buildAuthorizedToolExecutor(toolRegistry);
 const toolApprovals = {
@@ -178,6 +183,7 @@ const server = createLocalControlServer({
   connections: () => mcpReport,
   toolCatalog: () => toolRegistry.list(),
   selfImprove,
+  modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
   transcriber: buildTranscriber(),
@@ -208,6 +214,7 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
 }
 
 function shutdown() {
+  modelManager.stopServer();
   server.close(async () => {
     await runtime.stop();
     await outbox.stop();
