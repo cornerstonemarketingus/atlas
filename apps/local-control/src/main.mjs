@@ -164,6 +164,7 @@ const server = createLocalControlServer({
   team,
   memory,
   connections: () => mcpReport,
+  toolCatalog: () => toolRegistry.list(),
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
@@ -387,7 +388,9 @@ const router = createModelRouter({
  * whole point of reporting health separately from configuration.
  */
 async function reportModelHealth() {
-  const [hardware, servers] = await Promise.all([detectHardware(), discoverModelServers()]);
+  // The configured endpoint and routes are checked too, not only the default local ports.
+  const endpoints = [...new Set(["http://127.0.0.1:11434/v1", "http://127.0.0.1:8080/v1", process.env.ATLAS_MODEL_ENDPOINT, ...router.routes.map((route) => route.endpoint)].filter(Boolean).map((endpoint) => endpoint.replace(/\/+$/u, "")))];
+  const [hardware, servers] = await Promise.all([detectHardware(), discoverModelServers({ endpoints })]);
   const installed = servers.flatMap((server) => server.models);
   return {
     hardware,

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
-import { LOCAL_UI_CSS, LOCAL_UI_HTML, LOCAL_UI_JS } from "./ui.mjs";
+import { LOCAL_UI_CSS, LOCAL_UI_HTML, LOCAL_UI_ICON, LOCAL_UI_JS } from "./ui.mjs";
 import { decryptBackup, encryptBackup } from "./encrypted-backup.mjs";
 import { publishChange } from "./publish-adapters.mjs";
 import { discoverLocalModels } from "./model-discovery.mjs";
@@ -14,7 +14,7 @@ import { createRateLimiter, LIMITS } from "./rate-limit.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, innovation = null, platformStream = null, team = null, memory = null, connections = () => [] }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -36,6 +36,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     response.setHeader("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");
     if (request.method === "GET" && request.url === "/") return sendText(response, 200, "text/html; charset=utf-8", LOCAL_UI_HTML);
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
+    if (request.method === "GET" && (request.url === "/icon.svg" || request.url === "/favicon.ico")) return sendText(response, 200, "image/svg+xml", LOCAL_UI_ICON);
     if (request.method === "GET" && request.url === "/app.js") return sendText(response, 200, "text/javascript; charset=utf-8", LOCAL_UI_JS);
     if (platformRoutes?.handlePage(request, response)) return;
     if (innovationRoutes?.handlePage(request, response)) return;
@@ -61,6 +62,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (!platformRoutes && (request.url ?? "").startsWith("/v1/platform/")) return send(response, 503, { message: "The Atlas platform task store is not running in this process." });
     if (teamRoutes && (request.url ?? "").startsWith("/v1/team/")) { if (await teamRoutes(request, response, identity)) return; }
     if (!teamRoutes && (request.url ?? "").startsWith("/v1/team/")) return send(response, 503, { message: "Agent missions are not running in this process." });
+    // What agents can do on this machine, and what the owner's policy says about each capability.
+    if (request.method === "GET" && request.url === "/v1/tools") return send(response, 200, { tools: (toolCatalog?.() ?? []).map((tool) => ({ ...tool, decision: store.policy(tool.capability).decision })) });
     if (/^\/v1\/(knowledge|connections)(\/|\?|$)/u.test(request.url ?? "")) { if (await knowledgeRoutes(request, response, identity)) return; }
     if (innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) { if (await innovationRoutes.handle(request, response, identity)) return; }
     if (!innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) return send(response, 503, { message: "The Atlas innovation pipeline is not running in this process." });

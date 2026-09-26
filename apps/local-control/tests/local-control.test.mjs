@@ -28,7 +28,14 @@ test("local control plane authenticates, persists, and completes tasks", async (
   assert.equal((await fetch(`${origin}/health`)).status, 200);
   const page = await fetch(origin);
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /Atlas Local/u);
+  const html = await page.text();
+  assert.match(html, /What should Atlas do\?/u);
+  for (const section of ["home", "missions", "families", "computer", "projects", "knowledge", "connections", "approvals", "settings"]) {
+    assert.ok(html.includes(`data-view="${section}"`), `the console has a ${section} section`);
+  }
+  const icon = await fetch(`${origin}/favicon.ico`);
+  assert.equal(icon.status, 200, "the browser's icon request is not an authentication failure");
+  assert.match(icon.headers.get("content-type"), /svg/u);
   assert.match(page.headers.get("content-security-policy"), /frame-ancestors 'none'/u);
   assert.equal((await fetch(`${origin}/v1/tasks`)).status, 401);
   await fetch(`${origin}/v1/policies`, { method: "PUT", headers: { ...admin, "content-type": "application/json" }, body: JSON.stringify({ capability: "code.write", decision: "allow" }) });
