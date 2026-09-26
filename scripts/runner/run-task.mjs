@@ -77,19 +77,6 @@ function parseCodingRoutes(raw) {
   } catch {
     throw new Error("ATLAS_MODEL_ROUTES must be valid JSON.");
   }
-
-  function parseFallbackRoute(specification) {
-    const first = specification.indexOf(":");
-    const last = specification.lastIndexOf(":");
-    if (first <= 0 || last <= first + 1 || last >= specification.length - 1) {
-      return null;
-    }
-    return {
-      provider: specification.slice(0, first).trim().toLowerCase(),
-      model: specification.slice(first + 1, last).trim(),
-      apiKeyEnvironmentVariable: specification.slice(last + 1).trim(),
-    };
-  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("ATLAS_MODEL_ROUTES must be a JSON object.");
   }
@@ -105,6 +92,19 @@ function parseCodingRoutes(raw) {
     }
     return { provider: entry.slice(0, separator).trim().toLowerCase(), model: entry.slice(separator + 1).trim() };
   });
+}
+
+function parseFallbackRoute(specification) {
+  const first = specification.indexOf(":");
+  const last = specification.lastIndexOf(":");
+  if (first <= 0 || last <= first + 1 || last >= specification.length - 1) {
+    return null;
+  }
+  return {
+    provider: specification.slice(0, first).trim().toLowerCase(),
+    model: specification.slice(first + 1, last).trim(),
+    apiKeyEnvironmentVariable: specification.slice(last + 1).trim(),
+  };
 }
 
 /**
