@@ -499,7 +499,7 @@ async function resolveRunForTask(row, repository, token, fetcher, context) {
   });
   let runId = typeof row.githubRunId === "number" ? row.githubRunId : null;
   const listed = runId === null
-    ? await fetchGitHubJson(workflowRunsRequest({ token, repository, workflow }), fetcher)
+    ? await fetchGitHubJson(workflowRunsRequest({ token, repository, workflow, perPage: 100 }), fetcher)
     : null;
   const candidateRuns = Array.isArray(listed?.workflow_runs) ? listed.workflow_runs.map(normalizeRun).filter((run) => run !== null) : [];
   if (runId === null) {
@@ -748,7 +748,7 @@ function redactSecrets(text) {
   let redacted = String(text ?? "");
   for (const pattern of TOKEN_PATTERNS) redacted = redacted.replace(pattern, "[REDACTED]");
   redacted = redacted.replace(
-    /(\b(?:authorization|token|secret|password|passwd|cookie|api[_-]?key)\s*[:=]\s*)(["']?)[A-Za-z0-9._/+=-]{16,}\2/giu,
+    /(\b(?:authorization|token|secret|password|passwd|cookie|api[_-]?key)\s*[:=]\s*)(["']?)[^\s,;'"`]{4,}\2/giu,
     (_match, prefix, quote) => `${prefix}${quote}[REDACTED]${quote}`,
   );
   return redacted;
