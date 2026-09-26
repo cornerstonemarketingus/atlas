@@ -8,6 +8,11 @@ on:
         required: true
         default: atlas-db
 
+# Least privilege: the job only checks out code; Cloudflare credentials come
+# from repository secrets, never from the workflow token.
+permissions:
+  contents: read
+
 jobs:
   provision:
     runs-on: ubuntu-latest

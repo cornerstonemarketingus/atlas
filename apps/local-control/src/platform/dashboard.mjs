@@ -16,7 +16,7 @@ export const LOCAL_TENANT_ID = "local";
 const TASK_ID = "tsk_[0-9a-f]{32}";
 const MAX_LIST = 200;
 
-export function createPlatformRoutes({ store, tenantFor = () => LOCAL_TENANT_ID }) {
+export function createPlatformRoutes({ store, tenantFor = () => LOCAL_TENANT_ID, stream = null }) {
   if (!store) throw new TypeError("store is required.");
 
   /** Pages carry no data, so they are served before authentication. */
@@ -32,6 +32,12 @@ export function createPlatformRoutes({ store, tenantFor = () => LOCAL_TENANT_ID 
     const url = new URL(request.url ?? "/", "http://local.atlas");
     if (!url.pathname.startsWith("/v1/platform/")) return false;
     if (request.method !== "GET") return send(response, 405, { message: "The platform dashboard is read-only." });
+    // Live events, delivered from the transactional outbox.
+    if (url.pathname === "/v1/platform/stream") {
+      if (!stream) return send(response, 503, { message: "Live events are not running in this process." });
+      stream.attach(request, response, identity);
+      return true;
+    }
     const tenantId = tenantFor(identity);
 
     if (url.pathname === "/v1/platform/tasks") {
@@ -143,5 +149,19 @@ async function loadDetail(){
 q('#save-token').onclick=()=>{sessionStorage.setItem('atlas-token',q('#token').value);loadTasks()};
 q('#refresh').onclick=()=>{loadTasks();loadDetail()};
 if(q('#token').value)loadTasks();
-setInterval(()=>{if(sessionStorage.getItem('atlas-token')){loadTasks();loadDetail()}},5000);
+// Live updates from the outbox; a slow poll remains as a fallback.
+let pending=null;
+const refresh=()=>{clearTimeout(pending);pending=setTimeout(()=>{loadTasks();loadDetail()},150)};
+async function live(){
+  if(!sessionStorage.getItem('atlas-token'))return setTimeout(live,2000);
+  try{
+    const r=await api('/v1/platform/stream');
+    if(!r.ok||!r.body)throw new Error('no stream');
+    const reader=r.body.getReader();
+    for(;;){const {done,value}=await reader.read();if(done)break;if(new TextDecoder().decode(value).includes('event: '))refresh()}
+  }catch(e){}
+  setTimeout(live,3000);
+}
+live();
+setInterval(()=>{if(sessionStorage.getItem('atlas-token')){loadTasks();loadDetail()}},30000);
 `;

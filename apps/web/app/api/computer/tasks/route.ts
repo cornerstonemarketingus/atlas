@@ -4,14 +4,14 @@ import { getDb } from "../../../../db";
 import { computerApprovals, computerDevices, computerTaskEvents, computerTasks } from "../../../../db/schema";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { currentPlan } from "../../billing/plan.mjs";
-import { cloudBrowserAccess } from "../browser-plan.mjs";
+import { cloudBrowserAccess, hostedBrowserConfigured } from "../browser-plan.mjs";
 import { computerExecutionPolicy, normalizeComputerWorkflow } from "../computer-policy.mjs";
 import { taskEvent } from "../task-events";
 
 async function capabilities(account: { userId: string; dbUserId: number | null }) {
   const unrestricted = account.dbUserId === null;
   const tier = unrestricted ? "operator" : (await currentPlan(getDb(), account.dbUserId)).tier;
-  const cloudflare = cloudBrowserAccess(tier, process.env.ATLAS_CLOUDFLARE_BROWSER_ENABLED === "true", unrestricted);
+  const cloudflare = cloudBrowserAccess(tier, hostedBrowserConfigured(process.env), unrestricted);
   return {
     defaultProvider: "windows",
     providers: {
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
   if (executionProvider === "cloudflare") {
     const access = (await capabilities(account)).providers.cloudflare;
     if (!access.entitled) return Response.json({ message: "Cloudflare hosted browsing requires a Pro or Team plan." }, { status: 402 });
-    if (!access.configured) return Response.json({ message: "Hosted browsing is included with your plan but is not active on this Atlas deployment yet." }, { status: 503 });
+    if (!access.configured) return Response.json({ message: "Hosted browsing is not running yet, so Atlas did not queue this task. Pair your computer in Operate and run it there instead.", blocked: "BLOCKED_BY_CAPABILITY" }, { status: 503 });
     deviceId = `cloudflare-${createHash("sha256").update(account.userId).digest("hex").slice(0, 24)}`;
     await db.insert(computerDevices).values({ id: deviceId, requestedBy: account.userId, name: "Cloudflare Browser", platform: "cloudflare", status: "online", secretHash: createHash("sha256").update(randomBytes(32)).digest("hex") }).onConflictDoNothing();
   }

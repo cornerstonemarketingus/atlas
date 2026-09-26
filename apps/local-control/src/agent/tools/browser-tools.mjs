@@ -12,6 +12,8 @@
  * elements and clicks them by reference. Coordinates are not exposed, because
  * a pixel is not a thing an operator can meaningfully approve.
  */
+import { allowHostsFrom, assertPublicUrl } from "../../../../windows-companion/src/url-safety.mjs";
+
 export class BrowserToolError extends Error {
   constructor(code, message) {
     super(message);
@@ -43,7 +45,13 @@ export function assertNavigableUrl(candidate) {
  * on first use and cached, so launching a browser costs nothing until the
  * model actually asks for one.
  */
-export function registerBrowserTools(registry, { session, uploadRoot = null }) {
+/**
+ * The default navigation guard: public addresses only, unless the operator
+ * named a host in ATLAS_BROWSER_ALLOW_HOSTS (SECURITY-REVIEW SEC-3).
+ */
+export const defaultUrlGuard = (url) => assertPublicUrl(url, { allowHosts: allowHostsFrom(process.env.ATLAS_BROWSER_ALLOW_HOSTS) });
+
+export function registerBrowserTools(registry, { session, uploadRoot = null, urlGuard = defaultUrlGuard }) {
   let resolved = typeof session === "function" ? undefined : session;
   const need = async () => {
     if (resolved === undefined) {
@@ -73,7 +81,18 @@ export function registerBrowserTools(registry, { session, uploadRoot = null }) {
     },
     async execute({ input, signal }) {
       const url = assertNavigableUrl(input.url);
-      const result = await (await need()).navigate({ url, signal });
+      try { await urlGuard(url); }
+      catch (error) { throw new BrowserToolError(error?.code ?? "URL_REFUSED", error?.message ?? "That address is not allowed."); }
+      const browser = await need();
+      const result = await browser.navigate({ url, signal });
+      // A redirect can land somewhere the first check never saw; check where we ended up.
+      if (result?.url && result.url !== url) {
+        try { await urlGuard(result.url); }
+        catch (error) {
+          await browser.navigate({ url: "about:blank", signal }).catch(() => {});
+          throw new BrowserToolError(error?.code ?? "URL_REFUSED", `The page redirected to a refused address. ${error?.message ?? ""}`.trim());
+        }
+      }
       return `Opened ${result?.url ?? url}${result?.title ? ` — ${result.title}` : ""}.`;
     },
   });

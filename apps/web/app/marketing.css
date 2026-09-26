@@ -12,3 +12,18 @@
 @media(max-width:800px){.parallel-preview{padding:64px 6vw}.mission-console{box-shadow:8px 8px 0 #a4b523}.mission-console-header{align-items:flex-start;flex-direction:column}.mission-summary{grid-template-columns:1fr}.mission-summary>div{border-right:0;border-bottom:1px solid #30362b}.mission-summary>div:last-child{border-bottom:0}.mission-bottom{grid-template-columns:1fr}.mission-budgets{border-right:0;border-bottom:1px solid #30362b}.lane-title{flex-direction:column}.lane-title>span{align-self:flex-start}}
 .guide-section{padding:8vw;border-bottom:1px solid var(--line)}.guide-heading{display:grid;grid-template-columns:.55fr 1.45fr;gap:5vw;margin-bottom:52px}.guide-heading h2{font-size:clamp(38px,5vw,72px);line-height:1;letter-spacing:-.05em;margin:0}.guide-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}.guide-cards article{background:var(--paper);padding:34px;min-height:240px}.guide-cards b{font-size:21px}.guide-cards p,.guide-split li{color:var(--muted);line-height:1.65}.guide-cards a{text-decoration:underline}.guide-dark{background:var(--ink);color:white}.guide-control-list{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#444840}.guide-control-list article{display:grid;grid-template-columns:58px 1fr;gap:18px;background:var(--ink);padding:32px}.guide-control-list>article>span{font:800 11px var(--font-geist-mono);color:var(--acid)}.guide-control-list h3{font-size:22px;margin:0 0 12px}.guide-control-list p{color:#bbbdb5;line-height:1.6;margin:0}.guide-split{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line)}.guide-split>div{background:var(--paper);padding:38px}.guide-split h3{font-size:25px}.guide-split li{margin-bottom:12px}.guide-boundaries{background:#ece9df}
 @media(max-width:800px){.guide-heading,.guide-cards,.guide-control-list,.guide-split{grid-template-columns:1fr}.guide-section{padding:70px 6vw}}
+/* Product page: Create / Operate / Automate modes with honest availability */
+.mode-section{display:grid;grid-template-columns:1.1fr 1fr;gap:6vw;padding:7vw 8vw;border-bottom:1px solid var(--line);scroll-margin-top:90px}
+.mode-section h2{font-size:clamp(36px,4.6vw,64px);line-height:.98;letter-spacing:-.045em;margin:18px 0}
+.mode-section>div>p:not(.eyebrow){color:var(--muted);font-size:18px;line-height:1.6;max-width:560px}
+.availability{display:grid;gap:22px;align-content:start;margin:0}
+.availability>div{border-top:1px solid var(--line);padding-top:14px}
+.availability dt{font:600 11px var(--font-geist-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink);margin-bottom:8px}
+.availability>div:first-child dt::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#5c8f00;margin-right:8px;vertical-align:1px}
+.availability dd{margin:0 0 8px;color:var(--muted);line-height:1.5}
+.capability-grid.pillars{grid-template-columns:repeat(2,1fr)}
+.capability-grid.pillars article:nth-child(3n){border-right:1px solid var(--line)}
+.capability-grid.pillars article:nth-child(2n){border-right:0}
+.pillar-note{font-size:14px;border-left:2px solid var(--line);padding-left:12px;margin-top:18px}
+@media(max-width:860px){.mode-section,.capability-grid.pillars{grid-template-columns:1fr}.mode-section{padding:56px 6vw}.capability-grid.pillars article{border-right:0}}
+.capability-grid.pillars h2{font-size:clamp(28px,3vw,38px);line-height:1.08;letter-spacing:-.03em;margin:28px 0 12px}

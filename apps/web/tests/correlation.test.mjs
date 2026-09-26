@@ -33,8 +33,8 @@ test("a well-formed incoming header is honoured; a forged one is replaced", () =
 test("migration 0013 adds a nullable correlation_id to existing task rows", () => {
   const sql = fs.readFileSync(new URL("../drizzle/0013_task_correlation_id.sql", import.meta.url), "utf8");
   const journal = JSON.parse(fs.readFileSync(new URL("../drizzle/meta/_journal.json", import.meta.url), "utf8"));
-  assert.equal(journal.entries.at(-1).tag, "0013_task_correlation_id");
-  assert.equal(journal.entries.at(-1).idx, 13);
+  const entry = journal.entries.find((item) => item.tag === "0013_task_correlation_id");
+  assert.equal(entry?.idx, 13);
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("CREATE TABLE tasks (id integer PRIMARY KEY AUTOINCREMENT NOT NULL, task_id text NOT NULL, objective text NOT NULL)");

@@ -2,7 +2,9 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { githubOAuthConfiguration } from "../../auth/github-oauth.mjs";
 import { stripeConfiguration } from "../../billing/stripe.mjs";
-import { githubAppConfiguration } from "../../tasks/github-app.mjs";
+import { createInstallationToken, githubAppConfiguration } from "../../tasks/github-app.mjs";
+import { allowedRepositories } from "../../tasks/dispatch.mjs";
+import { probeGitHubDispatch } from "../../tasks/github-diagnosis.mjs";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 
 type StepState = "complete" | "action-required" | "failed";
@@ -31,6 +33,17 @@ function step(id: string, label: string, complete: boolean, detail: string, acti
   return { id, label, state, detail, ...(complete || !action ? {} : { action }) };
 }
 
+async function githubDispatchReadiness(githubApp: ReturnType<typeof githubAppConfiguration>) {
+  const [repository = "cornerstonemarketingus/atlas"] = [...allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)];
+  let token = process.env.ATLAS_GITHUB_TOKEN;
+  try {
+    if (githubApp.configured) token = await createInstallationToken(githubApp);
+  } catch {
+    return { ok: false, message: "GitHub App authentication failed.", unblock: "Check the ATLAS_GITHUB_APP_* secrets and redeploy." };
+  }
+  return probeGitHubDispatch({ token, repository, workflow: process.env.ATLAS_GITHUB_WORKFLOW || "atlas-runner.yml" });
+}
+
 /** Readiness metadata only: secret values and credential names never leave the Worker. */
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
@@ -43,8 +56,11 @@ export async function GET(request: Request) {
   const sessionSecretConfigured = Boolean(process.env.ATLAS_SESSION_SECRET);
   const githubDispatchConfigured = githubApp.configured || Boolean(process.env.ATLAS_GITHUB_TOKEN);
   const workerSecretsConfigured = sessionSecretConfigured && githubOAuth.configured && githubDispatchConfigured;
+  // "Ready" means the credential works, not merely that one is set: a
+  // read-only look at the workflow Atlas would dispatch.
+  const dispatch = await githubDispatchReadiness(githubApp);
   const steps = [
-    step("github-actions", "GitHub Actions access", githubDispatchConfigured, githubDispatchConfigured ? "Workflow dispatch credentials are available." : "Connect a GitHub App or configure dispatch access.", "Connect GitHub"),
+    step("github-actions", "GitHub Actions access", dispatch.ok, dispatch.ok ? "Atlas's GitHub credential can reach its task workflow." : `${dispatch.message} ${dispatch.unblock ?? ""}`.trim(), "Connect GitHub", githubDispatchConfigured && !dispatch.ok),
     step("d1-permission", "Cloudflare D1 access", database.binding, database.binding ? "The Worker can reach its D1 binding." : "The DB binding is unavailable to the live Worker.", "Configure D1 binding", !database.binding),
     step("d1-database", "D1 database selected", database.binding, database.binding ? "A database is connected as DB." : "Select or create a D1 database.", "Select database"),
     step("migrations", "Database migrations", database.migrations, database.migrations ? "Required application tables are readable." : "Apply the pending database migrations.", "Run migrations", database.binding && !database.migrations),

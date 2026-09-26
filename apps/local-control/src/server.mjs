@@ -1,23 +1,29 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
-import { LOCAL_UI_CSS, LOCAL_UI_HTML, LOCAL_UI_JS } from "./ui.mjs";
+import { LOCAL_UI_CSS, LOCAL_UI_HTML, LOCAL_UI_ICON, LOCAL_UI_JS } from "./ui.mjs";
 import { decryptBackup, encryptBackup } from "./encrypted-backup.mjs";
 import { publishChange } from "./publish-adapters.mjs";
 import { discoverLocalModels } from "./model-discovery.mjs";
 import { createAgentRoutes } from "./agent/routes.mjs";
 import { createMissionRoutes } from "./agent/mission-routes.mjs";
-import { createPlatformRoutes } from "./platform/dashboard.mjs";
+import { createPlatformRoutes, LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
+import { createInnovationRoutes, describeInnovationError } from "./platform/innovation/routes.mjs";
+import { createTeamRoutes } from "./agent/team/routes.mjs";
+import { createKnowledgeRoutes } from "./agent/knowledge-routes.mjs";
 import { createRateLimiter, LIMITS } from "./rate-limit.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
   const missionRoutes = missionService ? createMissionRoutes({ missionService }) : null;
-  const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore }) : null;
+  const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore, stream: platformStream }) : null;
+  const teamRoutes = team ? createTeamRoutes({ team, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const knowledgeRoutes = createKnowledgeRoutes({ memory, connections, send: (response, status, value) => { send(response, status, value); return true; } });
+  const innovationRoutes = innovation ? createInnovationRoutes({ pipeline: innovation.pipeline, organization: innovation.organization, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
 
   async function startTask(taskId) {
     store.markRunning(taskId);
@@ -30,8 +36,10 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     response.setHeader("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");
     if (request.method === "GET" && request.url === "/") return sendText(response, 200, "text/html; charset=utf-8", LOCAL_UI_HTML);
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
+    if (request.method === "GET" && (request.url === "/icon.svg" || request.url === "/favicon.ico")) return sendText(response, 200, "image/svg+xml", LOCAL_UI_ICON);
     if (request.method === "GET" && request.url === "/app.js") return sendText(response, 200, "text/javascript; charset=utf-8", LOCAL_UI_JS);
     if (platformRoutes?.handlePage(request, response)) return;
+    if (innovationRoutes?.handlePage(request, response)) return;
     response.setHeader("content-type", "application/json; charset=utf-8");
     if (request.method === "GET" && request.url === "/health") return send(response, 200, { status: "ok", mode: "sovereign", model, license, runtime: runtime ? { running: true, executors: runtime.executorIds() } : { running: false, executors: [] } });
     if (request.method === "POST" && request.url === "/v1/pair/claim") {
@@ -52,6 +60,13 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
 
     if (platformRoutes && platformRoutes.handle(request, response, identity)) return;
     if (!platformRoutes && (request.url ?? "").startsWith("/v1/platform/")) return send(response, 503, { message: "The Atlas platform task store is not running in this process." });
+    if (teamRoutes && (request.url ?? "").startsWith("/v1/team/")) { if (await teamRoutes(request, response, identity)) return; }
+    if (!teamRoutes && (request.url ?? "").startsWith("/v1/team/")) return send(response, 503, { message: "Agent missions are not running in this process." });
+    // What agents can do on this machine, and what the owner's policy says about each capability.
+    if (request.method === "GET" && request.url === "/v1/tools") return send(response, 200, { tools: (toolCatalog?.() ?? []).map((tool) => ({ ...tool, decision: store.policy(tool.capability).decision })) });
+    if (/^\/v1\/(knowledge|connections)(\/|\?|$)/u.test(request.url ?? "")) { if (await knowledgeRoutes(request, response, identity)) return; }
+    if (innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) { if (await innovationRoutes.handle(request, response, identity)) return; }
+    if (!innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) return send(response, 503, { message: "The Atlas innovation pipeline is not running in this process." });
     if (missionRoutes && (request.url ?? "").startsWith("/v1/missions")) { if (await missionRoutes.handle(request, response, identity)) return; }
     if (!missionService && (request.url ?? "").startsWith("/v1/missions")) return send(response, 503, { message: "The Atlas mission service is not running in this process." });
     if (agentRoutes && (request.url ?? "").startsWith("/v1/sessions")) { if (await agentRoutes.handle(request, response, identity)) return; }
@@ -89,6 +104,23 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
       }
       const body = await parseBody(request, response); if (!body) return;
       try {
+        // A build approval is bound to its Decision Packet: the pipeline checks the
+        // digest and records who decided before the inbox entry is resolved.
+        const pending = store.approval(approvalMatch[1]);
+        if (pending?.capability === "innovation.build" && pending.status === "pending" && innovation) {
+          if (!["approved", "denied"].includes(body.decision)) return send(response, 400, { message: "Invalid approval decision." });
+          try {
+            innovation.pipeline.decideFromApproval(LOCAL_TENANT_ID, pending.id, {
+              approved: body.decision === "approved",
+              actionDigest: pending.actionDigest,
+              decidedBy: { kind: "human", id: identity.role === "admin" ? "local-owner" : `device:${identity.device?.id ?? "unknown"}` },
+            });
+          } catch (error) {
+            const { status, body: detail } = describeInnovationError(error);
+            return send(response, status, detail);
+          }
+          return send(response, 200, { approval: store.approval(pending.id) });
+        }
         const approval = store.decideApproval(approvalMatch[1], body.decision);
         if (!approval) return send(response, 409, { message: "Approval is missing or already resolved." });
         if (approval.taskId) {

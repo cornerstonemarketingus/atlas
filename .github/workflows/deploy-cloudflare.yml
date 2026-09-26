@@ -8,6 +8,11 @@ on:
       - ".github/workflows/deploy-cloudflare.yml"
   workflow_dispatch: {}
 
+# Least privilege: the job only checks out code; Cloudflare credentials come
+# from repository secrets, never from the workflow token.
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

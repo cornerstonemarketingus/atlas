@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { subscriptions, users } from "../../../../../db/schema";
 import { exchangeCodeForToken, fetchGitHubProfile, githubOAuthConfiguration, clearStateCookieHeader, isOwnerGitHubLogin, readStateCookie, publicOrigin } from "../../github-oauth.mjs";
-import { signSession, sessionCookieHeader } from "../../session.mjs";
+import { OWNER_SESSION_TTL_SECONDS, signSession, sessionCookieHeader } from "../../session.mjs";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -42,16 +42,19 @@ export async function GET(request: Request) {
 
     const sessionSecret = process.env.ATLAS_SESSION_SECRET;
     if (!sessionSecret) throw new Error("ATLAS_SESSION_SECRET is not configured.");
+    // Owner sessions carry deployment authority: 12 hours, not 30 days (SEC-2).
+    const owner = isOwnerGitHubLogin(user.githubLogin);
+    const ttlSeconds = owner ? OWNER_SESSION_TTL_SECONDS : undefined;
     const token = await signSession(
-      isOwnerGitHubLogin(user.githubLogin)
-        ? { role: "operator", gh: user.githubLogin }
-        : { uid: user.id, gh: user.githubLogin },
+      owner ? { role: "operator", gh: user.githubLogin } : { uid: user.id, gh: user.githubLogin },
       sessionSecret,
+      Date.now(),
+      ttlSeconds,
     );
 
     const headers = new Headers({ location: `${publicOrigin(request)}/` });
     headers.append("set-cookie", clearState);
-    headers.append("set-cookie", sessionCookieHeader(token));
+    headers.append("set-cookie", sessionCookieHeader(token, ttlSeconds));
     return new Response(null, { status: 302, headers });
   } catch (error) {
     return new Response(`GitHub sign-in failed: ${error instanceof Error ? error.message : "unexpected error"}.`, {

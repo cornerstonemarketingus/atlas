@@ -4,6 +4,7 @@ import { getDb } from "../../../db";
 import { conversationMessages, conversations, repositories, runEvents, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
+import { explainGitHubFailure } from "./github-diagnosis.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
 import {
   fetchGitHubJson,
@@ -17,6 +18,7 @@ import { authenticatedAccount } from "./operator-auth.mjs";
 import { CORRELATION_HEADER, correlationIdFromRequest } from "./correlation.mjs";
 import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun, visibleTasks } from "./run-status.mjs";
 import { selfModificationDecision } from "./self-protection.mjs";
+import { repositoryAccessDecision } from "./repository-access.mjs";
 
 export async function POST(request: Request) {
   // A caller-supplied x-atlas-correlation-id is honoured only when it is
@@ -35,12 +37,27 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   let body: unknown;
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
   const validated = validateTask(body, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES));
-  if ("error" in validated) return Response.json({ message: validated.error }, { status: validated.status });
+  if ("error" in validated) return Response.json({ message: validated.error, ...(validated.needsClarification ? { needsClarification: true } : {}) }, { status: validated.status });
   const task = validated.task;
   const selfModification = selfModificationDecision(account, task);
   if (!selfModification.allowed) return Response.json({ message: selfModification.reason }, { status: selfModification.status });
   const requestedConversationId = typeof (body as { conversationId?: unknown }).conversationId === "string" ? (body as { conversationId: string }).conversationId : "";
   const conversationId = /^[0-9a-f-]{36}$/u.test(requestedConversationId) ? requestedConversationId : randomUUID();
+
+  let githubToken = process.env.ATLAS_GITHUB_TOKEN;
+  try {
+    const githubApp = githubAppConfiguration();
+    if (githubApp.configured) githubToken = await createInstallationToken(githubApp);
+  } catch {
+    return Response.json({ message: "GitHub App authentication failed, so nothing was started.", code: "GITHUB_APP_AUTH_FAILED", blocked: "BLOCKED_BY_MISSING_CREDENTIAL", unblock: "Check the ATLAS_GITHUB_APP_* secrets (app id, installation id, private key) and redeploy." }, { status: 502 });
+  }
+  // The platform credential acts only on repositories this person could
+  // work on themselves (SEC-1). Checked before plan usage is recorded, so a
+  // refused request costs nothing.
+  if (githubToken) {
+    const access = await repositoryAccessDecision(account, task, { token: githubToken });
+    if (!access.allowed) return Response.json({ message: access.message, code: access.code, blocked: access.blocked, unblock: access.unblock }, { status: access.status });
+  }
 
   // Platform-header and operator-token requests aren't billed GitHub accounts
   // (see operator-auth.mjs) — they bypass plan gating entirely rather than
@@ -67,22 +84,18 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   }
 
   const taskId = randomUUID();
-  let githubToken = process.env.ATLAS_GITHUB_TOKEN;
-  try {
-    const githubApp = githubAppConfiguration();
-    if (githubApp.configured) githubToken = await createInstallationToken(githubApp);
-  } catch {
-    return Response.json({ message: "GitHub App authentication is temporarily unavailable." }, { status: 502 });
-  }
   if (githubToken) {
     try {
       const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
       const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy, correlationId });
-      if (!response.ok) return Response.json({ message: "GitHub Actions rejected the task dispatch." }, { status: 502 });
+      if (!response.ok) {
+        const failure = explainGitHubFailure(response.status, { workflow, repository: task.repository });
+        return Response.json({ ...failure, message: `${failure.message} Nothing was started.` }, { status: 502 });
+      }
       const recorded = await recordDispatchedTask(account, task, taskId, mergePolicy, conversationId, "managed", correlationId);
       return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "managed", recorded }, { status: 202 });
     } catch {
-      return Response.json({ message: "GitHub Actions is temporarily unavailable." }, { status: 502 });
+      return Response.json({ ...explainGitHubFailure(503), message: "GitHub could not be reached, so nothing was started." }, { status: 502 });
     }
   }
   const endpoint = process.env.ATLAS_AGENT_DISPATCH_URL;

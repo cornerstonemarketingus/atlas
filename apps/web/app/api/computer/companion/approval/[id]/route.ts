@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { getDb } from "../../../../../../db";
 import { computerApprovals, computerTasks } from "../../../../../../db/schema";
 import { authenticatedDevice } from "../../../companion-auth";
@@ -20,6 +20,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (approval.consumedAt || approval.expiresAt <= new Date().toISOString()) return Response.json({ status: "expired" }, { status: 409 });
   if (createHash("sha256").update(action).digest("hex") !== approval.actionHash) return Response.json({ status: "binding-mismatch" }, { status: 409 });
   const consumedAt = new Date().toISOString();
-  await db.update(computerApprovals).set({ status: "consumed", consumedAt }).where(and(eq(computerApprovals.id, id), eq(computerApprovals.status, "approved")));
+  // One approval, one action: the conditional update is the lock. Two devices
+  // racing on the same approval both pass the reads above, but only one row
+  // update can match, so only one of them is told it may act.
+  const consumed = await db.update(computerApprovals).set({ status: "consumed", consumedAt })
+    .where(and(eq(computerApprovals.id, id), eq(computerApprovals.status, "approved"), isNull(computerApprovals.consumedAt), gt(computerApprovals.expiresAt, consumedAt)))
+    .returning({ id: computerApprovals.id });
+  if (!consumed.length) return Response.json({ status: "already-consumed" }, { status: 409 });
   return Response.json({ status: "consumed", consumedAt });
 }

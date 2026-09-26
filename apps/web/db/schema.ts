@@ -270,3 +270,23 @@ export const computerTaskEvents = sqliteTable("computer_task_events", {
   taskIndex: index("computer_task_events_task_created_at_idx").on(table.taskId, table.createdAt),
   ownerIndex: index("computer_task_events_owner_created_at_idx").on(table.requestedBy, table.createdAt),
 }));
+
+/**
+ * Session revocation (SECURITY-REVIEW SEC-2). Sessions are signed tokens, so
+ * revoking one means remembering its id until it would have expired anyway;
+ * "sign out everywhere" records a cut-off for a principal instead.
+ */
+export const revokedSessions = sqliteTable("revoked_sessions", {
+  sid: text("sid").primaryKey(),
+  principal: text("principal").notNull(),
+  revokedAt: text("revoked_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+}, (table) => ({
+  expiresIndex: index("revoked_sessions_expires_at_idx").on(table.expiresAt),
+}));
+
+export const sessionRevocations = sqliteTable("session_revocations", {
+  principal: text("principal").primaryKey(),
+  revokedBefore: integer("revoked_before").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});

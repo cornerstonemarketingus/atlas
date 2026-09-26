@@ -9,6 +9,9 @@ import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { PlatformTaskStore } from "./platform/task-store.mjs";
+import { bootstrapInnovation } from "./platform/innovation/bootstrap.mjs";
+import { OutboxDispatcher, createEventStream } from "./platform/outbox-dispatcher.mjs";
+import { LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
 import { createGitHubActionsExecutor, createLocalExecutor } from "./agent/executors.mjs";
 import { createGitHubActionsClient } from "./agent/github-actions-client.mjs";
 import { createConversationExecutor } from "./agent/conversation-executor.mjs";
@@ -19,11 +22,18 @@ import { detectHardware } from "./agent/models/hardware.mjs";
 import { discoverModelServers } from "./agent/models/discovery.mjs";
 import { recommendModels } from "./agent/models/recommend.mjs";
 import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/router.mjs";
+import { createRoutedClient } from "./agent/models/routed-client.mjs";
+import { createTeamService } from "./agent/team/team-service.mjs";
+import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
+import { ScopedMemoryStore } from "./platform/memory/memory-store.mjs";
+import { connectMcpServers, parseMcpServers } from "./platform/mcp/daemon-bridge.mjs";
 import { registerRepositoryTools } from "./agent/tools/repository-tools.mjs";
 import { registerRepositoryWriteTools } from "./agent/tools/repository-write-tools.mjs";
 import { registerFilesystemTools } from "./agent/tools/filesystem-tools.mjs";
 import { registerBrowserTools } from "./agent/tools/browser-tools.mjs";
+import { registerDesktopTools } from "./agent/tools/desktop-tools.mjs";
+import { registerTerminalTools } from "./agent/tools/terminal-tools.mjs";
 import { registerCommunicationsTools } from "./agent/tools/communications-tools.mjs";
 import { registerWorkflowTools } from "./agent/tools/workflow-tools.mjs";
 import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.mjs";
@@ -48,8 +58,61 @@ if (!token) {
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
 const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
 const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
+// The agent organization (Business Development Executive → Product Executive →
+// specialists, plus the Engineering, Design, Computer Operations and Research
+// peers) and the Innovation Backlog it works from.
+const innovation = bootstrapInnovation({ filename: join(dataDirectory, "organization.sqlite"), store, platformStore });
+// Every platform event committed to the outbox is delivered from here: today
+// to live dashboard clients; failures retry and then dead-letter visibly.
+const platformStream = createEventStream({ tenantFor: () => LOCAL_TENANT_ID });
+const outbox = new OutboxDispatcher({ store: platformStore, onError: (error) => console.error("Outbox delivery failed:", error instanceof Error ? error.message : error) });
+outbox.subscribe("*", (event) => platformStream.publish(event));
+outbox.start();
 const vault = createCredentialVault({ filePath: join(dataDirectory, "credentials.vault.json") });
 const license = loadLicense();
+// One model client (routed, with fallback) and one tool registry serve both
+// conversations and agent missions, so policy and approvals are identical.
+const modelClient = createRoutedClient({
+  routes: parseRoutes(process.env.ATLAS_MODEL_ROUTES ?? "[]"),
+  task: "planning",
+  createClient: (route) => createModelClient({ baseUrl: route.endpoint }),
+  fallback: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
+  onRoute: (route, { failedOver }) => store.audit("model.route", `${route.model} served a model turn${failedOver ? " after failover" : ""}`),
+});
+const toolRegistry = buildToolRegistry();
+const toolApprovals = {
+  // One-time and digest-bound: spending an approval consumes it, and it
+  // only matches the exact action it was granted for.
+  check: (digest) => store.consumeApprovedDigest(digest),
+  request: ({ digest, capability, summary, sessionId }) =>
+    store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
+  // Agent steps wait on the owner's decision rather than failing.
+  status: (id) => store.approval(id)?.status ?? null,
+};
+// Scoped, provenance-carrying memory: agents recall their family's verified
+// work and the owner can search, inspect and delete it under Knowledge.
+const memory = new ScopedMemoryStore(join(dataDirectory, "memory.sqlite"));
+memory.expire();
+setInterval(() => { try { memory.expire(); } catch { /* retried next hour */ } }, 60 * 60 * 1000).unref();
+// MCP servers the owner configured. Their tools join the same registry, so
+// they are denied until the owner allows the server's `mcp.<id>` capability.
+let mcpReport = [];
+try {
+  const servers = parseMcpServers(process.env.ATLAS_MCP_SERVERS);
+  if (servers.length) {
+    connectMcpServers({
+      registry: toolRegistry,
+      servers,
+      audit: (event) => store.audit(event.type ?? "mcp", `${event.serverId}${event.tool ? `/${event.tool}` : ""} ${event.outcome ?? ""}${event.reason ? ` (${event.reason})` : ""}`.trim()),
+    }).then(({ report }) => {
+      mcpReport = report;
+      for (const entry of report) console.log(`MCP server ${entry.id}: ${entry.status}${entry.tools ? ` (${entry.tools.length} tools)` : entry.message ? ` — ${entry.message}` : ""}`);
+    }, (error) => { mcpReport = [{ id: "*", status: "failed", message: error.message }]; });
+  }
+} catch (error) {
+  mcpReport = [{ id: "*", status: "failed", message: error.message }];
+  console.error(error.message);
+}
 const runtime = new AgentRuntime({
   sessions,
   executors: buildExecutors(),
@@ -62,7 +125,32 @@ const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
 const missionService = new MissionService({ store, execute: runMissionChild });
+// Agent missions: goal → plan over the agent organization → steps run by the
+// assigned agents on the same mission scheduler as coder missions.
+const teamStep = createAgentStepExecutor({
+  family: innovation.registry,
+  delegation: innovation.pipeline.delegation,
+  toolRegistry,
+  client: modelClient,
+  platformStore,
+  approvals: toolApprovals,
+  memory,
+  resultsOf: (missionId, ids) => (missionService.get(missionId)?.children ?? [])
+    .filter((c) => ids.includes(c.id))
+    .map((c) => ({ title: c.metadata?.stepTitle ?? c.id, summary: c.result?.handoff?.report ?? c.result?.summary ?? "" })),
+});
+const team = createTeamService({
+  family: innovation.registry,
+  delegation: innovation.pipeline.delegation,
+  missionService,
+  platformStore,
+  toolRegistry,
+  client: modelClient,
+  model: process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
+  workspace: join(dataDirectory, "workspace"),
+});
 const recoveredMissions = missionService.recover();
+team.reattach();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
 
 const server = createLocalControlServer({
@@ -73,6 +161,12 @@ const server = createLocalControlServer({
   runtime,
   missionService,
   platformStore,
+  innovation,
+  platformStream,
+  team,
+  memory,
+  connections: () => mcpReport,
+  toolCatalog: () => toolRegistry.list(),
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
@@ -81,6 +175,7 @@ const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
 server.listen(port, host, () => console.log(`Atlas sovereign control plane: http://${host}:${port}\nAgent runtime ${runtime.instanceId} executors: ${runtime.executorIds().join(", ")}`));
 
 async function runMissionChild({ child, signal, budget, checkpoint }) {
+  if (child.metadata?.kind === "agent_step") return teamStep({ child, signal, budget, checkpoint });
   await checkpoint();
   budget.record({ toolCalls: 1 });
   const repository = child.metadata?.repository;
@@ -102,7 +197,10 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
 function shutdown() {
   server.close(async () => {
     await runtime.stop();
+    await outbox.stop();
     sessions.close();
+    innovation.close();
+    platformStore.close();
     store.close();
     process.exit(0);
   });
@@ -119,15 +217,9 @@ function buildExecutors() {
   const executors = {
     local: createLocalExecutor({ dataDirectory }),
     conversation: createConversationExecutor({
-      client: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
-      registry: buildToolRegistry(),
-      approvals: {
-        // One-time and digest-bound: spending an approval consumes it, and it
-        // only matches the exact action it was granted for.
-        check: (digest) => store.consumeApprovedDigest(digest),
-        request: ({ digest, capability, summary, sessionId }) =>
-          store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
-      },
+      client: modelClient,
+      registry: toolRegistry,
+      approvals: toolApprovals,
     }),
   };
   const token = process.env.ATLAS_GITHUB_TOKEN;
@@ -147,9 +239,10 @@ function buildExecutors() {
 function buildToolRegistry() {
   const registry = new ToolRegistry({
     policy: (capability) => store.policy(capability).decision,
-    // Secrets are read from the process environment for now, by reference
-    // only. No tool receives a value it did not declare a need for.
-    secrets: (reference) => process.env[reference] ?? null,
+    // Secrets resolve by reference, from the OS-backed credential vault first
+    // and the process environment only as a fallback for existing setups
+    // (SECURITY-REVIEW SEC-8). No tool receives a value it did not declare.
+    secrets: async (reference) => (await vault.get(reference).catch(() => null)) ?? process.env[reference] ?? null,
   });
   registerRepositoryTools(registry);
   registerRepositoryWriteTools(registry);
@@ -160,6 +253,12 @@ function buildToolRegistry() {
   // its tools then fail closed with "no browser on this machine", which is a
   // better answer than the model never learning the capability exists.
   registerBrowserTools(registry, { session: buildBrowserSession, uploadRoot: join(dataDirectory, "workspace") });
+  // Desktop control: same companion runtime and rules; fails closed with a
+  // structured reason on machines without a supported desktop.
+  registerDesktopTools(registry, { session: buildDesktopSession });
+  // Terminal: the platform controller (no shell, allowlist, per-session
+  // workspace). High-risk commands need an approval bound to the command.
+  registerTerminalTools(registry, { controller: buildTerminalController });
   registerInfrastructureTools(registry, { providers: buildInfrastructureProviders(), vault });
   return registry;
 }
@@ -196,6 +295,48 @@ async function buildBrowserSession() {
         store.createApproval({ capability: "computer.high_risk", summary, actionDigest: digest });
         return store.consumeApprovedDigest(digest);
       },
+    },
+  });
+}
+
+/** The platform terminal controller, rooted in the daemon's own workspace area. */
+async function buildTerminalController() {
+  const [{ TerminalController }, { createHash }, { mkdirSync: makeDirectory }] = await Promise.all([
+    import("./platform/terminal/terminal-controller.mjs"),
+    import("node:crypto"),
+    import("node:fs"),
+  ]);
+  const rootDirectory = join(dataDirectory, "terminal-workspaces");
+  makeDirectory(rootDirectory, { recursive: true });
+  return new TerminalController({
+    rootDirectory,
+    approve: ({ argv, reasons }) => {
+      const digest = createHash("sha256").update(JSON.stringify(argv)).digest("hex");
+      if (store.consumeApprovedDigest(digest)) return true;
+      store.createApproval({ capability: "terminal.run", summary: `Run \`${argv.join(" ").slice(0, 200)}\` (${reasons.join("; ")})`, actionDigest: digest });
+      return false;
+    },
+  });
+}
+
+/**
+ * Builds the desktop operating session on first use, from the companion's
+ * driver and rules. Approvals for consequential desktop actions land in the
+ * local approvals inbox, bound to the exact action's digest.
+ */
+async function buildDesktopSession() {
+  const [{ createDesktopDriver, DesktopSession }, { createHash }] = await Promise.all([
+    import("../../windows-companion/src/desktop/index.mjs"),
+    import("node:crypto"),
+  ]);
+  return new DesktopSession({
+    driver: createDesktopDriver(),
+    evidenceDir: join(dataDirectory, "screenshots", "desktop"),
+    approve: async ({ action, risk, window }) => {
+      const digest = createHash("sha256").update(JSON.stringify(action)).digest("hex");
+      if (store.consumeApprovedDigest(digest)) return;
+      store.createApproval({ capability: "desktop.control", summary: `${risk.reason}${window ? ` (${window})` : ""}`, actionDigest: digest });
+      throw Object.assign(new Error("This desktop action needs your approval. Approve it in Atlas, then ask again."), { code: "APPROVAL_REQUIRED" });
     },
   });
 }
@@ -249,7 +390,9 @@ const router = createModelRouter({
  * whole point of reporting health separately from configuration.
  */
 async function reportModelHealth() {
-  const [hardware, servers] = await Promise.all([detectHardware(), discoverModelServers()]);
+  // The configured endpoint and routes are checked too, not only the default local ports.
+  const endpoints = [...new Set(["http://127.0.0.1:11434/v1", "http://127.0.0.1:8080/v1", process.env.ATLAS_MODEL_ENDPOINT, ...router.routes.map((route) => route.endpoint)].filter(Boolean).map((endpoint) => endpoint.replace(/\/+$/u, "")))];
+  const [hardware, servers] = await Promise.all([detectHardware(), discoverModelServers({ endpoints })]);
   const installed = servers.flatMap((server) => server.models);
   return {
     hardware,
