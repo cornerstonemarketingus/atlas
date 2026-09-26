@@ -51,7 +51,7 @@ export function registerSelfImproveTool(registry, service) {
     name: "atlas.improve_self",
     description: "Start Atlas's self-improvement loop on Atlas's own code: it picks small improvements (failing checks first, then TODOs), makes each in an isolated worktree, re-runs the checks, applies the self-modification policy and has a separate reviewer approve. Accepted changes wait on the Improve Atlas page for the owner to merge or reject; nothing is merged by this tool. Use when the person asks Atlas to improve, fix or work on itself.",
     capability: "atlas.self_improve",
-    risk: "medium",
+    risk: "moderate",
     timeoutMs: 10_000,
     maxOutputCharacters: 2_000,
     requiresApproval: true,
