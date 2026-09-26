@@ -74,3 +74,13 @@ test("titles a thread from its first message, truncated", () => {
   assert.equal(long.length, 72);
   assert.ok(long.endsWith("…"));
 });
+
+test("the fallback chat model: Groq defaults to gpt-oss-20b, configurable, and can be turned off", async () => {
+  const { resolveChatModel: resolve } = await import("../app/api/chat/model-endpoint.mjs");
+  const groq = { ATLAS_CHAT_BASE_URL: "https://api.groq.com/openai/v1", ATLAS_CHAT_MODEL: "openai/gpt-oss-120b", GROQ_API_KEY: "g" };
+  assert.equal(resolve(groq).fallbackModel, "openai/gpt-oss-20b");
+  assert.equal(resolve({ ...groq, ATLAS_CHAT_FALLBACK_MODEL: "llama-3.3-70b-versatile" }).fallbackModel, "llama-3.3-70b-versatile");
+  assert.equal(resolve({ ...groq, ATLAS_CHAT_FALLBACK_MODEL: "none" }).fallbackModel, null);
+  assert.equal(resolve({ ...groq, ATLAS_CHAT_MODEL: "openai/gpt-oss-20b" }).fallbackModel, null);
+  assert.equal(resolve({ ATLAS_CHAT_BASE_URL: "https://models.example.com/v1", ATLAS_CHAT_MODEL: "m" }).fallbackModel, null);
+});

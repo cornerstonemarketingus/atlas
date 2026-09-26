@@ -91,10 +91,17 @@ machine. The latest full suite contains 322 tests: 321 passed, 0 failed, 1
 file-symlink privilege skip. CI now runs the full local-control test suite on
 `windows-latest`.
 
-This does **not** make terminal execution a sandbox: commands run as the
-operator, and filesystem/network isolation is not provided by process-level
-policy. Do not use it for untrusted workloads until a container/VM runner is
-implemented and validated. Native PowerShell/CMD shell sessions and PTY are
+By default this does **not** make terminal execution a sandbox: commands run
+as the operator, and filesystem/network isolation is not provided by
+process-level policy. Setting `ATLAS_TERMINAL_CONTAINER_RUNTIME` (absolute path
+to docker or podman; optional `ATLAS_TERMINAL_CONTAINER_IMAGE`) runs every
+command in a disposable container instead: only the workspace is mounted, the
+network is off unless the command was approved as network-enabled, all
+capabilities are dropped, the root filesystem is read-only, and CPU, memory
+and process limits apply (`platform/terminal/container-sandbox.mjs`). A named
+runtime that cannot be used stops the daemon's terminal rather than falling
+back. Without it, do not use the process runner for untrusted workloads.
+Native PowerShell/CMD shell sessions and PTY are
 still not provided; the interface deliberately remains shell-free.
 
 ## Security review backlog

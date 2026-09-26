@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "apps/web/**"
+      # The chat's agent team imports the local daemon's team planner.
+      - "apps/local-control/src/agent/team/**"
       - ".github/workflows/deploy-cloudflare.yml"
   workflow_dispatch: {}
 

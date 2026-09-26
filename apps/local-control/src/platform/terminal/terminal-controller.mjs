@@ -2,10 +2,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { accessSync, constants, lstatSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, join, resolve, sep, isAbsolute } from "node:path";
 import { randomBytes } from "node:crypto";
+import { constants as osConstants } from "node:os";
 import { newId } from "../../../../../packages/atlas-contracts/src/index.mjs";
 import { confineRealPath } from "../../agent/tools/path-confinement.mjs";
 import { DEFAULT_ALLOWED_EXECUTABLES, TerminalPolicyError, evaluateCommand } from "./command-policy.mjs";
 import { createRedactor, hostSecretValues } from "./redaction.mjs";
+import { containerRunArguments, killContainer, minimalRuntimeEnvironment, resolveContainerSandbox } from "./container-sandbox.mjs";
+import { namespaceIsolation, namespaceRunArguments, prepareNamespaceWorkspace, resolveNamespaceSandbox } from "./namespace-sandbox.mjs";
 
 /**
  * TerminalController — the execution plane's terminal worker (blueprint §6).
@@ -47,27 +50,45 @@ import { createRedactor, hostSecretValues } from "./redaction.mjs";
  * - Every result carries an `isolation` record of what was actually applied,
  *   so callers never have to assume.
  *
- * Threat model and what is NOT isolated
- * -------------------------------------
+ * Threat model and what each runner isolates
+ * -------------------------------------------
  * The adversary is the agent's own choices: a confused or prompt-injected
- * model issuing a destructive or exfiltrating command. The controller makes
- * such commands hard to issue by accident and easy to audit. It is
- * process-level sandboxing only; it is NOT a container or a VM:
+ * model issuing a destructive or exfiltrating command, including arbitrary
+ * code through the allowlisted `node`/`python3`. There are three runners,
+ * chosen per controller; asking for an isolating one that cannot work here
+ * is a construction error, never a silent downgrade:
  *
- * - The child runs as the daemon's user with that user's filesystem access.
- *   `node` and `python3` are allowlisted, and arbitrary code in them can read
- *   or write anything the user can; argv path checks do not see inside code.
- * - There is no network isolation. `network: false` only blocks dedicated
- *   network tools and marks the command's risk; an interpreter can still open
- *   sockets.
- * - There is no PID, mount, IPC or user namespace; the child can see other
- *   processes. RLIMIT_NPROC is per-user and ignored for root.
- * - Path checks are check-then-use; a racing process could swap a symlink.
+ *   runner                      network        pid       filesystem               user
+ *   process (default)           host           shared    host, daemon's access    daemon uid
+ *   namespaces (Linux, opt-in)  none (net ns)  isolated  read-only root, private   65534, no caps,
+ *                                                        /tmp, workspace only      no_new_privs
+ *                                                        writable, siblings hidden
+ *   container (opt-in)          none           isolated  read-only root, only the  daemon uid:gid,
+ *                                                        workspace mounted         cap-drop ALL
+ *
+ * `requireIsolation: true` refuses to construct a controller with the
+ * process runner, so a caller handling an untrusted repository cannot end up
+ * running it unsandboxed by misconfiguration.
+ *
+ * Network: there is no egress allowlist. A command the policy approved as
+ * network-enabled (always high risk, always behind the approval callback)
+ * gets the HOST network under `namespaces` and the bridge network in a
+ * container; the isolation record says so.
+ *
+ * Still NOT isolated:
+ * - process runner: the child runs as the daemon's user with that user's
+ *   filesystem access, can open sockets (`network: false` only refuses
+ *   dedicated network tools) and can see other processes. RLIMIT_NPROC is
+ *   per-user and ignored for root.
+ * - namespaces runner: shares the host kernel with no seccomp filter and no
+ *   cgroup limits (rlimits only); see namespace-sandbox.mjs.
+ * - container runner: as strong as the runtime's configuration; not a VM.
+ * - Argv path checks are check-then-use; a racing process could swap a
+ *   symlink (the isolating runners only expose the workspace anyway).
  * - Redaction is pattern-based; an encoded secret passes through.
  *
- * Real isolation for untrusted workloads requires running this controller
- * inside a container or microVM (rootless, no host mounts beyond the
- * workspace root, egress-filtered network, seccomp) — the hosted execution
+ * Untrusted multi-tenant workloads should still run the whole controller in
+ * a microVM with an egress-filtered network; the hosted execution
  * plane must do that and treat this layer as defence in depth.
  */
 export class TerminalError extends Error {
@@ -110,6 +131,8 @@ export class TerminalController {
   #pathDirectories;
   #redact;
   #prlimit;
+  #container;
+  #namespaces;
   #workspaces = new Map();
   #commands = new Map();
 
@@ -122,6 +145,9 @@ export class TerminalController {
    * @param {string[]} [options.pathDirectories]  the child's PATH; defaults to node's own bin dir plus system bins
    * @param {string[]} [options.knownSecrets]  exact values to scrub from output (secret-named daemon env values are added)
    * @param {boolean|string} [options.prlimit]  false disables; a path overrides detection
+   * @param {object} [options.container]  run every command in a disposable container (see container-sandbox.mjs)
+   * @param {boolean|object} [options.namespaces]  run every command in fresh Linux namespaces (see namespace-sandbox.mjs)
+   * @param {boolean} [options.requireIsolation]  refuse to construct without `container` or `namespaces`
    */
   constructor({
     rootDirectory,
@@ -137,6 +163,9 @@ export class TerminalController {
     maxOutputBytes = DEFAULTS.maxOutputBytes,
     maxConcurrentPerWorkspace = DEFAULTS.maxConcurrentPerWorkspace,
     rlimits = {},
+    container = undefined,
+    namespaces = undefined,
+    requireIsolation = false,
   } = {}) {
     if (typeof rootDirectory !== "string" || rootDirectory.length === 0) {
       throw new TerminalError("NO_ROOT", "TerminalController needs a rootDirectory for workspaces.");
@@ -154,6 +183,23 @@ export class TerminalController {
       rlimits: { ...DEFAULTS.rlimits, ...rlimits },
     };
     this.#prlimit = detectPrlimit(prlimit);
+    // Resolved last and allowed to throw: asking for a container and getting
+    // the unisolated runner instead would be worse than not starting.
+    const wantsContainer = !(container === undefined || container === null || container === false);
+    const wantsNamespaces = !(namespaces === undefined || namespaces === null || namespaces === false);
+    if (wantsContainer && wantsNamespaces) {
+      throw new TerminalError("INVALID_SANDBOX", "Configure either container or namespaces, not both.");
+    }
+    if (requireIsolation === true && !wantsContainer && !wantsNamespaces) {
+      throw new TerminalError("ISOLATION_REQUIRED", "Isolation is required: configure container or namespaces; the process runner is not a sandbox.");
+    }
+    this.#container = resolveContainerSandbox(container);
+    this.#namespaces = resolveNamespaceSandbox(namespaces, { rootDirectory: this.#root });
+  }
+
+  /** Which runner every command uses: "container", "namespaces" or "process". */
+  get isolation() {
+    return this.#container ? "container" : this.#namespaces ? "namespaces" : "process";
   }
 
   get rootDirectory() {
@@ -166,8 +212,10 @@ export class TerminalController {
       noShell: true,
       processGroup: process.platform !== "win32",
       rlimits: this.#prlimit ? { tool: "prlimit", path: this.#prlimit } : { tool: null, reason: prlimitUnavailableReason() },
-      container: false,
-      networkIsolation: false,
+      container: this.#container ? { runtime: this.#container.runtime, image: this.#container.image } : false,
+      namespaces: this.#namespaces ? { tool: this.#namespaces.tool, mode: this.#namespaces.mode } : false,
+      isolation: this.isolation,
+      networkIsolation: Boolean(this.#container || this.#namespaces),
     };
   }
 
@@ -266,7 +314,10 @@ export class TerminalController {
       throw new TerminalError("CONCURRENCY_LIMIT", `This workspace already has ${workspace.running.size} running commands.`);
     }
 
-    const resolvedExecutable = this.#resolveExecutable(decision.executable);
+    // In a container the image provides the executable; the host's copy is irrelevant.
+    const resolvedExecutable = this.#container ? { executablePath: decision.executable, prefixArgs: [] } : this.#resolveExecutable(decision.executable);
+    // Files the host wrote since the last run (a checkout, templates) must be usable by the sandbox uid.
+    if (this.#namespaces) prepareNamespaceWorkspace(this.#namespaces, workspaceRoot);
     return this.#spawn(workspace, { argv, ...resolvedExecutable, cwd: cwdReal, env: childEnv, timeout, stdin, decision, network: network === true });
   }
 
@@ -372,7 +423,75 @@ export class TerminalController {
     return { args, applied };
   }
 
-  #spawn(workspace, { argv, executablePath, prefixArgs = [], cwd, env, timeout, stdin, decision, network }) {
+  #spawn(workspace, options) {
+    if (this.#container) return this.#spawnInContainer(workspace, options);
+    if (this.#namespaces) return this.#spawnInNamespaces(workspace, options);
+    return this.#spawnProcess(workspace, options);
+  }
+
+  #spawnInNamespaces(workspace, { argv, executablePath, prefixArgs = [], cwd, env, timeout, stdin, decision, network }) {
+    const id = newId("toolCall");
+    const sandbox = this.#namespaces;
+    const workspaceRoot = realpathSync(workspace.directory);
+    const wrapped = namespaceRunArguments({
+      sandbox, file: executablePath, args: [...prefixArgs, ...argv.slice(1)], network, workspaceRoot, rootDirectory: this.#root, cwd,
+    });
+    // rlimits go on the outermost process and are inherited by the
+    // namespace's init, setpriv and the command.
+    const rlimits = this.#prlimit ? this.#rlimitArgs() : null;
+    const [file, args] = rlimits && rlimits.args.length > 0
+      ? [this.#prlimit, [...rlimits.args, "--", wrapped.file, ...wrapped.args]]
+      : [wrapped.file, wrapped.args];
+    const detail = namespaceIsolation(sandbox, { network, workspaceRoot });
+    const isolation = {
+      level: "namespaces",
+      container: false,
+      noShell: true,
+      envScrubbed: true,
+      cwdConfined: true,
+      argumentPathPolicy: true,
+      processGroup: true,
+      processTreeCleanup: "namespace init killed; the kernel kills every process in the PID namespace",
+      timeoutMs: timeout,
+      maxOutputBytes: this.#options.maxOutputBytes,
+      rlimits: rlimits && rlimits.args.length > 0
+        ? { applied: true, tool: "prlimit", ...rlimits.applied }
+        : { applied: false, reason: this.#prlimit ? "no limits configured" : prlimitUnavailableReason() },
+      ...detail,
+      filesystem: "read-only host root; only the workspace is writable; private /tmp",
+    };
+    return this.#run(workspace, { id, file, args, env, cwd, useGroups: true, argv, timeout, stdin, decision, isolation, onKill: null });
+  }
+
+  #spawnInContainer(workspace, { argv, cwd, env, timeout, stdin, decision, network }) {
+    const id = newId("toolCall");
+    const name = `atlas-${String(id).replace(/[^A-Za-z0-9_.-]/gu, "")}`.slice(0, 120);
+    const sandbox = this.#container;
+    const args = containerRunArguments({
+      sandbox, name, workspaceRoot: realpathSync(workspace.directory), cwd, argv, env, network, interactive: stdin !== undefined,
+    });
+    const isolation = {
+      level: "container",
+      container: { runtime: sandbox.runtime, image: sandbox.image, name },
+      noShell: true,
+      envScrubbed: true,
+      cwdConfined: true,
+      argumentPathPolicy: true,
+      processGroup: process.platform !== "win32",
+      processTreeCleanup: "container removed, then the runtime client signalled",
+      timeoutMs: timeout,
+      maxOutputBytes: this.#options.maxOutputBytes,
+      limits: { cpus: sandbox.cpus, memoryBytes: sandbox.memoryBytes, pidsLimit: sandbox.pidsLimit },
+      network: network ? "enabled (container bridge)" : "none",
+      filesystem: "workspace only, mounted at /workspace; root filesystem read-only",
+    };
+    return this.#run(workspace, {
+      id, file: sandbox.runtime, args, env: minimalRuntimeEnvironment(), cwd, useGroups: process.platform !== "win32", argv, timeout, stdin, decision, isolation,
+      onKill: () => killContainer(sandbox, name),
+    });
+  }
+
+  #spawnProcess(workspace, { argv, executablePath, prefixArgs = [], cwd, env, timeout, stdin, decision, network }) {
     const id = newId("toolCall");
     const useGroups = process.platform !== "win32";
     const rlimits = this.#prlimit ? this.#rlimitArgs() : null;
@@ -400,6 +519,10 @@ export class TerminalController {
       filesystem: "host user permissions (workspace confinement is argv-level only)",
     };
 
+    return this.#run(workspace, { id, file, args, env, cwd, useGroups, argv, timeout, stdin, decision, isolation, onKill: null });
+  }
+
+  #run(workspace, { id, file, args, env, cwd, useGroups, argv, timeout, stdin, decision, isolation, onKill }) {
     const started = Date.now();
     const child = spawn(file, args, {
       cwd,
@@ -413,7 +536,7 @@ export class TerminalController {
     const queue = createEventQueue();
     const record = {
       id, child, workspace, state: "running", timedOut: false, cancelled: false, killTimer: null,
-      done: null,
+      done: null, onKill,
     };
     this.#commands.set(id, record);
     workspace.running.add(id);
@@ -451,7 +574,15 @@ export class TerminalController {
     const result = new Promise((resolveResult) => {
       let spawnError = null;
       child.on("error", (error) => { spawnError = error; });
-      child.on("close", (exitCode, signal) => {
+      child.on("close", (rawExitCode, rawSignal) => {
+        // The namespace init shell reports a killed command as 128+n; when the
+        // controller did the killing, report the signal like the other runners.
+        let exitCode = rawExitCode;
+        let signal = rawSignal;
+        if (isolation.level === "namespaces" && record.state === "terminating" && signal === null && exitCode > 128) {
+          const name = Object.keys(osConstants.signals).find((key) => osConstants.signals[key] === exitCode - 128);
+          if (name) { signal = name; exitCode = null; }
+        }
         clearTimeout(timer);
         if (record.killTimer) clearTimeout(record.killTimer);
         record.state = "exited";
@@ -495,6 +626,8 @@ export class TerminalController {
     if (record.state === "running") {
       record.state = "terminating";
       if (reason === "cancelled") record.cancelled = true;
+      // A container outlives its CLI client; remove it by name, then signal.
+      if (record.onKill) record.onKill();
       if (process.platform === "win32") {
         // Node's Windows child.kill(SIGTERM) maps to TerminateProcess and does
         // not reliably clean descendants. Kill only this managed PID tree,

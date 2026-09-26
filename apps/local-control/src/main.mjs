@@ -120,6 +120,7 @@ try {
 const runtime = new AgentRuntime({
   sessions,
   executors: buildExecutors(),
+  platformStore,
   audit: (category, summary) => store.audit(category, summary),
 });
 // Anything left running by the previous process is reconciled before the
@@ -348,8 +349,16 @@ async function buildTerminalController() {
   ]);
   const rootDirectory = join(dataDirectory, "terminal-workspaces");
   makeDirectory(rootDirectory, { recursive: true });
+  // Optional container isolation (issue #72). When a runtime is named and
+  // cannot be used, construction throws: the daemon never quietly falls back
+  // to running commands as the operator.
+  const containerRuntime = process.env.ATLAS_TERMINAL_CONTAINER_RUNTIME?.trim();
+  const container = containerRuntime
+    ? { runtime: containerRuntime, ...(process.env.ATLAS_TERMINAL_CONTAINER_IMAGE?.trim() ? { image: process.env.ATLAS_TERMINAL_CONTAINER_IMAGE.trim() } : {}) }
+    : undefined;
   return new TerminalController({
     rootDirectory,
+    container,
     approve: ({ argv, reasons }) => {
       const digest = createHash("sha256").update(JSON.stringify(argv)).digest("hex");
       if (store.consumeApprovedDigest(digest)) return true;

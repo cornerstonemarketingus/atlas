@@ -1,0 +1,165 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { MAX_TOOL_STEPS, converse } from "../app/api/chat/agent-loop.mjs";
+
+const endpoint = { baseUrl: "https://model.test/v1", apiKey: "k", model: "m" };
+const sse = (events) => new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+const say = (text) => ({ choices: [{ delta: { content: text } }] });
+const callTool = (id, name, args) => ({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] } }] });
+
+/** A fake model: answers each request with the next scripted reply, recording what it was sent. */
+function scripted(replies) {
+  const requests = [];
+  const fetcher = async (url, init) => {
+    if (!String(url).startsWith("https://model.test")) {
+      // The web page an instant tool reads.
+      return new Response("<title>Example</title><p>Example body</p>", { headers: { "content-type": "text/html" } });
+    }
+    requests.push(JSON.parse(init.body));
+    const next = replies.shift();
+    return typeof next === "function" ? next() : sse(next);
+  };
+  return { fetcher, requests };
+}
+
+function run(fetcher, overrides = {}) {
+  const events = [];
+  const started = [];
+  const promise = converse({
+    endpoint,
+    turns: [{ role: "system", content: "sys" }, { role: "user", content: "hi" }],
+    toolContext: { environment: {}, allowlist: new Set(), githubToken: async () => undefined, fetcher: overrides.toolFetcher ?? fetcher },
+    defaultRepository: "cornerstonemarketingus/atlas",
+    userMessage: "hi",
+    startTasks: async (calls) => { started.push(calls); return calls.requests.map((request) => `Started ${request.mode}.`); },
+    stream: true,
+    emit: (type, data) => events.push({ type, data }),
+    fetcher,
+    ...overrides,
+  });
+  return { promise, events, started };
+}
+
+test("a plain answer is one round with the tools offered", async () => {
+  const { fetcher, requests } = scripted([[say("Hello "), say("there")]]);
+  const { promise, events } = run(fetcher);
+  const outcome = await promise;
+  assert.deepEqual(outcome, { reply: "Hello there", steps: [] });
+  assert.equal(requests.length, 1);
+  assert.ok(requests[0].tools.some((tool) => tool.function.name === "read_web_page"));
+  assert.equal(requests[0].tool_choice, "auto");
+  assert.equal(requests[0].max_tokens, 2048);
+  assert.deepEqual(events.filter((event) => event.type === "delta").map((event) => event.data.text), ["Hello ", "there"]);
+});
+
+test("Atlas reads a page, sees the result, then answers", async () => {
+  const { fetcher, requests } = scripted([
+    [say("Let me look."), callTool("t1", "read_web_page", { url: "https://example.com/" })],
+    [say("It says Example body.")],
+  ]);
+  const { promise, events } = run(fetcher);
+  const outcome = await promise;
+  assert.equal(outcome.reply, "Let me look.\n\nIt says Example body.");
+  assert.deepEqual(outcome.steps, [{ label: "Read “Example”", ok: true }]);
+  const tools = events.filter((event) => event.type === "tool").map((event) => event.data);
+  assert.deepEqual(tools.map(({ id, label, state }) => ({ id, label, state })), [{ id: "t1", label: "Reading example.com/…", state: "running" }, { id: "t1", label: "Read “Example”", state: "done" }]);
+  // The finished step carries a preview of the page for the Files panel.
+  assert.equal(tools[1].preview.kind, "page");
+  assert.match(tools[1].preview.content, /Example body/u);
+  const second = requests[1].messages;
+  assert.equal(second.at(-2).role, "assistant");
+  assert.equal(second.at(-2).tool_calls[0].id, "t1");
+  assert.equal(second.at(-1).role, "tool");
+  assert.equal(second.at(-1).tool_call_id, "t1");
+  assert.match(second.at(-1).content, /<data source="web page https:\/\/example.com\/">[\s\S]*Example body/u);
+});
+
+test("tasks the model starts run once, after the reply", async () => {
+  const { fetcher } = scripted([[say("Starting it."), callTool("s1", "start_atlas_task", { mode: "coder", objective: "Fix the login bug", repository: "cornerstonemarketingus/atlas" })]]);
+  const { promise, started } = run(fetcher);
+  const outcome = await promise;
+  assert.equal(started.length, 1);
+  assert.equal(started[0].requests[0].mode, "coder");
+  assert.equal(outcome.reply, "Starting it.\n\nStarted coder.");
+});
+
+test("tool use is bounded: the last round must answer in words", async () => {
+  const loopForever = Array.from({ length: MAX_TOOL_STEPS }, (_, index) => [callTool(`r${index}`, "read_web_page", { url: "https://example.com/" })]);
+  const { fetcher, requests } = scripted([...loopForever, [say("Done looking.")]]);
+  const outcome = await run(fetcher).promise;
+  assert.equal(requests.length, MAX_TOOL_STEPS + 1);
+  assert.equal(requests.at(-1).tool_choice, "none");
+  assert.equal(outcome.steps.length, MAX_TOOL_STEPS);
+  assert.equal(outcome.reply, "Done looking.");
+});
+
+test("an endpoint without tool support is retried without tools", async () => {
+  const { fetcher, requests } = scripted([() => new Response("no tools", { status: 400 }), [say("Plain answer.")]]);
+  const outcome = await run(fetcher).promise;
+  assert.equal(outcome.reply, "Plain answer.");
+  assert.ok(requests[0].tools);
+  assert.equal(requests[1].tools, undefined);
+});
+
+test("model failures become an actionable error", async () => {
+  const { fetcher } = scripted([() => new Response("secret prompt echoed", { status: 500 })]);
+  assert.deepEqual(await run(fetcher).promise, { error: "The model endpoint answered 500.", status: 502 });
+  const down = async () => { throw new TypeError("fetch failed"); };
+  assert.equal((await run(down).promise).status, 504);
+});
+
+test("non-streaming replies are handled the same way", async () => {
+  const json = (body) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  const { fetcher } = scripted([
+    () => json({ choices: [{ message: { content: "", tool_calls: [{ id: "n1", type: "function", function: { name: "read_web_page", arguments: "{\"url\":\"https://example.com/\"}" } }] } }] }),
+    () => json({ choices: [{ message: { content: "Found it." } }] }),
+  ]);
+  const outcome = await run(fetcher, { stream: false }).promise;
+  assert.equal(outcome.reply, "Found it.");
+  assert.equal(outcome.steps.length, 1);
+});
+
+test("a 429 waits what the provider asks, retries, then falls back to the second model", async () => {
+  const waits = [];
+  const limited = () => new Response("slow down", { status: 429, headers: { "retry-after": "1" } });
+  const { fetcher, requests } = scripted([limited, limited, [say("From the fallback.")]]);
+  const outcome = await run(fetcher, { endpoint: { ...endpoint, fallbackModel: "small" }, sleep: async (ms) => { waits.push(ms); } }).promise;
+  assert.equal(outcome.reply, "From the fallback.");
+  assert.deepEqual(waits, [1000]);
+  assert.deepEqual(requests.map((request) => request.model), ["m", "m", "small"]);
+});
+
+test("a long retry-after skips straight to the fallback; no fallback means a clear 429 error", async () => {
+  const limited = () => new Response("", { status: 429, headers: { "retry-after": "60" } });
+  const waits = [];
+  const withFallback = scripted([limited, [say("ok")]]);
+  assert.equal((await run(withFallback.fetcher, { endpoint: { ...endpoint, fallbackModel: "small" }, sleep: async (ms) => { waits.push(ms); } }).promise).reply, "ok");
+  assert.deepEqual(waits, []);
+  const without = scripted([limited]);
+  const failed = await run(without.fetcher, { sleep: async () => {} }).promise;
+  assert.equal(failed.status, 429);
+  assert.match(failed.error, /rate limit/u);
+});
+
+test("a rate limit after some work keeps the work and says why it stopped", async () => {
+  const limited = () => new Response("", { status: 429, headers: { "retry-after": "60" } });
+  const { fetcher } = scripted([[say("Checking the page."), callTool("t1", "read_web_page", { url: "https://example.com/" })], limited]);
+  const outcome = await run(fetcher, { sleep: async () => {} }).promise;
+  assert.match(outcome.reply, /^Checking the page\.\n\n_Stopped early: .*rate limit/u);
+  assert.equal(outcome.steps.length, 1);
+});
+
+test("older tool results are shortened before later rounds", async () => {
+  const big = "x".repeat(5000);
+  const { fetcher, requests } = scripted([
+    [callTool("t1", "read_web_page", { url: "https://example.com/" })],
+    [callTool("t2", "read_web_page", { url: "https://example.com/b" })],
+    [say("done")],
+  ]);
+  const bigPage = async () => new Response(`<p>${big}</p>`, { headers: { "content-type": "text/html" } });
+  await run(fetcher, { toolFetcher: bigPage }).promise;
+  const third = requests[2].messages.filter((message) => message.role === "tool");
+  assert.match(third[0].content, /already read; shortened\)\n<\/data>$/u);
+  assert.ok(third[1].content.length > 5000);
+});

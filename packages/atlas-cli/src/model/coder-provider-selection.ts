@@ -75,7 +75,15 @@ export interface CoderProviderSelectionInput {
   /** Raw `--api-key-env` value, or undefined when the flag was not passed. */
   readonly apiKeyEnvironmentVariable?: string | undefined;
   readonly tokenBudget: number;
+  /**
+   * Replaces the provider's per-turn output ceiling. Groq's default of 1,024
+   * suits its free tier; a paid tier has the headroom for full-file edits.
+   */
+  readonly outputTokensPerTurn?: number | undefined;
 }
+
+/** Bounds for an operator-chosen per-turn output ceiling. */
+export const OUTPUT_TOKENS_PER_TURN_RANGE = Object.freeze({ minimum: 256, maximum: 32_768 });
 
 export interface CoderProviderSelection {
   readonly profile: CoderProviderProfile;
@@ -115,13 +123,21 @@ export function selectCoderProvider(input: CoderProviderSelectionInput): CoderPr
   if (!Number.isSafeInteger(input.tokenBudget) || input.tokenBudget < 1) {
     return { ok: false, message: "--token-budget must be a positive integer." };
   }
+  const override = input.outputTokensPerTurn;
+  if (override !== undefined && (!Number.isSafeInteger(override)
+    || override < OUTPUT_TOKENS_PER_TURN_RANGE.minimum || override > OUTPUT_TOKENS_PER_TURN_RANGE.maximum)) {
+    return {
+      ok: false,
+      message: `--output-tokens-per-turn must be an integer between ${OUTPUT_TOKENS_PER_TURN_RANGE.minimum} and ${OUTPUT_TOKENS_PER_TURN_RANGE.maximum}.`,
+    };
+  }
 
   return {
     ok: true,
     selection: {
       profile,
       apiKeyEnvironmentVariable,
-      maxOutputTokensPerTurn: Math.min(profile.maxOutputTokensPerTurn, input.tokenBudget),
+      maxOutputTokensPerTurn: Math.min(override ?? profile.maxOutputTokensPerTurn, input.tokenBudget),
       inferred,
     },
   };

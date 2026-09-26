@@ -228,6 +228,9 @@ jobs:
           ATLAS_CODER_RETRY_MAX_DELAY_MS: ${{ vars.ATLAS_CODER_RETRY_MAX_DELAY_MS }}
           ATLAS_TOKEN_BUDGET: ${{ vars.ATLAS_TOKEN_BUDGET }}
           ATLAS_MAX_TURNS: ${{ vars.ATLAS_MAX_TURNS }}
+          # Per-step reply ceiling. Groq defaults to 1,024 for its free tier;
+          # on a paid tier set 8192 so full-file edits fit in one step.
+          ATLAS_OUTPUT_TOKENS_PER_TURN: ${{ vars.ATLAS_OUTPUT_TOKENS_PER_TURN }}
           # Points the OpenAI-compatible client at a self-hosted model server
           # (vLLM, Ollama, llama.cpp, TGI, a rented GPU) instead of Groq. Set
           # it to the base URL ending in /v1. Must be https unless loopback:

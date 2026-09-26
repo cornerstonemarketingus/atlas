@@ -18,7 +18,8 @@ export async function POST(request: Request) {
   const id = randomUUID();
   const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
   await getDb().insert(computerApprovals).values({
-    id, taskId, requestedBy: task.requestedBy, summary,
+    // The approval belongs to the workspace of the device that asked for it.
+    id, tenantId: device.tenantId, taskId, requestedBy: task.requestedBy, summary,
     domain: typeof body.domain === "string" ? body.domain.slice(0, 255) : null,
     actionHash: createHash("sha256").update(action).digest("hex"), expiresAt,
   });

@@ -1,19 +1,35 @@
+import { getD1 } from "../../../../db";
+import { tenantAllowlist } from "../../../../db/tenancy.mjs";
+import { NO_TENANT_MESSAGE, resolveTenantContext } from "../../auth/tenant-context.mjs";
 import { allowedRepositories } from "../../tasks/dispatch.mjs";
 import { createInstallationToken, githubAppConfiguration } from "../../tasks/github-app.mjs";
-import { authenticatedUserId } from "../../tasks/operator-auth.mjs";
+import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
+import { platformGitHubToken } from "../../tasks/github-token.mjs";
 
 const GITHUB_API = "https://api.github.com";
 
 export async function GET(request: Request) {
-  if (!(await authenticatedUserId(request))) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  const account = await authenticatedAccount(request);
+  if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
 
-  const repositories = [...allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)];
-  const requestedRepository = new URL(request.url).searchParams.get("repository")?.toLowerCase() ?? repositories[0];
+  // The active tenant's allowlist, bounded by ATLAS_ALLOWED_REPOSITORIES.
+  let repositories: string[];
+  try {
+    const d1 = getD1();
+    const tenant = await resolveTenantContext(request, account, d1);
+    if (!tenant) return Response.json({ message: NO_TENANT_MESSAGE }, { status: 403 });
+    repositories = [...await tenantAllowlist(d1, tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES))];
+  } catch {
+    return Response.json({ message: "Your workspace's repositories are unavailable." }, { status: 503 });
+  }
+  const requested = new URL(request.url).searchParams.get("repository")?.toLowerCase();
+  if (!requested && repositories.length === 0) return Response.json({ repositories, defaultBranch: "main", branches: ["main"] });
+  const requestedRepository = requested ?? repositories[0];
   if (!requestedRepository || !repositories.includes(requestedRepository)) {
     return Response.json({ message: "That repository is not on your Atlas allowlist." }, { status: 403 });
   }
 
-  let token = process.env.ATLAS_GITHUB_TOKEN;
+  let token = platformGitHubToken();
   try {
     const configuration = githubAppConfiguration();
     if (configuration.configured) token = await createInstallationToken(configuration);

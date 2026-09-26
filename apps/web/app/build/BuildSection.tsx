@@ -51,7 +51,7 @@ const STARTERS = [
   { title: "Fix what's broken", detail: "Debug & validate", prompt: "Diagnose the currently failing tests and fix the root cause, not the symptom." },
 ];
 
-/** Projects: the advanced workspace for review, debugging, and code changes. */
+/** Code: the detailed view of a conversation's code work — the advanced workspace for review, debugging, and code changes. */
 export function BuildSection() {
   const [repository, setRepository] = useState("cornerstonemarketingus/atlas");
   const [repositoryOptions, setRepositoryOptions] = useState(["cornerstonemarketingus/atlas"]);
@@ -114,6 +114,12 @@ export function BuildSection() {
   }, [repository]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [thread, tasks.length]);
+
+  // A conversation's Code view opens straight onto that conversation's work.
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("conversation");
+    if (requested && /^[0-9a-f-]{36}$/u.test(requested)) void openThread(requested);
+  }, []);
 
   async function openThread(id: string) {
     setConversationId(id);

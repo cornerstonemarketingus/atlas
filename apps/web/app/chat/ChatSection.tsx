@@ -3,6 +3,8 @@ import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { classifyIntent } from "./intent.mjs";
 import { MessageBody } from "./MessageBody.js";
+import { TaskActivity } from "./TaskActivity.js";
+import { AgentTree, ToolSteps, WorkPanel, type AgentNode, type LogLine, type ToolStep, type WorkItem } from "./Workspace.js";
 import { createEventParser } from "../api/chat/stream.mjs";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
@@ -10,24 +12,45 @@ import { PROJECT_CHANGE_EVENT, PROJECT_STORAGE_KEY } from "../ProjectSwitcher.js
 import { ThreadRail, useThreads } from "../ThreadRail.js";
 
 type Message = { id: string; role: string; content: string; createdAt: string };
-type Task = { taskId: string; objective: string; mode: string; status?: string; repository?: string; branch?: string; run?: { url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
+type Task = { taskId: string; objective: string; mode: string; status?: string; repository?: string; branch?: string; run?: { id?: number; url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
 type Detail = { messages?: Message[]; tasks?: Task[] };
 
 const STARTERS = [
-  { title: "Review my project", prompt: "Review my project and tell me what I should improve first." },
-  { title: "Find and fix a bug", prompt: "Find the most likely bug in my project, fix it, run the tests, and open a pull request." },
-  { title: "Plan what to build next", prompt: "Help me decide what to build next and explain the simplest useful version." },
+  { title: "Fix a bug in my project", prompt: "Find the most likely bug in my project, fix it, run the tests, and open a pull request." },
+  { title: "Fill in a form on a website", prompt: "Go to " },
+  { title: "Explain how my code works", prompt: "Explain how my project is organised and where the main logic lives." },
 ];
+
+/**
+ * The capabilities a conversation is using, shown as context only once they
+ * are in use. Nobody picks one up front: Atlas chooses from the request.
+ */
+function activeCapabilities(conversationId: string | null, tasks: Task[], messages: Message[]) {
+  const items: { label: string; href: string }[] = [];
+  if (tasks.length && conversationId) items.push({ label: "Code", href: `/build?conversation=${encodeURIComponent(conversationId)}` });
+  const pullRequest = tasks.find((task) => task.pullRequest?.url)?.pullRequest?.url;
+  if (pullRequest) items.push({ label: "Pull request ↗", href: pullRequest });
+  if (messages.some((message) => message.role === "assistant" && message.content.includes("](/automation)"))) items.push({ label: "Computer control", href: "/automation" });
+  return items;
+}
 
 type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
+type Preview = { kind: "file" | "page"; title: string; content: string; url?: string; repository?: string; path?: string };
+const PANEL_KEY = "atlas.workPanel";
 
-function taskStatusLabel(task: Task) {
-  const status = task.status ?? "dispatched";
-  if (["succeeded", "completed"].includes(status)) return "Task completed.";
-  if (["failed", "timed_out", "cancelled"].includes(status)) return `Task ${status.replaceAll("_", " ")}.`;
-  if (["running", "queued", "dispatched"].includes(status)) return "Atlas is working on this task.";
-  return "Task received.";
+function readPanelPreference() {
+  try { return typeof window !== "undefined" && window.localStorage.getItem(PANEL_KEY) === "open"; } catch { return false; }
+}
+
+/** Files and pages Atlas read become panel items; the same file read twice is one item, refreshed. */
+function itemFromPreview(preview: Preview): WorkItem {
+  if (preview.kind === "page") return { id: `page:${preview.url}`, kind: "page", title: preview.title, url: preview.url ?? "", content: preview.content };
+  return { id: `file:${preview.repository}/${preview.path}`, kind: "file", title: preview.path ?? preview.title, path: preview.path ?? preview.title, repository: preview.repository, content: preview.content };
+}
+
+function upsert<T extends { id: string }>(list: T[], item: T) {
+  return list.some((existing) => existing.id === item.id) ? list.map((existing) => existing.id === item.id ? item : existing) : [...list, item];
 }
 
 /**
@@ -48,8 +71,39 @@ export function ChatSection() {
   const { threads, close } = useThreads(version);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [streaming, setStreaming] = useState<string | null>(null);
+  // What the model thought before answering: streamed live, then kept (not stored) beside the reply it led to.
+  const [thinking, setThinking] = useState("");
+  const [thoughts, setThoughts] = useState<Record<string, string>>({});
+  const [liveSteps, setLiveSteps] = useState<ToolStep[]>([]);
+  const [stepLogs, setStepLogs] = useState<Record<string, ToolStep[]>>({});
+  // The agent team working on a reply (lead → team → child agents), live and then kept beside the reply.
+  const [liveAgents, setLiveAgents] = useState<AgentNode[]>([]);
+  const [agentLogs, setAgentLogs] = useState<Record<string, AgentNode[]>>({});
+  // The side panel: a terminal-style log of every step, and the files Atlas read or changed.
+  const [panelOpen, setPanelOpen] = useState(readPanelPreference);
+  const [panelTab, setPanelTab] = useState<"terminal" | "files">("terminal");
+  const [log, setLog] = useState<LogLine[]>([]);
+  const [items, setItems] = useState<WorkItem[]>([]);
+  const [selectedItem, setSelectedItem] = useState<string | null>(null);
+  const logSerial = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  function addLog(line: Omit<LogLine, "id" | "at">) {
+    logSerial.current += 1;
+    const entry = { ...line, id: `l${logSerial.current}`, at: Date.now() };
+    setLog((lines) => [...lines.slice(-499), entry]);
+  }
+
+  function togglePanel(open = !panelOpen) {
+    setPanelOpen(open);
+    try { window.localStorage.setItem(PANEL_KEY, open ? "open" : "closed"); } catch { /* preference only */ }
+  }
+
+  function addItems(next: WorkItem[]) {
+    if (!next.length) return;
+    setItems((list) => next.reduce(upsert, list));
+  }
 
   useEffect(() => {
     let active = true;
@@ -118,7 +172,7 @@ export function ChatSection() {
     }
   }
 
-  function startNew() { abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); }
+  function startNew() { abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
 
   useEffect(() => {
     if (!conversationId) return;
@@ -134,7 +188,7 @@ export function ChatSection() {
       } catch { /* Keep the last known conversation when offline. */ }
     };
     void refresh();
-    const timer = setInterval(() => { void refresh(); }, 12_000);
+    const timer = setInterval(() => { void refresh(); }, 5_000);
     return () => { active = false; clearInterval(timer); };
   }, [conversationId]);
 
@@ -143,8 +197,10 @@ export function ChatSection() {
   }
 
   /**
-   * Questions are always answered. A clear request for work is offered as a
-   * task to confirm — never started just because a message contained a verb.
+   * Every message goes to Atlas, and Atlas decides what it needs: an answer,
+   * code work, or work on the person's computer. Only when no model is
+   * connected (so nothing can decide) does a keyword guess offer the work as
+   * a card to confirm instead.
    */
   async function send(event: FormEvent) {
     event.preventDefault();
@@ -153,7 +209,7 @@ export function ChatSection() {
     setDraft("");
     setNotice("");
     const intent = classifyIntent(text, { hasProject: Boolean(repository) });
-    if (intent.kind === "project_task" || intent.kind === "computer_task") {
+    if (ready?.configured === false && (intent.kind === "project_task" || intent.kind === "computer_task")) {
       showLocal(text);
       setSuggestion({ text, kind: intent.kind, mode: "mode" in intent ? intent.mode : undefined, reason: intent.reason });
       return;
@@ -185,15 +241,46 @@ export function ChatSection() {
       const decoder = new TextDecoder();
       const parser = createEventParser();
       let partial = "";
+      let thought = "";
+      let steps: ToolStep[] = [];
+      let agents: AgentNode[] = [];
+      setThinking("");
+      setLiveSteps([]);
+      setLiveAgents([]);
+      addLog({ kind: "note", text: `› ${text.length > 120 ? `${text.slice(0, 120)}…` : text}` });
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message } | null;
+          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
           if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
+          else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
-          else if (item.type === "error") setNotice(data?.message ?? "Atlas could not finish that reply.");
-          else if (item.type === "done" && data?.reply) setMessages((items) => [...items, data.reply!]);
+          else if (item.type === "tool" && data?.id && data.label && data.state) {
+            const step: ToolStep = { id: data.agentId ? `${data.agentId}:${data.id}` : data.id, label: data.label, state: data.state as ToolStep["state"], ...(data.agentId ? { agentId: data.agentId } : {}) };
+            steps = upsert(steps, step);
+            setLiveSteps(steps);
+            setStreaming((current) => current ?? "");
+            const who = data.agentId ? agents.find((agent) => agent.id === data.agentId)?.name ?? "Agent" : "Atlas";
+            addLog({ kind: "tool", state: step.state, who, text: step.state === "running" ? `$ ${step.label}` : `${step.state === "done" ? "✓" : "✕"} ${step.label}` });
+            if (data.preview) addItems([itemFromPreview(data.preview)]);
+          }
+          else if (item.type === "agent" && data?.id && data.name) {
+            const node: AgentNode = { id: data.id, parentId: data.parentId ?? null, name: data.name, role: data.role, title: data.title ?? "", state: data.state ?? "running", depth: data.depth ?? 1, summary: data.summary };
+            agents = upsert(agents, node);
+            setLiveAgents(agents);
+            setStreaming((current) => current ?? "");
+            addLog({ kind: "agent", state: node.state, who: node.name, text: `${node.state === "running" || node.state === "planning" ? "▸" : node.state === "done" ? "✓" : node.state === "failed" ? "✕" : "·"} ${node.title}${node.summary && (node.state === "done" || node.state === "failed") && node.depth === 0 ? ` (${node.summary})` : ""} · ${node.state}` });
+          }
+          else if (item.type === "error") { setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `✕ ${data?.message ?? "the reply failed"}` }); }
+          else if (item.type === "done" && data?.reply) {
+            const reply = data.reply;
+            if (thought) setThoughts((items) => ({ ...items, [reply.id]: thought }));
+            if (steps.length) setStepLogs((items) => ({ ...items, [reply.id]: steps }));
+            if (agents.length) setAgentLogs((items) => ({ ...items, [reply.id]: agents }));
+            addLog({ kind: "note", state: "done", who: "Atlas", text: "✓ reply finished" });
+            setMessages((items) => [...items, reply]);
+          }
         }
       }
       setVersion((value) => value + 1);
@@ -202,6 +289,9 @@ export function ChatSection() {
     } finally {
       abortRef.current = null;
       setStreaming(null);
+      setThinking("");
+      setLiveSteps([]);
+      setLiveAgents([]);
       setSending(false);
     }
   }
@@ -245,7 +335,7 @@ export function ChatSection() {
       const result = await response.json() as { message?: string };
       if (!response.ok) { setNotice(result.message ?? "Atlas could not start that computer task."); return; }
       setMessages((items) => [...items, { id: `local-${Date.now()}-task`, role: "assistant", createdAt: new Date().toISOString(),
-        content: `Started on **${device.name}**${device.status === "online" ? "" : " (it will begin when that computer comes online)"}. I will pause for your approval before anything consequential. Follow it in [Computer](/automation).` }]);
+        content: `Started on **${device.name}**${device.status === "online" ? "" : " (it will begin when that computer comes online)"}. I will pause for your approval before anything consequential. Follow it in [Computer control](/automation).` }]);
     } catch {
       setNotice("Atlas could not reach the computer service. Nothing was started.");
     } finally {
@@ -263,13 +353,21 @@ export function ChatSection() {
     section="chat"
     rail={<ThreadRail threads={threads} activeId={conversationId} newLabel="New chat" emptyLabel="Nothing yet. Ask Atlas anything."
       onNew={startNew} onOpen={(id) => void openThread(id)} onClose={(id) => void close(id).then((done) => { if (done && id === conversationId) startNew(); })} />}
-    headerContext={<span className="context-chip">{ready === null ? "Checking model…" : ready.configured ? "Model connected" : "No model endpoint"}</span>}
+    panel={panelOpen ? <WorkPanel tab={panelTab} onTab={setPanelTab} onClose={() => togglePanel(false)} log={log} items={items}
+      selectedId={selectedItem} onSelect={setSelectedItem} /> : null}
+    headerContext={<>
+      {activeCapabilities(conversationId, tasks, messages).map((item) => <a key={item.label} className="context-chip capability-chip" href={item.href}
+        {...(item.href.startsWith("http") ? { target: "_blank", rel: "noreferrer" } : {})}>{item.label}</a>)}
+      {ready?.configured === false && <span className="context-chip">No model connected</span>}
+      <button type="button" className={panelOpen ? "context-chip panel-toggle active" : "context-chip panel-toggle"} aria-pressed={panelOpen}
+        onClick={() => togglePanel()} title="Show what Atlas is doing: terminal log and files">{panelOpen ? "Hide panel" : `Terminal${items.length ? ` · ${items.length} files` : ""}`}</button>
+    </>}
   >
     <div className="section-scroll">
       {messages.length === 0 ? <div className="section-empty">
         <div className="empty-mark"><AtlasMark /></div>
-        <h1>What can I help you get done?</h1>
-        <p>Ask a question, or tell Atlas what to build, fix, or do on your computer.</p>
+        <h1>What do you want to accomplish?</h1>
+        <p>Ask a question or describe the outcome. Atlas works out whether it needs to answer, change code, or use your computer.</p>
         <div className="starter-grid">
           {STARTERS.map((item) => <button key={item.title} onClick={() => setDraft(item.prompt)}>
             {item.title}
@@ -278,8 +376,16 @@ export function ChatSection() {
       </div> : <div className="message-stream">
         {messages.map((item) => item.role === "user"
           ? <div className="user-message" key={item.id}><p>{item.content}</p></div>
-          : <div className="atlas-message" key={item.id}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><MessageBody text={item.content} /></div></div>)}
-        {streaming !== null && <div className="atlas-message" aria-live="polite"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>{streaming ? <MessageBody text={streaming} /> : <p className="thinking">Thinking…</p>}</div></div>}
+          : <div className="atlas-message" key={item.id}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>
+            {thoughts[item.id] && <details className="thinking-block"><summary>Thought process</summary><p>{thoughts[item.id]}</p></details>}
+            {agentLogs[item.id] && <AgentTree agents={agentLogs[item.id]} steps={stepLogs[item.id] ?? []} collapsed />}
+            {stepLogs[item.id]?.some((step) => !step.agentId) && <ToolSteps steps={stepLogs[item.id].filter((step) => !step.agentId)} collapsed />}
+            <MessageBody text={item.content} /></div></div>)}
+        {streaming !== null && <div className="atlas-message" aria-live="polite"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>
+          {thinking && <details className="thinking-block" open={!streaming}><summary>{streaming ? "Thought process" : "Thinking…"}</summary><p>{thinking}</p></details>}
+          {liveSteps.some((step) => !step.agentId) && <ToolSteps steps={liveSteps.filter((step) => !step.agentId)} />}
+          {liveAgents.length > 0 && <AgentTree agents={liveAgents} steps={liveSteps} />}
+          {streaming ? <MessageBody text={streaming} /> : !thinking && liveSteps.length === 0 && liveAgents.length === 0 && <p className="thinking">Thinking…</p>}</div></div>}
         {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Starting…</p></div></div>}
         {suggestion && <div className="atlas-message suggestion-card"><div className="assistant-avatar"><AtlasMark /></div><div>
           <b>Atlas</b>
@@ -291,7 +397,8 @@ export function ChatSection() {
             <button type="button" className="secondary" onClick={() => void ask(suggestion.text)}>Just answer in chat</button>
           </div>
         </div></div>}
-        {tasks.map((task) => <div className="atlas-message task-update" key={task.taskId}><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p>{taskStatusLabel(task)}</p><small>{task.mode === "coder" ? "I'll open a pull request when it's done." : "I'll post a report when it's done."}</small><div className="result-links">{task.pullRequest?.url && <a className="result-link" href={task.pullRequest.url} target="_blank" rel="noreferrer">Review the pull request ↗</a>}{task.run?.url && <a className="result-link" href={task.run.url} target="_blank" rel="noreferrer">Open task details ↗</a>}</div></div></div>)}
+        {tasks.map((task) => <TaskActivity key={task.taskId} task={task} onLog={addLog} onChanges={addItems}
+          onOpenFile={(id) => { setSelectedItem(id); setPanelTab("files"); togglePanel(true); }} />)}
       </div>}
       <div ref={endRef} />
     </div>
@@ -301,7 +408,7 @@ export function ChatSection() {
       </p>}
       <textarea aria-label="Message Atlas" value={draft} rows={3} onKeyDown={keyDown}
         onChange={(event) => setDraft(event.target.value)}
-      placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything, or describe what you want to get done…"} />
+      placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything…"} />
       <div className="composer-actions">
         <div><span className="composer-hint">Enter sends · Shift+Enter for a new line</span></div>
         {streaming !== null
@@ -312,3 +419,4 @@ export function ChatSection() {
     </form>
   </AtlasShell>;
 }
+
