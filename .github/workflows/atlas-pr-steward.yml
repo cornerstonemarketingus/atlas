@@ -1,0 +1,137 @@
+name: Atlas PR Steward
+# Closes the coding loop for Atlas's own pull requests (issue #86): when CI
+# goes red on an `atlas/task-*` branch, or someone with write access leaves
+# review comments, re-run the coder on that same branch with the failure or
+# the comments as its objective, push the fix, and say what changed. Bounded
+# to 3 attempts per pull request; checks that are also red on the base
+# branch are reported, not "fixed".
+#
+# Deliberately NOT triggered by pull_request_review: for pull_request* events
+# GitHub runs the workflow file from the PR's own branch, which here is code
+# Atlas wrote, and it would run with secrets. workflow_run and schedule always
+# use this file as it is on the default branch. Review comments are picked up
+# by the 6-hourly sweep (or a manual run).
+run-name: Atlas PR Steward · ${{ github.event.workflow_run.head_branch || inputs.pr_number || 'sweep' }}
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  # Every 6 hours: picks up review comments (CI failures arrive immediately
+  # through workflow_run). Each sweep is a short job; hourly was wasteful.
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to steward (an atlas/task-* branch)
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-pr-steward-${{ github.event.workflow_run.head_branch || inputs.pr_number || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  steward:
+    # Cheap exit for every CI run that is not a failure on an Atlas branch.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+       startsWith(github.event.workflow_run.head_branch, 'atlas/task-') &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ vars.ATLAS_SELF_HOSTED_MODEL != '' && 330 || 25 }}
+    permissions:
+      contents: read
+    env:
+      ATLAS_REPOSITORY: ${{ github.repository }}
+      ATLAS_MODE: coder
+      ATLAS_MERGE_POLICY: manual
+      ATLAS_OUTPUT_DIR: ${{ github.workspace }}/atlas-output
+      ATLAS_REPOSITORY_ROOT: ${{ github.workspace }}/target
+    steps:
+      - name: Check out trusted runner policy
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: cornerstonemarketingus/atlas
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/atlas-cli/package-lock.json
+
+      - name: Plan the repair
+        id: plan
+        env:
+          GITHUB_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
+          ATLAS_PR_NUMBER: ${{ inputs.pr_number }}
+        run: node scripts/runner/steward-plan.mjs
+
+      - name: Validate repair inputs
+        if: steps.plan.outputs.action == 'repair'
+        run: node scripts/runner/validate-inputs.mjs
+
+      - name: Build trusted Atlas CLI
+        if: steps.plan.outputs.action == 'repair'
+        working-directory: packages/atlas-cli
+        run: npm ci --ignore-scripts && npm run build
+
+      # The exact commit that was planned against: if the branch moves on, the
+      # push below is rejected instead of overwriting anything.
+      - name: Check out the pull request branch as untrusted data
+        if: steps.plan.outputs.action == 'repair'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: cornerstonemarketingus/atlas
+          ref: ${{ steps.plan.outputs.head_sha }}
+          path: target
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install target validation dependencies
+        if: steps.plan.outputs.action == 'repair'
+        working-directory: target/packages/atlas-cli
+        run: npm ci --ignore-scripts
+
+      - name: Run Atlas coder on the branch
+        if: steps.plan.outputs.action == 'repair'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ATLAS_CODER_PROVIDER: ${{ vars.ATLAS_CODER_PROVIDER }}
+          ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
+          ATLAS_CODER_FALLBACKS: ${{ vars.ATLAS_CODER_FALLBACKS }}
+          ATLAS_CODER_RETRY_ATTEMPTS: ${{ vars.ATLAS_CODER_RETRY_ATTEMPTS }}
+          ATLAS_CODER_RETRY_MAX_DELAY_MS: ${{ vars.ATLAS_CODER_RETRY_MAX_DELAY_MS }}
+          ATLAS_TOKEN_BUDGET: ${{ vars.ATLAS_TOKEN_BUDGET }}
+          ATLAS_MAX_TURNS: ${{ vars.ATLAS_MAX_TURNS }}
+          ATLAS_OUTPUT_TOKENS_PER_TURN: ${{ vars.ATLAS_OUTPUT_TOKENS_PER_TURN }}
+          ATLAS_CODER_BASE_URL: ${{ vars.ATLAS_CODER_BASE_URL }}
+          ATLAS_CODER_CONTEXT_WINDOW: ${{ vars.ATLAS_CODER_CONTEXT_WINDOW }}
+          ATLAS_CODER_MAX_OUTPUT_TOKENS: ${{ vars.ATLAS_CODER_MAX_OUTPUT_TOKENS }}
+          ATLAS_VERIFY_DIR: ${{ vars.ATLAS_VERIFY_DIR || 'packages/atlas-cli' }}
+          ATLAS_MAX_REPAIR_ATTEMPTS: ${{ vars.ATLAS_MAX_REPAIR_ATTEMPTS }}
+        run: node scripts/runner/run-task.mjs
+
+      - name: Push the fix and report on the pull request
+        if: steps.plan.outputs.action == 'repair'
+        env:
+          GITHUB_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
+          ATLAS_PR_NUMBER: ${{ steps.plan.outputs.pr_number }}
+          ATLAS_REPAIR_ATTEMPT: ${{ steps.plan.outputs.attempt }}
+          ATLAS_HEAD_SHA: ${{ steps.plan.outputs.head_sha }}
+        run: node scripts/runner/push-repair.mjs
+
+      - name: Write run summary
+        if: always() && steps.plan.outputs.action == 'repair'
+        run: node scripts/runner/run-summary.mjs
