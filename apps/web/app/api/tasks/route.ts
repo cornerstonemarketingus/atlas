@@ -18,6 +18,7 @@ import { authenticatedAccount } from "./operator-auth.mjs";
 import { CORRELATION_HEADER, correlationIdFromRequest } from "./correlation.mjs";
 import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun, visibleTasks } from "./run-status.mjs";
 import { selfModificationDecision } from "./self-protection.mjs";
+import { repositoryAccessDecision } from "./repository-access.mjs";
 
 export async function POST(request: Request) {
   // A caller-supplied x-atlas-correlation-id is honoured only when it is
@@ -42,6 +43,21 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   if (!selfModification.allowed) return Response.json({ message: selfModification.reason }, { status: selfModification.status });
   const requestedConversationId = typeof (body as { conversationId?: unknown }).conversationId === "string" ? (body as { conversationId: string }).conversationId : "";
   const conversationId = /^[0-9a-f-]{36}$/u.test(requestedConversationId) ? requestedConversationId : randomUUID();
+
+  let githubToken = process.env.ATLAS_GITHUB_TOKEN;
+  try {
+    const githubApp = githubAppConfiguration();
+    if (githubApp.configured) githubToken = await createInstallationToken(githubApp);
+  } catch {
+    return Response.json({ message: "GitHub App authentication failed, so nothing was started.", code: "GITHUB_APP_AUTH_FAILED", blocked: "BLOCKED_BY_MISSING_CREDENTIAL", unblock: "Check the ATLAS_GITHUB_APP_* secrets (app id, installation id, private key) and redeploy." }, { status: 502 });
+  }
+  // The platform credential acts only on repositories this person could
+  // work on themselves (SEC-1). Checked before plan usage is recorded, so a
+  // refused request costs nothing.
+  if (githubToken) {
+    const access = await repositoryAccessDecision(account, task, { token: githubToken });
+    if (!access.allowed) return Response.json({ message: access.message, code: access.code, blocked: access.blocked, unblock: access.unblock }, { status: access.status });
+  }
 
   // Platform-header and operator-token requests aren't billed GitHub accounts
   // (see operator-auth.mjs) — they bypass plan gating entirely rather than
@@ -68,13 +84,6 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   }
 
   const taskId = randomUUID();
-  let githubToken = process.env.ATLAS_GITHUB_TOKEN;
-  try {
-    const githubApp = githubAppConfiguration();
-    if (githubApp.configured) githubToken = await createInstallationToken(githubApp);
-  } catch {
-    return Response.json({ message: "GitHub App authentication failed, so nothing was started.", code: "GITHUB_APP_AUTH_FAILED", blocked: "BLOCKED_BY_MISSING_CREDENTIAL", unblock: "Check the ATLAS_GITHUB_APP_* secrets (app id, installation id, private key) and redeploy." }, { status: 502 });
-  }
   if (githubToken) {
     try {
       const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
