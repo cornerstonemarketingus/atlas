@@ -99,3 +99,13 @@ test("both Atlas workflows declare correlation_id as optional and pass it only t
     }
   }
 });
+
+test("coder tasks default to CI-gated autopilot, and a bad setting never widens the policy", async () => {
+  const { defaultMergePolicy } = await import("../app/api/tasks/dispatch.mjs");
+  assert.equal(defaultMergePolicy(undefined), "ci-gated");
+  assert.equal(defaultMergePolicy(""), "ci-gated");
+  assert.equal(defaultMergePolicy("manual"), "manual");
+  assert.equal(defaultMergePolicy(" CI-Gated "), "ci-gated");
+  assert.equal(defaultMergePolicy("none"), "none");
+  assert.equal(defaultMergePolicy("yolo"), "manual");
+});

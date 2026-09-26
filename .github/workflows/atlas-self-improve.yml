@@ -7,11 +7,13 @@ name: Atlas self-improvement
 # This is an autonomous agent with write access to its own source. Three rules
 # make that safe rather than reckless, and none of them is optional:
 #
-#  1. merge_policy is fixed at "manual" in build-dispatch.py and is
-#     deliberately NOT a dispatch input, because an input is a thing someone
-#     flips "just this once". A self-modifying loop that can merge its own
-#     changes can disable its own safety rails and then keep running with them
-#     disabled. Every change it proposes waits for a human.
+#  1. The merge policy comes from the repository variable
+#     ATLAS_SELF_IMPROVE_MERGE_POLICY (default "ci-gated", allowed "manual" or
+#     "ci-gated"), never from a dispatch input, so the agent being dispatched
+#     cannot choose how its own change lands. "ci-gated" merges the change only
+#     after every CI check on its pull request passes; "none" (merge without
+#     checks) is refused for self-modification. The owner chose autopilot; set
+#     the variable to "manual" to return to human review of every change.
 #  2. It stops when review work is already queued. Without this a daily job
 #     quietly becomes a pull-request firehose, and unreviewed PRs from an
 #     autonomous agent are worse than no agent at all.
@@ -112,6 +114,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
           OBJECTIVE_OVERRIDE: ${{ github.event.inputs.objective }}
+          SELF_IMPROVE_MERGE_POLICY: ${{ vars.ATLAS_SELF_IMPROVE_MERGE_POLICY }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail

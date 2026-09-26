@@ -12,8 +12,29 @@ import sys
 
 OBJECTIVE_FILE = pathlib.Path(__file__).with_name("self-improve-objective.md")
 
+# The owner chose autopilot: self-improvement merges its own change once every
+# CI check on the pull request passes. "none" (merge without checks) is refused
+# for self-modification: a change that breaks CI must never land on main, and
+# the regression guard in create-coder-pull-request.mjs still holds a change
+# its own verification measured as broken. Set the repository variable
+# ATLAS_SELF_IMPROVE_MERGE_POLICY=manual to go back to human review.
+SELF_IMPROVE_POLICIES = {"manual", "ci-gated"}
+DEFAULT_SELF_IMPROVE_POLICY = "ci-gated"
+
+
+def merge_policy() -> str:
+    value = os.environ.get("SELF_IMPROVE_MERGE_POLICY", "").strip() or DEFAULT_SELF_IMPROVE_POLICY
+    if value not in SELF_IMPROVE_POLICIES:
+        raise ValueError(f"SELF_IMPROVE_MERGE_POLICY must be one of {sorted(SELF_IMPROVE_POLICIES)}, not {value!r}.")
+    return value
+
 
 def main() -> int:
+    try:
+        policy = merge_policy()
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
     override = os.environ.get("OBJECTIVE_OVERRIDE", "").strip()
     objective = override or OBJECTIVE_FILE.read_text(encoding="utf-8").strip()
     if not objective:
@@ -30,10 +51,9 @@ def main() -> int:
             "branch": "main",
             "mode": "coder",
             "objective": objective,
-            # Fixed, and intentionally not configurable from the workflow. A
-            # self-modifying agent that can merge its own changes can disable
-            # its own safety rails and then keep running with them disabled.
-            "merge_policy": "manual",
+            # From a repository variable, never a dispatch input: the agent
+            # being dispatched cannot choose how its own change is merged.
+            "merge_policy": policy,
         },
     }
     json.dump(payload, sys.stdout)
