@@ -23,7 +23,7 @@ starts wiring them in, beginning with the agent organization.
 |---|---|---|
 | `packages/atlas-cli` | 424/424 pass, `tsc` clean | `npm ci --ignore-scripts && npm run build && npm test` |
 | `apps/web` | 131/131 pass, lint clean, build clean | `npm ci && npm run lint && npm test` (test runs `vinext build`) |
-| `apps/local-control` | 276/276 pass at base; 285/285 on this branch | `npm test` |
+| `apps/local-control` | PR CI passed on Linux. A local Windows run of the PR snapshot produced 299 passes, 19 failures and 3 symlink-privilege skips; failures cluster around Unix-only terminal executable lookup (`cat`, `true`, etc.), POSIX path assumptions, and an MCP child-environment assertion that omits Windows variables. | `npm test` on the PR snapshot; details recorded in this recovery pass |
 | `packages/atlas-contracts` | 6/6 | `npm test` |
 | `scripts/runner`, `scripts/local` | 36/36 | `node --test scripts/runner/*.test.mjs scripts/local/*.test.mjs` |
 | Workflow syntax | 9/9 parse | `python3 .github/atlas/check-workflows.py` |
@@ -76,6 +76,18 @@ Legend: **IMPLEMENTED** (wired into a running entry point and tested),
 | Time-based / event-driven automations | PARTIAL (GitHub cron for self-improve only) | `atlas-self-improve.yml` |
 | Tenant model | MISSING (principal string only) | `apps/web/db/schema.ts` |
 | Legacy Python prototype | OBSOLETE (documented as such) | `src/atlas_agent` |
+
+### Windows execution verification
+
+The Windows companion desktop driver is covered by its Windows CI integration
+test, but the separate platform terminal controller is not yet Windows-ready.
+Its executable search defaults to `/usr/local/bin`, `/usr/bin`, and `/bin`,
+its process-group/termination behavior is POSIX-specific, and terminal fixtures
+use Unix commands and slash-based paths. On the Windows development host this
+causes the terminal tests to fail before command execution. Treat Windows
+terminal execution as **missing/unsupported**, not as a passing capability,
+until a native adapter and platform-specific tests land. MCP's scrubbed child
+environment also needs a Windows-specific baseline allowlist/test.
 
 ## Security review backlog
 

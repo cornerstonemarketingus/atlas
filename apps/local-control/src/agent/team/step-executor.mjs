@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import { completeTurn, parseJsonReply, tokenUsage } from "./model.mjs";
 import { toolsForAgent } from "./permissions.mjs";
@@ -49,14 +50,15 @@ export function createAgentStepExecutor({ family, delegation, toolRegistry, clie
     ];
     const usage = { inputTokens: 0, outputTokens: 0, toolCalls: 0 };
     const toolLog = [];
+    const toolOutcomes = [];
     let report = "";
     let feedback = null;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (feedback) messages.push({ role: "user", content: `A reviewer checked your report and it does not yet satisfy "${meta.doneWhen}": ${feedback} Continue the step and report again.` });
-      report = await actLoop({ client, messages, tools, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, budget, checkpoint, usage, toolLog });
+      report = await actLoop({ client, messages, tools, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, budget, checkpoint, usage, toolLog, toolOutcomes });
       await checkpoint();
-      const verdict = await verifyStep({ client, meta, report, toolLog, signal, usage });
+      const verdict = await verifyStep({ client, meta, report, toolLog, toolOutcomes, signal, usage });
       if (verdict.passed) {
         return finish({ family, delegation, platformStore, memory, recalled, meta, agent, stepTaskId, report, verdict, usage, toolLog, budget });
       }
@@ -111,7 +113,7 @@ function ensureDelegated({ family, delegation, meta, agent, stepTaskId }) {
   }
 }
 
-async function actLoop({ client, messages, tools, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, budget, checkpoint, usage, toolLog }) {
+async function actLoop({ client, messages, tools, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, budget, checkpoint, usage, toolLog, toolOutcomes }) {
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn += 1) {
     await checkpoint();
     const reply = await completeTurn(client, { model: meta.model, messages, tools, maxOutputTokens: 1500, signal });
@@ -124,14 +126,14 @@ async function actLoop({ client, messages, tools, allowedTools, toolRegistry, ap
     for (const call of reply.toolCalls) {
       budget.record({ toolCalls: 1 });
       usage.toolCalls += 1;
-      const content = await runTool({ call, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, checkpoint, toolLog });
+      const content = await runTool({ call, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, checkpoint, toolLog, toolOutcomes });
       messages.push({ role: "tool", tool_call_id: call.id, content: `<data source="${call.name}">\n${content}\n</data>` });
     }
   }
   return "The step used all of its tool turns without finishing.";
 }
 
-async function runTool({ call, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, checkpoint = () => {}, toolLog }) {
+async function runTool({ call, allowedTools, toolRegistry, approvals, platformStore, meta, agent, signal, checkpoint = () => {}, toolLog, toolOutcomes }) {
   let input = {};
   try { input = JSON.parse(call.arguments || "{}"); } catch { /* recorded as given; the registry rejects it */ }
   const recorded = platformStore?.recordToolCall({
@@ -165,6 +167,10 @@ async function runTool({ call, allowedTools, toolRegistry, approvals, platformSt
       ...(status === "succeeded" ? { output: { text: String(outcome.output).slice(0, 4000) } } : { error: { code: outcome.code ?? "TOOL_FAILED", message: String(outcome.message ?? "").slice(0, 500) } }),
     });
   }
+  // Fingerprints are ephemeral verification data only: tool arguments may
+  // contain secrets, so never persist the digest beside the human-readable log.
+  const actionKey = createHash("sha256").update(`${call.name}\0${call.arguments ?? "{}"}`).digest("hex");
+  toolOutcomes.push({ actionKey, status });
   toolLog.push({ tool: call.name, status, code: outcome.code ?? null });
   if (outcome.status === "completed") return String(outcome.output);
   if (outcome.status === "approval-required") return "This action needs the owner's approval. It has been requested; continue without it or report that it is pending.";
@@ -193,9 +199,20 @@ function summarizeInput(input) {
  * Deterministic facts come first: a report that relies on a tool call that
  * failed or is still awaiting approval cannot pass on the model's word.
  */
-export async function verifyStep({ client, meta, report, toolLog, signal, usage }) {
-  const pending = toolLog.filter((t) => t.status === "awaiting_approval");
+export async function verifyStep({ client, meta, report, toolLog, toolOutcomes = [], signal, usage }) {
   if (!report || report === "(no report)") return { passed: false, reason: "The agent produced no report." };
+  const latestByAction = new Map();
+  toolOutcomes.forEach((entry, index) => latestByAction.set(entry.actionKey ?? `unkeyed:${index}`, entry));
+  const unresolved = [...latestByAction.values()].filter((entry) => entry.status !== "succeeded");
+  if (unresolved.length) {
+    const pending = unresolved.filter((entry) => entry.status === "awaiting_approval").length;
+    const failed = unresolved.length - pending;
+    const reason = [
+      pending ? `${pending} action(s) are still waiting for approval` : "",
+      failed ? `${failed} tool action(s) failed or were denied` : "",
+    ].filter(Boolean).join("; ");
+    return { passed: false, reason: `${reason}. Recover the action and verify it on a new attempt.`, checker: "deterministic-tool-outcomes" };
+  }
   const messages = [
     { role: "system", content: "You verify whether a step's report meets its completion check. Be strict: judge only what the report and tool log show. Respond with JSON only." },
     { role: "user", content: `Check: ${meta.doneWhen}\n\n<data source="report">\n${report.slice(0, 6000)}\n</data>\n\nTool log: ${JSON.stringify(toolLog.slice(-20))}\n\nReturn {"passed": true|false, "reason": "one sentence"}.` },
@@ -206,8 +223,8 @@ export async function verifyStep({ client, meta, report, toolLog, signal, usage 
     usage.inputTokens += counted.inputTokens;
     usage.outputTokens += counted.outputTokens;
     const verdict = parseJsonReply(turn.text);
-    const passed = verdict.passed === true && pending.length === 0;
-    return { passed, reason: pending.length ? `${pending.length} action(s) are still waiting for approval.` : String(verdict.reason ?? "").slice(0, 500), checker: "model+facts" };
+    const passed = verdict.passed === true;
+    return { passed, reason: String(verdict.reason ?? "").slice(0, 500), checker: "model+facts" };
   } catch (error) {
     return { passed: false, reason: `The check could not run: ${error.message}` };
   }
