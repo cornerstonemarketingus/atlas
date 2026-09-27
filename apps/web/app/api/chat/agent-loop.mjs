@@ -23,7 +23,7 @@ export const MAX_REPLY_TOKENS = 2048;
 /** The longest wait honoured from a provider's retry-after before trying the fallback model instead. */
 const MAX_RATE_LIMIT_WAIT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 60_000;
-/** Longest the loop waits in the quota ledger's queue before sending anyway (the provider stays the final judge). */
+/** Longest inline wait before returning capacity information for fallback/recovery. */
 export const MAX_GOVERNOR_WAIT_MS = 8_000;
 /**
  * Final synthesis: the call that turns completed work into the answer. It has
@@ -75,9 +75,9 @@ function capacityHeaders(headers) {
  * soon, then release with what the provider reported, so every isolate and
  * agent on the same provider allowance sees the same remaining capacity.
  *
- * The ledger protects capacity; it is never the reason a reply fails. No
- * governor, an unavailable one, or a wait longer than MAX_GOVERNOR_WAIT_MS
- * all fall through to sending, and callModel's 429 handling still applies.
+ * Missing/unavailable governors retain the legacy direct path. A known
+ * capacity refusal must never send anyway: return its retry time so the
+ * caller can use another model or its bounded recovery path.
  */
 export async function governedSend(endpoint, turns, options) {
   const governor = endpoint.governor;
@@ -88,13 +88,17 @@ export async function governedSend(endpoint, turns, options) {
   for (;;) {
     const grant = await governor.reserve({ requestId, models: [endpoint.model], estimatedTokens, latencyClass: governor.latencyClass });
     if (!grant || grant.granted) break;
-    if (waited + grant.waitMs > MAX_GOVERNOR_WAIT_MS) {
+    const waitMs = Number.isFinite(grant.waitMs) && grant.waitMs > 0 ? Math.ceil(grant.waitMs) : 1_000;
+    if (waited + waitMs > MAX_GOVERNOR_WAIT_MS) {
       await governor.withdraw(requestId);
       inferenceDiagnostic("inference.governor_wait_exceeded", { model: endpoint.model, reason: grant.reason, waitMs: grant.waitMs, waitedMs: waited });
-      break;
+      return new Response(JSON.stringify({ error: { code: "ATLAS_CAPACITY_WAIT", message: "Model capacity is reserved; retry after the indicated delay." } }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": String(Math.ceil(waitMs / 1000)), "x-atlas-capacity-wait": "true" },
+      });
     }
-    await (options.sleep ?? sleep)(grant.waitMs);
-    waited += grant.waitMs;
+    await (options.sleep ?? sleep)(waitMs);
+    waited += waitMs;
   }
   let response;
   try {
@@ -104,10 +108,39 @@ export async function governedSend(endpoint, turns, options) {
     throw error;
   }
   const failure = response.ok ? null : classifyHttpFailure({ status: response.status, body: await response.clone().text().catch(() => ""), headers: response.headers });
-  await governor.release({
+  const outcome = {
     requestId, model: endpoint.model, headers: capacityHeaders(response.headers), status: response.status,
     kind: failure?.kind ?? null, retryAfterMs: failure?.retryAfterMs ?? null, ...(failure?.scope ? { scope: failure.scope } : {}),
-  });
+  };
+  if (response.ok && response.body && (response.headers.get("content-type") ?? "").includes("text/event-stream")) {
+    const reader = response.body.getReader();
+    let released = false;
+    const release = async (kind = null) => {
+      if (released) return;
+      released = true;
+      await governor.release({ ...outcome, kind });
+    };
+    // Headers arrive before generation ends. Keep the reservation until the
+    // consumer finishes, cancels, or observes a stream failure.
+    const body = new ReadableStream({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) { await release(); controller.close(); }
+          else controller.enqueue(value);
+        } catch (error) {
+          await release(classifyThrown(error).kind);
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        try { await reader.cancel(reason); }
+        finally { await release("CANCELLED"); }
+      },
+    }, { highWaterMark: 0 });
+    return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  }
+  await governor.release(outcome);
   return response;
 }
 

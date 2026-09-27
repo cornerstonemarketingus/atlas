@@ -95,7 +95,7 @@ test("while the ledger says capacity returns soon, the call waits for it", async
   assert.deepEqual(governor.calls.map((call) => call.method), ["reserve", "reserve", "release"]);
 });
 
-test("a wait longer than the limit withdraws from the queue and sends anyway: the ledger never fails a reply", async () => {
+test("a long capacity wait withdraws without sending to an exhausted model", async () => {
   const governor = ledgerGovernor();
   governor.state.models.m = { limitRequests: null, limitTokens: 6000, remainingRequests: null, remainingTokens: 0, resetRequestsAt: null, resetTokensAt: MAX_GOVERNOR_WAIT_MS + 60_000, blockedUntil: null, blockedReason: null, observedAt: 0 };
   const slept = [];
@@ -104,15 +104,17 @@ test("a wait longer than the limit withdraws from the queue and sends anyway: th
   const logged = [];
   console.warn = (line) => logged.push(line);
   try {
-    await governedSend({ baseUrl: "https://model.test/v1", model: "m", governor }, turns, {
+    const response = await governedSend({ baseUrl: "https://model.test/v1", model: "m", governor }, turns, {
       stream: false, maxTokens: 10, fetcher: async () => { sent += 1; return ok(); }, sleep: async (ms) => slept.push(ms),
     });
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get("retry-after"), "68");
   } finally {
     console.warn = warn;
   }
   assert.deepEqual(slept, []);
-  assert.equal(sent, 1);
-  assert.deepEqual(governor.calls.map((call) => call.method), ["reserve", "withdraw", "release"]);
+  assert.equal(sent, 0);
+  assert.deepEqual(governor.calls.map((call) => call.method), ["reserve", "withdraw"]);
   assert.equal(Object.keys(governor.state.waiting).length, 0, "no stale waiter holds capacity back from others");
   assert.match(logged.join("\n"), /inference\.governor_wait_exceeded/u);
 });
@@ -170,4 +172,53 @@ test("chatGovernorFor is null when there is no binding, and never throws", async
   assert.equal(chatGovernor(null), null);
   const bound = await chatGovernorFor({ baseUrl: "https://model.test/v1", apiKey: "k" }, { INFERENCE_GOVERNOR: { idFromName: (name) => name, get: () => ({ fetch: async () => Response.json({ granted: true, model: "m" }) }) } });
   assert.deepEqual(await bound.reserve({ requestId: "r", models: ["m"], estimatedTokens: 1 }), { granted: true, model: "m" });
+});
+
+test("known exhausted primary routes to fallback without a refused provider request", async () => {
+  const governor = ledgerGovernor();
+  governor.state.models.m = { limitRequests: null, limitTokens: 6000, remainingRequests: null, remainingTokens: 0, resetRequestsAt: null, resetTokensAt: 60_000, blockedUntil: null, blockedReason: null, observedAt: 0 };
+  const sent = [];
+  const response = await callModel({ baseUrl: "https://model.test/v1", model: "m", fallbackModel: "f", governor }, turns, {
+    stream: false, fetcher: async (_url, init) => { sent.push(JSON.parse(init.body).model); return ok(); }, sleep: async () => assert.fail("no inline wait for daily/exhausted primary"),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(sent, ["f"]);
+  assert.equal(Object.keys(governor.state.reservations).length, 0);
+  assert.equal(Object.keys(governor.state.waiting).length, 0);
+});
+
+test("persistent zero-delay denials remain bounded and never bypass admission", async () => {
+  let attempts = 0;
+  let withdrawn = 0;
+  const governor = { reserve: async () => { attempts++; return { granted: false, waitMs: 0 }; }, withdraw: async () => { withdrawn++; } };
+  const response = await governedSend({ baseUrl: "https://model.test/v1", model: "m", governor }, turns, {
+    stream: false, fetcher: async () => assert.fail("denied request sent"), sleep: async () => {},
+  });
+  assert.equal(response.status, 429);
+  assert.equal(attempts, 9);
+  assert.equal(withdrawn, 1);
+});
+
+test("streaming holds capacity until generation finishes and releases on cancellation", async () => {
+  for (const cancel of [false, true]) {
+    const governor = ledgerGovernor();
+    const response = await governedSend({ baseUrl: "https://model.test/v1", model: "m", governor }, turns, {
+      stream: true, fetcher: async () => new Response(new ReadableStream({ pull(controller) { controller.enqueue(new TextEncoder().encode("data: hello\n\n")); if (!cancel) controller.close(); } }), { headers: { "content-type": "text/event-stream" } }),
+    });
+    assert.equal(Object.keys(governor.state.reservations).length, 1);
+    if (cancel) await response.body.cancel();
+    else await response.text();
+    assert.equal(Object.keys(governor.state.reservations).length, 0);
+    assert.equal(governor.calls.filter(call => call.method === "release").length, 1);
+  }
+});
+
+test("stream read failure releases the reservation exactly once", async () => {
+  const governor = ledgerGovernor();
+  const response = await governedSend({ baseUrl: "https://model.test/v1", model: "m", governor }, turns, {
+    stream: true, fetcher: async () => new Response(new ReadableStream({ pull(controller) { controller.error(new TypeError("stream disconnected")); } }), { headers: { "content-type": "text/event-stream" } }),
+  });
+  await assert.rejects(response.text(), /stream disconnected/u);
+  assert.equal(Object.keys(governor.state.reservations).length, 0);
+  assert.equal(governor.calls.filter(call => call.method === "release").length, 1);
 });
