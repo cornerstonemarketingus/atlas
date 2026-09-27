@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { RepositoryImportGraph } from "../src/infrastructure/repository-import-graph.js";
 
 import { PolicyEnforcedReadOnlyToolRegistry } from "../src/infrastructure/policy-enforced-read-only-tool-registry.js";
 import { SafeRepositoryFileEditor } from "../src/infrastructure/safe-repository-file-editor.js";
@@ -47,6 +48,8 @@ test("every tool advertised to the model is registered, and vice versa", async (
     symbolIndexer: new RepositorySymbolIndexer(),
     referenceFinder: new RepositorySymbolReferenceFinder(),
     sourceReader: new BoundedRepositorySourceReader(),
+    // As the CLI wires it: every advertised tool, including tests_for, must be registered.
+    importGraph: new RepositoryImportGraph(),
   }));
   registerRepositoryWriteTools(registry, createRepositoryWriteTools(binding, { editor: new SafeRepositoryFileEditor() }));
 
