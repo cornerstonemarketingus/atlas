@@ -120,9 +120,20 @@ export function retryAfterMs(headers, body = "") {
 /**
  * Sends a model request, riding out rate limits: on 429, wait what the
  * provider asks (when that is short) and retry once, then try the fallback
- * model on the same endpoint. Other statuses are returned as they are.
+ * model on the same endpoint, with the same single bounded retry. Other
+ * statuses are returned as they are.
  */
 export async function callModel(endpoint, turns, options) {
+  const response = await sendWithRateLimitRetry(endpoint, turns, options);
+  if (response.status === 429 && endpoint.fallbackModel && endpoint.fallbackModel !== endpoint.model) {
+    const fallback = await sendWithRateLimitRetry({ ...endpoint, model: endpoint.fallbackModel }, turns, options);
+    answeredBy.set(fallback, endpoint.fallbackModel);
+    return fallback;
+  }
+  return response;
+}
+
+async function sendWithRateLimitRetry(endpoint, turns, options) {
   let response = await sendModel(endpoint, turns, options);
   if (response.status !== 429) return response;
   const wait = retryAfterMs(response.headers, await response.clone().text().catch(() => ""));
@@ -130,11 +141,6 @@ export async function callModel(endpoint, turns, options) {
     await (options.sleep ?? sleep)(wait);
     response = await sendModel(endpoint, turns, options);
     if (response.status !== 429) return response;
-  }
-  if (endpoint.fallbackModel) {
-    const fallback = await sendModel({ ...endpoint, model: endpoint.fallbackModel }, turns, options);
-    answeredBy.set(fallback, endpoint.fallbackModel);
-    return fallback;
   }
   return response;
 }
