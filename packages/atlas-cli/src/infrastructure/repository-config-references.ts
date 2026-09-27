@@ -68,7 +68,7 @@ const PYTHON_READS: readonly (readonly [RegExp, string])[] = [
 const WORKFLOW_CONTEXT = new RegExp(`\\b(secrets|vars)\\.(${NAME})`, "gu");
 // Names every process (or GitHub runner) provides; reading them says nothing
 // about the repository's configuration.
-const AMBIENT_NAMES = new Set(["NODE_ENV", "HOME", "PATH", "PWD", "CI", "TMPDIR", "TEMP", "TMP", "USER", "SHELL", "APPDATA", "LOCALAPPDATA", "USERPROFILE"]);
+const AMBIENT_NAMES = new Set(["NODE_ENV", "HOME", "PATH", "PWD", "CI", "TMPDIR", "TEMP", "TMP", "USER", "SHELL", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "SystemRoot", "SYSTEMROOT", "COMSPEC", "DISPLAY", "LANG", "TERM"]);
 const isAmbient = (name: string) => AMBIENT_NAMES.has(name) || /^(?:GITHUB|RUNNER|ACTIONS)_/u.test(name);
 
 export class RepositoryConfigReferences {
