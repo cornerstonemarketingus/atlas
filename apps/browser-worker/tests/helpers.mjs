@@ -17,7 +17,7 @@ export async function startServer({ otherOrigin = null } = {}) {
     }
     if (path === "/beacon.html" && otherOrigin) {
       res.writeHead(200, { "content-type": "text/html" }).end(
-        `<!doctype html><title>Beacon</title><img alt="t" src="${otherOrigin}/tracker.png"><script>fetch("${otherOrigin}/exfil").catch(()=>{})</script><a href="${otherOrigin}/elsewhere">Offsite</a>`,
+        `<!doctype html><title>Beacon</title><img alt="t" src="${otherOrigin}/tracker.png"><script>fetch("${otherOrigin}/exfil").catch(()=>{})</script><a href="${otherOrigin}/elsewhere">Offsite</a><a href="#" onclick="setTimeout(() => { location.href = '${otherOrigin}/later'; }, 150); return false;">Delayed offsite</a>`,
       );
       return;
     }

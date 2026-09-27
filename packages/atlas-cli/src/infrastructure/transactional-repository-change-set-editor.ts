@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { lstat, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
@@ -37,7 +37,7 @@ export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeS
   private readonly maxEdits: number;
   private readonly maxChangeSetBytes: number;
   private readonly pending = new Map<string, readonly RepositoryFileEditPlan[]>();
-  private readonly checkpoints = new Map<string, ReadonlyMap<string, string>>();
+  private readonly checkpoints = new Map<string, ReadonlyMap<string, Checkpoint>>();
 
   public constructor(
     private readonly fileEditor: RepositoryFileEditor,
@@ -70,7 +70,7 @@ export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeS
     }
 
     const edits: RepositoryFileEditPlan[] = [];
-    const captured = new Map<string, string>();
+    const captured = new Map<string, Checkpoint>();
     try {
       for (const request of requests) {
         const plan = await this.fileEditor.preview(repositoryPath, request);
@@ -109,7 +109,7 @@ export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeS
       throw changeSetError("INVALID_PLAN", "Change-set plans are unavailable or have been changed.");
     }
     this.pending.delete(plan.changeSetDigest);
-    const checkpoints = this.checkpoints.get(plan.changeSetDigest) ?? new Map<string, string>();
+    const checkpoints = this.checkpoints.get(plan.changeSetDigest) ?? new Map<string, Checkpoint>();
     this.checkpoints.delete(plan.changeSetDigest);
 
     const applied: RepositoryFileEditResult[] = [];
@@ -142,7 +142,7 @@ export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeS
     return true;
   }
 
-  private async rollback(root: string, edits: readonly RepositoryFileEditPlan[], checkpoints: ReadonlyMap<string, string>): Promise<{ succeeded: string[]; failed: string[] }> {
+  private async rollback(root: string, edits: readonly RepositoryFileEditPlan[], checkpoints: ReadonlyMap<string, Checkpoint>): Promise<{ succeeded: string[]; failed: string[] }> {
     const succeeded: string[] = [];
     const failed: string[] = [];
     for (const edit of edits) {
@@ -156,10 +156,10 @@ export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeS
     return { succeeded, failed };
   }
 
-  private async compensate(root: string, edit: RepositoryFileEditPlan, checkpoints: ReadonlyMap<string, string>): Promise<void> {
+  private async compensate(root: string, edit: RepositoryFileEditPlan, checkpoints: ReadonlyMap<string, Checkpoint>): Promise<void> {
     if (edit.operation === "update") {
       // Re-previewing forces the same containment, symlink, text, and current-hash checks as a forward edit.
-      const content = checkpointFor(edit, checkpoints);
+      const { content } = checkpointFor(edit, checkpoints);
       const checkpoint = await this.fileEditor.preview(root, {
         operation: "update", path: edit.path, content, expectedSha256: nonNull(edit.afterSha256),
       });
@@ -185,12 +185,19 @@ export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeS
   }
 }
 
-function checkpointFor(edit: RepositoryFileEditPlan, checkpoints: ReadonlyMap<string, string>): string {
+/** The bytes an edit destroys, plus what a restore must put back around them. */
+interface Checkpoint {
+  readonly content: string;
+  readonly mode: number;
+  readonly bom: boolean;
+}
+
+function checkpointFor(edit: RepositoryFileEditPlan, checkpoints: ReadonlyMap<string, Checkpoint>): Checkpoint {
   const expectedHash = edit.beforeSha256;
   if (expectedHash === null) throw changeSetError("ROLLBACK_FAILED", "An edit checkpoint is unavailable.");
-  const content = checkpoints.get(edit.planDigest);
-  if (content === undefined || hash(content) !== expectedHash) throw changeSetError("ROLLBACK_FAILED", "An edit checkpoint is unavailable.");
-  return content;
+  const checkpoint = checkpoints.get(edit.planDigest);
+  if (checkpoint === undefined || hash(checkpoint.content) !== expectedHash) throw changeSetError("ROLLBACK_FAILED", "An edit checkpoint is unavailable.");
+  return checkpoint;
 }
 
 function nonNull(value: string | null): string {
@@ -198,16 +205,17 @@ function nonNull(value: string | null): string {
   return value;
 }
 
-async function readCheckpoint(root: string, path: string, expectedHash: string | null): Promise<string> {
+async function readCheckpoint(root: string, path: string, expectedHash: string | null): Promise<Checkpoint> {
   if (expectedHash === null) throw changeSetError("ROLLBACK_FAILED", "An edit checkpoint is unavailable.");
   const target = await containedPath(root, path, "file");
+  const mode = (await stat(target)).mode & 0o7777;
   const bytes = await readFile(target);
   if (bytes.includes(0)) throw changeSetError("ROLLBACK_FAILED", "Edit checkpoint is not text.");
   let content: string;
   try { content = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
   catch (error) { throw changeSetError("ROLLBACK_FAILED", "Edit checkpoint is not valid UTF-8.", error); }
   if (hash(content) !== expectedHash) throw changeSetError("ROLLBACK_FAILED", "Edit checkpoint changed during preview.");
-  return content;
+  return { content, mode, bom: bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf };
 }
 
 async function removeCreatedFile(root: string, edit: RepositoryFileEditPlan): Promise<void> {
@@ -219,12 +227,14 @@ async function removeCreatedFile(root: string, edit: RepositoryFileEditPlan): Pr
   await rm(target, { force: false });
 }
 
-async function restoreDeletedFile(root: string, edit: RepositoryFileEditPlan, content: string): Promise<void> {
+async function restoreDeletedFile(root: string, edit: RepositoryFileEditPlan, checkpoint: Checkpoint): Promise<void> {
   await assertStableRoot(root);
   const target = await containedPath(root, edit.path, "absent");
   const temporary = resolve(dirname(target), `.atlas-rollback-${randomBytes(12).toString("hex")}.tmp`);
   try {
-    await writeFile(temporary, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    // Byte-for-byte as it was: the mark, the text, and the permission bits.
+    await writeFile(temporary, checkpoint.bom ? `\uFEFF${checkpoint.content}` : checkpoint.content, { encoding: "utf8", flag: "wx" });
+    await chmod(temporary, checkpoint.mode);
     await rename(temporary, target);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);
