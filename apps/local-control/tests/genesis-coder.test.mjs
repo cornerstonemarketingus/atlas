@@ -137,6 +137,20 @@ const browserSkip = required ? false : await (async () => {
   try { const browser = await playwright.chromium.launch({ headless: true }); await browser.close(); return false; } catch { return "Chromium is not installed"; }
 })();
 
+function describeTransitions(transitions) {
+  const from = transitions.findIndex((t) => t.to === "verifying");
+  return transitions.slice(Math.max(0, from)).map((t) => {
+    const failure = t.evidence?.failure;
+    const detail = [
+      failure?.check ? `check=${failure.check}` : "",
+      ...(failure?.findings ?? []).slice(0, 5).map((f) => `[${f.check} ${f.page}: ${f.observed}]`),
+      failure?.output ? `output=${JSON.stringify(String(failure.output).slice(-400))}` : "",
+      t.evidence?.kind === "repair-result" ? `coder ok=${t.evidence.ok} commit=${Boolean(t.evidence.commit)} ${JSON.stringify(String(t.evidence.summary ?? "").slice(-400))}` : "",
+    ].filter(Boolean).join(" ");
+    return `-> ${t.to}: ${String(t.reason ?? "").slice(0, 200)}${detail ? ` | ${detail}` : ""}`;
+  }).join("\n");
+}
+
 test("a visual problem found in the screenshots is repaired by the real coder, then the app is checked again", { skip: browserSkip, timeout: 600_000 }, async () => {
   const { createVisionReviewer } = await import("../src/platform/genesis/vision.mjs");
   let visionCalls = 0;
@@ -173,7 +187,9 @@ test("a visual problem found in the screenshots is repaired by the real coder, t
     assert.equal(repairing.evidence.failure.check, "browser");
     assert.match(repairing.reason, /too faint to read/u);
     assert.match(readFileSync(join(done.workspace, "public", "styles.css"), "utf8"), /font-weight: 700/u, "the real coder changed the stylesheet");
-    assert.equal(done.repairsUsed, 1);
+    // When this fails intermittently in CI, the transitions say which check
+    // needed the extra repair (it does not reproduce locally).
+    assert.equal(done.repairsUsed, 1, describeTransitions(done.transitions));
     const summary = done.transitions.at(-1).evidence.summary;
     assert.equal(summary.inspection.limited, false);
     assert.equal(summary.inspection.visual.reviewed, true);
