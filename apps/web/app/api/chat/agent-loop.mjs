@@ -34,9 +34,9 @@ const MAX_SYNTHESIS_TOKENS = 8_192;
 /** How much of the gathered tool output the synthesis call sees. */
 const SYNTHESIS_EVIDENCE_CHARS = 16_000;
 const SYNTHESIS_RESULT_CHARS = 4_000;
-/** Statuses that say "not now", as opposed to "not ever" (401, 403, 404, 400). */
 /** Retries of the very first call when the provider refuses it for now. */
 const FIRST_CALL_RETRIES = 2;
+/** Statuses that say "not now", as opposed to "not ever" (401, 403, 404, 400). */
 const TRANSIENT_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
 
 /** Which model actually answered a response, when the fallback was used. */
