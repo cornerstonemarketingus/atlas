@@ -171,3 +171,111 @@ test("chatGovernorFor is null when there is no binding, and never throws", async
   const bound = await chatGovernorFor({ baseUrl: "https://model.test/v1", apiKey: "k" }, { INFERENCE_GOVERNOR: { idFromName: (name) => name, get: () => ({ fetch: async () => Response.json({ granted: true, model: "m" }) }) } });
   assert.deepEqual(await bound.reserve({ requestId: "r", models: ["m"], estimatedTokens: 1 }), { granted: true, model: "m" });
 });
+
+const blockedEntry = (until) => ({ limitRequests: null, limitTokens: 6000, remainingRequests: null, remainingTokens: 0, resetRequestsAt: null, resetTokensAt: until, blockedUntil: null, blockedReason: null, observedAt: 0 });
+
+test("with a pool, a call goes to the first model that has capacity, and the reply is attributed to it", async () => {
+  const governor = ledgerGovernor();
+  governor.state.models.main = blockedEntry(60_000);
+  const sentTo = [];
+  const response = await callModel({ baseUrl: "https://model.test/v1", model: "main", models: ["main", "spare", "f"], fallbackModel: "f", governor }, turns, {
+    stream: false, maxTokens: 10, fetcher: async (_url, init) => { sentTo.push(JSON.parse(init.body).model); return ok(); }, sleep: async () => assert.fail("no wait while another model has room"),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(sentTo, ["spare"]);
+  const release = governor.calls.find((call) => call.method === "release").argument;
+  assert.equal(release.model, "spare", "the ledger is told which model actually served");
+  assert.deepEqual(governor.calls[0].argument.models, ["main", "spare", "f"]);
+});
+
+test("with a pool, a 429 routes the retry to another model at once instead of sleeping", async () => {
+  let clock = 0;
+  const governor = ledgerGovernor({ now: () => clock });
+  const sentTo = [];
+  const replies = [
+    () => new Response("Rate limit reached. Please try again in 6s.", { status: 429, headers: { "retry-after": "6" } }),
+    () => ok(),
+  ];
+  const slept = [];
+  await callModel({ baseUrl: "https://model.test/v1", model: "main", models: ["main", "spare"], governor }, turns, {
+    stream: false, maxTokens: 10, fetcher: async (_url, init) => { sentTo.push(JSON.parse(init.body).model); return replies.shift()(); }, sleep: async (ms) => { slept.push(ms); clock += ms; },
+  });
+  assert.deepEqual(sentTo, ["main", "spare"]);
+  assert.deepEqual(slept, [], "the refused model is blocked in the ledger; nobody waits for it");
+});
+
+test("without a governor, a pool changes nothing: same wait-and-retry as before", async () => {
+  const sentTo = [];
+  const slept = [];
+  const replies = [() => new Response("", { status: 429, headers: { "retry-after": "2" } }), () => ok()];
+  await callModel({ baseUrl: "https://model.test/v1", model: "main", models: ["main", "spare"] }, turns, {
+    stream: false, fetcher: async (_url, init) => { sentTo.push(JSON.parse(init.body).model); return replies.shift()(); }, sleep: async (ms) => slept.push(ms),
+  });
+  assert.deepEqual(sentTo, ["main", "main"]);
+  assert.deepEqual(slept, [2000]);
+});
+
+test("latency classes: the lead is INTERACTIVE, child agents are TASK_CRITICAL, and synthesis goes first in its class", async () => {
+  const governor = ledgerGovernor();
+  const empty = () => new Response(JSON.stringify({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }), { headers: { "content-type": "application/json" } });
+  const replies = [empty, ok];
+  await converse({
+    endpoint: { baseUrl: "https://model.test/v1", model: "m", governor }, turns,
+    toolContext: { environment: {}, allowlist: new Set(), githubToken: async () => undefined },
+    userMessage: "hi", stream: false, emit: () => {}, fetcher: async () => replies.shift()(), tools: [], sleep: async () => {},
+  });
+  const reserves = governor.calls.filter((call) => call.method === "reserve").map((call) => call.argument);
+  assert.deepEqual(reserves.map((request) => [request.latencyClass, request.priority]), [["INTERACTIVE", 0], ["INTERACTIVE", 10]], "the empty reply is finished by a synthesis call that outranks ordinary steps");
+
+  const child = ledgerGovernor();
+  await converse({
+    endpoint: { baseUrl: "https://model.test/v1", model: "m", governor: child }, turns, agentId: "a1",
+    toolContext: { environment: {}, allowlist: new Set(), githubToken: async () => undefined },
+    userMessage: "hi", stream: false, emit: () => {}, fetcher: async () => ok(), tools: [], allowTasks: false,
+  });
+  assert.equal(child.calls.find((call) => call.method === "reserve").argument.latencyClass, "TASK_CRITICAL");
+});
+
+test("the agent-team planner reserves as TASK_CRITICAL", async () => {
+  const { plannerClient } = await import("../app/api/chat/agent-team.mjs");
+  const governor = ledgerGovernor();
+  const client = plannerClient({ baseUrl: "https://model.test/v1", model: "m", governor }, async () => ok());
+  const chunks = [];
+  for await (const chunk of client.stream({ messages: turns, maxOutputTokens: 10 })) chunks.push(chunk.type);
+  assert.deepEqual(chunks, ["text", "done"]);
+  assert.equal(governor.calls.find((call) => call.method === "reserve").argument.latencyClass, "TASK_CRITICAL");
+});
+
+test("diagnostics name the pool model that actually answered", async () => {
+  const governor = ledgerGovernor();
+  governor.state.models.main = blockedEntry(60_000);
+  const empty = () => new Response(JSON.stringify({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }), { headers: { "content-type": "application/json" } });
+  const replies = [empty, ok];
+  const logged = [];
+  const warn = console.warn;
+  console.warn = (line) => logged.push(line);
+  try {
+    await converse({
+      endpoint: { baseUrl: "https://model.test/v1", model: "main", models: ["main", "spare"], governor }, turns,
+      toolContext: { environment: {}, allowlist: new Set(), githubToken: async () => undefined },
+      userMessage: "hi", stream: false, emit: () => {}, fetcher: async () => replies.shift()(), tools: [], sleep: async () => {},
+    });
+  } finally {
+    console.warn = warn;
+  }
+  const records = logged.map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+  const empties = records.filter((record) => record.event === "inference.empty_response");
+  assert.ok(empties.length > 0, "the empty reply is reported");
+  assert.equal(empties[0].model, "spare");
+  assert.equal(empties[0].fallbackUsed, true);
+});
+
+test("with a pool but a governor that does not answer, a 429 still gets the short wait before the retry", async () => {
+  const governor = { latencyClass: "INTERACTIVE", reserve: async () => null, release: async () => null, withdraw: async () => null };
+  const slept = [];
+  const replies = [() => new Response("", { status: 429, headers: { "retry-after": "2" } }), () => ok()];
+  await callModel({ baseUrl: "https://model.test/v1", model: "main", models: ["main", "spare"], governor }, turns, {
+    stream: false, fetcher: async () => replies.shift()(), sleep: async (ms) => slept.push(ms),
+  });
+  assert.deepEqual(slept, [2000], "without the ledger's record, retrying at once would only be refused again");
+});

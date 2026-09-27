@@ -76,8 +76,9 @@ test("setup status reports chat readiness as flags, never values", () => {
     ATLAS_CHAT_MODEL: "openai/gpt-oss-120b",
     GROQ_API_KEY: "gsk_secret_value",
   });
-  assert.deepEqual(readiness, { configured: true, fallbackModelConfigured: true, webSearchConfigured: false });
+  assert.deepEqual(readiness, { configured: true, fallbackModelConfigured: true, modelPoolSize: 2, webSearchConfigured: false });
   assert.doesNotMatch(JSON.stringify(readiness), /gsk_|groq\.com|gpt-oss/u);
   assert.equal(chatReadiness({ ATLAS_CHAT_BASE_URL: "https://api.groq.com/openai/v1", ATLAS_CHAT_MODEL: "m", ATLAS_CHAT_FALLBACK_MODEL: "none" }).fallbackModelConfigured, false);
   assert.equal(chatReadiness({}).configured, false);
+  assert.equal(chatReadiness({}).modelPoolSize, 0);
 });
