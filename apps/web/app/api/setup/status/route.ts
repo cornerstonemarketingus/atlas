@@ -43,7 +43,7 @@ async function githubDispatchReadiness(githubApp: ReturnType<typeof githubAppCon
   } catch {
     return { ok: false, message: "GitHub App authentication failed.", unblock: "Check the ATLAS_GITHUB_APP_* secrets and redeploy." };
   }
-  return probeGitHubDispatch({ token, repository, workflow: process.env.ATLAS_GITHUB_WORKFLOW || "atlas-runner.yml" });
+  return probeGitHubDispatch({ token, repository, workflow: process.env.ATLAS_GITHUB_WORKFLOW || "atlas-runner.yml", githubApp: githubApp.configured });
 }
 
 /** Readiness metadata only: secret values and credential names never leave the Worker. */

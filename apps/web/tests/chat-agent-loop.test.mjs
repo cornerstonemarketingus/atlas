@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MAX_TOOL_STEPS, converse } from "../app/api/chat/agent-loop.mjs";
+import { MAX_TOOL_STEPS, converse, durationMs, retryAfterMs } from "../app/api/chat/agent-loop.mjs";
 
 const endpoint = { baseUrl: "https://model.test/v1", apiKey: "k", model: "m" };
 const sse = (events) => new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
@@ -149,6 +149,27 @@ test("a long retry-after skips straight to the fallback; no fallback means a cle
   const failed = await run(without.fetcher, { sleep: async () => {} }).promise;
   assert.equal(failed.status, 429);
   assert.match(failed.error, /rate limit/u);
+});
+
+test("a Groq minute-long wait in the body or reset header goes to the fallback instead of retrying into it", async () => {
+  const inBody = () => new Response(JSON.stringify({ error: { message: "Rate limit reached on tokens per day (TPD). Please try again in 7m12.5s." } }), { status: 429 });
+  const inHeader = () => new Response("", { status: 429, headers: { "x-ratelimit-reset-tokens": "1m2.5s" } });
+  for (const limited of [inBody, inHeader]) {
+    const waits = [];
+    const { fetcher, requests } = scripted([limited, [say("ok")]]);
+    const outcome = await run(fetcher, { endpoint: { ...endpoint, fallbackModel: "small" }, sleep: async (ms) => { waits.push(ms); } }).promise;
+    assert.equal(outcome.reply, "ok");
+    assert.deepEqual(waits, []);
+    assert.deepEqual(requests.map((request) => request.model), ["m", "small"]);
+  }
+});
+
+test("reads Groq's durations", () => {
+  assert.equal(durationMs("2m59.56s"), 179_560);
+  assert.equal(durationMs("340ms"), 340);
+  assert.equal(durationMs("later"), null);
+  assert.equal(retryAfterMs(new Headers(), "Please try again in 1.5s."), 1_500);
+  assert.equal(retryAfterMs(new Headers({ "retry-after": "2" }), "Please try again in 9s."), 2_000);
 });
 
 test("a rate limit after some work waits, then writes the answer from the work", async () => {

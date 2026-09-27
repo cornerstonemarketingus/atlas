@@ -42,6 +42,8 @@ export interface VerificationReport {
   readonly newFailures: readonly string[];
   /** Plain-language explanation suitable for a pull request body. */
   readonly message: string;
+  /** The pass at which repair moved to the escalation model, when it did. */
+  readonly escalatedAtPass?: number;
 }
 
 export interface VerifiedCoderResult {
@@ -58,6 +60,17 @@ export interface VerifiedCoderSessionOptions {
   readonly runValidation: (label: ValidationSnapshot["label"]) => Promise<ValidationSnapshot>;
   readonly baseEvidence?: readonly AgentEvidence[];
   readonly maxRepairAttempts?: number;
+  /**
+   * A stronger agent for when the normal repair budget is spent and the
+   * change still breaks checks. It continues from the same checkpoint (the
+   * working tree with every edit so far, and only the failures the change
+   * introduced as evidence); the task is never restarted, and it spends from
+   * the same token budget.
+   */
+  readonly escalation?: {
+    readonly attempts: number;
+    readonly runAgent: (evidence: readonly AgentEvidence[]) => Promise<AgentPassResult>;
+  };
   readonly compare?: (baseline: ValidationSnapshot, postChange: ValidationSnapshot) => ValidationComparison;
 }
 
@@ -83,6 +96,7 @@ export class VerifiedCoderSession {
   readonly #baseEvidence: readonly AgentEvidence[];
   readonly #maxRepairAttempts: number;
   readonly #compare: NonNullable<VerifiedCoderSessionOptions["compare"]>;
+  readonly #escalation: VerifiedCoderSessionOptions["escalation"];
 
   public constructor(options: VerifiedCoderSessionOptions) {
     this.#plan = options.plan;
@@ -91,6 +105,10 @@ export class VerifiedCoderSession {
     this.#baseEvidence = options.baseEvidence ?? [];
     this.#maxRepairAttempts = options.maxRepairAttempts ?? DEFAULT_MAX_REPAIR_ATTEMPTS;
     this.#compare = options.compare ?? compareValidationSnapshots;
+    this.#escalation = options.escalation;
+    if (this.#escalation && (!Number.isSafeInteger(this.#escalation.attempts) || this.#escalation.attempts < 1 || this.#escalation.attempts > 5)) {
+      throw new RangeError("escalation.attempts must be an integer between 1 and 5.");
+    }
     if (!Number.isSafeInteger(this.#maxRepairAttempts) || this.#maxRepairAttempts < 0 || this.#maxRepairAttempts > 10) {
       throw new RangeError("maxRepairAttempts must be an integer between 0 and 10.");
     }
@@ -120,10 +138,12 @@ export class VerifiedCoderSession {
     let last: AgentPassResult | null = null;
     let evidence: readonly AgentEvidence[] = this.#baseEvidence;
     let comparison: ValidationComparison | null = null;
+    let passBudget = this.#maxRepairAttempts + 1;
+    let escalatedAtPass: number | undefined;
 
     for (;;) {
       pass += 1;
-      last = await this.#runAgent(evidence);
+      last = await (escalatedAtPass !== undefined && this.#escalation ? this.#escalation.runAgent(evidence) : this.#runAgent(evidence));
       mergeEdits(accumulated, last.edits);
 
       if (last.status !== "completed") {
@@ -161,19 +181,26 @@ export class VerifiedCoderSession {
 
       const postChange = await this.#runValidation("post-change");
       comparison = this.#compare(baseline, postChange);
-      const action = decideVerificationAction(comparison, pass, this.#maxRepairAttempts + 1);
+      let action = decideVerificationAction(comparison, pass, passBudget);
+      if (action === "regressed" && this.#escalation && escalatedAtPass === undefined) {
+        // The repair budget is spent and the change still breaks checks: a
+        // stronger model continues from this checkpoint instead of giving up.
+        escalatedAtPass = pass + 1;
+        passBudget += this.#escalation.attempts;
+        action = "repair";
+      }
 
       if (action === "accept") {
-        return this.#result(last, accumulated, this.#report("verified", pass, comparison,
-          `Verified: the repository's own checks (${this.#plan.profiles.map((profile) => profile.id).join(", ")}) reported no failures that this change introduced.`));
+        return this.#result(last, accumulated, this.#report("verified", pass, comparison, escalatedAtPass,
+          `Verified: the repository's own checks (${this.#plan.profiles.map((profile) => profile.id).join(", ")}) reported no failures that this change introduced${escalatedAtPass === undefined ? "" : ` (repaired by the escalation model from pass ${escalatedAtPass})`}.`));
       }
       if (action === "inconclusive") {
-        return this.#result(last, accumulated, this.#report("inconclusive", pass, comparison,
+        return this.#result(last, accumulated, this.#report("inconclusive", pass, comparison, escalatedAtPass,
           "Inconclusive: checks could not be compared reliably (an infrastructure failure or a flaky result), so this change is unverified and needs a human look."));
       }
       if (action === "regressed") {
-        return this.#result(last, accumulated, this.#report("regressed", pass, comparison,
-          `Regressed: this change introduced ${comparison.summary.new} validation failure(s) that survived ${pass - 1} repair attempt(s).`));
+        return this.#result(last, accumulated, this.#report("regressed", pass, comparison, escalatedAtPass,
+          `Regressed: this change introduced ${comparison.summary.new} validation failure(s) that survived ${pass - 1} repair attempt(s)${escalatedAtPass === undefined ? "" : `, including ${pass - escalatedAtPass + 1} by the escalation model`}.`));
       }
 
       // Repair: hand the model only what it broke, and go round again.
@@ -186,9 +213,11 @@ export class VerifiedCoderSession {
     status: VerificationStatus,
     attempts: number,
     comparison: ValidationComparison,
+    escalatedAtPass: number | undefined,
     message: string,
   ): VerificationReport {
     return {
+      ...(escalatedAtPass === undefined ? {} : { escalatedAtPass }),
       status,
       attempts,
       profileIds: this.#plan.profiles.map((profile) => profile.id),

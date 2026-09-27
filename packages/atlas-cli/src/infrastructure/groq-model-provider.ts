@@ -2,10 +2,17 @@ import type { ModelCapabilities, ModelProvider, ModelProviderMetadata, ModelRequ
 import { ModelProviderError } from "../model/model-provider.js";
 import { validateModelRequest, validateModelResponse } from "../model/model-contract-validation.js";
 import { buildOpenAiChatPayload, parseOpenAiChatResponse } from "./openai-compatible-chat-format.js";
+import { parseDurationMs, retryAfterHeaderMs, suggestedWaitFromMessage } from "./rate-limit-timing.js";
 
 const DEFAULT_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+// A token-per-minute window never needs more than a minute to refill; a
+// longer reset is a daily quota, and sleeping on that would only hang the run.
+const DEFAULT_MAX_PACING_WAIT_MS = 60_000;
+// Rough upper bound for tokens in a JSON chat request. Over-estimating costs a
+// short wait; under-estimating costs a 429 and a retry.
+const BYTES_PER_TOKEN_ESTIMATE = 3;
 
 export interface GroqModelProviderOptions {
   readonly apiKey: string;
@@ -14,6 +21,19 @@ export interface GroqModelProviderOptions {
   readonly timeoutMs?: number;
   readonly maxResponseBytes?: number;
   readonly fetchImplementation?: typeof fetch;
+  /**
+   * Wait for the token-per-minute window to refill before a request the last
+   * response's `x-ratelimit-remaining-tokens` says cannot fit. Defaults to on.
+   */
+  readonly paceRequests?: boolean;
+  readonly maximumPacingWaitMs?: number;
+  readonly sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  readonly now?: () => number;
+}
+
+interface TokenWindow {
+  readonly remainingTokens: number;
+  readonly resetsAt: number;
 }
 
 /**
@@ -29,6 +49,11 @@ export class GroqModelProvider implements ModelProvider {
   readonly #timeoutMs: number;
   readonly #maxResponseBytes: number;
   readonly #fetch: typeof fetch;
+  readonly #paceRequests: boolean;
+  readonly #maximumPacingWaitMs: number;
+  readonly #sleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  readonly #now: () => number;
+  #tokenWindow: TokenWindow | undefined;
 
   public constructor(options: GroqModelProviderOptions) {
     if (options.apiKey.trim().length === 0) throw new TypeError("GroqModelProvider requires a non-empty apiKey.");
@@ -37,12 +62,18 @@ export class GroqModelProvider implements ModelProvider {
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#maxResponseBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
     this.#fetch = options.fetchImplementation ?? fetch;
+    this.#paceRequests = options.paceRequests ?? true;
+    this.#maximumPacingWaitMs = options.maximumPacingWaitMs ?? DEFAULT_MAX_PACING_WAIT_MS;
+    this.#sleep = options.sleep ?? defaultSleep;
+    this.#now = options.now ?? Date.now;
     this.metadata = { id: "groq", displayName: "Groq", models: [...options.models] };
   }
 
   public async complete(request: ModelRequest, options: { readonly signal?: AbortSignal } = {}): Promise<ModelResponse> {
     const validated = validateModelRequest(request);
     const payload = buildOpenAiChatPayload(validated);
+    const body = JSON.stringify(payload);
+    await this.#waitForTokenWindow(body, options.signal);
     const timeoutSignal = AbortSignal.timeout(this.#timeoutMs);
     const signal = options.signal === undefined ? timeoutSignal : AbortSignal.any([options.signal, timeoutSignal]);
 
@@ -51,7 +82,7 @@ export class GroqModelProvider implements ModelProvider {
       response = await this.#fetch(this.#endpoint, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${this.#apiKey}` },
-        body: JSON.stringify(payload),
+        body,
         signal,
       });
     } catch (cause) {
@@ -65,6 +96,7 @@ export class GroqModelProvider implements ModelProvider {
       });
     }
 
+    this.#recordTokenWindow(response.headers);
     const text = await response.text();
     if (Buffer.byteLength(text) > this.#maxResponseBytes) {
       throw new ModelProviderError({
@@ -92,11 +124,15 @@ export class GroqModelProvider implements ModelProvider {
       // failure looks identical and has to be guessed at from the status
       // code alone.
       const detail = text.trim().slice(0, 500);
+      const retryAfterMs = response.status === 429 || response.status >= 500
+        ? retryAfterHeaderMs(response.headers) ?? suggestedWaitFromMessage(text)
+        : undefined;
       throw new ModelProviderError({
         message: `Groq endpoint returned HTTP ${response.status}${detail.length > 0 ? `: ${detail}` : ""}`,
         code: authFailure ? "authentication" : response.status === 429 ? "rate-limit" : "provider-failure",
         providerId: this.metadata.id,
         retryable: !authFailure && (response.status === 429 || response.status >= 500),
+        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
       });
     }
 
@@ -114,6 +150,59 @@ export class GroqModelProvider implements ModelProvider {
     }
     return parseOpenAiChatResponse(parsed, this.metadata.id);
   }
+
+  /**
+   * An agent resends its whole conversation every turn, so on a small
+   * tokens-per-minute allowance the second or third turn in a minute is
+   * rejected. Groq says how much of the window is left on every response;
+   * waiting for the refill up front is cheaper than a 429 and a retry, and
+   * does not spend one of the retry attempts.
+   */
+  async #waitForTokenWindow(body: string, signal: AbortSignal | undefined): Promise<void> {
+    const window = this.#tokenWindow;
+    if (!this.#paceRequests || window === undefined) return;
+    const waitMs = window.resetsAt - this.#now();
+    if (waitMs <= 0) {
+      this.#tokenWindow = undefined;
+      return;
+    }
+    const estimatedTokens = Math.ceil(Buffer.byteLength(body) / BYTES_PER_TOKEN_ESTIMATE);
+    if (estimatedTokens <= window.remainingTokens || waitMs > this.#maximumPacingWaitMs) return;
+    try {
+      await this.#sleep(waitMs, signal);
+    } catch (cause) {
+      throw new ModelProviderError({
+        message: "Groq request cancelled",
+        code: "cancelled",
+        providerId: this.metadata.id,
+        retryable: false,
+        cause,
+      });
+    }
+    this.#tokenWindow = undefined;
+  }
+
+  #recordTokenWindow(headers: Headers): void {
+    const remaining = Number.parseInt(headers.get("x-ratelimit-remaining-tokens") ?? "", 10);
+    const resetMs = parseDurationMs(headers.get("x-ratelimit-reset-tokens") ?? "");
+    this.#tokenWindow = Number.isSafeInteger(remaining) && remaining >= 0 && resetMs !== undefined
+      ? { remainingTokens: remaining, resetsAt: this.#now() + resetMs }
+      : undefined;
+  }
+}
+
+function defaultSleep(delayMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      reject(new DOMException("aborted", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(resolve, delayMs);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("aborted", "AbortError"));
+    }, { once: true });
+  });
 }
 
 /**

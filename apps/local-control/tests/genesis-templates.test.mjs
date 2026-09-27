@@ -43,7 +43,7 @@ for (const [prompt, expected] of SCENARIOS) {
     const workspace = await createWorkspace({ root, projectId: "gen_12345678-aaaa-bbbb-cccc-1234567890ab", spec, templateId: expected });
     assert.equal(workspace.folder, join(root, projectFolderName(spec.name, "gen_12345678-aaaa-bbbb-cccc-1234567890ab")));
     assert.match(workspace.commit, /^[0-9a-f]{40}$/u);
-    assert.deepEqual(gitLog(workspace.folder), [`Atlas|Create ${spec.name} from the ${expected} template (v1.0.0)`]);
+    assert.deepEqual(gitLog(workspace.folder), [`Atlas|Create ${spec.name} from the ${expected} template (v${getTemplate(expected).version})`]);
     const meta = JSON.parse(readFileSync(join(workspace.folder, ".atlas", "genesis.json"), "utf8"));
     assert.equal(meta.template, expected);
     assert.equal(JSON.parse(readFileSync(join(workspace.folder, "package.json"), "utf8")).dependencies && Object.keys(JSON.parse(readFileSync(join(workspace.folder, "package.json"), "utf8")).dependencies).length, 0, "nothing to install");
