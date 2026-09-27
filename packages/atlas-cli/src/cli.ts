@@ -12,6 +12,7 @@ import { RepositoryTextSearch } from "./infrastructure/repository-text-search.js
 import { RepositorySymbolIndexer } from "./infrastructure/repository-symbol-indexer.js";
 import { RepositoryImportGraph, testsFor } from "./infrastructure/repository-import-graph.js";
 import { RepositoryPackageGraph } from "./infrastructure/repository-package-graph.js";
+import { RepositoryConfigReferences } from "./infrastructure/repository-config-references.js";
 import { BoundedRepositorySourceReader } from "./infrastructure/bounded-repository-source-reader.js";
 import { RepositorySymbolReferenceFinder } from "./infrastructure/repository-symbol-reference-finder.js";
 import { BudgetedModelProvider } from "./infrastructure/budgeted-model-provider.js";
@@ -61,6 +62,7 @@ const USAGE = `Usage:
   atlas tree <repository-path> [--max-depth N] [--max-entries N] [--format text|json]
   atlas tests-for <repository-path> <relative-file-path> [--depth N] [--format text|json]
   atlas packages <repository-path> [--format text|json]
+  atlas env <repository-path> [--name NAME] [--undeclared] [--format text|json]
   atlas redact [--max-characters N] [--summary]   (reads stdin, writes redacted text to stdout)
   atlas replay <audit-log.jsonl> [--session <id>] [--format text|json]
   atlas github repo <owner>/<repository> [--format text|json]
@@ -92,7 +94,7 @@ export async function main(args: readonly string[]): Promise<number> {
       writeError: (text) => process.stderr.write(text),
     });
   }
-  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
+  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
     console.error(USAGE);
     return 2;
   }
@@ -125,6 +127,29 @@ export async function main(args: readonly string[]): Promise<number> {
         }
       }
       for (const warning of graph.warnings) console.error(`warning: ${warning.message}`);
+      return 0;
+    }
+    if (args[0] === "env") {
+      const nameIndex = args.indexOf("--name");
+      const name = nameIndex < 0 ? undefined : args[nameIndex + 1];
+      if (nameIndex >= 0 && (name === undefined || name.startsWith("--"))) {
+        console.error("The --name option requires a value.");
+        return 2;
+      }
+      const result = await new RepositoryConfigReferences().find(args[1]);
+      const variables = result.variables
+        .filter((variable) => name === undefined || variable.name === name)
+        .filter((variable) => !args.includes("--undeclared") || variable.undeclared);
+      if (format === "json") {
+        console.log(JSON.stringify({ ...result, variables }, null, 2));
+        return 0;
+      }
+      if (variables.length === 0) console.log(name === undefined ? "No environment variable references found." : `No references to ${name}.`);
+      for (const variable of variables) {
+        console.log(`${variable.name}${variable.undeclared ? "  (read, but not declared in any example file, workflow env or wrangler vars)" : ""}`);
+        for (const reference of variable.references) console.log(`  ${reference.kind.padEnd(8)} ${reference.file}:${reference.line}  ${reference.via}`);
+      }
+      for (const warning of result.warnings) console.error(`warning: ${warning.message}`);
       return 0;
     }
     if (args[0] === "tests-for") {
