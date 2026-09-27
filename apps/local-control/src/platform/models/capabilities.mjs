@@ -61,7 +61,9 @@ export class ModelCapabilityRegistry {
   upsert(profile) {
     const normalized = normalizeProfile(profile);
     const existing = this.#profiles.get(normalized.id);
-    if (existing && !profile.measured) normalized.measured = existing.measured;
+    if (existing && !profile.measured && existing.provider === normalized.provider
+      && existing.model === normalized.model && existing.endpoint === normalized.endpoint
+      && existing.local === normalized.local) normalized.measured = structuredClone(existing.measured);
     this.#profiles.set(normalized.id, normalized);
     return this.effective(normalized.id);
   }
@@ -84,19 +86,13 @@ export class ModelCapabilityRegistry {
    * Records a capability-suite result. Only the fields given are replaced;
    * `measuredAt` is required so a stale measurement is visible as stale.
    */
-  recordMeasurement(id, { capabilities = {}, reliability, p50LatencyMs, measuredAt, probes } = {}) {
+  recordMeasurement(id, measurement = {}) {
+    const { measuredAt } = measurement;
     const profile = this.#profiles.get(id);
     if (!profile) throw new CapabilityError("UNKNOWN_PROFILE", `No model profile '${id}'.`);
     if (!measuredAt || Number.isNaN(Date.parse(measuredAt))) throw new CapabilityError("INVALID_MEASUREMENT", "A measurement needs a measuredAt timestamp.");
-    const next = { ...(profile.measured ?? {}), capabilities: { ...(profile.measured?.capabilities ?? {}) }, measuredAt: new Date(measuredAt).toISOString() };
-    for (const [key, value] of Object.entries(capabilities)) {
-      if (!CAPABILITY_KEYS.includes(key)) continue;
-      validateCapability(key, value);
-      next.capabilities[key] = value;
-    }
-    if (reliability !== undefined) next.reliability = unit(reliability, "reliability");
-    if (p50LatencyMs !== undefined) next.p50LatencyMs = nonNegative(p50LatencyMs, "p50LatencyMs");
-    if (probes) next.probes = probes;
+    const next = normalizeMeasured({ ...profile.measured, ...measurement,
+      capabilities: { ...profile.measured?.capabilities, ...measurement.capabilities } });
     profile.measured = next;
     return this.effective(id);
   }
@@ -134,6 +130,12 @@ export class ModelCapabilityRegistry {
       p50LatencyMs: pick("p50LatencyMs", null),
       reliability: pick("reliability", 0),
       measuredAt: profile.measured?.measuredAt ?? null,
+      contextVerifiedTokens: profile.measured?.probes?.contextVerifiedTokens ?? null,
+      structuredOutputReliability: profile.measured?.structuredOutputReliability ?? null,
+      toolCallReliability: profile.measured?.toolCallReliability ?? null,
+      // These describe the latest probe batch, not lifetime production traffic.
+      recentFailureRate: profile.measured?.recentFailureRate ?? null,
+      health: structuredClone(profile.measured?.health ?? { status: "unknown", checkedAt: null }),
       sources,
     };
   }
@@ -154,13 +156,15 @@ function normalizeProfile(profile) {
   if (local && CLOUD_ONLY_PROVIDERS.includes(provider)) throw new CapabilityError("INVALID_PROFILE", `Model '${id}' cannot be local: ${provider} is a hosted provider.`);
   if (local && profile.endpoint && !isLoopbackUrl(profile.endpoint)) throw new CapabilityError("INVALID_PROFILE", `Model '${id}' is marked local but its endpoint is not loopback.`);
   const declared = { capabilities: {} };
-  for (const [key, value] of Object.entries(profile.capabilities ?? {})) {
+  for (const [key, value] of Object.entries(profile.capabilities ?? profile.declared?.capabilities ?? {})) {
     if (!CAPABILITY_KEYS.includes(key)) continue;
     validateCapability(key, value);
     declared.capabilities[key] = value;
   }
-  if (profile.reliability !== undefined) declared.reliability = unit(profile.reliability, "reliability");
-  if (profile.p50LatencyMs !== undefined) declared.p50LatencyMs = nonNegative(profile.p50LatencyMs, "p50LatencyMs");
+  for (const key of ["reliability", "p50LatencyMs"]) {
+    const value = profile[key] ?? profile.declared?.[key];
+    if (value !== undefined) declared[key] = key === "reliability" ? unit(value, key) : nonNegative(value, key);
+  }
   const normalized = {
     id,
     provider,
@@ -177,7 +181,8 @@ function normalizeProfile(profile) {
 }
 
 function normalizeMeasured(measured) {
-  const out = { capabilities: {}, measuredAt: new Date(measured.measuredAt ?? Date.now()).toISOString() };
+  if (!measured.measuredAt || Number.isNaN(Date.parse(measured.measuredAt))) throw new CapabilityError("INVALID_MEASUREMENT", "A measurement needs a measuredAt timestamp.");
+  const out = { capabilities: {}, measuredAt: new Date(measured.measuredAt).toISOString() };
   for (const [key, value] of Object.entries(measured.capabilities ?? {})) {
     if (!CAPABILITY_KEYS.includes(key)) continue;
     validateCapability(key, value);
@@ -185,6 +190,24 @@ function normalizeMeasured(measured) {
   }
   if (measured.reliability !== undefined) out.reliability = unit(measured.reliability, "reliability");
   if (measured.p50LatencyMs !== undefined) out.p50LatencyMs = nonNegative(measured.p50LatencyMs, "p50LatencyMs");
+  for (const key of ["structuredOutputReliability", "toolCallReliability", "recentFailureRate"]) {
+    if (measured[key] !== undefined) out[key] = unit(measured[key], key);
+  }
+  if (measured.health !== undefined) {
+    if (!["available", "unavailable", "degraded"].includes(measured.health?.status)
+      || !measured.health.checkedAt || Number.isNaN(Date.parse(measured.health.checkedAt))) {
+      throw new CapabilityError("INVALID_MEASUREMENT", "Health needs a status and checkedAt timestamp.");
+    }
+    out.health = { status: measured.health.status, checkedAt: new Date(measured.health.checkedAt).toISOString() };
+  }
+  if (measured.probes !== undefined) {
+    const { results, contextVerifiedTokens } = measured.probes;
+    if (!Array.isArray(results) || results.length > 232) throw new CapabilityError("INVALID_MEASUREMENT", "Probe results must be a bounded array.");
+    out.probes = { results: results.map((probe) => {
+      if (typeof probe?.id !== "string" || typeof probe.passed !== "boolean" || typeof probe.detail !== "string") throw new CapabilityError("INVALID_MEASUREMENT", "Invalid probe result.");
+      return { id: probe.id.slice(0, 100), passed: probe.passed, detail: probe.detail.slice(0, 1000) };
+    }), contextVerifiedTokens: contextVerifiedTokens == null ? null : nonNegative(contextVerifiedTokens, "contextVerifiedTokens") };
+  }
   return out;
 }
 

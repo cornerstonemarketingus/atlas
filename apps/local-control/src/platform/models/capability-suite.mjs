@@ -12,7 +12,7 @@
  * Probes: JSON output, tool-call formatting (validated with validateToolCall),
  * and context recall at increasing sizes (a "needle" at the start of filler).
  * Context is recorded honestly: if every size passed, the declared window is
- * kept and `contextVerifiedTokens` notes how far it was tested; if a size
+ * kept as declared and `contextVerifiedTokens` notes how far it was tested; if a size
  * failed, the measured window is the largest size that passed.
  * Vision is not probed, so it stays declared.
  */
@@ -27,16 +27,26 @@ const FILLER = "The quarterly report discusses logistics, staffing, and routine 
 
 export async function runCapabilitySuite(modelClient, profileId, { registry, model, trials = 1, contextSizes = [1_024, 4_096], clock = () => Date.now(), now = () => new Date() } = {}) {
   if (!registry) throw new TypeError("runCapabilitySuite needs a registry to record measurements in.");
+  // Validate before inference: zero trials used to certify tools/JSON without
+  // a single request. Bound input allocation and total calls as well.
+  if (!Number.isSafeInteger(trials) || trials < 1 || trials > 100) throw new RangeError("trials must be an integer from 1 to 100.");
+  if (!Array.isArray(contextSizes) || contextSizes.length > 32
+    || contextSizes.some((size) => !Number.isSafeInteger(size) || size < 1 || size > 131_072)) {
+    throw new RangeError("contextSizes must contain at most 32 integer sizes from 1 to 131072.");
+  }
   const profile = registry.effective(profileId);
   const modelName = model ?? profile.model ?? profileId;
+  if (modelName !== profile.model) throw new TypeError("model must match the registered profile before recording evidence.");
   const probes = [];
   const latencies = [];
+  let responses = 0;
 
   const run = async (id, request, check) => {
     const started = clock();
     let outcome;
     try {
       const response = await complete(modelClient, { model: modelName, ...request });
+      responses += 1;
       outcome = { id, ...check(response) };
     } catch (error) {
       outcome = { id, passed: false, detail: `error: ${error.message}` };
@@ -78,8 +88,10 @@ export async function runCapabilitySuite(modelClient, profileId, { registry, mod
   const declaredContext = profile.capabilities.contextTokens;
   let largestRecalled = 0;
   let recallFailed = false;
-  for (const size of [...contextSizes].sort((a, b) => a - b)) {
+  let recallAttempted = false;
+  for (const size of [...new Set(contextSizes)].sort((a, b) => a - b)) {
     if (declaredContext && size > declaredContext) break;
+    recallAttempted = true;
     const code = `${Math.floor(1000 + (size % 9000))}-ALPHA`;
     const needle = `Remember this: the vault code is ${code}. `;
     const filler = FILLER.repeat(Math.max(1, Math.floor((size * 4 - needle.length) / FILLER.length)));
@@ -94,15 +106,22 @@ export async function runCapabilitySuite(modelClient, profileId, { registry, mod
   const capabilities = {
     structuredOutput: jsonPasses === trials,
     toolCalls: toolPasses === trials,
-    contextTokens: recallFailed ? largestRecalled : Math.max(declaredContext, largestRecalled),
+    // A successful 4K probe is not a measurement of a declared 128K window.
+    ...(recallFailed || (recallAttempted && largestRecalled >= declaredContext)
+      ? { contextTokens: largestRecalled } : {}),
   };
   const sorted = [...latencies].sort((a, b) => a - b);
+  const measuredAt = now().toISOString();
   const measurement = {
     capabilities,
     reliability: probes.length ? Math.round((passed / probes.length) * 1000) / 1000 : 0,
     p50LatencyMs: sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : undefined,
-    measuredAt: now().toISOString(),
-    probes: { results: probes, contextVerifiedTokens: largestRecalled },
+    measuredAt,
+    structuredOutputReliability: jsonPasses / trials,
+    toolCallReliability: toolPasses / trials,
+    recentFailureRate: 1 - passed / probes.length,
+    health: { status: responses === 0 ? "unavailable" : responses === probes.length ? "available" : "degraded", checkedAt: measuredAt },
+    probes: { results: probes, contextVerifiedTokens: recallAttempted ? largestRecalled : null },
   };
   const effective = registry.recordMeasurement(profileId, measurement);
   return { profileId, passed, total: probes.length, probes, measured: measurement, effective };

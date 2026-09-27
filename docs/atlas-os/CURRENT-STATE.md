@@ -1,5 +1,11 @@
 # Atlas — current state (2026-09-25)
 
+> Historical audit. For the 2026-09-26 `main` audit at `91820a6` and the
+> Intelligence Layer implementation sequence, see
+> [INTELLIGENCE-ROADMAP.md](../INTELLIGENCE-ROADMAP.md). In particular, Genesis
+> now has tenant-scoped planning persistence; full application execution is
+> still missing. Status claims below describe the older audited revision.
+
 Audited on branch `claude/atlas-platform-development-o9znpd` at base `1cabfe6`
 (merge of PR #58). Everything below was re-checked against code, CI and test
 runs on that date; older handoff documents were compared, not trusted.
