@@ -226,6 +226,9 @@ jobs:
           ATLAS_CODER_FALLBACKS: ${{ vars.ATLAS_CODER_FALLBACKS }}
           ATLAS_CODER_RETRY_ATTEMPTS: ${{ vars.ATLAS_CODER_RETRY_ATTEMPTS }}
           ATLAS_CODER_RETRY_MAX_DELAY_MS: ${{ vars.ATLAS_CODER_RETRY_MAX_DELAY_MS }}
+          # Optional stronger model for repairs the configured one could not finish (docs/CODER-PROVIDER-LIMITS.md).
+          ATLAS_CODER_ESCALATION: ${{ vars.ATLAS_CODER_ESCALATION }}
+          ATLAS_CODER_ESCALATION_ATTEMPTS: ${{ vars.ATLAS_CODER_ESCALATION_ATTEMPTS }}
           ATLAS_TOKEN_BUDGET: ${{ vars.ATLAS_TOKEN_BUDGET }}
           ATLAS_MAX_TURNS: ${{ vars.ATLAS_MAX_TURNS }}
           # Per-step reply ceiling. Groq defaults to 1,024 for its free tier;
