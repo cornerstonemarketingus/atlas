@@ -54,6 +54,25 @@ function grantInstructions(kind, permission, repository) {
   }
 }
 
+/**
+ * Why the GitHub App could not get an installation token, and the fix. The
+ * token request asks for Actions: write; an App without that permission is
+ * refused here, before any dispatch, so this is where it has to be named.
+ */
+export function explainGitHubAppFailure(error, { repository = "the repository" } = {}) {
+  const base = { credential: "github-app", blocked: "BLOCKED_BY_MISSING_CREDENTIAL" };
+  switch (error?.code) {
+    case "GITHUB_APP_PERMISSION_MISSING":
+      return { ...base, code: "GITHUB_PERMISSION_MISSING", blocked: "BLOCKED_BY_PERMISSION", missingPermission: "Actions", message: `The GitHub App does not have Actions: write on ${repository}, so it cannot start runs.`, unblock: grantInstructions("github-app", "Actions", repository) };
+    case "GITHUB_APP_INSTALLATION_NOT_FOUND":
+      return { ...base, code: "GITHUB_APP_INSTALLATION_NOT_FOUND", message: "GitHub has no installation of the App with the configured installation id.", unblock: `Install the GitHub App on ${repository} and save its installation id as ATLAS_GITHUB_INSTALLATION_ID, then run "Deploy Atlas web to Cloudflare Workers".` };
+    case "GITHUB_APP_KEY_REJECTED":
+      return { ...base, code: "GITHUB_APP_KEY_REJECTED", message: "GitHub rejected the App's signed request: the App id and private key do not match.", unblock: "Generate a new private key in the App's settings, save it as ATLAS_GITHUB_APP_PRIVATE_KEY with the matching ATLAS_GITHUB_APP_ID, then redeploy." };
+    default:
+      return { ...base, code: "GITHUB_APP_AUTH_FAILED", message: "GitHub App authentication failed.", unblock: "Check the ATLAS_GITHUB_APP_* secrets (app id, installation id, private key) and redeploy." };
+  }
+}
+
 /** A 403 with no requests left is GitHub's rate limit, not a missing permission. */
 export function isRateLimited(headers) {
   return headers?.get?.("x-ratelimit-remaining") === "0";

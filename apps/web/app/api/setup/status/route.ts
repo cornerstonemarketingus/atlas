@@ -5,7 +5,7 @@ import { stripeConfiguration } from "../../billing/stripe.mjs";
 import { chatReadiness } from "../../chat/model-endpoint.mjs";
 import { createInstallationToken, githubAppConfiguration } from "../../tasks/github-app.mjs";
 import { allowedRepositories } from "../../tasks/dispatch.mjs";
-import { probeGitHubDispatch } from "../../tasks/github-diagnosis.mjs";
+import { explainGitHubAppFailure, probeGitHubDispatch } from "../../tasks/github-diagnosis.mjs";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { platformGitHubToken } from "../../tasks/github-token.mjs";
 
@@ -40,8 +40,8 @@ async function githubDispatchReadiness(githubApp: ReturnType<typeof githubAppCon
   let token = platformGitHubToken();
   try {
     if (githubApp.configured) token = await createInstallationToken(githubApp);
-  } catch {
-    return { ok: false, message: "GitHub App authentication failed.", unblock: "Check the ATLAS_GITHUB_APP_* secrets and redeploy." };
+  } catch (error) {
+    return { ok: false, ...explainGitHubAppFailure(error, { repository }) };
   }
   return probeGitHubDispatch({ token, repository, workflow: process.env.ATLAS_GITHUB_WORKFLOW || "atlas-runner.yml", githubApp: githubApp.configured });
 }
