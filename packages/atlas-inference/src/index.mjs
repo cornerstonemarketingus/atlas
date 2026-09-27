@@ -6,3 +6,4 @@ export { POLL_MS, RESERVATION_TTL_MS, WAITING_TTL_MS, emptyLedgerState, ledgerSn
 export { CIRCUIT, TargetHealth, admit as admitToTarget, effectiveHealth, initialHealth, recordOutcome } from "./circuit.mjs";
 export { listModels, validateBaseUrl } from "./openai-compatible.mjs";
 export { MODEL_LIST_TTL_MS, createTargetRegistry } from "./target-registry.mjs";
+export { cacheReport, canonicalJson, prefixChanges, promptFingerprint, withCachedTokens } from "./prompt-fingerprint.mjs";
