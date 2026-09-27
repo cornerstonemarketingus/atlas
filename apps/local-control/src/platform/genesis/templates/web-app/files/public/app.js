@@ -6,6 +6,12 @@ const main = document.getElementById("main");
 const nav = document.getElementById("nav");
 const toast = document.getElementById("toast");
 let config = null;
+// Every route change starts a new view. A render that awaited the network
+// checks it is still the current view before touching the page, so a slow
+// response from the screen the person just left can never replace the one
+// they are on.
+let view = 0;
+const currentView = () => { const mine = view; return () => mine === view; };
 
 function h(tag, attributes = {}, ...children) {
   const node = document.createElement(tag);
@@ -89,9 +95,11 @@ function recordForm(entity, { record = null, fields = entity.fields, submitLabel
 }
 
 async function renderDashboard() {
+  const current = currentView();
   setPage("Dashboard", h("p", { class: "loading", role: "status", text: "Loading…" }));
   try {
     const stats = await api("stats");
+    if (!current()) return;
     const cards = config.entities.map((entity) => {
       const stat = stats[entity.slug];
       return h("a", { class: "card stat", href: `#/${entity.slug}` },
@@ -100,6 +108,7 @@ async function renderDashboard() {
         Object.keys(stat.byStatus).length ? h("ul", { class: "breakdown" }, ...Object.entries(stat.byStatus).map(([status, count]) => h("li", {}, h("span", { text: status }), h("span", { text: String(count) })))) : null);
     });
     const recent = await Promise.all(config.entities.map(async (entity) => ({ entity, records: (await api(entity.slug)).records.slice(0, 5) })));
+    if (!current()) return;
     setPage("Dashboard",
       h("div", { class: "grid" }, ...cards),
       ...recent.map(({ entity, records }) => h("section", { class: "card" },
@@ -108,20 +117,27 @@ async function renderDashboard() {
           ? h("ul", { class: "recent" }, ...records.map((record) => h("li", {}, h("a", { href: `#/${entity.slug}/${record.id}`, text: record[entity.fields[0].key] || `#${record.id}` }), h("span", { class: "muted", text: new Date(record.createdAt).toLocaleDateString() }))))
           : h("p", { class: "empty" }, `No ${entity.plural.toLowerCase()} yet. `, h("a", { href: `#/${entity.slug}/new`, text: `Add the first one` })))));
   } catch (error) {
-    setPage("Dashboard", h("p", { class: "error", role: "alert", text: `Could not load the dashboard: ${error.message}` }));
+    if (current()) setPage("Dashboard", h("p", { class: "error", role: "alert", text: `Could not load the dashboard: ${error.message}` }));
   }
 }
 
 async function renderList(entity, query = "") {
+  const current = currentView();
   const statusField = entity.fields.find((field) => field.type === "select");
   const search = h("input", { type: "search", id: "search", placeholder: `Search ${entity.plural.toLowerCase()}`, "aria-label": `Search ${entity.plural.toLowerCase()}`, value: query });
   const results = h("div", { class: "results", "aria-live": "polite" }, h("p", { class: "loading", text: "Loading…" }));
   setPage(entity.plural,
     h("div", { class: "toolbar" }, search, h("a", { class: "button", href: `#/${entity.slug}/new`, text: `Add ${entity.name.toLowerCase()}` })),
     results);
+  // Only the newest search's answer is shown: typing quickly must not let an
+  // older, slower response (such as the unfiltered first load) win.
+  let latest = 0;
   const load = async () => {
+    const request = ++latest;
+    const fresh = () => request === latest && current();
     try {
       const { records } = await api(`${entity.slug}?q=${encodeURIComponent(search.value)}`);
+      if (!fresh()) return;
       if (!records.length) {
         results.replaceChildren(h("p", { class: "empty", text: search.value ? `No ${entity.plural.toLowerCase()} match "${search.value}".` : `No ${entity.plural.toLowerCase()} yet. Add the first one.` }));
         return;
@@ -136,7 +152,7 @@ async function renderList(entity, query = "") {
             try { await api(`${entity.slug}/${record.id}`, { method: "DELETE" }); notify(`${entity.name} deleted.`); load(); } catch (error) { notify(error.message); }
           } })))))));
     } catch (error) {
-      results.replaceChildren(h("p", { class: "error", role: "alert", text: `Could not load ${entity.plural.toLowerCase()}: ${error.message}` }));
+      if (fresh()) results.replaceChildren(h("p", { class: "error", role: "alert", text: `Could not load ${entity.plural.toLowerCase()}: ${error.message}` }));
     }
   };
   let timer;
@@ -149,13 +165,15 @@ async function renderRecord(entity, id) {
     setPage(`Add ${entity.name.toLowerCase()}`, recordForm(entity, { submitLabel: `Save ${entity.name.toLowerCase()}`, onSaved: (record) => { notify(`${entity.name} saved.`); location.hash = `#/${entity.slug}/${record.id}`; } }));
     return;
   }
+  const current = currentView();
   try {
     const { record } = await api(`${entity.slug}/${id}`);
+    if (!current()) return;
     setPage(record[entity.fields[0].key] || `${entity.name} #${record.id}`,
       h("p", {}, h("a", { href: `#/${entity.slug}`, text: `← All ${entity.plural.toLowerCase()}` })),
       recordForm(entity, { record, submitLabel: "Save changes", onSaved: () => { notify("Changes saved."); renderRecord(entity, id); } }));
   } catch (error) {
-    setPage(`${entity.name} not found`, h("p", { class: "error", role: "alert", text: error.message }), h("a", { href: `#/${entity.slug}`, text: `Back to ${entity.plural.toLowerCase()}` }));
+    if (current()) setPage(`${entity.name} not found`, h("p", { class: "error", role: "alert", text: error.message }), h("a", { href: `#/${entity.slug}`, text: `Back to ${entity.plural.toLowerCase()}` }));
   }
 }
 
@@ -172,6 +190,7 @@ function renderBooking() {
 }
 
 function route() {
+  view += 1;
   const [, first = "", second] = location.hash.replace(/^#/u, "").split("/");
   nav.classList.remove("open");
   document.getElementById("menu").setAttribute("aria-expanded", "false");
