@@ -53,6 +53,7 @@ import { registerGenesisTools } from "./platform/genesis/tools.mjs";
 import { GenesisPublisher } from "./platform/genesis/publish.mjs";
 import { PreviewManager } from "./platform/genesis/preview.mjs";
 import { createInspector } from "./platform/genesis/inspector.mjs";
+import { createVisionReviewer } from "./platform/genesis/vision.mjs";
 import { createGenesisCoder } from "./platform/genesis/coder.mjs";
 import { runCheck } from "./platform/self-improve/runtime.mjs";
 import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
@@ -193,13 +194,16 @@ const genesisExecutor = new GenesisExecutor({
   runCheck,
   coder: createGenesisCoder({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan, intelligence: genesis.intelligence }),
   preview: genesisPreviews,
-  inspector: createInspector({ artifactsRoot: join(dataDirectory, "genesis", "inspections") }),
+  inspector: createInspector({ artifactsRoot: join(dataDirectory, "genesis", "inspections"), vision: createVisionReviewer() }),
 });
 for (const project of genesis.recover()) console.log(`Genesis: ${project.name} was interrupted and is paused.`);
 // Publishing a finished project is external: it goes through the publish.remote policy and the normal approvals.
 const genesisPublisher = new GenesisPublisher({
   genesis,
   approvals: { policy: (capability) => store.policy(capability), create: (request) => store.createApproval(request), get: (id) => store.approval(id) },
+  // Host and deployment tokens come from the OS-backed vault first, like every other credential.
+  credentials: async (name) => (await vault.get(name).catch(() => null)) ?? process.env[name] ?? null,
+  runCheck,
 });
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
 // Remote access stays customer-managed (your VPN or HTTPS proxy); Atlas itself keeps listening on loopback.

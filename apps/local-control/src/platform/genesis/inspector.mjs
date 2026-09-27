@@ -246,11 +246,27 @@ export async function inspectInBrowser(project, preview, { artifactsDir = null, 
 }
 
 /** The inspector Genesis uses: a browser when one launches, HTTP otherwise (flagged as limited). */
-export function createInspector({ artifactsRoot = null, playwright = null, launchOptions = {} } = {}) {
+/**
+ * The inspector Genesis uses: a browser when one launches, HTTP otherwise
+ * (flagged as limited). With a `vision` reviewer (vision.mjs), a clean
+ * browser inspection's screenshots are also reviewed visually; its blocking
+ * findings join the others, and its suggestions go to the polish step.
+ */
+export function createInspector({ artifactsRoot = null, playwright = null, launchOptions = {}, vision = null } = {}) {
   return async (project, preview) => {
     if (project.plan.template !== "api-service") {
       const browser = await inspectInBrowser(project, preview, { artifactsDir: artifactsRoot ? join(artifactsRoot, project.id) : null, playwright, launchOptions });
-      if (browser) return browser;
+      if (browser) {
+        if (!vision || !browser.ok) return browser;
+        const visual = await vision(project, browser.evidence.screenshots).catch((error) => ({ reviewed: false, reason: String(error?.message ?? error), findings: [] }));
+        const findings = [...browser.findings, ...visual.findings];
+        return {
+          ...browser,
+          ok: !findings.some((f) => f.severity === "error"),
+          findings,
+          evidence: { ...browser.evidence, visual: { reviewed: visual.reviewed, model: visual.model ?? null, reason: visual.reason ?? null, issues: visual.findings.length } },
+        };
+      }
     }
     return inspectOverHttp(project, preview);
   };

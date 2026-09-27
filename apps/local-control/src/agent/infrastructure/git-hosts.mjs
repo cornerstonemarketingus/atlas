@@ -156,3 +156,76 @@ export function sealSecret(value, base64Key) {
   }
   return publicEncrypt({ key, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }, Buffer.from(value, "utf8")).toString("base64");
 }
+
+const REPOSITORY_NAME = /^[A-Za-z0-9._-]{1,100}$/u;
+
+/**
+ * Creating a repository on a git host, in the same plan → approve → apply →
+ * verify shape as the rest of this file. Creating is reversible only by
+ * deleting the repository on the host, which Atlas does not do on its own.
+ *
+ * GitHub: POST /user/repos · GitLab: POST /projects · Forgejo: POST /api/v1/user/repos.
+ */
+export function createRepositoryCreator({ host, token, baseUrl = null, fetchImpl = fetch }) {
+  if (!token) throw new InfrastructureError("NO_CREDENTIAL", `A ${host} token is required to create a repository.`);
+  const root = host === "forgejo" ? `${String(baseUrl ?? "").replace(/\/+$/u, "")}/api/v1` : (baseUrl ?? ROOTS[host]);
+  if (!root || (host === "forgejo" && !baseUrl)) throw new InfrastructureError("UNKNOWN_HOST", "Use github, gitlab, or forgejo with its base URL.");
+  const headers = host === "gitlab"
+    ? { "private-token": token }
+    : host === "forgejo"
+      ? { authorization: `token ${token}` }
+      : { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
+  const call = createApiClient({ root, headers, fetchImpl });
+
+  async function owner(signal) {
+    const user = await call(host === "gitlab" ? "/user" : "/user", { signal });
+    return host === "gitlab" ? user.username : user.login;
+  }
+
+  async function find(fullName, signal) {
+    try {
+      if (host === "gitlab") return await call(`/projects/${encodeURIComponent(fullName)}`, { signal });
+      return await call(`/repos/${fullName}`, { signal });
+    } catch (error) {
+      if (error.code === "NOT_FOUND" || /404/u.test(String(error.message))) return null;
+      throw error;
+    }
+  }
+
+  const cloneUrl = (repo) => repo.clone_url ?? repo.http_url_to_repo ?? null;
+  const webUrl = (repo) => repo.html_url ?? repo.web_url ?? null;
+
+  return {
+    provider: host,
+    async planRepository({ name, visibility = "private", description = "", signal }) {
+      if (!REPOSITORY_NAME.test(name ?? "")) throw new InfrastructureError("BAD_REPOSITORY", "A repository name uses letters, numbers, dots, dashes and underscores.");
+      if (!["private", "public"].includes(visibility)) throw new InfrastructureError("BAD_VISIBILITY", "Visibility is private or public.");
+      const login = await owner(signal);
+      const fullName = `${login}/${name}`;
+      if (await find(fullName, signal)) throw new InfrastructureError("EXISTS", `${fullName} already exists on ${host}; choose another name or publish to it directly.`);
+      return buildPlan({
+        provider: host,
+        operation: "create",
+        resource: "repository",
+        target: `${fullName} (${visibility})`,
+        before: null,
+        after: { name, owner: login, visibility, description: description.slice(0, 200) },
+        reversible: false,
+        notes: [
+          visibility === "public" ? "A public repository is visible to everyone on the internet." : "A private repository is visible only to you and people you invite.",
+          "Undoing this means deleting the repository on the host yourself.",
+        ],
+      });
+    },
+    async applyRepository({ plan, signal }) {
+      const { name, visibility, description, owner: login } = plan.after;
+      const body = host === "gitlab"
+        ? { name, path: name, visibility, description }
+        : { name, private: visibility === "private", description, auto_init: false };
+      await call(host === "gitlab" ? "/projects" : "/user/repos", { method: "POST", body, signal });
+      // Read back rather than trusting the create call's own response.
+      const created = await find(`${login}/${name}`, signal);
+      return { verified: Boolean(created), observed: created ? { fullName: `${login}/${name}`, cloneUrl: cloneUrl(created), webUrl: webUrl(created) } : null };
+    },
+  };
+}

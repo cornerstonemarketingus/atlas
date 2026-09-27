@@ -104,6 +104,10 @@ export class GenesisStore {
         created_at TEXT NOT NULL
       );
     `);
+    // Publish requests of other kinds (repository creation, deployment) carry their approved plan.
+    for (const column of ["kind TEXT NOT NULL DEFAULT 'push'", "plan_json TEXT"]) {
+      try { this.#db.exec(`ALTER TABLE genesis_publish_requests ADD COLUMN ${column}`); } catch { /* already present */ }
+    }
     // Additive migration for databases created before tasks recorded their executor.
     try { this.#db.exec("ALTER TABLE genesis_tasks ADD COLUMN executor TEXT NOT NULL DEFAULT 'template'"); } catch { /* already present */ }
   }
@@ -235,15 +239,15 @@ export class GenesisStore {
   }
 
   /** A publish waiting for the owner's approval; survives restarts. */
-  recordPublishRequest(projectId, { approvalId, remote, commit }) {
-    this.#db.prepare("INSERT OR REPLACE INTO genesis_publish_requests (approval_id, project_id, remote, commit_sha, created_at) VALUES (?, ?, ?, ?, ?)").run(approvalId, projectId, remote, commit, this.#stamp());
+  recordPublishRequest(projectId, { approvalId, remote, commit, kind = "push", plan = null }) {
+    this.#db.prepare("INSERT OR REPLACE INTO genesis_publish_requests (approval_id, project_id, remote, commit_sha, created_at, kind, plan_json) VALUES (?, ?, ?, ?, ?, ?, ?)").run(approvalId, projectId, remote, commit, this.#stamp(), kind, plan ? json(plan) : null);
   }
 
   takePublishRequest(approvalId) {
     const row = this.#db.prepare("SELECT * FROM genesis_publish_requests WHERE approval_id = ?").get(String(approvalId));
     if (!row) return null;
     this.#db.prepare("DELETE FROM genesis_publish_requests WHERE approval_id = ?").run(String(approvalId));
-    return { approvalId: row.approval_id, projectId: row.project_id, remote: row.remote, commit: row.commit_sha };
+    return { approvalId: row.approval_id, projectId: row.project_id, remote: row.remote, commit: row.commit_sha, kind: row.kind ?? "push", plan: parse(row.plan_json) };
   }
 
   /** Projects that were mid-work when Atlas stopped. */
