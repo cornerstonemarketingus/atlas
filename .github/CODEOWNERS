@@ -65,3 +65,5 @@
 # Security policy
 /apps/web/worker/security-headers.mjs @cornerstonemarketingus
 /docs/atlas-os/SECURITY-REVIEW.md @cornerstonemarketingus
+/docs/PROGRAM.md @cornerstonemarketingus
+/CLAUDE.md @cornerstonemarketingus
