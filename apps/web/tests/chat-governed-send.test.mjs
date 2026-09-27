@@ -95,7 +95,7 @@ test("while the ledger says capacity returns soon, the call waits for it", async
   assert.deepEqual(governor.calls.map((call) => call.method), ["reserve", "reserve", "release"]);
 });
 
-test("a wait longer than the limit withdraws from the queue and sends anyway: the ledger never fails a reply", async () => {
+test("a long capacity wait withdraws without sending to an exhausted model", async () => {
   const governor = ledgerGovernor();
   governor.state.models.m = { limitRequests: null, limitTokens: 6000, remainingRequests: null, remainingTokens: 0, resetRequestsAt: null, resetTokensAt: MAX_GOVERNOR_WAIT_MS + 60_000, blockedUntil: null, blockedReason: null, observedAt: 0 };
   const slept = [];
@@ -104,15 +104,17 @@ test("a wait longer than the limit withdraws from the queue and sends anyway: th
   const logged = [];
   console.warn = (line) => logged.push(line);
   try {
-    await governedSend({ baseUrl: "https://model.test/v1", model: "m", governor }, turns, {
+    const response = await governedSend({ baseUrl: "https://model.test/v1", model: "m", governor }, turns, {
       stream: false, maxTokens: 10, fetcher: async () => { sent += 1; return ok(); }, sleep: async (ms) => slept.push(ms),
     });
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get("retry-after"), "68");
   } finally {
     console.warn = warn;
   }
   assert.deepEqual(slept, []);
-  assert.equal(sent, 1);
-  assert.deepEqual(governor.calls.map((call) => call.method), ["reserve", "withdraw", "release"]);
+  assert.equal(sent, 0);
+  assert.deepEqual(governor.calls.map((call) => call.method), ["reserve", "withdraw"]);
   assert.equal(Object.keys(governor.state.waiting).length, 0, "no stale waiter holds capacity back from others");
   assert.match(logged.join("\n"), /inference\.governor_wait_exceeded/u);
 });
@@ -278,4 +280,76 @@ test("with a pool but a governor that does not answer, a 429 still gets the shor
     stream: false, fetcher: async () => replies.shift()(), sleep: async (ms) => slept.push(ms),
   });
   assert.deepEqual(slept, [2000], "without the ledger's record, retrying at once would only be refused again");
+});
+
+test("known exhausted primary routes to fallback without a refused provider request", async () => {
+  const governor = ledgerGovernor();
+  governor.state.models.m = { limitRequests: null, limitTokens: 6000, remainingRequests: null, remainingTokens: 0, resetRequestsAt: null, resetTokensAt: 60_000, blockedUntil: null, blockedReason: null, observedAt: 0 };
+  const sent = [];
+  const response = await callModel({ baseUrl: "https://model.test/v1", model: "m", fallbackModel: "f", governor }, turns, {
+    stream: false, fetcher: async (_url, init) => { sent.push(JSON.parse(init.body).model); return ok(); }, sleep: async () => assert.fail("no inline wait for daily/exhausted primary"),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(sent, ["f"]);
+  assert.equal(Object.keys(governor.state.reservations).length, 0);
+  assert.equal(Object.keys(governor.state.waiting).length, 0);
+});
+
+test("persistent zero-delay denials remain bounded and never bypass admission", async () => {
+  let attempts = 0;
+  let withdrawn = 0;
+  const governor = { reserve: async () => { attempts++; return { granted: false, waitMs: 0 }; }, withdraw: async () => { withdrawn++; } };
+  const response = await governedSend({ baseUrl: "https://model.test/v1", model: "m", governor }, turns, {
+    stream: false, fetcher: async () => assert.fail("denied request sent"), sleep: async () => {},
+  });
+  assert.equal(response.status, 429);
+  assert.equal(attempts, 9);
+  assert.equal(withdrawn, 1);
+});
+
+test("streaming holds capacity until generation finishes and releases on cancellation", async () => {
+  for (const cancel of [false, true]) {
+    const governor = ledgerGovernor();
+    const response = await governedSend({ baseUrl: "https://model.test/v1", model: "m", governor }, turns, {
+      stream: true, fetcher: async () => new Response(new ReadableStream({ pull(controller) { controller.enqueue(new TextEncoder().encode("data: hello\n\n")); if (!cancel) controller.close(); } }), { headers: { "content-type": "text/event-stream" } }),
+    });
+    assert.equal(Object.keys(governor.state.reservations).length, 1);
+    if (cancel) await response.body.cancel();
+    else await response.text();
+    assert.equal(Object.keys(governor.state.reservations).length, 0);
+    assert.equal(governor.calls.filter(call => call.method === "release").length, 1);
+  }
+});
+
+test("stream read failure releases the reservation exactly once", async () => {
+  const governor = ledgerGovernor();
+  const response = await governedSend({ baseUrl: "https://model.test/v1", model: "m", governor }, turns, {
+    stream: true, fetcher: async () => new Response(new ReadableStream({ pull(controller) { controller.error(new TypeError("stream disconnected")); } }), { headers: { "content-type": "text/event-stream" } }),
+  });
+  await assert.rejects(response.text(), /stream disconnected/u);
+  assert.equal(Object.keys(governor.state.reservations).length, 0);
+  assert.equal(governor.calls.filter(call => call.method === "release").length, 1);
+});
+
+test("a streamed reply from a pool model keeps its attribution through the held reservation", async () => {
+  const governor = ledgerGovernor();
+  governor.state.models.main = blockedEntry(60_000);
+  // An empty streamed reply, so the loop reports which model gave it; then the synthesis answers.
+  const replies = [() => new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { "content-type": "text/event-stream" } }), ok];
+  const logged = [];
+  const warn = console.warn;
+  console.warn = (line) => logged.push(line);
+  try {
+    await converse({
+      endpoint: { baseUrl: "https://model.test/v1", model: "main", models: ["main", "spare"], governor }, turns,
+      toolContext: { environment: {}, allowlist: new Set(), githubToken: async () => undefined },
+      userMessage: "hi", stream: true, emit: () => {}, fetcher: async () => replies.shift()(), tools: [], sleep: async () => {},
+    });
+  } finally {
+    console.warn = warn;
+  }
+  const empty = logged.map((line) => { try { return JSON.parse(line); } catch { return null; } }).find((record) => record?.event === "inference.empty_response");
+  assert.equal(empty?.model, "spare", "the wrapped stream still names the model that answered");
+  assert.equal(governor.calls.find((call) => call.method === "release").argument.model, "spare");
+  assert.equal(Object.keys(governor.state.reservations).length, 0, "released once the stream was read to the end");
 });
