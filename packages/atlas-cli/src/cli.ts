@@ -556,7 +556,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     },
   });
 
-  const retryOptions = { maximumAttempts: retryAttemptsOption ?? 3, maximumDelayMs: retryMaxDelayOption ?? 30_000 };
+  const retryOptions = { maximumAttempts: retryAttemptsOption ?? 3, maximumDelayMs: retryMaxDelayOption ?? 60_000 };
   const makeRoute = (routeModel: string, routeSelection: typeof selection.selection, routeApiKey: string, routeEndpoint?: URL) => {
     // A self-hosted route declares the window its server was actually started
     // with. Inheriting the vendor's 128,000 while Ollama serves 4,096 gets the
