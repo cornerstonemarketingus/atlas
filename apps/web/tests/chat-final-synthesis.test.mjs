@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { RateLimitState } from "../../../packages/atlas-inference/src/index.mjs";
 
 import { MAX_TOOL_STEPS, converse } from "../app/api/chat/agent-loop.mjs";
 import { plannerClient } from "../app/api/chat/agent-team.mjs";
@@ -33,6 +34,14 @@ function scripted(replies) {
   return { fetcher, requests };
 }
 
+/** Fresh capacity state per run, on a clock the stubbed sleep advances — as real sleeps advance real time. */
+function isolatedCapacity(sleepOverride) {
+  let now = 1_000_000;
+  const capacity = new RateLimitState({ now: () => now });
+  const sleep = async (ms) => { now += ms; if (sleepOverride) await sleepOverride(ms); };
+  return { capacity, sleep };
+}
+
 function run(fetcher, overrides = {}) {
   const events = [];
   const promise = converse({
@@ -47,6 +56,7 @@ function run(fetcher, overrides = {}) {
     fetcher,
     sleep: async () => {},
     ...overrides,
+    ...isolatedCapacity(overrides.sleep),
   });
   return { promise, events };
 }
@@ -127,7 +137,9 @@ test("the fallback model's empty reply is recovered like any other", async () =>
   const { fetcher, requests } = scripted([limited, [finish("stop")], [say("Recovered.")]]);
   const outcome = await run(fetcher, { endpoint: { ...endpoint, fallbackModel: "small" } }).promise;
   assert.equal(outcome.reply, "Recovered.");
-  assert.deepEqual(requests.map((request) => request.model), ["m", "small", "m"]);
+  // The primary is known to be refusing for 60s, so synthesis goes straight to
+  // the fallback instead of spending a request on a certain refusal.
+  assert.deepEqual(requests.map((request) => request.model), ["m", "small", "small"]);
 });
 
 test("an agent team's results reach the answer even when the lead's next turn is empty", async () => {
@@ -184,12 +196,12 @@ test("diagnostics carry facts, never prompts, keys or the endpoint URL", async (
 test("the planner's client asks again on an empty reply instead of feeding \"\" to the planner", async () => {
   const replies = [json({ choices: [{ message: { content: "" }, finish_reason: "length" }] }), json({ choices: [{ message: { content: "{\"ok\":true}" } }] })];
   const sent = [];
-  const client = plannerClient(endpoint, async (_url, init) => { sent.push(JSON.parse(init.body)); return replies.shift()(); });
+  const client = plannerClient(endpoint, async (_url, init) => { sent.push(JSON.parse(init.body)); return replies.shift()(); }, undefined, new RateLimitState());
   let text = "";
   for await (const chunk of client.stream({ messages: [{ role: "user", content: "plan" }], maxOutputTokens: 300 })) if (chunk.type === "text") text += chunk.delta;
   assert.equal(text, "{\"ok\":true}");
   assert.deepEqual(sent.map((body) => body.max_tokens), [300, 600]);
 
-  const alwaysEmpty = plannerClient(endpoint, async () => json({ choices: [] })());
+  const alwaysEmpty = plannerClient(endpoint, async () => json({ choices: [] })(), undefined, new RateLimitState());
   await assert.rejects(async () => { for await (const chunk of alwaysEmpty.stream({ messages: [] })) void chunk; }, (error) => error.code === "EMPTY_MODEL_RESPONSE");
 });

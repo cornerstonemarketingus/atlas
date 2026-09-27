@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { RateLimitState } from "../../../packages/atlas-inference/src/index.mjs";
 
 import { MAX_TOOL_STEPS, converse } from "../app/api/chat/agent-loop.mjs";
 
@@ -23,6 +24,14 @@ function scripted(replies) {
   return { fetcher, requests };
 }
 
+/** Fresh capacity state per run, on a clock the stubbed sleep advances — as real sleeps advance real time. */
+function isolatedCapacity(sleepOverride) {
+  let now = 1_000_000;
+  const capacity = new RateLimitState({ now: () => now });
+  const sleep = async (ms) => { now += ms; if (sleepOverride) await sleepOverride(ms); };
+  return { capacity, sleep };
+}
+
 function run(fetcher, overrides = {}) {
   const events = [];
   const started = [];
@@ -37,6 +46,7 @@ function run(fetcher, overrides = {}) {
     emit: (type, data) => events.push({ type, data }),
     fetcher,
     ...overrides,
+    ...isolatedCapacity(overrides.sleep),
   });
   return { promise, events, started };
 }
@@ -106,7 +116,7 @@ test("model failures become an actionable error", async () => {
   const failing = () => new Response("secret prompt echoed", { status: 500 });
   const { fetcher, requests } = scripted([failing, failing, failing]);
   const waits = [];
-  assert.deepEqual(await run(fetcher, { sleep: async (ms) => { waits.push(ms); } }).promise, { error: "The model endpoint answered 500.", status: 502 });
+  assert.deepEqual(await run(fetcher, { sleep: async (ms) => { waits.push(ms); } }).promise, { error: "The model service had a temporary problem.", status: 502, kind: "SERVER_ERROR" });
   // A 5xx is retried a bounded number of times, never looped on.
   assert.equal(requests.length, 3);
   assert.equal(waits.length, 2);
@@ -148,7 +158,8 @@ test("a long retry-after skips straight to the fallback; no fallback means a cle
   const without = scripted([limited]);
   const failed = await run(without.fetcher, { sleep: async () => {} }).promise;
   assert.equal(failed.status, 429);
-  assert.match(failed.error, /rate limit/u);
+  // Plain words for the person, with when to try again; no status codes.
+  assert.equal(failed.error, "Model capacity is temporarily full. Ask again in about 60 seconds.");
 });
 
 test("a rate limit after some work waits, then writes the answer from the work", async () => {

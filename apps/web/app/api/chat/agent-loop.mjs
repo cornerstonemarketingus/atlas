@@ -2,6 +2,10 @@ import { TASK_TOOL, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } from "./instant-tools.mjs";
 import { completionsUrl, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
+import {
+  InferenceErrorKind, RateLimitState, classifyCompletion, classifyHttpFailure, classifyThrown, describeForPerson,
+  estimateRequestTokens, isTransient, parseDurationMs, retryAfterHeaderMs, suggestedWaitMs, targetKey,
+} from "../../../../../packages/atlas-inference/src/index.mjs";
 
 /**
  * The agent loop behind one chat reply.
@@ -34,51 +38,106 @@ const MAX_SYNTHESIS_TOKENS = 8_192;
 /** How much of the gathered tool output the synthesis call sees. */
 const SYNTHESIS_EVIDENCE_CHARS = 16_000;
 const SYNTHESIS_RESULT_CHARS = 4_000;
-/** Statuses that say "not now", as opposed to "not ever" (401, 403, 404, 400). */
 /** Retries of the very first call when the provider refuses it for now. */
 const FIRST_CALL_RETRIES = 2;
-const TRANSIENT_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
+
+/**
+ * What this Worker isolate knows about each model's capacity. Shared by every
+ * request and every agent the isolate serves, so one agent learning a model is
+ * exhausted spares the rest the refusal. Advisory and in-memory: an isolate
+ * that starts fresh simply learns again from the next response's headers.
+ */
+export const sharedCapacity = new RateLimitState();
 
 /** Which model actually answered a response, when the fallback was used. */
 const answeredBy = new WeakMap();
 
-function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS }) {
-  return fetcher(completionsUrl(endpoint.baseUrl), {
-    method: "POST",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
-    body: JSON.stringify({ model: endpoint.model, messages: turns, stream, temperature: 0.2, max_tokens: maxTokens, ...(tools ? { tools, tool_choice: toolChoice } : {}) }),
-  });
+/** Marks a response Atlas made up instead of sending, because the target was known to be exhausted. */
+const heldBack = new WeakSet();
+
+async function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, capacity = sharedCapacity }) {
+  const body = JSON.stringify({ model: endpoint.model, messages: turns, stream, temperature: 0.2, max_tokens: maxTokens, ...(tools ? { tools, tool_choice: toolChoice } : {}) });
+  const key = targetKey(endpoint);
+  const finished = capacity.begin(key, estimateRequestTokens(body));
+  try {
+    const response = await fetcher(completionsUrl(endpoint.baseUrl), {
+      method: "POST",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
+      body,
+    });
+    // Every response, success or refusal, says how much allowance is left.
+    capacity.observe(key, response.headers);
+    if (response.status === 429) {
+      const text = await response.clone().text().catch(() => "");
+      const failure = classifyHttpFailure({ status: 429, body: text, headers: response.headers });
+      capacity.rateLimited(key, { retryAfterMs: failure.retryAfterMs, scope: failure.scope });
+    }
+    return response;
+  } finally {
+    finished();
+  }
 }
 
-/** Milliseconds a 429 asks us to wait (retry-after in seconds, or a Groq-style "1.5s"/"250ms" reset). */
-export function retryAfterMs(headers) {
-  const after = Number.parseFloat(headers.get("retry-after") ?? "");
-  if (Number.isFinite(after) && after >= 0) return Math.ceil(after * 1000);
-  const reset = /^(\d+(?:\.\d+)?)(ms|s)$/u.exec(headers.get("x-ratelimit-reset-tokens") ?? headers.get("x-ratelimit-reset-requests") ?? "");
-  if (reset) return Math.ceil(Number(reset[1]) * (reset[2] === "s" ? 1000 : 1));
-  return 2_000;
+/** A 429 Atlas answers itself, without sending, for a target it knows cannot take the request yet. */
+function heldBackResponse(waitMs) {
+  const seconds = Number.isFinite(waitMs) ? Math.max(1, Math.ceil(waitMs / 1000)) : 3600;
+  const response = new Response("", { status: 429, headers: { "retry-after": String(seconds) } });
+  heldBack.add(response);
+  return response;
 }
 
 /**
- * Sends a model request, riding out rate limits: on 429, wait what the
- * provider asks (when that is short) and retry once, then try the fallback
- * model on the same endpoint. Other statuses are returned as they are.
+ * Milliseconds a 429 asks us to wait: retry-after in seconds, then the wait
+ * the body names ("Please try again in 2m59.56s."), then the reset header.
+ */
+export function retryAfterMs(headers, body = "") {
+  return retryAfterHeaderMs(headers)
+    ?? suggestedWaitMs(body)
+    ?? parseDurationMs(headers.get("x-ratelimit-reset-tokens") ?? headers.get("x-ratelimit-reset-requests") ?? "")
+    ?? 2_000;
+}
+
+/**
+ * Sends a model request, riding out rate limits. Before sending, the target's
+ * known capacity is checked: a short known wait is waited out, a long one goes
+ * to the fallback model without first spending a request on a target that is
+ * certain to refuse it. On a 429, wait what the provider asks (when that is
+ * short) and retry once, then try the fallback model on the same endpoint.
+ * Other statuses are returned as they are.
  */
 export async function callModel(endpoint, turns, options) {
+  const capacity = options.capacity ?? sharedCapacity;
+  const pause = options.sleep ?? sleep;
+  const estimate = estimateRequestTokens(turns);
+  const fallbackEndpoint = endpoint.fallbackModel ? { ...endpoint, model: endpoint.fallbackModel } : null;
+  const viaFallback = async () => {
+    const response = await sendModel(fallbackEndpoint, turns, options);
+    answeredBy.set(response, endpoint.fallbackModel);
+    return response;
+  };
+
+  const gate = capacity.check(targetKey(endpoint), estimate);
+  if (!gate.ok) {
+    if (gate.waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
+      await pause(gate.waitMs);
+    } else if (fallbackEndpoint && capacity.check(targetKey(fallbackEndpoint), estimate).ok) {
+      return viaFallback();
+    } else {
+      const fallbackGate = fallbackEndpoint ? capacity.check(targetKey(fallbackEndpoint), estimate) : gate;
+      return heldBackResponse(Math.min(gate.waitMs, fallbackGate.ok ? gate.waitMs : fallbackGate.waitMs));
+    }
+  }
+
   let response = await sendModel(endpoint, turns, options);
   if (response.status !== 429) return response;
-  const wait = retryAfterMs(response.headers);
+  const wait = retryAfterMs(response.headers, await response.clone().text().catch(() => ""));
   if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
-    await (options.sleep ?? sleep)(wait);
+    await pause(wait);
     response = await sendModel(endpoint, turns, options);
     if (response.status !== 429) return response;
   }
-  if (endpoint.fallbackModel) {
-    const fallback = await sendModel({ ...endpoint, model: endpoint.fallbackModel }, turns, options);
-    answeredBy.set(fallback, endpoint.fallbackModel);
-    return fallback;
-  }
+  if (fallbackEndpoint) return viaFallback();
   return response;
 }
 
@@ -120,16 +179,21 @@ function sleep(ms) {
  * reason, which model answered, and whether an HTTP 200 carried anything at
  * all (EMPTY_MODEL_RESPONSE is not a successful inference).
  */
-async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause }) {
-  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause });
+async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, capacity }) {
+  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, capacity });
   let toolsDropped = false;
   if (tools && (response.status === 400 || response.status === 422)) {
-    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause });
+    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, capacity });
     toolsDropped = true;
   }
   const model = answeredBy.get(response) ?? endpoint.model;
   const fallbackUsed = model !== endpoint.model;
-  if (!response.ok) return { ok: false, status: response.status, retryAfterMs: retryAfterMs(response.headers), model, fallbackUsed };
+  if (!response.ok) {
+    // The body picks the kind and the stated wait; it is never kept, because providers echo the prompt in it.
+    const body = await response.text().catch(() => "");
+    const failure = classifyHttpFailure({ status: response.status, body, headers: response.headers });
+    return { ok: false, status: response.status, kind: failure.kind, scope: failure.scope, retryAfterMs: retryAfterMs(response.headers, body), model, fallbackUsed, heldBack: heldBack.has(response) };
+  }
   if (!stream || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
     // Not streaming, or a server that ignored stream:true: the whole reply at once.
     let payload;
@@ -140,10 +204,12 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
     if (typeof thought === "string" && thought) emit("thinking", { text: thought });
     const text = replyText(payload);
     if (text) emit("delta", { text });
+    const calls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+    const empty = classifyCompletion({ payload, text, toolCallCount: calls.length, parsed: payload !== null });
     return {
-      ok: true, text, calls: Array.isArray(message?.tool_calls) ? message.tool_calls : [], toolsDropped,
+      ok: true, text, calls, toolsDropped,
       finishReason: typeof choice?.finish_reason === "string" ? choice.finish_reason : null,
-      invalid: payload === null, model, fallbackUsed, status: response.status,
+      kind: empty?.kind ?? null, model, fallbackUsed, status: response.status,
     };
   }
   const parser = createDeltaParser();
@@ -166,7 +232,9 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
   }
   // A last event without a trailing newline is still part of the reply.
   take(parser.finish(decoder.decode()));
-  return { ok: true, text, calls: parser.toolCalls, toolsDropped, finishReason: parser.finishReason, invalid: false, model, fallbackUsed, status: response.status };
+  const calls = parser.toolCalls;
+  const empty = classifyCompletion({ payload: undefined, text, toolCallCount: calls.length });
+  return { ok: true, text, calls, toolsDropped, finishReason: parser.finishReason, kind: empty?.kind ?? null, model, fallbackUsed, status: response.status };
 }
 
 function clipText(value, max) {
@@ -219,6 +287,24 @@ function workSummary({ steps, failure }) {
   ].filter(Boolean).join("\n\n");
 }
 
+/** What a person sees when the very first call cannot be made: plain words, the actionable part only. */
+function personMessage(result) {
+  const sentence = describeForPerson(result.kind);
+  if (result.kind === InferenceErrorKind.RATE_LIMIT || result.kind === InferenceErrorKind.CAPACITY) {
+    const seconds = Math.ceil((result.retryAfterMs ?? 60_000) / 1000);
+    const when = seconds >= 120 ? `about ${Math.ceil(seconds / 60)} minutes` : `about ${seconds} seconds`;
+    return `${sentence} Ask again in ${when}.`;
+  }
+  return sentence;
+}
+
+/** Why work stopped, for the synthesis prompt and the saved-work summary. */
+function reasonFor(result) {
+  if (result.kind === InferenceErrorKind.RATE_LIMIT || result.kind === InferenceErrorKind.CAPACITY) return "the model provider's rate limit was reached.";
+  if (result.kind === InferenceErrorKind.EMPTY_MODEL_RESPONSE || result.kind === InferenceErrorKind.INVALID_RESPONSE) return "the model returned an empty reply.";
+  return describeForPerson(result.kind);
+}
+
 /**
  * @param {{
  *   endpoint: { baseUrl?: string, apiKey?: string | null, model?: string },
@@ -240,7 +326,7 @@ function workSummary({ steps, failure }) {
  * }} options
  * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[] } | { error: string, status: number }>}
  */
-export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause = sleep }) {
+export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause = sleep, capacity = sharedCapacity }) {
   // Child agents get their own, narrower tool list and no task starting; the lead gets everything.
   const tools = toolOverride ?? [...(allowTasks ? [TASK_TOOL] : []), ...instantToolDefinitions(toolContext?.environment ?? {})];
   const offered = new Set(tools.map((tool) => tool.function.name));
@@ -276,7 +362,8 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     };
   };
   const describe = (result, round) => ({
-    ...diagnostics, round, model: result.model ?? endpoint.model, status: result.status ?? null,
+    ...diagnostics, round, model: result.model ?? endpoint.model, status: result.status ?? null, kind: result.kind ?? null,
+    ...(result.heldBack ? { heldBack: true } : {}),
     finishReason: result.finishReason ?? null, contentLength: result.text?.length ?? 0,
     toolCallCount: result.calls?.length ?? 0, fallbackUsed: Boolean(result.fallbackUsed),
   });
@@ -289,26 +376,24 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     let result;
     try {
       // The last round keeps the tool definitions (earlier rounds' results refer to them) but must answer in words.
-      result = await modelStep({ endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sinkFor(), toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause });
+      result = await modelStep({ endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sinkFor(), toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause, capacity });
     } catch (error) {
-      const timedOut = error instanceof Error && error.name === "TimeoutError";
-      const message = timedOut ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.";
-      inferenceDiagnostic("inference.failed", { ...diagnostics, round, model: endpoint.model, reason: timedOut ? "TIMEOUT" : "NETWORK" });
-      if (round === 0) return { error: message, status: 504 };
+      const { kind } = classifyThrown(error);
+      const message = kind === InferenceErrorKind.TIMEOUT ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.";
+      inferenceDiagnostic("inference.failed", { ...diagnostics, round, model: endpoint.model, kind });
+      if (round === 0) return { error: message, status: 504, kind };
       failure = message;
       break;
     }
     // The status is the actionable part; the body can contain the prompt echoed back.
     if (!result.ok) {
-      const message = result.status === 429
-        ? "The model provider's rate limit was reached (429). Wait a minute and ask again, or set a higher-limit model or ATLAS_CHAT_FALLBACK_MODEL."
-        : `The model endpoint answered ${result.status}.`;
-      inferenceDiagnostic(result.status === 429 ? "inference.rate_limited" : "inference.failed", describe(result, round));
+      const message = personMessage(result);
+      inferenceDiagnostic(result.kind === InferenceErrorKind.RATE_LIMIT ? "inference.rate_limited" : "inference.failed", describe(result, round));
       const wait = Math.max(1_000, result.retryAfterMs ?? 2_000);
-      if (round === 0 && TRANSIENT_STATUSES.has(result.status) && wait <= waitBudget && firstCallRetries < FIRST_CALL_RETRIES) {
-        firstCallRetries += 1;
+      if (round === 0 && isTransient(result.kind) && wait <= waitBudget && firstCallRetries < FIRST_CALL_RETRIES) {
         // Nothing done yet and nothing to synthesize from: wait out the
         // provider's stated reset and ask again, rather than refusing the request.
+        firstCallRetries += 1;
         emit("tool", { id: "capacity", label: "Waiting briefly for model capacity…", state: "running", ...tag });
         await pause(wait);
         waitBudget -= wait;
@@ -316,10 +401,10 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         round -= 1;
         continue;
       }
-      if (round === 0) return { error: message, status: result.status === 429 ? 429 : 502 };
+      if (round === 0) return { error: message, status: result.kind === InferenceErrorKind.RATE_LIMIT ? 429 : 502, kind: result.kind };
       // Work is already done. A transient refusal goes to final synthesis,
       // which waits and retries; a configuration error would only fail again.
-      if (TRANSIENT_STATUSES.has(result.status)) failure = result.status === 429 ? "the model provider's rate limit was reached." : `the model endpoint answered ${result.status}.`;
+      if (isTransient(result.kind)) failure = reasonFor(result);
       else fatal = message;
       break;
     }
@@ -333,10 +418,10 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         type: "function",
         function: { name: call.function.name, arguments: typeof call.function.arguments === "string" ? call.function.arguments : JSON.stringify(call.function.arguments ?? {}) },
       }));
-    if (!result.text.trim() && calls.length === 0) {
+    if (result.kind) {
       // HTTP 200 with nothing in it: no choices, null or blank content, or a
       // reasoning model that spent the whole budget thinking. Not an answer.
-      inferenceDiagnostic("inference.empty_response", { ...describe(result, round), invalid: Boolean(result.invalid) });
+      inferenceDiagnostic("inference.empty_response", describe(result, round));
       break;
     }
     if (allowTasks) taskCalls.push(...calls.filter((call) => !runnable(call.function.name)));
@@ -391,9 +476,9 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       let result;
       try {
         // No tools: the model cannot start another tool cycle, only answer.
-        result = await modelStep({ endpoint, turns: [...turns, message], tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause });
+        result = await modelStep({ endpoint, turns: [...turns, message], tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause, capacity });
       } catch (error) {
-        result = { ok: false, status: error instanceof Error && error.name === "TimeoutError" ? 504 : 503, retryAfterMs: 2_000 };
+        result = { ok: false, status: null, kind: classifyThrown(error).kind, retryAfterMs: 2_000 };
       }
       if (result.ok && result.text.trim()) {
         emit("tool", { id: progressId, label: "Answer written", state: "done", ...tag });
@@ -407,8 +492,8 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         reason = "the model returned an empty reply.";
         continue;
       }
-      if (!TRANSIENT_STATUSES.has(result.status)) { reason = `the model endpoint answered ${result.status}.`; break; }
-      reason = result.status === 429 ? "the model provider's rate limit was reached." : `the model endpoint answered ${result.status}.`;
+      reason = reasonFor(result);
+      if (!isTransient(result.kind)) break;
       const wait = Math.max(1_000, result.retryAfterMs ?? 2_000);
       if (attempt === SYNTHESIS_ATTEMPTS - 1 || wait > waitBudget) break;
       emit("tool", { id: progressId, label: "Waiting briefly for model capacity…", state: "running", ...tag });

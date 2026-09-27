@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { RateLimitState } from "../../../packages/atlas-inference/src/index.mjs";
 
 import { HOSTED_ROSTER, MAX_DEPTH, availableRoster, createAgentTeam } from "../app/api/chat/agent-team.mjs";
 
@@ -39,7 +40,7 @@ function fakeModel({ plan, agents = {}, verdicts = {} }) {
 
 function team(fetcher, environment = {}) {
   const events = [];
-  const instance = createAgentTeam({ endpoint, fetcher, sleep: async () => {}, toolContext: { environment, allowlist: new Set(["owner/repo"]), githubToken: async () => "t", fetcher } });
+  const instance = createAgentTeam({ endpoint, fetcher, sleep: async () => {}, capacity: new RateLimitState(), toolContext: { environment, allowlist: new Set(["owner/repo"]), githubToken: async () => "t", fetcher } });
   const run = (goal) => instance.handler({ function: { name: "run_agent_team", arguments: JSON.stringify({ goal }) } }, { emit: (type, data) => events.push({ type, data }) });
   return { instance, run, events };
 }
