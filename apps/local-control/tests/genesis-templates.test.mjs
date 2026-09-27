@@ -12,7 +12,7 @@ import { runCheck } from "../src/platform/self-improve/runtime.mjs";
 
 const withRoot = async (run) => {
   const root = mkdtempSync(join(tmpdir(), "atlas-genesis-ws-"));
-  try { await run(root); } finally { rmSync(root, { recursive: true, force: true }); }
+  try { await run(root); } finally { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
 };
 const gitLog = (folder) => execFileSync("git", ["log", "--format=%an|%s"], { cwd: folder, encoding: "utf8" }).trim().split("\n");
 

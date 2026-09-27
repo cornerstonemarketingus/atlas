@@ -82,6 +82,7 @@ export class GenesisStore {
         position INTEGER NOT NULL,
         title TEXT NOT NULL,
         kind TEXT NOT NULL,
+        executor TEXT NOT NULL DEFAULT 'template',
         objective TEXT NOT NULL,
         inputs_json TEXT NOT NULL,
         outputs_json TEXT NOT NULL,
@@ -94,6 +95,8 @@ export class GenesisStore {
         PRIMARY KEY (project_id, task_id)
       );
     `);
+    // Additive migration for databases created before tasks recorded their executor.
+    try { this.#db.exec("ALTER TABLE genesis_tasks ADD COLUMN executor TEXT NOT NULL DEFAULT 'template'"); } catch { /* already present */ }
   }
 
   close() { this.#db.close(); }
@@ -192,8 +195,8 @@ export class GenesisStore {
     const at = this.#stamp();
     this.#tx(() => {
       this.#db.prepare("DELETE FROM genesis_tasks WHERE project_id = ?").run(id);
-      const insert = this.#db.prepare("INSERT INTO genesis_tasks (project_id, task_id, position, title, kind, objective, inputs_json, outputs_json, depends_on_json, verification_json, status, attempts, evidence_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?)");
-      tasks.forEach((task, index) => insert.run(id, task.id, index, task.title, task.kind, task.objective, json(task.inputs ?? []), json(task.outputs ?? []), json(task.dependsOn ?? []), json(task.verification ?? []), task.status ?? "pending", at));
+      const insert = this.#db.prepare("INSERT INTO genesis_tasks (project_id, task_id, position, title, kind, executor, objective, inputs_json, outputs_json, depends_on_json, verification_json, status, attempts, evidence_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?)");
+      tasks.forEach((task, index) => insert.run(id, task.id, index, task.title, task.kind, task.executor ?? "template", task.objective, json(task.inputs ?? []), json(task.outputs ?? []), json(task.dependsOn ?? []), json(task.verification ?? []), task.status ?? "pending", at));
     });
     return this.tasks(tenantId, id);
   }
@@ -201,7 +204,7 @@ export class GenesisStore {
   tasks(tenantId, id) {
     this.#row(tenantId, id);
     return this.#db.prepare("SELECT * FROM genesis_tasks WHERE project_id = ? ORDER BY position").all(id).map((row) => ({
-      id: row.task_id, title: row.title, kind: row.kind, objective: row.objective,
+      id: row.task_id, title: row.title, kind: row.kind, executor: row.executor, objective: row.objective,
       inputs: parse(row.inputs_json, []), outputs: parse(row.outputs_json, []), dependsOn: parse(row.depends_on_json, []),
       verification: parse(row.verification_json, []), status: row.status, attempts: row.attempts, evidence: parse(row.evidence_json, []), updatedAt: row.updated_at,
     }));

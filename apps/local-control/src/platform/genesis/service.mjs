@@ -97,7 +97,7 @@ export class GenesisService {
     const { spec, refinedBy } = await this.#specify(text, {});
     let project = this.store.create({ tenantId: this.tenantId, prompt: text, name: spec.name, actor });
     project = this.#move(project.id, "requirements", {
-      reason: `Requirements written (${spec.pages.length} pages, ${spec.entities.length} record types, ${spec.acceptanceCriteria.length} acceptance criteria).`,
+      reason: `Requirements written (${plural(spec.pages.length, "page")}, ${plural(spec.entities.length, "record type")}, ${plural(spec.acceptanceCriteria.length, "acceptance criterion")}).`.replace("criterions", "criteria"),
       evidence: { kind: "specification", refinedBy, assumptions: spec.assumptions, questions: spec.questions },
       patch: { spec, name: spec.name },
     });
@@ -188,8 +188,17 @@ export class GenesisService {
 
   resume(id, { actor = "owner" } = {}) {
     const project = this.store.get(this.tenantId, id);
-    if (project.state !== "paused") throw new GenesisError("NOT_PAUSED", "Only a paused project can be resumed.");
+    const waitingForAnswers = project.state === "blocked" && project.resumeTo === "requirements";
+    if (!["paused", "blocked"].includes(project.state) || waitingForAnswers) throw new GenesisError("NOT_PAUSED", waitingForAnswers ? "This project is waiting for answers, not paused." : "Only a paused or blocked project can be resumed.");
     return this.#move(id, project.resumeTo, { reason: `Resumed ${STATE_LABELS[project.resumeTo].toLowerCase()}.`, evidence: { kind: "control" }, actor });
+  }
+
+  /** After a failure: try the build and verification again with a fresh repair budget. */
+  retry(id, { actor = "owner" } = {}) {
+    const project = this.store.get(this.tenantId, id);
+    if (project.state !== "failed") throw new GenesisError("NOT_FAILED", "Only a failed project can be retried.");
+    if (!project.workspace) return this.#move(id, "planned", { reason: "Retrying from the plan.", evidence: { kind: "control" }, actor });
+    return this.#move(id, "building", { reason: "Retrying the build with a fresh repair budget.", evidence: { kind: "control" }, patch: { repairsUsed: 0 }, actor });
   }
 
   cancel(id, { actor = "owner" } = {}) {
@@ -210,12 +219,14 @@ export class GenesisService {
   }
 }
 
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+
 /** A short, jargon-free progress list derived from durable state (never from UI state). */
 export function progressOf(project, tasks, transitions) {
   const reached = new Set(transitions.map((t) => t.to));
   const steps = [
     { label: "Understanding your idea", done: reached.has("requirements") },
-    { label: project.spec ? `Requirements: ${project.spec.pages.length} pages, ${project.spec.entities.length} record types` : "Requirements", done: reached.has("planned") || reached.has("blocked") },
+    { label: project.spec ? `Requirements: ${plural(project.spec.pages.length, "page")}, ${plural(project.spec.entities.length, "record type")}` : "Requirements", done: reached.has("planned") || reached.has("blocked") },
     { label: project.plan ? `Plan: ${tasks.length} tasks` : "Planning", done: reached.has("planned") },
     ...tasks.map((t) => ({ label: t.title, done: t.status === "passed", status: t.status, attempts: t.attempts })),
     { label: "Ready", done: project.state === "ready" || project.state === "published" },

@@ -117,15 +117,80 @@ template, writes the configuration from the spec and `.atlas/genesis.json`
 initial commit as Atlas. No remote is involved. `commitWorkspace` commits
 each later change.
 
+## Execution (`executor.mjs`, `preview.mjs`, `inspector.mjs`, `coder.mjs`)
+
+Once a plan is approved, the daemon runs the project by itself:
+
+1. **Scaffolding.** It creates the workspace (a changed project is
+   reconfigured in place), commits it, and records the folder, template and
+   commit as evidence.
+2. **Building.** Tasks run in dependency order.
+   - `template` tasks are provided by the template configuration and stay
+     "running" until the checks confirm them.
+   - `coder` tasks go to Atlas's existing coder (`atlas code`, driven through
+     `createCoderBuilder` exactly as self-improvement drives it). Each task is
+     one bounded objective with its verification criteria, gets at most two
+     attempts, and each result is committed.
+   - With no reachable model, the task and the project become **blocked**,
+     with the reason recorded; resuming continues from there.
+3. **Verifying.** The template's `check`, `test` and `build` run through the
+   shell-free `runCheck`. The evidence records the exit codes, durations, test
+   counts and output tails.
+4. **Repairing.**
+   - A failure becomes a repair objective that carries the real output, plus
+     the Intelligence Layer's `explainFailure` summary.
+   - The repair is judged by the self-improvement change policy, restricted to
+     the rules that protect verification: no deleted tests, no fewer tests,
+     nothing secret-shaped, and nothing under `.atlas/` or `.git/`. A
+     violation rolls the repair back.
+   - Repairs stop at the project's budget (3 by default), and the project then
+     **fails** with the evidence. `retry` gives it a fresh budget.
+5. **Previewing.** `PreviewManager` allocates a free loopback port and starts
+   the template's preview command without a shell, using the minimal
+   environment. It considers the app started only when the health URL answers
+   200; an early exit or a timeout is a failed start with the logs, which goes
+   to repair.
+   - Previews are recorded in `previews.json`. On the next start, orphans are
+     stopped, but only when `/proc` confirms the process is that preview.
+6. **Reviewing.** `createInspector` opens the app in Chromium (Playwright from
+   `apps/browser-worker`).
+   - It checks every page at 1280px and 375px for status, the expected
+     heading, console errors, uncaught exceptions and horizontal overflow.
+   - It drives the critical workflows through the real UI: add a record and
+     find it by search, book an appointment, send an enquiry (empty and
+     valid).
+   - It saves screenshots outside the project for a later vision pass.
+   - Without a browser it falls back to HTTP checks and marks the result
+     `limited`; the final summary says so. APIs are fully checked over HTTP.
+   - Findings (`{ check, page, expected, observed, severity }`) go to repair
+     like any failure.
+7. **Polishing.** With a model, one bounded polish pass runs after a clean
+   review, and is then verified and reviewed again. Without a model it is
+   skipped, and the summary says so.
+8. **Ready** only when every task has passed or was skipped with a reason. The
+   ready evidence is the owner's summary: preview URL, folder, features,
+   pages, checks with test counts, inspection mode, repairs and limitations.
+
+The coder's model comes from `intelligence.modelFor` when that answers, then
+the owner's applied model plan by difficulty (through the existing
+`agent/models/difficulty.mjs`), then `ATLAS_GENESIS_MODEL` or the default
+local model. The endpoint is the local model server unless the owner sets
+`ATLAS_GENESIS_BASE_URL`, so paid APIs are never used silently.
+
 ## PR sequence
 
 1. **Lifecycle, durable store, requirements, plan, routes** (`/v1/genesis`). Done in this PR.
 2. **Local workspace and curated templates** (`web-app`, `static-site`, `api-service`). Done: see "Templates" below.
-3. Task executor: template tasks, plus coder tasks via `createCoderBuilder`.
-4. Verify/repair loop with budget and evidence.
-5. Preview manager.
-6. Browser verification.
-7. UI quality pass.
-8. Live Genesis UX (local app and chat tool).
+3–6. **Executor, verify/repair loop, preview manager and browser verification.** Done: see "Execution" below.
+7. UI quality pass (vision review of the saved screenshots; bounded polish already runs when a model exists).
+8. **Live Genesis UX.** Done:
+   - **Build** page in the local app: prompt box with examples, plain
+     progress (✓ / ● / ✗ / – per step), answer form for open questions,
+     **Open the application**, what was verified, limitations, files, **Ask
+     for a change**, pause/resume/cancel/retry/approve, and expandable
+     assumptions and technical details (every transition with its evidence).
+   - **Chat tools** `genesis.build`, `genesis.status`, `genesis.change` and
+     `genesis.answer` (capability `genesis.build`, allowed by default).
+     "Add Google login" continues the most recent project.
 9. Publishing handoff through the existing adapters and approvals.
-10. End-to-end scenario benchmarks: marketing site, CRUD, dashboard, REST API, authenticated app.
+10. **Benchmarks.** Done: `node scripts/local/genesis-bench.mjs` runs the five scenarios (marketing site, CRUD, dashboard, REST API, authenticated app) for real. It records completion, build, test counts, browser verification, repairs, time, models used and human intervention in `~/.atlas/genesis/benchmarks/`. The first baseline, with no model available: 4/5 ready, 3 browser-verified and the API verified over HTTP, 0 repairs. The authenticated app correctly blocks until a coding model is set up.

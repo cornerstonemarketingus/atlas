@@ -9,7 +9,7 @@ import {
 
 const withDirectory = async (run) => {
   const directory = mkdtempSync(join(tmpdir(), "atlas-genesis-"));
-  try { await run(directory); } finally { rmSync(directory, { recursive: true, force: true }); }
+  try { await run(directory); } finally { rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
 };
 
 test("the lifecycle allows the build path and refuses shortcuts", () => {
@@ -161,7 +161,7 @@ test("a refinement from the Intelligence Layer is used only when it keeps the co
   assert.equal((await good.create("Build a website for my roofing company")).name, "Refined Name");
   const broken = new GenesisService({ store, intelligence: { refineSpecification: async () => ({ nonsense: true }), refinePlan: async () => { throw new Error("model down"); } } });
   const kept = await broken.create("Build a website for my roofing company");
-  assert.equal(kept.name, "Roofing Website");
+  assert.equal(kept.name, "Roofing Company");
   assert.ok(kept.tasks.length > 0, "a failing planner falls back to the deterministic plan");
   store.close();
 }));

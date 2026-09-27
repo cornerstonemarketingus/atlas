@@ -176,7 +176,8 @@ function detectAuth(prompt, archetype) {
 function detectIntegrations(prompt) {
   const list = [];
   if (has(prompt, /\b(pay(ments?)?|checkout|stripe|paypal|invoice|deposits?|charge)\b/u)) list.push({ id: "payments", label: "Online payments", needs: "a payment provider account and keys" });
-  if (has(prompt, /\b(email|e-mail|notify|notifications?|newsletter)\b/u)) list.push({ id: "email", label: "Email notifications", needs: "an email sending service" });
+  // "name/email/phone" is a field, not a request to send email.
+  if (has(prompt, /\b(notify|notifications?|newsletters?|reminders?|send (an? )?e-?mails?|e-?mail (me|them|customers|clients|reminders|alerts|confirmations?))\b/u)) list.push({ id: "email", label: "Email notifications", needs: "an email sending service" });
   if (has(prompt, /\b(sms|text message)\b/u)) list.push({ id: "sms", label: "Text messages", needs: "an SMS provider" });
   if (has(prompt, /\bgoogle (login|sign[- ]?in|auth)|sign in with google\b/u)) list.push({ id: "google-oauth", label: "Google sign-in", needs: "a Google OAuth client" });
   if (has(prompt, /\b(maps?|directions)\b/u)) list.push({ id: "maps", label: "Map link", needs: "nothing (a link to the address)" });
@@ -288,13 +289,14 @@ export function inferSpecification(prompt, { answers = {} } = {}) {
   const pages = archetype === "website" ? websitePages(business) : archetype === "api" ? [] : appPages(entities, archetype, booking);
   const workflows = workflowsFor({ archetype, entities, booking, auth, pages });
   const kindLabel = {
-    website: "Website",
+    // A site is named like the business it presents ("Roofing Company"), not "Website".
+    website: business ? title(business.noun) : "Website",
     webapp: /\bcrm\b/iu.test(text) ? "CRM" : booking ? "Bookings" : /\b(online store|shop)\b/iu.test(text) ? "Store" : entities[0] ? `${entities[0].name} Tracker` : "App",
     dashboard: `${/\b([a-z]+) dashboard\b/iu.exec(text)?.[1] && !/^(a|an|the|simple|small|my|our)$/iu.test(/\b([a-z]+) dashboard\b/iu.exec(text)[1]) ? `${/\b([a-z]+) dashboard\b/iu.exec(text)[1]} ` : ""}Dashboard`,
     api: `${entities[0] ? `${entities[0].name} ` : ""}API`,
   }[archetype];
   const qualifier = business?.kind ?? (business && !["company", "business", "team", "firm", "store", "shop"].includes(business.noun) ? business.noun : null);
-  const name = explicitName(text) ?? title(`${qualifier ? `${qualifier} ` : ""}${kindLabel}`);
+  const name = explicitName(text) ?? (archetype === "website" && business ? title(business.phrase) : title(`${qualifier ? `${qualifier} ` : ""}${kindLabel}`));
   const questions = questionsFor({ prompt: text, integrations }).filter((q) => !(q.id in answers));
 
   const assumptions = [

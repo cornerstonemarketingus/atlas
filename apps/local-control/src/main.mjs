@@ -47,7 +47,13 @@ import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.
 import { createCredentialVault } from "./agent/credential-vault.mjs";
 import { openInBrowser, ownerAccount, resolveOwnerToken, signInUrl } from "./identity/owner.mjs";
 import { RemoteAccess } from "./remote/access.mjs";
-import { GenesisService, GenesisStore } from "./platform/genesis/index.mjs";
+import { ACTIVE_STATES, GenesisService, GenesisStore } from "./platform/genesis/index.mjs";
+import { GenesisExecutor } from "./platform/genesis/executor.mjs";
+import { registerGenesisTools } from "./platform/genesis/tools.mjs";
+import { PreviewManager } from "./platform/genesis/preview.mjs";
+import { createInspector } from "./platform/genesis/inspector.mjs";
+import { createGenesisCoder } from "./platform/genesis/coder.mjs";
+import { runCheck } from "./platform/self-improve/runtime.mjs";
 import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
 import { createVercelAdapter } from "./agent/infrastructure/vercel.mjs";
 import { createGitHostAdapter } from "./agent/infrastructure/git-hosts.mjs";
@@ -169,7 +175,25 @@ if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.len
 
 // Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
 const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
-const genesis = new GenesisService({ store: genesisStore, policy: (capability) => store.policy(capability), onChange: (project) => store.audit("genesis.transition", `${project.name}: ${project.state}`) });
+const genesis = new GenesisService({
+  store: genesisStore,
+  policy: (capability) => store.policy(capability),
+  onChange: (project) => {
+    store.audit("genesis.transition", `${project.name}: ${project.state}`);
+    // Approved or resumed work starts (or continues) without the owner running anything.
+    if ((project.state === "approved" || ACTIVE_STATES.includes(project.state)) && genesisExecutor && !genesisExecutor.isRunning(project.id)) genesisExecutor.run(project.id).catch(() => {});
+  },
+});
+const genesisPreviews = new PreviewManager({ registryPath: join(dataDirectory, "genesis", "previews.json"), runPrepare: runCheck, log: (line) => store.audit("genesis.preview", line) });
+for (const result of genesisPreviews.cleanupOrphans()) if (result.action === "stopped") console.log(`Genesis: stopped a preview left running by a previous Atlas (${result.projectId}).`);
+const genesisExecutor = new GenesisExecutor({
+  genesis,
+  projectsRoot: join(dataDirectory, "genesis", "projects"),
+  runCheck,
+  coder: createGenesisCoder({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan, intelligence: genesis.intelligence }),
+  preview: genesisPreviews,
+  inspector: createInspector({ artifactsRoot: join(dataDirectory, "genesis", "inspections") }),
+});
 for (const project of genesis.recover()) console.log(`Genesis: ${project.name} was interrupted and is paused.`);
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
 // Remote access stays customer-managed (your VPN or HTTPS proxy); Atlas itself keeps listening on loopback.
@@ -192,6 +216,7 @@ const server = createLocalControlServer({
   identity: { owner, tokenStorage: ownerToken.storage },
   remoteAccess,
   genesis,
+  genesisPreviews,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -226,6 +251,7 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
 
 function shutdown() {
   modelManager.stopServer();
+  genesisPreviews.stopAll().catch(() => {});
   server.close(async () => {
     await runtime.stop();
     await outbox.stop();
@@ -300,6 +326,8 @@ function buildToolRegistry() {
   registerCommunicationsTools(registry, { send: null });
   // Starting a run asks the owner first (requiresApproval); merging a result is a second, separate decision.
   registerSelfImproveTool(registry, selfImprove);
+  // Genesis is created after the registry; the tools look it up when they run.
+  registerGenesisTools(registry, () => genesis);
   registerWorkflowTools(registry);
   // The browser family is registered whether or not a companion is attached:
   // its tools then fail closed with "no browser on this machine", which is a
