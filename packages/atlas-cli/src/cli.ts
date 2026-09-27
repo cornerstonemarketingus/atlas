@@ -14,6 +14,7 @@ import { RepositoryImportGraph, testsFor } from "./infrastructure/repository-imp
 import { RepositoryPackageGraph } from "./infrastructure/repository-package-graph.js";
 import { RepositoryDeliveryMap } from "./infrastructure/repository-delivery-map.js";
 import { RepositoryMap } from "./infrastructure/repository-map.js";
+import { RepositorySecuritySurfaces } from "./infrastructure/repository-security-surfaces.js";
 import { RepositorySchemaMap } from "./infrastructure/repository-schema-map.js";
 import { RepositoryConfigReferences } from "./infrastructure/repository-config-references.js";
 import { BoundedRepositorySourceReader } from "./infrastructure/bounded-repository-source-reader.js";
@@ -67,6 +68,7 @@ const USAGE = `Usage:
   atlas packages <repository-path> [--format text|json]
   atlas ci <repository-path> [--format text|json]
   atlas map <repository-path> [--format text|json]
+  atlas surfaces <repository-path> [--format text|json]
   atlas schemas <repository-path> [--format text|json]
   atlas env <repository-path> [--name NAME] [--undeclared] [--format text|json]
   atlas redact [--max-characters N] [--summary]   (reads stdin, writes redacted text to stdout)
@@ -100,7 +102,7 @@ export async function main(args: readonly string[]): Promise<number> {
       writeError: (text) => process.stderr.write(text),
     });
   }
-  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "ci" && args[0] !== "map" && args[0] !== "schemas" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
+  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "ci" && args[0] !== "map" && args[0] !== "surfaces" && args[0] !== "schemas" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
     console.error(USAGE);
     return 2;
   }
@@ -156,6 +158,23 @@ export async function main(args: readonly string[]): Promise<number> {
       console.log(map.apis.length === 0 ? "API schemas: none found." : "API schemas:");
       for (const api of map.apis) console.log(`  ${api.kind}: ${api.file}${api.title ? `  "${api.title}"` : ""}${api.version ? ` ${api.version}` : ""}  ${api.operations} operation(s)`);
       for (const warning of map.warnings) console.error(`warning: ${warning.message}`);
+      return 0;
+    }
+    if (args[0] === "surfaces") {
+      const surfaces = await new RepositorySecuritySurfaces().find(args[1]);
+      if (format === "json") {
+        console.log(JSON.stringify(surfaces, null, 2));
+        return 0;
+      }
+      console.log(`HTTP entry points: ${surfaces.summary.entryPoints} (${surfaces.summary.withoutGuard} with no known auth guard in the same file; a route module may be guarded by the server that dispatches to it, so confirm by reading)`);
+      for (const entry of surfaces.entryPoints) {
+        console.log(`  ${entry.methods.join(",") || "*"} ${entry.route}  ${entry.evidence.file}:${entry.evidence.line}  ${entry.guard ? `guard: ${entry.guard.file}:${entry.guard.line}` : "no guard found"}`);
+      }
+      for (const [kind, count] of Object.entries(surfaces.summary.sinks)) {
+        console.log(`${kind}: ${count}`);
+        for (const sink of surfaces.sinks.filter((item) => item.kind === kind)) console.log(`  ${sink.evidence.file}:${sink.evidence.line}  ${sink.evidence.text}`);
+      }
+      for (const warning of surfaces.warnings) console.error(`warning: ${warning.message}`);
       return 0;
     }
     if (args[0] === "map") {
