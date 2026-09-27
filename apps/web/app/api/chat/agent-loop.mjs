@@ -42,13 +42,49 @@ const TRANSIENT_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]
 /** Which model actually answered a response, when the fallback was used. */
 const answeredBy = new WeakMap();
 
-function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS }) {
+function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, reasoningEffort }) {
   return fetcher(completionsUrl(endpoint.baseUrl), {
     method: "POST",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
-    body: JSON.stringify({ model: endpoint.model, messages: turns, stream, temperature: 0.2, max_tokens: maxTokens, ...(tools ? { tools, tool_choice: toolChoice } : {}) }),
+    body: JSON.stringify({
+      model: endpoint.model, messages: turns, stream, temperature: 0.2, max_tokens: maxTokens,
+      // Only ever sent to a server that has already streamed reasoning back, i.e. one that runs a reasoning model.
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+      ...(tools ? { tools, tool_choice: toolChoice } : {}),
+    }),
   });
+}
+
+/**
+ * Groq checks a model's tool call against the offered tools and answers a bad
+ * one (an unknown tool, arguments that are not valid JSON or do not match the
+ * schema) with HTTP 400 `tool_use_failed`, echoing the attempt in
+ * `failed_generation`. That is one bad call, not an endpoint without tool
+ * support. Returns the attempted tool name (only the name: the arguments are
+ * model output and may repeat anything in the conversation), or null.
+ */
+export function rejectedToolCall(body) {
+  let parsed;
+  try { parsed = JSON.parse(body); } catch { return null; }
+  const error = parsed?.error;
+  if (error?.code !== "tool_use_failed") return null;
+  let name = "";
+  try {
+    const attempt = JSON.parse(String(error.failed_generation ?? ""));
+    const candidate = Array.isArray(attempt) ? attempt[0] : attempt;
+    name = typeof candidate?.name === "string" ? candidate.name : typeof candidate?.function?.name === "string" ? candidate.function.name : "";
+  } catch { /* not JSON: the model wrote a malformed call */ }
+  return { name: name.replace(/[^\w.-]/gu, "").slice(0, 64) };
+}
+
+function usageSummary(usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const count = (value) => (Number.isFinite(value) ? value : null);
+  return {
+    promptTokens: count(usage.prompt_tokens), completionTokens: count(usage.completion_tokens), totalTokens: count(usage.total_tokens),
+    reasoningTokens: count(usage.completion_tokens_details?.reasoning_tokens),
+  };
 }
 
 /** Milliseconds a 429 asks us to wait (retry-after in seconds, or a Groq-style "1.5s"/"250ms" reset). */
@@ -120,11 +156,16 @@ function sleep(ms) {
  * reason, which model answered, and whether an HTTP 200 carried anything at
  * all (EMPTY_MODEL_RESPONSE is not a successful inference).
  */
-async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause }) {
-  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause });
+async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort }) {
+  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort });
   let toolsDropped = false;
   if (tools && (response.status === 400 || response.status === 422)) {
-    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause });
+    const body = await response.clone().text().catch(() => "");
+    const rejected = response.status === 400 ? rejectedToolCall(body) : null;
+    // One malformed tool call is not a server without tools: keep the tools
+    // and let the loop ask for a corrected call.
+    if (rejected) return { ok: false, status: 400, rejectedTool: rejected, model: answeredBy.get(response) ?? endpoint.model, fallbackUsed: answeredBy.has(response) };
+    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, reasoningEffort });
     toolsDropped = true;
   }
   const model = answeredBy.get(response) ?? endpoint.model;
@@ -143,6 +184,8 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
     return {
       ok: true, text, calls: Array.isArray(message?.tool_calls) ? message.tool_calls : [], toolsDropped,
       finishReason: typeof choice?.finish_reason === "string" ? choice.finish_reason : null,
+      hadReasoning: typeof thought === "string" && thought.length > 0,
+      usage: usageSummary(payload?.usage), noChoices: payload !== null && !choice,
       invalid: payload === null, model, fallbackUsed, status: response.status,
     };
   }
@@ -166,7 +209,10 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
   }
   // A last event without a trailing newline is still part of the reply.
   take(parser.finish(decoder.decode()));
-  return { ok: true, text, calls: parser.toolCalls, toolsDropped, finishReason: parser.finishReason, invalid: false, model, fallbackUsed, status: response.status };
+  return {
+    ok: true, text, calls: parser.toolCalls, toolsDropped, finishReason: parser.finishReason,
+    hadReasoning: parser.sawReasoning, usage: usageSummary(parser.usage), invalid: false, model, fallbackUsed, status: response.status,
+  };
 }
 
 function clipText(value, max) {
@@ -258,6 +304,11 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   // Why tool work stopped before the model finished, if it did.
   let failure = "";
   let fatal = null;
+  // The last HTTP 200 that carried nothing, so synthesis can answer its cause rather than repeat it.
+  let lastEmpty = null;
+  // Set when no model could write the answer: the reply is the saved work, and callers can tell.
+  let unfinished = null;
+  let toolCallRepaired = false;
   // Shared by every wait this reply does for model capacity, so one reply never stalls without bound.
   let waitBudget = SYNTHESIS_WAIT_BUDGET_MS;
   let firstCallRetries = 0;
@@ -279,6 +330,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     ...diagnostics, round, model: result.model ?? endpoint.model, status: result.status ?? null,
     finishReason: result.finishReason ?? null, contentLength: result.text?.length ?? 0,
     toolCallCount: result.calls?.length ?? 0, fallbackUsed: Boolean(result.fallbackUsed),
+    hadReasoning: Boolean(result.hadReasoning), usage: result.usage ?? null,
   });
 
   let freshFrom = working.length;
@@ -296,6 +348,21 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       inferenceDiagnostic("inference.failed", { ...diagnostics, round, model: endpoint.model, reason: timedOut ? "TIMEOUT" : "NETWORK" });
       if (round === 0) return { error: message, status: 504 };
       failure = message;
+      break;
+    }
+    if (result.rejectedTool) {
+      // The provider refused one malformed tool call. Say what was wrong and
+      // ask once more with the same tools; a second refusal is an invalid
+      // response, and final synthesis answers from the work so far.
+      inferenceDiagnostic("inference.invalid_tool_call", { ...describe(result, round), repaired: toolCallRepaired });
+      if (!toolCallRepaired) {
+        toolCallRepaired = true;
+        const offeredNames = [...offered].join(", ");
+        working.push({ role: "user", content: `Your last tool call was rejected as invalid${result.rejectedTool.name ? ` ('${result.rejectedTool.name}')` : ""}. Call only these tools, with JSON arguments that match their parameters exactly: ${offeredNames}. Or answer in words.` });
+        round -= 1;
+        continue;
+      }
+      inferenceDiagnostic("inference.failed", { ...describe(result, round), kind: "INVALID_RESPONSE" });
       break;
     }
     // The status is the actionable part; the body can contain the prompt echoed back.
@@ -336,7 +403,8 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     if (!result.text.trim() && calls.length === 0) {
       // HTTP 200 with nothing in it: no choices, null or blank content, or a
       // reasoning model that spent the whole budget thinking. Not an answer.
-      inferenceDiagnostic("inference.empty_response", { ...describe(result, round), invalid: Boolean(result.invalid) });
+      inferenceDiagnostic("inference.empty_response", { ...describe(result, round), invalid: Boolean(result.invalid), noChoices: Boolean(result.noChoices) });
+      lastEmpty = result;
       break;
     }
     if (allowTasks) taskCalls.push(...calls.filter((call) => !runnable(call.function.name)));
@@ -384,14 +452,23 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     const objective = userMessage || [...turns].reverse().find((turn) => turn.role === "user")?.content || "";
     const message = synthesisMessage({ objective: typeof objective === "string" ? objective : "", steps, toolResults, partial: text.trim(), failure, queuedRuns: taskCalls.length });
     let tokens = Math.max(maxTokens, MAX_REPLY_TOKENS);
+    let reasoningEffort;
+    let target = endpoint;
+    // A reasoning model that spent its whole budget thinking and wrote nothing
+    // needs less thinking and more room, not the same request again.
+    const adaptTo = (empty) => {
+      if (empty?.finishReason === "length") tokens = Math.min(tokens * 2, MAX_SYNTHESIS_TOKENS);
+      if (empty?.finishReason === "length" && empty.hadReasoning) reasoningEffort = "low";
+    };
+    adaptTo(lastEmpty);
     let reason = failure;
-    inferenceDiagnostic("inference.finalizing", { ...diagnostics, steps: steps.length, cause: failure ? "interrupted" : "no_final_text" });
+    inferenceDiagnostic("inference.finalizing", { ...diagnostics, steps: steps.length, cause: failure ? "interrupted" : lastEmpty ? "empty_response" : "no_final_text", reasoningEffort: reasoningEffort ?? null, maxTokens: tokens });
     emit("tool", { id: progressId, label: "Writing the answer from the results…", state: "running", ...tag });
     for (let attempt = 0; attempt < SYNTHESIS_ATTEMPTS; attempt += 1) {
       let result;
       try {
         // No tools: the model cannot start another tool cycle, only answer.
-        result = await modelStep({ endpoint, turns: [...turns, message], tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause });
+        result = await modelStep({ endpoint: target, turns: [...turns, message], tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause, reasoningEffort });
       } catch (error) {
         result = { ok: false, status: error instanceof Error && error.name === "TimeoutError" ? 504 : 503, retryAfterMs: 2_000 };
       }
@@ -400,11 +477,20 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         lastText = result.text;
         return;
       }
-      inferenceDiagnostic(result.ok ? "inference.empty_response" : "inference.retry", { ...describe(result, "synthesis"), attempt });
+      inferenceDiagnostic(result.ok ? "inference.empty_response" : "inference.retry", { ...describe(result, "synthesis"), attempt, reasoningEffort: reasoningEffort ?? null });
       if (result.ok) {
-        // A reasoning model that ran out of room while thinking gets more room, not the same wall again.
-        if (result.finishReason === "length") tokens = Math.min(tokens * 2, MAX_SYNTHESIS_TOKENS);
+        adaptTo(result);
+        // Empty twice from one model: the configured fallback model writes it.
+        if (attempt >= 1 && target === endpoint && endpoint.fallbackModel) {
+          target = { ...endpoint, model: endpoint.fallbackModel, fallbackModel: null };
+          inferenceDiagnostic("inference.target_changed", { ...diagnostics, round: "synthesis", from: endpoint.model, to: endpoint.fallbackModel, cause: "empty_response" });
+        }
         reason = "the model returned an empty reply.";
+        continue;
+      }
+      if (result.status === 400 && reasoningEffort) {
+        // A server that rejects reasoning_effort: ask again without it.
+        reasoningEffort = undefined;
         continue;
       }
       if (!TRANSIENT_STATUSES.has(result.status)) { reason = `the model endpoint answered ${result.status}.`; break; }
@@ -417,13 +503,15 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     }
     // Every attempt failed. The completed work is still the answer's substance; say so plainly.
     emit("tool", { id: progressId, label: "Could not reach a model to write the answer", state: "failed", ...tag });
+    unfinished = { status: "incomplete", reason, completedSteps: steps.filter((step) => step.ok).length, failedSteps: steps.filter((step) => !step.ok).length };
     const summary = workSummary({ steps, failure: reason });
     const addition = `${text.trim() ? "\n\n" : ""}${summary}`;
     text += addition;
     emit("delta", { text: addition });
   }
 
-  if (!allowTasks) return { reply: text.trim(), steps };
+  const finish = (reply) => (unfinished ? { reply, steps, finalization: unfinished } : { reply, steps });
+  if (!allowTasks) return finish(text.trim());
   // Runs the model asked for start after its words, and each gets one line saying whether it started.
   const started = await startTasks(taskRequestsFromCalls(taskCalls.slice(0, 3), { defaultRepository, userMessage }));
   if (started.length) {
@@ -431,5 +519,5 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     text += addition;
     emit("delta", { text: addition });
   }
-  return { reply: text.trim(), steps };
+  return finish(text.trim());
 }

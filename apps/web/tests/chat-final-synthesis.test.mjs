@@ -102,15 +102,107 @@ test("a tool call on the final allowed round leads to a synthesis, not silence",
   assert.match(requests.at(-1).messages.at(-1).content, /Completed steps/u);
 });
 
-test("a reasoning model that spent its budget thinking gets more room, not the same wall", async () => {
+test("a model that hit its length limit with nothing written gets more room at once, not the same wall", async () => {
   const { fetcher, requests } = scripted([
-    [finish("length")],
     [finish("length")],
     [say("Answer at last.")],
   ]);
   const outcome = await run(fetcher).promise;
   assert.equal(outcome.reply, "Answer at last.");
-  assert.deepEqual(requests.map((request) => request.max_tokens), [2048, 2048, 4096]);
+  assert.deepEqual(requests.map((request) => request.max_tokens), [2048, 4096]);
+  assert.equal(requests[1].reasoning_effort, undefined, "no reasoning was seen, so none is asked to change");
+});
+
+// GPT-OSS on Groq: the reasoning uses up max_completion_tokens, HTTP 200 comes back
+// with finish_reason "length", reasoning in the stream and no content.
+const thinking = (text) => ({ choices: [{ delta: { reasoning: text } }] });
+
+test("reasoning that exhausted the budget: synthesis asks for low reasoning effort and more room", async () => {
+  const logged = [];
+  const original = console.warn;
+  console.warn = (line) => logged.push(JSON.parse(String(line)));
+  let outcome;
+  let requests;
+  try {
+    const script = scripted([
+      [thinking("Let me think about this at great length…"), { choices: [{ delta: {}, finish_reason: "length" }], x_groq: { usage: { prompt_tokens: 5100, completion_tokens: 2048, total_tokens: 7148 } } }],
+      [say("The answer.")],
+    ]);
+    requests = script.requests;
+    outcome = await run(script.fetcher).promise;
+  } finally {
+    console.warn = original;
+  }
+  assert.equal(outcome.reply, "The answer.");
+  assert.equal(requests[1].reasoning_effort, "low");
+  assert.equal(requests[1].max_tokens, 4096);
+  assert.equal(requests[0].reasoning_effort, undefined, "normal rounds keep the model's own reasoning effort");
+  const empty = logged.find((record) => record.event === "inference.empty_response");
+  assert.equal(empty.finishReason, "length");
+  assert.equal(empty.hadReasoning, true);
+  assert.deepEqual(empty.usage, { promptTokens: 5100, completionTokens: 2048, totalTokens: 7148, reasoningTokens: null });
+  assert.doesNotMatch(JSON.stringify(logged), /great length/u, "reasoning text is never logged");
+});
+
+test("a server that rejects reasoning_effort is asked again without it", async () => {
+  const { fetcher, requests } = scripted([
+    [thinking("hmm"), finish("length")],
+    () => new Response(JSON.stringify({ error: { message: "unknown parameter reasoning_effort" } }), { status: 400 }),
+    [say("Fine.")],
+  ]);
+  const outcome = await run(fetcher).promise;
+  assert.equal(outcome.reply, "Fine.");
+  assert.equal(requests[1].reasoning_effort, "low");
+  assert.equal(requests[2].reasoning_effort, undefined);
+});
+
+test("empty twice from the configured model: the fallback model writes the answer", async () => {
+  const { fetcher, requests } = scripted([[finish("stop")], [finish("stop")], [finish("stop")], [say("From the fallback.")]]);
+  const outcome = await run(fetcher, { endpoint: { ...endpoint, fallbackModel: "small" } }).promise;
+  assert.equal(outcome.reply, "From the fallback.");
+  assert.deepEqual(requests.map((request) => request.model), ["m", "m", "m", "small"]);
+});
+
+test("when no model writes the answer, the outcome says so alongside the saved work", async () => {
+  const empty = [finish("stop")];
+  const { fetcher } = scripted([empty, empty, empty, empty]);
+  const outcome = await run(fetcher).promise;
+  assert.ok(outcome.reply.length > 0);
+  assert.deepEqual(outcome.finalization, { status: "incomplete", reason: "the model returned an empty reply.", completedSteps: 0, failedSteps: 0 });
+});
+
+// Groq's answer to one malformed tool call (body shape as Groq returns it).
+const toolUseFailed = (name = "repo.search") => () => new Response(JSON.stringify({ error: {
+  message: `Tool call validation failed: attempted to call tool '${name}' which was not in request.tools`,
+  type: "invalid_request_error", code: "tool_use_failed",
+  failed_generation: JSON.stringify({ name, arguments: { query: "secret-looking argument" } }),
+} }), { status: 400 });
+
+test("one rejected tool call is corrected, and the conversation keeps its tools", async () => {
+  const { fetcher, requests } = scripted([toolUseFailed(), [say("Answered with tools still available.")]]);
+  const outcome = await run(fetcher).promise;
+  assert.equal(outcome.reply, "Answered with tools still available.");
+  assert.equal(requests.length, 2);
+  assert.ok(Array.isArray(requests[1].tools) && requests[1].tools.length > 0, "tools are not dropped over one bad call");
+  const correction = requests[1].messages.at(-1).content;
+  assert.match(correction, /rejected as invalid \('repo\.search'\)/u);
+  assert.match(correction, /read_web_page/u);
+  assert.doesNotMatch(correction, /secret-looking/u, "the rejected arguments are not replayed");
+});
+
+test("a second rejected tool call ends tool use for this reply and synthesis answers", async () => {
+  const { fetcher, requests } = scripted([toolUseFailed(), toolUseFailed(), [say("Answer without that tool.")]]);
+  const outcome = await run(fetcher).promise;
+  assert.equal(outcome.reply, "Answer without that tool.");
+  assert.equal(requests.length, 3);
+  assert.equal(requests[2].tools, undefined);
+});
+
+test("a server that genuinely cannot take tools still gets the request without them", async () => {
+  const { fetcher, requests } = scripted([() => new Response("{\"error\":{\"message\":\"tools not supported\"}}", { status: 400 }), [say("Plain answer.")]]);
+  const outcome = await run(fetcher).promise;
+  assert.equal(outcome.reply, "Plain answer.");
+  assert.equal(requests[1].tools, undefined);
 });
 
 test("a model that never answers is bounded and still yields a non-empty reply", async () => {
