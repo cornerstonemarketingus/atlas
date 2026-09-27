@@ -2,7 +2,9 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { githubOAuthConfiguration } from "../../auth/github-oauth.mjs";
 import { stripeConfiguration } from "../../billing/stripe.mjs";
-import { chatReadiness } from "../../chat/model-endpoint.mjs";
+import { chatReadiness, resolveChatModel } from "../../chat/model-endpoint.mjs";
+import { governorReadiness } from "../../inference/governor-client.mjs";
+import { workerEnv } from "../../inference/worker-env.mjs";
 import { createInstallationToken, githubAppConfiguration } from "../../tasks/github-app.mjs";
 import { allowedRepositories } from "../../tasks/dispatch.mjs";
 import { explainGitHubAppFailure, probeGitHubDispatch } from "../../tasks/github-diagnosis.mjs";
@@ -79,6 +81,6 @@ export async function GET(request: Request) {
     completedSteps,
     totalSteps: steps.length,
     steps,
-    optional: { stripeConfigured: stripe.configured, chat: chatReadiness(process.env) },
+    optional: { stripeConfigured: stripe.configured, chat: chatReadiness(process.env), inferenceGovernor: await governorReadiness(resolveChatModel(process.env), workerEnv) },
   }, { headers: { "cache-control": "no-store" } });
 }
