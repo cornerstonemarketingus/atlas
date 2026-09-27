@@ -171,3 +171,79 @@ test("still raises when the rejected generation cannot be read as a tool call", 
     await assert.rejects(provider.complete(request), ModelProviderError, generation);
   }
 });
+
+function okResponse(headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify({
+    id: "resp", model: "llama-3.3-70b-versatile",
+    choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
+    usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+  }), { status: 200, headers: { "content-type": "application/json", ...headers } });
+}
+
+test("carries the wait a 429 names so the retry does not guess", async () => {
+  // The body format Groq uses for token-per-minute limits.
+  const body = JSON.stringify({ error: { message: "Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM): Limit 8000, Used 7400, Requested 1900. Please try again in 9.75s.", code: "rate_limit_exceeded" } });
+  const fromBody = providerReturning(new Response(body, { status: 429 }));
+  await assert.rejects(fromBody.complete(request), (error: unknown) =>
+    error instanceof ModelProviderError && error.code === "rate-limit" && error.retryAfterMs === 9_750);
+
+  const fromHeader = providerReturning(new Response(body, { status: 429, headers: { "retry-after": "12" } }));
+  await assert.rejects(fromHeader.complete(request), (error: unknown) =>
+    error instanceof ModelProviderError && error.retryAfterMs === 12_000);
+});
+
+test("waits for the token window to refill before a request that cannot fit in it", async () => {
+  let clock = 1_000;
+  const delays: number[] = [];
+  const responses = [
+    okResponse({ "x-ratelimit-remaining-tokens": "3", "x-ratelimit-reset-tokens": "7.5s" }),
+    okResponse({ "x-ratelimit-remaining-tokens": "7000", "x-ratelimit-reset-tokens": "1s" }),
+    okResponse(),
+  ];
+  const provider = new GroqModelProvider({
+    apiKey: "key",
+    models: [model],
+    now: () => clock,
+    sleep: async (ms) => { delays.push(ms); clock += ms; },
+    fetchImplementation: fakeFetch(() => responses.shift()!),
+  });
+
+  await provider.complete(request);
+  clock += 500;
+  await provider.complete(request); // 3 tokens left: wait out the rest of the 7.5s window
+  await provider.complete(request); // 7,000 left: plenty, no wait
+  assert.deepEqual(delays, [7_000]);
+});
+
+test("does not pace on a reset longer than a minute, or when pacing is off", async () => {
+  const delays: number[] = [];
+  const make = (reset: string, paceRequests: boolean) => {
+    const responses = [okResponse({ "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": reset }), okResponse()];
+    return new GroqModelProvider({
+      apiKey: "key", models: [model], paceRequests,
+      sleep: async (ms) => { delays.push(ms); },
+      fetchImplementation: fakeFetch(() => responses.shift()!),
+    });
+  };
+  const daily = make("2h3m", true);
+  await daily.complete(request);
+  await daily.complete(request);
+  const off = make("5s", false);
+  await off.complete(request);
+  await off.complete(request);
+  assert.deepEqual(delays, []);
+});
+
+test("a pacing wait honours cancellation", async () => {
+  const controller = new AbortController();
+  const responses = [okResponse({ "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "30s" }), okResponse()];
+  const provider = new GroqModelProvider({
+    apiKey: "key", models: [model],
+    sleep: async () => { throw new DOMException("aborted", "AbortError"); },
+    fetchImplementation: fakeFetch(() => responses.shift()!),
+  });
+  await provider.complete(request);
+  controller.abort();
+  await assert.rejects(provider.complete(request, { signal: controller.signal }), (error: unknown) =>
+    error instanceof ModelProviderError && error.code === "cancelled");
+});
