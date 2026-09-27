@@ -117,7 +117,10 @@ test("a model that hit its length limit with nothing written gets more room at o
 // with finish_reason "length", reasoning in the stream and no content.
 const thinking = (text) => ({ choices: [{ delta: { reasoning: text } }] });
 
-test("reasoning that exhausted the budget: synthesis asks for low reasoning effort and more room", async () => {
+const readPage = (id) => callTool(id, "read_web_page", { url: `https://example.com/${id}` });
+const groqUsage = (completion) => ({ choices: [{ delta: {}, finish_reason: "length" }], x_groq: { usage: { prompt_tokens: 5100, completion_tokens: completion, total_tokens: 5100 + completion } } });
+
+test("reasoning exhausted while writing up finished work: low reasoning effort and room for what was spent", async () => {
   const logged = [];
   const original = console.warn;
   console.warn = (line) => logged.push(JSON.parse(String(line)));
@@ -125,18 +128,20 @@ test("reasoning that exhausted the budget: synthesis asks for low reasoning effo
   let requests;
   try {
     const script = scripted([
-      [thinking("Let me think about this at great length…"), { choices: [{ delta: {}, finish_reason: "length" }], x_groq: { usage: { prompt_tokens: 5100, completion_tokens: 2048, total_tokens: 7148 } } }],
-      [say("The answer.")],
+      [readPage("t1")],
+      [thinking("Let me think about this at great length…"), groqUsage(2048)],
+      [say("The page says Example body.")],
     ]);
     requests = script.requests;
     outcome = await run(script.fetcher).promise;
   } finally {
     console.warn = original;
   }
-  assert.equal(outcome.reply, "The answer.");
-  assert.equal(requests[1].reasoning_effort, "low");
-  assert.equal(requests[1].max_tokens, 4096);
-  assert.equal(requests[0].reasoning_effort, undefined, "normal rounds keep the model's own reasoning effort");
+  assert.equal(outcome.reply, "The page says Example body.");
+  const synthesis = requests.at(-1);
+  assert.equal(synthesis.reasoning_effort, "low", "formatting finished work does not need deep reasoning");
+  assert.equal(synthesis.max_tokens, 4096);
+  assert.ok(requests.slice(0, -1).every((request) => request.reasoning_effort === undefined), "working rounds keep the model's own effort");
   const empty = logged.find((record) => record.event === "inference.empty_response");
   assert.equal(empty.finishReason, "length");
   assert.equal(empty.hadReasoning, true);
@@ -144,16 +149,43 @@ test("reasoning that exhausted the budget: synthesis asks for low reasoning effo
   assert.doesNotMatch(JSON.stringify(logged), /great length/u, "reasoning text is never logged");
 });
 
+test("reasoning exhausted on a question with no work yet: full reasoning kept, only the room grows", async () => {
+  const { fetcher, requests } = scripted([
+    [thinking("hard problem…"), groqUsage(6000)],
+    [say("The considered answer.")],
+  ]);
+  const outcome = await run(fetcher).promise;
+  assert.equal(outcome.reply, "The considered answer.");
+  assert.equal(requests[1].reasoning_effort, undefined, "difficult analysis keeps its reasoning");
+  // 6,000 spent thinking plus room for the answer, within the ceiling.
+  assert.equal(requests[1].max_tokens, 8048);
+});
+
+test("the same reasoning exhaustion is handled identically without streaming", async () => {
+  const json = (body) => () => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  const { fetcher, requests } = scripted([
+    json({ choices: [{ message: { content: "", tool_calls: [{ id: "n1", type: "function", function: { name: "read_web_page", arguments: "{\"url\":\"https://example.com/\"}" } }] } }] }),
+    json({ choices: [{ message: { content: "", reasoning: "long thought" }, finish_reason: "length" }], usage: { prompt_tokens: 5000, completion_tokens: 2048, total_tokens: 7048, completion_tokens_details: { reasoning_tokens: 2048 } } }),
+    json({ choices: [{ message: { content: "Non-streamed answer." } }] }),
+  ]);
+  const outcome = await run(fetcher, { stream: false }).promise;
+  assert.equal(outcome.reply, "Non-streamed answer.");
+  assert.equal(requests.at(-1).reasoning_effort, "low");
+  assert.equal(requests.at(-1).max_tokens, 4096);
+  assert.equal(requests.at(-1).tools, undefined);
+});
+
 test("a server that rejects reasoning_effort is asked again without it", async () => {
   const { fetcher, requests } = scripted([
+    [readPage("t1")],
     [thinking("hmm"), finish("length")],
     () => new Response(JSON.stringify({ error: { message: "unknown parameter reasoning_effort" } }), { status: 400 }),
     [say("Fine.")],
   ]);
   const outcome = await run(fetcher).promise;
   assert.equal(outcome.reply, "Fine.");
-  assert.equal(requests[1].reasoning_effort, "low");
-  assert.equal(requests[2].reasoning_effort, undefined);
+  assert.equal(requests[2].reasoning_effort, "low");
+  assert.equal(requests[3].reasoning_effort, undefined);
 });
 
 test("empty twice from the configured model: the fallback model writes the answer", async () => {

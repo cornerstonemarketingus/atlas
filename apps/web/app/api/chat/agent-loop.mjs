@@ -31,6 +31,8 @@ const SYNTHESIS_ATTEMPTS = 3;
 const SYNTHESIS_WAIT_BUDGET_MS = 45_000;
 /** Output ceiling when a reasoning model spent the whole budget thinking and wrote nothing. */
 const MAX_SYNTHESIS_TOKENS = 8_192;
+/** Room kept for the written answer on top of what the model was seen to spend thinking. */
+const ANSWER_ALLOWANCE_TOKENS = 2_048;
 /** How much of the gathered tool output the synthesis call sees. */
 const SYNTHESIS_EVIDENCE_CHARS = 16_000;
 const SYNTHESIS_RESULT_CHARS = 4_000;
@@ -284,7 +286,7 @@ function workSummary({ steps, failure }) {
  *   agentId?: string,
  *   sleep?: (ms: number) => Promise<void>,
  * }} options
- * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[] } | { error: string, status: number }>}
+ * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[], finalization?: { status: string, reason: string, completedSteps: number, failedSteps: number } } | { error: string, status: number }>}
  */
 export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause = sleep }) {
   // Child agents get their own, narrower tool list and no task starting; the lead gets everything.
@@ -455,10 +457,16 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     let reasoningEffort;
     let target = endpoint;
     // A reasoning model that spent its whole budget thinking and wrote nothing
-    // needs less thinking and more room, not the same request again.
+    // needs room for what it actually spent plus an answer, not the same
+    // request again. Lower reasoning effort only when the work is already done
+    // and the call is writing it up; a question answered from nothing keeps
+    // its full reasoning and just gets the room.
+    const hasWork = steps.length > 0 || toolResults.length > 0 || Boolean(text.trim());
     const adaptTo = (empty) => {
-      if (empty?.finishReason === "length") tokens = Math.min(tokens * 2, MAX_SYNTHESIS_TOKENS);
-      if (empty?.finishReason === "length" && empty.hadReasoning) reasoningEffort = "low";
+      if (empty?.finishReason !== "length") return;
+      const spent = empty.usage?.completionTokens ?? 0;
+      tokens = Math.min(MAX_SYNTHESIS_TOKENS, Math.max(tokens * 2, spent + ANSWER_ALLOWANCE_TOKENS));
+      if (empty.hadReasoning && hasWork) reasoningEffort = "low";
     };
     adaptTo(lastEmpty);
     let reason = failure;
