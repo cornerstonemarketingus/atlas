@@ -6,7 +6,7 @@ import { NO_TENANT_MESSAGE, resolveTenantContext, tenantScope } from "../auth/te
 import { conversationMessages, conversations, repositories, runEvents, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, defaultMergePolicy, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
-import { explainGitHubFailure } from "./github-diagnosis.mjs";
+import { credentialKind, explainDispatchFailure, explainGitHubFailure } from "./github-diagnosis.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
 import {
   fetchGitHubJson,
@@ -61,9 +61,13 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   try { if (!(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) conversationId = randomUUID(); } catch { conversationId = randomUUID(); }
 
   let githubToken = platformGitHubToken();
+  let credential = credentialKind(githubToken);
   try {
     const githubApp = githubAppConfiguration();
-    if (githubApp.configured) githubToken = await createInstallationToken(githubApp);
+    if (githubApp.configured) {
+      githubToken = await createInstallationToken(githubApp);
+      credential = credentialKind(githubToken, { githubApp: true });
+    }
   } catch {
     return Response.json({ message: "GitHub App authentication failed, so nothing was started.", code: "GITHUB_APP_AUTH_FAILED", blocked: "BLOCKED_BY_MISSING_CREDENTIAL", unblock: "Check the ATLAS_GITHUB_APP_* secrets (app id, installation id, private key) and redeploy." }, { status: 502 });
   }
@@ -109,7 +113,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
       const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
       const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy, correlationId });
       if (!response.ok) {
-        const failure = explainGitHubFailure(response.status, { workflow, repository: task.repository });
+        const failure = explainDispatchFailure(response, { workflow, repository: task.repository, credential });
         return Response.json({ ...failure, message: `${failure.message} Nothing was started.` }, { status: 502 });
       }
       const recorded = await recordDispatchedTask(account, tenant.tenantId, task, taskId, mergePolicy, conversationId, "managed", correlationId);
