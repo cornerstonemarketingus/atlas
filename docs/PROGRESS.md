@@ -7,8 +7,20 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 
 ## Current position
 
-- **Phase:** 0 (live rescue). All Phase 0 code is in review; the exit gate
-  needs the owner (deploy and a live session), so Phase 1 has not started.
+- **Phase:** 0 exit gate pending (owner: deploy + live session). Phase 1
+  package work is built and in review as a stack; wiring hosted chat through
+  it waits for #119 (both change the chat loop).
+- **Workstreams (PROGRAM.md §4):** A, inference control plane,
+  [#127](https://github.com/cornerstonemarketingus/atlas/issues/127)
+  (claude-1). B, eval harness and dogfood log,
+  [#128](https://github.com/cornerstonemarketingus/atlas/issues/128)
+  (claude-2; brief in the issue's first comment).
+- **Merge order for the Phase 1 stack:** #129 → #130 → #131 → #132 → #133
+  (each is based on the one before; retarget to `main` as each merges).
+- **Next for workstream A once #119 merges:** wire chat through the ledger
+  (reserve/release with outcomes), move the memory digest after the history
+  (cache finding in #133), `ATLAS_CHAT_MODELS` pool from the target
+  registry, resumable chat turns (task id, event log, SSE replay, polling).
 - **Blocked on owner, in order:**
   1. Merge [#123](https://github.com/cornerstonemarketingus/atlas/pull/123)
      (PR 0, CODEOWNERS), then add the branch ruleset below and turn on
@@ -44,3 +56,10 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 | 2026-09-27 | [#123](https://github.com/cornerstonemarketingus/atlas/pull/123) | PR 0 | CODEOWNERS for every protected category in PROGRAM.md §3 (workflows, auth/credentials/tenancy, redaction, approvals, merge/steward, self-improvement, sandbox/policy/egress, security policy, the program and CLAUDE.md); guard test fails if an entry matches no file | runner scripts 49/49; guard mutation-checked | Owner merges; ruleset is owner-only | Owner: ruleset + auto-merge setting |
 | 2026-09-27 | [#124](https://github.com/cornerstonemarketingus/atlas/pull/124) (merged) | 0.1 | Setup probe checks Actions: write (dispatch to a branch that cannot exist: 403 = missing, 422 "No ref found" = granted, nothing runs); credential kind from prefix; exact missing permission with per-kind grant steps; rate-limit 403 told apart; dispatch failures use the same explanation and are never recorded as started | web 232/232; 9 new tests; guard mutation-checked (5 fail without it) | Auto-resume needs durable execution (1.2) | — |
 | 2026-09-27 | [#125](https://github.com/cornerstonemarketingus/atlas/pull/125) (retargeted to main) | 0.1 | GitHub App token refusals named: key rejected, installation not found, Actions permission not granted | web 234/234 | Protected (github-app.mjs): owner review | Owner review |
+| 2026-09-27 | [#126](https://github.com/cornerstonemarketingus/atlas/pull/126) (merged) | log | PROGRESS after #122-#125 | docs | — | — |
+| 2026-09-27 | [#127](https://github.com/cornerstonemarketingus/atlas/issues/127) / [#128](https://github.com/cornerstonemarketingus/atlas/issues/128) | §4 | Two workstream issues with claim labels; claude-2 brief for the eval harness | issues | — | Owner starts the second agent from #128 |
+| 2026-09-27 | [#129](https://github.com/cornerstonemarketingus/atlas/pull/129) | 1.1 | packages/atlas-inference: error kinds incl. CAPACITY_EXCEEDED, ProviderCapacityState, request/target/usage/checkpoint contracts, eligibility preflight; CI job | package 28/28 | Protected (ci.yml); whether providers count max_tokens at admission is unverified, so the conservative rule is the default | Owner review |
+| 2026-09-27 | [#130](https://github.com/cornerstonemarketingus/atlas/pull/130) | 1.2 | Quota ledger in a SQLite Durable Object per quota scope: atomic idempotent reservations, expiry, header reconciliation, priority hold-back; setup status round trip | package 40/40, web 239/239, wrangler dry-run lists the binding; guards mutation-checked | Adds a DO migration to production: owner review | Owner review |
+| 2026-09-27 | [#131](https://github.com/cornerstonemarketingus/atlas/pull/131) | 1.3 | Circuit breakers (HEALTHY/DEGRADED/OPEN/PROBING, one probe, doubling cooldown, config failures disable) | package 47/47; probe guard mutation-checked | Stacked | After #130 |
+| 2026-09-27 | [#132](https://github.com/cornerstonemarketingus/atlas/pull/132) | 1.3 | OpenAI-compatible listModels and probed target registry | package 53/53 | Stacked | After #131 |
+| 2026-09-27 | [#133](https://github.com/cornerstonemarketingus/atlas/pull/133) | 1.4 | Prompt fingerprints and cache-hit report; found chat's memory digest breaking the prefix cache | package 58/58 | Stacked; fix lands with chat wiring | After #132 |
