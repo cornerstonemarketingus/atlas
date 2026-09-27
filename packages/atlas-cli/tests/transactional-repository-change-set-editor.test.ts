@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -237,4 +237,24 @@ test("bounds the number of edits and the total content bytes in one change set",
     { operation: "create", path: "src/a.ts", content: "x".repeat(17), mustNotExist: true },
   ]), (error) => code(error) === "CHANGE_SET_TOO_LARGE");
   await assert.rejects(readFile(join(root, "src/a.ts")), { code: "ENOENT" });
+});
+
+test("rolling back a delete restores the file's mode and byte-order mark", { skip: process.platform === "win32" && "POSIX modes only" }, async () => {
+  const root = await fixture();
+  const script = join(root, "src/tool.sh");
+  await writeFile(script, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("echo hi\n")]));
+  await chmod(script, 0o750);
+  await writeFile(join(root, "src/other.ts"), "before\n");
+  const editor = new TransactionalRepositoryChangeSetEditor(new SafeRepositoryFileEditor());
+  const plan = await editor.preview(root, [
+    { operation: "delete", path: "src/tool.sh", expectedSha256: hash("echo hi\n") },
+    { operation: "update", path: "src/other.ts", content: "after\n", expectedSha256: hash("before\n") },
+  ]);
+  await writeFile(join(root, "src/other.ts"), "raced\n");
+  const result = await editor.apply(plan, { approved: true, changeSetDigest: plan.changeSetDigest });
+  assert.equal(result.rollbackStatus, "rolled-back");
+  const bytes = await readFile(script);
+  assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  assert.equal(bytes.subarray(3).toString("utf8"), "echo hi\n");
+  assert.equal((await stat(script)).mode & 0o7777, 0o750);
 });
