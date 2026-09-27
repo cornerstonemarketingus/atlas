@@ -188,8 +188,17 @@ export class GenesisService {
 
   resume(id, { actor = "owner" } = {}) {
     const project = this.store.get(this.tenantId, id);
-    if (project.state !== "paused") throw new GenesisError("NOT_PAUSED", "Only a paused project can be resumed.");
+    const waitingForAnswers = project.state === "blocked" && project.resumeTo === "requirements";
+    if (!["paused", "blocked"].includes(project.state) || waitingForAnswers) throw new GenesisError("NOT_PAUSED", waitingForAnswers ? "This project is waiting for answers, not paused." : "Only a paused or blocked project can be resumed.");
     return this.#move(id, project.resumeTo, { reason: `Resumed ${STATE_LABELS[project.resumeTo].toLowerCase()}.`, evidence: { kind: "control" }, actor });
+  }
+
+  /** After a failure: try the build and verification again with a fresh repair budget. */
+  retry(id, { actor = "owner" } = {}) {
+    const project = this.store.get(this.tenantId, id);
+    if (project.state !== "failed") throw new GenesisError("NOT_FAILED", "Only a failed project can be retried.");
+    if (!project.workspace) return this.#move(id, "planned", { reason: "Retrying from the plan.", evidence: { kind: "control" }, actor });
+    return this.#move(id, "building", { reason: "Retrying the build with a fresh repair budget.", evidence: { kind: "control" }, patch: { repairsUsed: 0 }, actor });
   }
 
   cancel(id, { actor = "owner" } = {}) {

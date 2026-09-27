@@ -9,6 +9,15 @@ form?.addEventListener("submit", async (event) => {
   const button = form.querySelector("button[type=submit]");
   const data = Object.fromEntries(new FormData(form).entries());
   error.hidden = true;
+  // Check in the browser first; the server checks again.
+  const problem = !String(data.name ?? "").trim() ? "Please tell us your name."
+    : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(String(data.email ?? "").trim()) ? "Please enter a valid email address."
+      : !String(data.message ?? "").trim() ? "Please tell us how we can help." : null;
+  if (problem) {
+    error.textContent = problem;
+    error.hidden = false;
+    return;
+  }
   button.disabled = true;
   try {
     const response = await fetch("/api/enquiries", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });

@@ -37,7 +37,8 @@ function setPage(title, ...content) {
   document.title = `${title} · ${config.name}`;
   main.replaceChildren(h("h1", { text: title }), ...content);
   main.focus({ preventScroll: true });
-  for (const link of nav.querySelectorAll("a")) link.toggleAttribute("aria-current", link.getAttribute("href") === location.hash || (location.hash === "" && link.getAttribute("href") === "#/"));
+  const here = location.hash === "" || location.hash === "#/dashboard" && config.home !== "book" ? "#/" : location.hash.split("/").slice(0, 2).join("/");
+  for (const link of nav.querySelectorAll("a")) link.toggleAttribute("aria-current", link.getAttribute("href") === here);
 }
 
 function inputFor(field, value = "", idPrefix = "f") {
