@@ -70,7 +70,7 @@ Legend: **IMPLEMENTED** (wired into a running entry point and tested),
 | Terminal controller (platform) | **IMPLEMENTED on this branch** as the `terminal.run` agent tool (per-session workspace, allowlist, approvals for high-risk commands) | `agent/tools/terminal-tools.mjs` |
 | Browser worker package | IMPLEMENTED as package + vertical-slice test; not the daemon's default browser | `apps/browser-worker` |
 
-| Project Genesis (prompt → requirements → plan → app) | MISSING | — |
+| Project Genesis (prompt → requirements → plan → app) | PARTIAL: lifecycle, durable state, requirements and plan; execution stages in progress (see GENESIS.md) | `apps/local-control/src/platform/genesis`, `docs/atlas-os/GENESIS.md` |
 | Visual builder / live preview with source mapping | MISSING | roadmap only |
 | Deployment adapters | PARTIAL (Cloudflare/Vercel/git-host plan/apply/rollback adapters exist in local daemon) | `agent/infrastructure/*` |
 | Time-based / event-driven automations | PARTIAL (GitHub cron for self-improve only) | `atlas-self-improve.yml` |

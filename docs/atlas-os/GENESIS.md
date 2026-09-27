@@ -1,0 +1,107 @@
+# Project Genesis: idea → working local application
+
+Genesis takes one sentence ("Build me a simple CRM for my construction
+company") and produces a working application on the owner's machine. It
+tests the application, runs it, inspects it in a browser, repairs what fails,
+and presents it. Publishing happens afterwards, and only with approval.
+
+Genesis orchestrates infrastructure Atlas already has. It is not a second
+coder, worktree system, approval system or agent framework.
+
+## Audit of main (27 Sep 2026)
+
+### Genesis pieces that already existed
+
+| Piece | Where | State |
+| --- | --- | --- |
+| Hosted intake: `genesis_projects` table and `POST/GET /api/genesis/projects` | `apps/web` (#107) | Stores the prompt and a stub requirements object with `status: "planned"`. Nothing executes it. |
+| Roadmap entries | `TODO.md` ("Project Genesis … #73"), `docs/atlas-os/CURRENT-STATE.md` ("MISSING"), `PARALLEL-WORKSTREAMS.md` (workstream D) | Described but not built. |
+
+### Execution primitives Genesis reuses
+
+| Need | Existing primitive |
+| --- | --- |
+| Make and repair code in a workspace | `packages/atlas-cli` `atlas code <repo> <objective>`. It detects build/test/lint/typecheck scripts, verifies its own edit and repairs it (`--max-repair-attempts`). The daemon already drives it through `platform/self-improve/runtime.mjs` (`createCoderBuilder`). |
+| Run checks without a shell, Windows included | `runtime.mjs` `runCheck` / `resolveCheck`, and `agent/tools/process.mjs` `runCommand` / `safeEnvironment` |
+| Git in a workspace | `platform/engineering/git.mjs` (`git`, `commitConfig`, `diffStats`) |
+| Isolated attempts | `platform/engineering/worktrees.mjs` `WorktreeManager`, with `atlas/` branches |
+| Durable tasks, events and artifacts | `platform/task-store.mjs` `PlatformTaskStore` (outbox, events, artifacts) |
+| Approvals and policies | `store.mjs` `local_policies` and `createApproval`, and `server.mjs` approval decisions |
+| Browser | `agent/browser/playwright-page.mjs` (optional `playwright-core`, SSRF guard with `allowPrivateHosts`) and `apps/browser-worker` (disposable, origin-confined sessions with a `verify` export) |
+| Publishing | `publish-adapters.mjs` (GitHub/GitLab/Forgejo) and `agent/infrastructure/{cloudflare,vercel,git-hosts}.mjs` (plan/apply/rollback) |
+| Model choice | `agent/models/*` (catalog, difficulty, hosting). This is **Intelligence Layer territory**; Genesis only calls it through an adapter. |
+
+### Parts of the spec that already exist under other names
+
+- "Bounded tasks with dependencies": `agent/team/planner.mjs` (`validatePlan`, 8 steps with `dependsOn`) and `platform/orchestrator/dag.mjs`. Both are for agent missions. Genesis tasks need template/coder/checks/browser executors and per-task evidence, so they are kept in Genesis's own small table and reuse the dependency-ordering idea.
+- "Repair loop": the coder's own verify→repair loop, plus the self-improvement loop's baseline/re-check/policy/review flow.
+- "Recovery after restart": `store.mjs` marks running local tasks `interrupted`, and missions are interrupted the same way. Genesis follows that pattern: a project caught mid-work is paused, with the reason recorded.
+
+### What was missing for PROMPT → WORKING LOCAL APPLICATION
+
+1. A lifecycle and durable project state with evidence (**PR 1, this PR**).
+2. A local project workspace (no GitHub), initialised with git, from a curated, versioned template with known install/dev/test/build/preview commands.
+3. A task executor: template tasks run deterministically, coder tasks run through `createCoderBuilder` in the workspace, one bounded objective at a time.
+4. A verify → repair loop with a budget (evidence in, bounded coder repair, re-verify).
+5. A preview manager: port allocation, process tracking, health check, logs, stop/restart, orphan cleanup.
+6. Browser verification of the running preview (DOM and console evidence first, screenshots when a vision model exists).
+7. A bounded UI polish pass.
+8. Live Genesis UX in the local app and chat (plain progress, expandable details).
+9. Publishing handoff through the existing adapters and approvals.
+10. Repeatable end-to-end scenarios with recorded metrics.
+
+## Collision boundaries with the Intelligence Layer
+
+Genesis does **not** modify `agent/models/*`, `platform/models/*`, `platform/planning/*`, or any context-retrieval or failure-analysis code. It calls reasoning only through `platform/genesis/intelligence.mjs`:
+
+- `refineSpecification({ prompt, draft })` returns a spec with the same shape;
+- `refinePlan({ spec, draft })` returns a plan with the same shape;
+- `modelFor({ task, attempt })` returns `{ model }` or `null` (the coder's default);
+- `explainFailure({ task, evidence })` returns `{ summary, hints[] }`.
+
+The defaults are deterministic, and any method can be replaced. Refinements that break the shape are discarded, so a weak model can fail to help but can never corrupt project state.
+
+## Lifecycle
+
+```
+idea → requirements → planned → approved → scaffolding → building → verifying
+     → previewing → reviewing → ready → publishing → published
+repairing: loops back from verifying, previewing and reviewing
+paused / blocked (remember where to resume) · failed · cancelled (final)
+ready / published → requirements: conversational changes ("Add Google login")
+```
+
+`platform/genesis/lifecycle.mjs` is the only authority on legal moves.
+Building cannot jump to ready, and verification cannot be skipped. Every
+transition is written to `genesis_transitions` in the same transaction as the
+state change, with a reason, evidence and actor.
+
+## Requirements and plans
+
+- `requirements.mjs` infers a structured spec from the prompt: name,
+  objective, archetype, target users, pages, workflows, entities with typed
+  fields, auth, integrations, design, deployment, constraints, acceptance
+  criteria, assumptions and questions. The inference is deterministic, and
+  every default is listed as an assumption.
+- Questions are asked only for payments (cost and credentials), regulated
+  health data, and automatic messages to real people.
+- `planner.mjs` produces at most 16 bounded tasks. Each has an objective,
+  inputs, outputs, dependencies, verification and an executor
+  (`template` / `coder` / `checks` / `browser`). No task is "build the whole
+  app".
+- Plan approval follows the `genesis.plan` policy, which defaults to `allow`
+  because building locally only writes inside the project folder. Set it to
+  `ask` to approve each plan yourself.
+
+## PR sequence
+
+1. **Lifecycle, durable store, requirements, plan, routes** (`/v1/genesis`). Done in this PR.
+2. Local workspace and curated templates (static-site, web-app, api-service), zero-dependency where possible so they run offline.
+3. Task executor: template tasks, plus coder tasks via `createCoderBuilder`.
+4. Verify/repair loop with budget and evidence.
+5. Preview manager.
+6. Browser verification.
+7. UI quality pass.
+8. Live Genesis UX (local app and chat tool).
+9. Publishing handoff through the existing adapters and approvals.
+10. End-to-end scenario benchmarks: marketing site, CRUD, dashboard, REST API, authenticated app.

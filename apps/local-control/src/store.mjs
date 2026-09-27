@@ -54,7 +54,7 @@ export class LocalTaskStore {
       CREATE INDEX IF NOT EXISTS local_mission_events_mission_id_idx ON local_mission_events(mission_id);
       CREATE TRIGGER IF NOT EXISTS local_mission_events_no_update BEFORE UPDATE ON local_mission_events BEGIN SELECT RAISE(ABORT, 'Mission events are append-only'); END;
       CREATE TRIGGER IF NOT EXISTS local_mission_events_no_delete BEFORE DELETE ON local_mission_events BEGIN SELECT RAISE(ABORT, 'Mission events are append-only'); END;
-      INSERT OR IGNORE INTO local_policies (capability, decision) VALUES ('code.write', 'ask'), ('computer.high_risk', 'ask'), ('publish.remote', 'ask'), ('repository.read', 'allow'), ('desktop.observe', 'ask'), ('desktop.control', 'ask'), ('terminal.run', 'ask');
+      INSERT OR IGNORE INTO local_policies (capability, decision) VALUES ('code.write', 'ask'), ('computer.high_risk', 'ask'), ('publish.remote', 'ask'), ('repository.read', 'allow'), ('desktop.observe', 'ask'), ('desktop.control', 'ask'), ('terminal.run', 'ask'), ('genesis.plan', 'allow');
     `);
     // Additive migrations for approvals bound to an agent action. Older
     // installations have the table without these columns; adding them is
