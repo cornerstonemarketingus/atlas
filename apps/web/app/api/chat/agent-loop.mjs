@@ -32,13 +32,32 @@ function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetche
   });
 }
 
-/** Milliseconds a 429 asks us to wait (retry-after in seconds, or a Groq-style "1.5s"/"250ms" reset). */
-export function retryAfterMs(headers) {
-  const after = Number.parseFloat(headers.get("retry-after") ?? "");
-  if (Number.isFinite(after) && after >= 0) return Math.ceil(after * 1000);
-  const reset = /^(\d+(?:\.\d+)?)(ms|s)$/u.exec(headers.get("x-ratelimit-reset-tokens") ?? headers.get("x-ratelimit-reset-requests") ?? "");
-  if (reset) return Math.ceil(Number(reset[1]) * (reset[2] === "s" ? 1000 : 1));
-  return 2_000;
+const DURATION_UNIT_MS = { h: 3_600_000, m: 60_000, s: 1_000, ms: 1, us: 0.001, "µs": 0.001, ns: 0.000_001 };
+const DURATION = /^(?:\d+(?:\.\d+)?(?:ms|us|µs|ns|h|m|s))+$/u;
+
+/** A Go-style duration as Groq reports it ("7.66s", "340ms", "2m59.56s") in milliseconds, or null. */
+export function durationMs(text) {
+  const trimmed = String(text ?? "").trim();
+  if (!DURATION.test(trimmed)) return null;
+  let total = 0;
+  for (const [, amount, unit] of trimmed.matchAll(/(\d+(?:\.\d+)?)(ms|us|µs|ns|h|m|s)/gu)) total += Number(amount) * DURATION_UNIT_MS[unit];
+  return Math.ceil(total);
+}
+
+/**
+ * Milliseconds a 429 asks us to wait: retry-after in seconds, then the wait
+ * the body names ("Please try again in 2m59.56s."), then Groq's reset header.
+ * A wait over a minute (a daily quota) must be read as such, or the chat
+ * retries into a limit that is certain to refuse it again.
+ */
+export function retryAfterMs(headers, body = "") {
+  const after = headers.get("retry-after")?.trim() ?? "";
+  if (/^\d+(?:\.\d+)?$/u.test(after)) return Math.ceil(Number(after) * 1000);
+  const suggested = /try again in ((?:\d+(?:\.\d+)?(?:ms|us|µs|ns|h|m|s))+)/iu.exec(body);
+  const fromBody = suggested ? durationMs(suggested[1]) : null;
+  if (fromBody !== null) return fromBody;
+  const reset = durationMs(headers.get("x-ratelimit-reset-tokens") ?? headers.get("x-ratelimit-reset-requests") ?? "");
+  return reset ?? 2_000;
 }
 
 /**
@@ -49,7 +68,7 @@ export function retryAfterMs(headers) {
 export async function callModel(endpoint, turns, options) {
   let response = await sendModel(endpoint, turns, options);
   if (response.status !== 429) return response;
-  const wait = retryAfterMs(response.headers);
+  const wait = retryAfterMs(response.headers, await response.clone().text().catch(() => ""));
   if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
     await (options.sleep ?? sleep)(wait);
     response = await sendModel(endpoint, turns, options);
