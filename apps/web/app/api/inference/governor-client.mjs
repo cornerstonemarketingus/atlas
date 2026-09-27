@@ -55,3 +55,28 @@ export async function governorReadiness(endpoint, environment) {
     ? { bound: true, reachable: true, models: Object.keys(snapshot.models).length, reservations: snapshot.reservations, waiting: snapshot.waiting.length }
     : { bound: true, reachable: false };
 }
+
+/**
+ * The ledger calls the chat loop makes around each model request, bound to
+ * one scope's governor. Every call answers null when the governor is
+ * unavailable, and the loop then sends as it did before the ledger existed.
+ */
+export function chatGovernor(stub, { latencyClass = "INTERACTIVE" } = {}) {
+  if (!stub) return null;
+  return {
+    latencyClass,
+    reserve: (request) => governorCall(stub, "reserve", request),
+    release: (outcome) => governorCall(stub, "release", outcome),
+    withdraw: (requestId) => governorCall(stub, "withdraw", { requestId }),
+  };
+}
+
+/** chatGovernor for an endpoint's quota scope; null (never a throw) when there is none. */
+export async function chatGovernorFor(endpoint, environment, options) {
+  try {
+    return chatGovernor(governorFor(await quotaScopeFor(endpoint), environment), options);
+  } catch (error) {
+    logUnavailable({ method: "scope", error: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
