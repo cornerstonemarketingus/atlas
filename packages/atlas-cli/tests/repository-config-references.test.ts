@@ -63,3 +63,22 @@ test("never opens a real .env or .dev.vars file, and never records values", asyn
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("launch scripts and workflow run steps that set a variable declare it", async () => {
+  const root = await repository({
+    "src/app.ts": "process.env.FROM_PS1; process.env.FROM_SH; process.env.FROM_RUN; process.env.STILL_MISSING;\n",
+    "scripts/Start-App.ps1": "if ($env:FROM_PS1 -eq $null) { }\n$env:FROM_PS1 = $Value\nRemove-Item Env:FROM_PS1\n",
+    "scripts/start.sh": "#!/bin/sh\nexport FROM_SH=1\nnode app.js\n",
+    ".github/workflows/run.yml": "on: push\njobs:\n  a:\n    steps:\n      - run: |\n          export FROM_RUN=\"${FROM_RUN:-5}\"\n          node x\n",
+  });
+  try {
+    const result = await new RepositoryConfigReferences().find(root);
+    const declaredBy = (name: string) => result.variables.find((item) => item.name === name)?.references.filter((item) => item.kind === "declared").map((item) => `${item.file}:${item.line} ${item.via}`);
+    assert.deepEqual(declaredBy("FROM_PS1"), ["scripts/Start-App.ps1:2 PowerShell $env:"], "a comparison or removal is not a declaration");
+    assert.deepEqual(declaredBy("FROM_SH"), ["scripts/start.sh:2 shell export"]);
+    assert.deepEqual(declaredBy("FROM_RUN"), [".github/workflows/run.yml:6 workflow export"]);
+    assert.deepEqual(result.variables.filter((item) => item.undeclared).map((item) => item.name), ["STILL_MISSING"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

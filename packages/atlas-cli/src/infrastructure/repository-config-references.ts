@@ -116,6 +116,8 @@ export class RepositoryConfigReferences {
           if (isAmbient(match[2]!)) continue;
           add(match[2]!, { file: path, line: lineAt(text, match.index ?? 0), kind: match[1] === "secrets" ? "secret" : "variable", via: `workflow ${match[1]}` });
         }
+        // A run: step can also set a variable for the command it starts.
+        for (const { name, line } of shellExports(text)) if (!isAmbient(name)) add(name, { file: path, line, kind: "declared", via: "workflow export" });
         const declared = workflowEnvKeys(text);
         if (declared.length > 0) declarationFiles.add(path);
         for (const { name, line } of declared) if (!isAmbient(name)) add(name, { file: path, line, kind: "declared", via: "workflow env" });
@@ -125,6 +127,11 @@ export class RepositoryConfigReferences {
           const match = new RegExp(`^\\s*(?:export\\s+)?#?\\s*(${NAME})\\s*=`, "u").exec(lineText);
           if (match?.[1] && !/^\s*#\s*[a-z]/u.test(lineText)) add(match[1], { file: path, line: index + 1, kind: "declared", via: posix.basename(path) });
         });
+      } else if (type === "shell" || type === "powershell") {
+        // Launch scripts that set a variable before starting a program declare it.
+        const found = type === "shell" ? shellExports(text) : powershellAssignments(text);
+        if (found.length > 0) declarationFiles.add(path);
+        for (const { name, line } of found) if (!isAmbient(name)) add(name, { file: path, line, kind: "declared", via: type === "shell" ? "shell export" : "PowerShell $env:" });
       } else if (type === "wrangler") {
         const vars = wranglerVars(text);
         if (vars.length > 0) declarationFiles.add(path);
@@ -144,7 +151,7 @@ export class RepositoryConfigReferences {
   }
 }
 
-type FileType = "script" | "python" | "workflow" | "example" | "wrangler";
+type FileType = "script" | "python" | "workflow" | "example" | "wrangler" | "shell" | "powershell";
 
 function classify(path: string): FileType | null {
   const base = posix.basename(path);
@@ -155,7 +162,23 @@ function classify(path: string): FileType | null {
   if (/\.d\.[cm]?ts$/u.test(base)) return null;
   if (SCRIPT.test(base)) return "script";
   if (PYTHON.test(base)) return "python";
+  if (/\.(?:sh|bash)$/u.test(base)) return "shell";
+  if (/\.ps1$/u.test(base)) return "powershell";
   return null;
+}
+
+/** `export NAME=value` (shell, and workflow run: steps). */
+function shellExports(text: string): { name: string; line: number }[] {
+  const found: { name: string; line: number }[] = [];
+  for (const match of text.matchAll(new RegExp(`^[ \\t]*(?:-[ \\t]*run:[ \\t]*)?export[ \\t]+(${NAME})=`, "gmu"))) found.push({ name: match[1]!, line: lineAt(text, match.index ?? 0) });
+  return found;
+}
+
+/** `$env:NAME = value` in PowerShell (reads like `$env:NAME` alone are not declarations). */
+function powershellAssignments(text: string): { name: string; line: number }[] {
+  const found: { name: string; line: number }[] = [];
+  for (const match of text.matchAll(new RegExp(`\\$env:(${NAME})[ \\t]*=(?!=)`, "giu"))) found.push({ name: match[1]!, line: lineAt(text, match.index ?? 0) });
+  return found;
 }
 
 function lineAt(text: string, offset: number): number {
