@@ -3,6 +3,7 @@ import { parseJsonReply } from "../../../../local-control/src/agent/team/model.m
 import { callModel, converse } from "./agent-loop.mjs";
 import { asData, instantToolDefinitions } from "./instant-tools.mjs";
 import { replyText } from "./model-endpoint.mjs";
+import { ModelRecoveryState } from "./model-recovery.mjs";
 
 /**
  * Agent teams in hosted chat: a lead (the chat reply) hands a goal to a team,
@@ -97,10 +98,10 @@ const DELEGATE_TOOL = {
 };
 
 /** Adapts the chat endpoint to the daemon planner's `client.stream` interface (with the chat loop's rate-limit handling). */
-export function plannerClient(endpoint, fetcher = fetch, sleep = undefined) {
+export function plannerClient(endpoint, fetcher = fetch, sleep = undefined, recovery = {}) {
   return {
     async *stream({ messages, maxOutputTokens = 1500 }) {
-      const response = await callModel(endpoint, messages, { stream: false, tools: null, fetcher, maxTokens: maxOutputTokens, sleep });
+      const response = await callModel(endpoint, messages, { stream: false, tools: null, fetcher, maxTokens: maxOutputTokens, sleep, ...recovery });
       if (!response.ok) throw Object.assign(new Error(`The model endpoint answered ${response.status}.`), { code: "MODEL_UNAVAILABLE" });
       const payload = await response.json();
       yield { type: "text", delta: replyText(payload) };
@@ -131,9 +132,10 @@ export function availableRoster(environment = {}) {
  * `converse({ handlers })`; everything the team does is reported through the
  * lead's `emit` as `agent` and `tool` events.
  *
- * @param {{ endpoint: object, toolContext: object, fetcher?: typeof fetch, idPrefix?: string }} context
+ * @param {{ endpoint: object, toolContext: object, fetcher?: typeof fetch, idPrefix?: string, sleep?: (ms: number) => Promise<void>, signal?: AbortSignal, turnId?: string }} context
  */
-export function createAgentTeam({ endpoint, toolContext, fetcher = fetch, idPrefix = "a", sleep = undefined }) {
+export function createAgentTeam({ endpoint, toolContext, fetcher = fetch, idPrefix = "a", sleep = undefined, signal = undefined, turnId = undefined }) {
+  endpoint = { ...endpoint, recoveryState: endpoint.recoveryState ?? new ModelRecoveryState() };
   const environment = toolContext?.environment ?? {};
   const roster = availableRoster(environment);
   const definitions = new Map(instantToolDefinitions(environment).map((tool) => [tool.function.name, tool]));
@@ -144,7 +146,7 @@ export function createAgentTeam({ endpoint, toolContext, fetcher = fetch, idPref
   async function verify({ title, instructions, doneWhen, report }) {
     try {
       let text = "";
-      for await (const chunk of plannerClient(endpoint, fetcher, sleep).stream({
+      for await (const chunk of plannerClient(endpoint, fetcher, sleep, { signal, turnId }).stream({
         maxOutputTokens: 300,
         messages: [
           { role: "system", content: "You check an agent's report against its step. Reply with JSON only: {\"passed\": true|false, \"reason\": \"one sentence\"}. Pass only if the report actually satisfies the condition; a report that says it could not find something fails unless the step allowed that." },
@@ -185,7 +187,7 @@ export function createAgentTeam({ endpoint, toolContext, fetcher = fetch, idPref
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (attempt > 0) turns.push({ role: "assistant", content: report }, { role: "user", content: `A reviewer checked your report and it does not yet satisfy "${doneWhen}": ${verdict.reason} Continue the step and report again.` });
       const outcome = await converse({
-        endpoint, turns, toolContext, stream: false, emit, fetcher, agentId: id, sleep,
+        endpoint, turns, toolContext, stream: false, emit, fetcher, agentId: id, sleep, signal, turnId,
         tools: [...tools, ...(canDelegate ? [DELEGATE_TOOL] : [])], handlers, allowTasks: false, maxRounds: CHILD_ROUNDS, maxTokens: CHILD_TOKENS,
       });
       if ("error" in outcome) {
@@ -263,7 +265,7 @@ export function createAgentTeam({ endpoint, toolContext, fetcher = fetch, idPref
     emit("agent", { id: leadId, parentId: null, name: "Planning lead", role: "planning", title: clip(goal, 160), state: "planning", depth: 0 });
     let plan;
     try {
-      ({ plan } = await planMission({ client: plannerClient(endpoint, fetcher, sleep), model: endpoint.model, goal: repository ? `${goal}\n(Repository: ${repository})` : goal, roster }));
+      ({ plan } = await planMission({ client: plannerClient(endpoint, fetcher, sleep, { signal, turnId }), model: endpoint.model, goal: repository ? `${goal}\n(Repository: ${repository})` : goal, roster, signal }));
     } catch (error) {
       emit("agent", { id: leadId, parentId: null, name: "Planning lead", role: "planning", title: clip(goal, 160), state: "failed", depth: 0, summary: error instanceof Error ? error.message : "Planning failed." });
       return { ok: false, label: "The team could not plan this", content: `Planning failed: ${error instanceof Error ? error.message : "unknown error"}. Do the work yourself with your own tools instead.` };

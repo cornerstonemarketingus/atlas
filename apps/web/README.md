@@ -455,3 +455,12 @@ When no GitHub token is configured, Atlas falls back to the existing
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
 - [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+
+## Chat recovery across execution targets
+
+Chat retains its existing short 429 retry and configured/Groq sibling fallback.
+Operators can now configure additional permitted model/provider/local targets
+through `ATLAS_CHAT_TARGETS`, with scoped cooldowns, isolated credential references
+and explicit paid-recovery gates. See
+[Chat model recovery](../../docs/CHAT-MODEL-RECOVERY.md) for configuration,
+rate-limit evidence, budget semantics and hosted/local limitations.

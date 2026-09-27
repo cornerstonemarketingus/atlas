@@ -18,6 +18,7 @@ import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
 import { createAgentTeam } from "./agent-team.mjs";
 import { instantToolDefinitions } from "./instant-tools.mjs";
+import { recoveryForScope } from "./model-recovery.mjs";
 
 /** How much of a thread is replayed to the model. Enough for continuity, bounded so a long thread cannot grow a request without limit. */
 const HISTORY_TURNS = 20;
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
 
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
-  const endpoint = resolveChatModel(process.env);
+  const endpoint = { ...resolveChatModel(process.env), recoveryState: recoveryForScope(null) };
   if (!endpoint.configured) {
     return Response.json({ message: endpoint.reason, needsModelEndpoint: true }, { status: 503 });
   }
@@ -54,6 +55,7 @@ export async function POST(request: Request) {
     // Tenancy (#71): threads belong to the caller's tenant; an id owned by another tenant or principal is never written to.
     const tenant = await resolveTenantContext(request, account, getD1());
     if (!tenant || !(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) throw new Error("Conversation is not writable in this workspace.");
+    endpoint.recoveryState = recoveryForScope(JSON.stringify([tenant.tenantId, account.userId]));
     await db.insert(conversations)
       .values({ id: conversationId, tenantId: tenant.tenantId, requestedBy: account.userId, title: threadTitle(message), repository, branch, createdAt: now, updatedAt: now })
       .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now }, setWhere: and(eq(conversations.tenantId, tenant.tenantId), eq(conversations.requestedBy, account.userId)) });
@@ -84,9 +86,10 @@ export async function POST(request: Request) {
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
   const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
   // The lead (this reply) can hand work to an agent team built on the daemon's planner; see agent-team.mjs.
-  const team = createAgentTeam({ endpoint, toolContext });
+  const turnId = randomUUID();
+  const team = createAgentTeam({ endpoint, toolContext, signal: request.signal, turnId });
   const loop = {
-    endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks,
+    endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks, signal: request.signal, turnId,
     tools: [TASK_TOOL, team.definition, ...instantToolDefinitions(toolContext.environment)],
     handlers: { [team.definition.function.name]: team.handler },
   };
@@ -212,6 +215,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
   db: ReturnType<typeof getDb>; userId: string; defaultRepository: string; userMessage: string;
   startTasks: (calls: TaskRequests) => Promise<string[]>;
   tools: object[]; handlers: Parameters<typeof converse>[0]["handlers"];
+  signal: AbortSignal; turnId: string;
 }) {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({

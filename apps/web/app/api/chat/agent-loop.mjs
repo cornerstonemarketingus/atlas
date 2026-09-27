@@ -2,6 +2,8 @@ import { TASK_TOOL, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } from "./instant-tools.mjs";
 import { completionsUrl, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
+import { eligibleTargets, ModelRecoveryState } from "./model-recovery.mjs";
+export { retryAfterMs } from "./model-recovery.mjs";
 
 /**
  * The agent loop behind one chat reply.
@@ -23,40 +25,83 @@ export const MAX_REPLY_TOKENS = 2048;
 const MAX_RATE_LIMIT_WAIT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 
-function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS }) {
+function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, signal, timeoutMs = REQUEST_TIMEOUT_MS }) {
+  const timeout = AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, timeoutMs)));
   return fetcher(completionsUrl(endpoint.baseUrl), {
     method: "POST",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    redirect: "error",
     headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
     body: JSON.stringify({ model: endpoint.model, messages: turns, stream, temperature: 0.2, max_tokens: maxTokens, ...(tools ? { tools, tool_choice: toolChoice } : {}) }),
   });
 }
 
-/** Milliseconds a 429 asks us to wait (retry-after in seconds, or a Groq-style "1.5s"/"250ms" reset). */
-export function retryAfterMs(headers) {
-  const after = Number.parseFloat(headers.get("retry-after") ?? "");
-  if (Number.isFinite(after) && after >= 0) return Math.ceil(after * 1000);
-  const reset = /^(\d+(?:\.\d+)?)(ms|s)$/u.exec(headers.get("x-ratelimit-reset-tokens") ?? headers.get("x-ratelimit-reset-requests") ?? "");
-  if (reset) return Math.ceil(Number(reset[1]) * (reset[2] === "s" ? 1000 : 1));
-  return 2_000;
-}
-
 /**
- * Sends a model request, riding out rate limits: on 429, wait what the
- * provider asks (when that is short) and retry once, then try the fallback
- * model on the same endpoint. Other statuses are returned as they are.
+ * Retry short request limits once, then continue through the router's permitted
+ * targets. No response content has been consumed here: switching cannot replay
+ * tools or duplicate a partially streamed reply. Bound calls, wall time and waits.
  */
 export async function callModel(endpoint, turns, options) {
-  let response = await sendModel(endpoint, turns, options);
-  if (response.status !== 429) return response;
-  const wait = retryAfterMs(response.headers);
-  if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
-    await (options.sleep ?? sleep)(wait);
-    response = await sendModel(endpoint, turns, options);
-    if (response.status !== 429) return response;
+  const state = endpoint.recoveryState ?? new ModelRecoveryState();
+  const { targets, inputTokenEstimate } = eligibleTargets(endpoint, { ...options, turns });
+  const deadline = state.now() + 90_000;
+  let calls = 0;
+  let waited = 0;
+  let lastResponse;
+  let lastError;
+  const notify = (event) => { try { options.onRecovery?.(event); } catch { /* telemetry cannot interrupt work */ } };
+  for (const target of targets) {
+    options.signal?.throwIfAborted();
+    if (!state.availability(target).available) continue;
+    for (let retry = 0; retry < 2; retry += 1) {
+      options.signal?.throwIfAborted();
+      if (calls >= 16 || state.now() >= deadline) break;
+      // Reserve the estimate synchronously before sending, including retries.
+      // Parallel team calls share this turn's budget and cannot over-reserve it.
+      if (target.estimatedCostMicroUsd > 0) {
+        const budget = endpoint.recoveryBudget;
+        if (!budget || target.estimatedCostMicroUsd > budget.maxCostMicroUsd - budget.spentMicroUsd) break;
+        budget.spentMicroUsd += target.estimatedCostMicroUsd;
+      }
+      calls += 1;
+      notify({ type: "model_attempt", targetId: target.id, provider: target.provider, model: target.model,
+        estimatedCostMicroUsd: target.estimatedCostMicroUsd, turnId: options.turnId ?? null, attempt: calls });
+      let response;
+      try {
+        response = await sendModel(target, turns, { ...options, timeoutMs: deadline - state.now() });
+      } catch (error) {
+        options.signal?.throwIfAborted();
+        lastError = error;
+        notify(state.record(target, null, new Headers(), { ...options, inputTokenEstimate, outputTokenEstimate: options.maxTokens ?? MAX_REPLY_TOKENS }));
+        break;
+      }
+      if (response.ok) {
+        if (lastResponse) await lastResponse.body?.cancel().catch(() => {});
+        state.success(target); return response;
+      }
+      if (lastResponse) await lastResponse.body?.cancel().catch(() => {});
+      lastResponse = response;
+      // Existing no-tools compatibility retry remains in modelStep, after other
+      // targets have had an opportunity to handle the full tool request.
+      if (options.tools?.length && [400, 422].includes(response.status)) break;
+      if (![429, 500, 502, 503, 504].includes(response.status)) return response;
+      const event = state.record(target, response.status, response.headers, { ...options, inputTokenEstimate, outputTokenEstimate: options.maxTokens ?? MAX_REPLY_TOKENS });
+      notify(event);
+      const tokenOrDaily = ["tokens", "tpm", "tpd", "rpd", "input_tokens", "output_tokens"].includes(event.category);
+      // Do not immediately resend an oversized context or spin on daily quota.
+      // Provider-wide cooldowns also bypass sibling models in the outer loop.
+      if (retry > 0 || response.status !== 429 || tokenOrDaily || event.waitMs > MAX_RATE_LIMIT_WAIT_MS - waited
+        || state.now() + event.waitMs >= deadline) break;
+      waited += event.waitMs;
+      await response.body?.cancel().catch(() => {});
+      lastResponse = undefined;
+      await (options.sleep ?? sleep)(event.waitMs, options.signal);
+      if (state.availability(target).until > event.limitedUntil) break;
+    }
   }
-  if (endpoint.fallbackModel) return sendModel({ ...endpoint, model: endpoint.fallbackModel }, turns, options);
-  return response;
+  if (lastResponse) return lastResponse;
+  if (lastError) throw lastError;
+  return new Response(null, { status: targets.length && state.history().at(-1)?.httpStatus === 429 ? 429 : 503 });
 }
 
 /** Rate limits count every token resent each round, so results the model already used are cut to a digest. */
@@ -70,8 +115,14 @@ export function compactOlderToolResults(turns, freshFrom) {
   }
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const finish = () => { signal?.removeEventListener("abort", abort); resolve(); };
+    const timer = setTimeout(finish, ms);
+    const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(signal.reason); };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 /**
@@ -79,11 +130,13 @@ function sleep(ms) {
  * calling answers 400 or 422, and the call is retried without them rather
  * than failing. Streams thinking and words through `emit` as they arrive.
  */
-async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause }) {
-  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause });
+async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, signal, turnId }) {
+  const recovery = { signal, turnId, onRecovery: (event) => emit("model_recovery", event) };
+  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, ...recovery });
   let toolsDropped = false;
   if (tools && (response.status === 400 || response.status === 422)) {
-    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause });
+    await response.body?.cancel().catch(() => {});
+    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, ...recovery });
     toolsDropped = true;
   }
   if (!response.ok) return { ok: false, status: response.status };
@@ -134,10 +187,13 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
  *   maxTokens?: number,
  *   agentId?: string,
  *   sleep?: (ms: number) => Promise<void>,
+ *   signal?: AbortSignal,
+ *   turnId?: string,
  * }} options
  * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[] } | { error: string, status: number }>}
  */
-export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause }) {
+export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause, signal, turnId }) {
+  endpoint = { ...endpoint, recoveryState: endpoint.recoveryState ?? new ModelRecoveryState() };
   // Child agents get their own, narrower tool list and no task starting; the lead gets everything.
   const tools = toolOverride ?? [...(allowTasks ? [TASK_TOOL] : []), ...instantToolDefinitions(toolContext?.environment ?? {})];
   const offered = new Set(tools.map((tool) => tool.function.name));
@@ -173,7 +229,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     let result;
     try {
       // The last round keeps the tool definitions (earlier rounds' results refer to them) but must answer in words.
-      result = await modelStep({ endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sink, toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause });
+      result = await modelStep({ endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sink, toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause, signal, turnId });
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "TimeoutError";
       const message = timedOut ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.";
@@ -183,7 +239,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     // The status is the actionable part; the body can contain the prompt echoed back.
     if (!result.ok) {
       const message = result.status === 429
-        ? "The model provider's rate limit was reached (429). Wait a minute and ask again, or set a higher-limit model or ATLAS_CHAT_FALLBACK_MODEL."
+        ? "The permitted model targets are exhausted or cooling down after a rate limit (429). Your completed steps are preserved. Retry after the cooldown, or configure another permitted target in Connections."
         : `The model endpoint answered ${result.status}.`;
       if (round > 0) return interrupted(message);
       return { error: message, status: result.status === 429 ? 429 : 502 };

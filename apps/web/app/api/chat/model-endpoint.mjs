@@ -65,7 +65,50 @@ export function resolveChatModel(environment = process.env) {
 
   if (url.search || url.hash) return { configured: false, reason: "The model endpoint must not contain a query or fragment." };
   if (!apiKey && url.origin === "https://api.groq.com") apiKey = (environment.GROQ_API_KEY || "").trim();
-  return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel: fallbackModelFor(environment, url, model) };
+  const primary = { baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel: fallbackModelFor(environment, url, model) };
+  try {
+    return { configured: true, ...primary, ...recoveryConfiguration(environment, primary) };
+  } catch {
+    // Never echo configuration: it can contain accidentally pasted credentials.
+    return { configured: false, reason: "Invalid chat recovery configuration. Check ATLAS_CHAT_TARGETS, ATLAS_CHAT_TARGET_ORDER and recovery policy settings." };
+  }
+}
+
+/** Validate every target through the same endpoint rules; credentials never inherit across targets. */
+function recoveryConfiguration(environment, primary) {
+  const policy = environment.ATLAS_CHAT_ROUTING_POLICY || "BALANCED";
+  if (!["LOCAL_ONLY", "PREFER_LOCAL", "BALANCED", "BEST_AVAILABLE"].includes(policy)) throw new Error("policy");
+  const maxCostMicroUsd = Number(environment.ATLAS_CHAT_RECOVERY_BUDGET_MICRO_USD || 0);
+  if (!Number.isSafeInteger(maxCostMicroUsd) || maxCostMicroUsd < 0) throw new Error("budget");
+  const raw = JSON.parse(environment.ATLAS_CHAT_TARGETS || "[]");
+  if (!Array.isArray(raw) || raw.length > 6) throw new Error("targets");
+  const ids = new Set(["primary", "fallback"]);
+  const targets = raw.map((entry) => {
+    if (!entry || !/^[a-zA-Z0-9_-]{1,64}$/u.test(entry.id) || ids.has(entry.id)) throw new Error("id");
+    ids.add(entry.id);
+    if (typeof entry.baseUrl !== "string" || typeof entry.model !== "string" || !entry.model.trim() || entry.model.length > 200) throw new Error("endpoint");
+    if (entry.apiKey !== undefined || (entry.apiKeyEnv !== undefined && !/^[A-Z][A-Z0-9_]{0,100}$/u.test(entry.apiKeyEnv))) throw new Error("key");
+    const resolved = resolveChatModel({ ATLAS_CHAT_BASE_URL: entry.baseUrl, ATLAS_CHAT_MODEL: entry.model, ATLAS_MODEL_API_KEY: entry.apiKeyEnv ? environment[entry.apiKeyEnv] || "" : "", ATLAS_CHAT_FALLBACK_MODEL: "none" });
+    if (!resolved.configured) throw new Error("endpoint");
+    const local = LOOPBACK_HOSTS.includes(new URL(resolved.baseUrl).hostname);
+    if (entry.local !== undefined && entry.local !== local) throw new Error("locality");
+    if (typeof entry.provider !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/u.test(entry.provider)) throw new Error("provider");
+    const capabilities = entry.capabilities ?? {};
+    for (const key of ["toolCalls", "vision", "structuredOutput"]) if (capabilities[key] !== undefined && typeof capabilities[key] !== "boolean") throw new Error("capabilities");
+    for (const key of ["contextTokens", "maxOutputTokens"]) if (capabilities[key] !== undefined && (!Number.isSafeInteger(capabilities[key]) || capabilities[key] < 1)) throw new Error("capabilities");
+    if (entry.reliability !== undefined && (typeof entry.reliability !== "number" || !Number.isFinite(entry.reliability) || entry.reliability < 0 || entry.reliability > 1)) throw new Error("reliability");
+    const cost = entry.cost ?? (local ? { inputMicroUsdPerMillion: 0, outputMicroUsdPerMillion: 0 } : null);
+    if (cost && [cost.inputMicroUsdPerMillion, cost.outputMicroUsdPerMillion].some((value) => typeof value !== "number" || !Number.isFinite(value) || value < 0)) throw new Error("cost");
+    if (entry.rateLimitScope !== undefined && !["model", "provider"].includes(entry.rateLimitScope)) throw new Error("scope");
+    if (entry.policyAllowed !== undefined && typeof entry.policyAllowed !== "boolean") throw new Error("permission");
+    return { id: entry.id, provider: entry.provider, baseUrl: resolved.baseUrl, model: resolved.model, apiKey: resolved.apiKey,
+      local, capabilities, cost, reliability: entry.reliability ?? null, policyAllowed: entry.policyAllowed === true,
+      credentialAvailable: !entry.apiKeyEnv || Boolean(resolved.apiKey), rateLimitScope: entry.rateLimitScope ?? "model" };
+  });
+  const order = environment.ATLAS_CHAT_TARGET_ORDER ? JSON.parse(environment.ATLAS_CHAT_TARGET_ORDER) : null;
+  const available = ["primary", ...(primary.fallbackModel ? ["fallback"] : []), ...targets.map((target) => target.id)];
+  if (order && (!Array.isArray(order) || order.length !== available.length || new Set(order).size !== available.length || order.some((id) => !available.includes(id)))) throw new Error("order");
+  return { targets, routingPolicy: policy, targetOrder: order, allowPaidRecovery: environment.ATLAS_CHAT_ALLOW_PAID_RECOVERY === "true", recoveryBudget: { maxCostMicroUsd, spentMicroUsd: 0 } };
 }
 
 /** The absolute chat-completions URL for a resolved endpoint. */
