@@ -94,8 +94,17 @@ describe("browser worker", { skip: skipBrowser }, () => {
     assert.ok(blocked.includes("/tracker.png"), `img should be blocked: ${blocked}`);
     assert.ok(blocked.includes("/exfil"), `fetch should be blocked: ${blocked}`);
 
-    await assert.rejects(() => worker.click(sessionId, { role: "link", name: "Offsite" }), { code: "LEFT_ALLOWED_ORIGINS" });
+    await assert.rejects(() => worker.click(sessionId, { role: "link", name: "Offsite", exact: true }), { code: "LEFT_ALLOWED_ORIGINS" });
     assert.equal(worker.describeSession(sessionId).open, false);
+    assert.deepEqual(other.hits, []);
+
+    // A navigation that starts just after the click returns (script, slow
+    // handler, busy machine) is caught too: the click is never reported as a
+    // success while the page is on its way to another origin.
+    const delayed = await worker.createSession({ allowedOrigins: [site.origin] });
+    await worker.navigate(delayed.sessionId, { url: `${site.origin}/beacon.html` });
+    await assert.rejects(() => worker.click(delayed.sessionId, { role: "link", name: "Delayed offsite" }), { code: "LEFT_ALLOWED_ORIGINS" });
+    assert.equal(worker.describeSession(delayed.sessionId).open, false);
     assert.deepEqual(other.hits, []);
 
     const second = await worker.createSession({ allowedOrigins: [site.origin] });

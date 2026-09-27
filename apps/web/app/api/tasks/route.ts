@@ -6,7 +6,7 @@ import { NO_TENANT_MESSAGE, resolveTenantContext, tenantScope } from "../auth/te
 import { conversationMessages, conversations, repositories, runEvents, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, defaultMergePolicy, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
-import { credentialKind, explainDispatchFailure, explainGitHubFailure } from "./github-diagnosis.mjs";
+import { credentialKind, explainDispatchFailure, explainGitHubAppFailure, explainGitHubFailure } from "./github-diagnosis.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
 import {
   fetchGitHubJson,
@@ -68,8 +68,9 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
       githubToken = await createInstallationToken(githubApp);
       credential = credentialKind(githubToken, { githubApp: true });
     }
-  } catch {
-    return Response.json({ message: "GitHub App authentication failed, so nothing was started.", code: "GITHUB_APP_AUTH_FAILED", blocked: "BLOCKED_BY_MISSING_CREDENTIAL", unblock: "Check the ATLAS_GITHUB_APP_* secrets (app id, installation id, private key) and redeploy." }, { status: 502 });
+  } catch (error) {
+    const failure = explainGitHubAppFailure(error, { repository: task.repository });
+    return Response.json({ ...failure, message: `${failure.message} Nothing was started.` }, { status: 502 });
   }
   // The platform credential acts only on repositories this person could
   // work on themselves (SEC-1). Checked before plan usage is recorded, so a
