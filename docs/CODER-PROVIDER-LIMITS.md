@@ -36,3 +36,17 @@ verify the coding path. Anthropic also has account-specific per-minute limits:
 https://platform.claude.com/docs/en/api/rate-limits
 
 Never commit an API key or paste it into a task objective.
+
+## Escalating repairs to a stronger model
+
+When the coder's change still breaks the repository's own checks after its
+repair attempts (`ATLAS_MAX_REPAIR_ATTEMPTS`, default 2), it can hand the
+repair to a stronger model instead of stopping as a regression. Set the
+repository variable `ATLAS_CODER_ESCALATION` to `provider:model:API_KEY_ENV`
+(same shape as a fallback route, e.g. `anthropic:claude-sonnet-5:ANTHROPIC_API_KEY`)
+and optionally `ATLAS_CODER_ESCALATION_ATTEMPTS` (1–5, default 2).
+
+The escalation model continues from the same checkpoint: the working tree
+with every edit so far, and only the failures the change introduced. The
+task is never restarted, and it spends from the same token budget. The
+pull request says when escalation was used (`escalatedAtPass`).

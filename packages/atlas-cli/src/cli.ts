@@ -64,7 +64,7 @@ const USAGE = `Usage:
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
-       [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
+       [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]`;
@@ -526,12 +526,35 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     routes.push({ provider: makeRoute(fallbackModel, fallbackSelection.selection, fallbackKey), model: fallbackModel });
   }
   const routedProvider = routes.length === 1 ? routes[0]!.provider : new FallbackModelProvider(routes);
-  // Retries and fallbacks share one outer budget ledger, so changing routes
-  // cannot reset the task's hard output-token ceiling.
-  const provider = new BudgetedModelProvider(
-    routedProvider,
-    new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget }),
-  );
+  // Retries, fallbacks and escalation share one outer budget ledger, so
+  // changing routes or models cannot reset the task's hard output-token ceiling.
+  const budgetLedger = new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget });
+  const provider = new BudgetedModelProvider(routedProvider, budgetLedger);
+
+  // Optional stronger model for repairs the configured model could not finish
+  // (docs/PROGRAM.md 2.4): it continues from the same working tree and
+  // evidence, never restarts the task, and spends from the same budget.
+  let escalationRoute: { provider: BudgetedModelProvider; model: string } | undefined;
+  if (args.includes("--escalate")) {
+    const specification = readRequiredOption(args, "--escalate");
+    if (specification === null) return 2;
+    const parts = specification.split(":");
+    if (parts.length !== 3 || parts.some((part) => part.trim().length === 0)) {
+      console.error("--escalate must use provider:model:API_KEY_ENV.");
+      return 2;
+    }
+    const [escalationProvider, escalationModel, escalationKeyEnvironment] = parts as [string, string, string];
+    const escalationSelection = selectCoderProvider({ provider: escalationProvider, model: escalationModel, apiKeyEnvironmentVariable: escalationKeyEnvironment, tokenBudget, outputTokensPerTurn });
+    if (!escalationSelection.ok) { console.error(escalationSelection.message); return 2; }
+    const escalationKey = process.env[escalationSelection.selection.apiKeyEnvironmentVariable];
+    if (!escalationKey?.trim()) {
+      console.error(`Environment variable ${escalationSelection.selection.apiKeyEnvironmentVariable} is not set (required for escalation provider '${escalationProvider}').`);
+      return 2;
+    }
+    escalationRoute = { provider: new BudgetedModelProvider(makeRoute(escalationModel, escalationSelection.selection, escalationKey), budgetLedger), model: escalationModel };
+  }
+  const escalationAttemptsOption = readOptionalInteger(args, "--escalation-attempts", 1, 5);
+  if (escalationAttemptsOption === null) return 2;
   // A monorepo often declares no scripts at its root, so allow verification to
   // be pointed at the package that owns them. The path stays relative and
   // contained: BoundedCommandRunner rejects an absolute or escaping cwd, and
@@ -569,9 +592,9 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
 
   const sessionId = randomUUID();
   const audit = new InMemorySessionAuditLog();
-  const agent = new ProviderReadOnlyToolAgent({
-    provider,
-    model,
+  const makeAgent = (agentProvider: typeof provider, agentModel: string) => new ProviderReadOnlyToolAgent({
+    provider: agentProvider,
+    model: agentModel,
     registry,
     tools: COMPACT_CODER_MODEL_TOOLS,
     audit,
@@ -588,8 +611,36 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     ...(profile.providerId === "groq" && endpoint === undefined ? { maximumRequestBytes: groqRequestByteLimit(outputTokensPerTurn) } : {}),
     systemPrompt: CODE_SYSTEM_PROMPT,
   });
+  const agent = makeAgent(provider, model);
 
   let usage = { turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0 };
+  const runAgentWith = (passAgent: typeof agent) => async (evidence: readonly { label: string; content: string }[]) => {
+    // Each pass appends to the shared `edits` array; the delta is what this
+    // pass changed. The token ledger is deliberately shared across passes,
+    // so a repair loop spends from the same budget rather than a fresh one.
+    const before = edits.length;
+    const pass = await passAgent.run({
+      sessionId,
+      objective,
+      evidence: evidence.map((item) => ({ label: item.label, content: item.content })),
+      scope: { kind: "repository", repositoryId },
+      context: { repositoryId },
+    });
+    usage = {
+      turns: usage.turns + pass.trace.turns,
+      toolCalls: usage.toolCalls + pass.trace.toolCalls,
+      inputTokens: usage.inputTokens + pass.trace.usage.inputTokens,
+      outputTokens: usage.outputTokens + pass.trace.usage.outputTokens,
+    };
+    return {
+      status: pass.status,
+      response: pass.status === "completed" ? pass.response : "",
+      message: pass.status === "approval-required"
+        ? `Stopped waiting on approval for ${pass.toolName}.`
+        : "message" in pass ? pass.message : null,
+      edits: edits.slice(before),
+    };
+  };
   const result = await new VerifiedCoderSession({
     plan,
     maxRepairAttempts,
@@ -597,33 +648,8 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     // first request carries only a compact map so entry-level hosted-model TPM
     // limits cannot reject the run before the agent gets its first turn.
     baseEvidence: [{ label: "Deterministic repository summary", content: renderJson(compactRepositorySummary(summary)) }],
-    runAgent: async (evidence) => {
-      // Each pass appends to the shared `edits` array; the delta is what this
-      // pass changed. The token ledger is deliberately shared across passes,
-      // so a repair loop spends from the same budget rather than a fresh one.
-      const before = edits.length;
-      const pass = await agent.run({
-        sessionId,
-        objective,
-        evidence: evidence.map((item) => ({ label: item.label, content: item.content })),
-        scope: { kind: "repository", repositoryId },
-        context: { repositoryId },
-      });
-      usage = {
-        turns: usage.turns + pass.trace.turns,
-        toolCalls: usage.toolCalls + pass.trace.toolCalls,
-        inputTokens: usage.inputTokens + pass.trace.usage.inputTokens,
-        outputTokens: usage.outputTokens + pass.trace.usage.outputTokens,
-      };
-      return {
-        status: pass.status,
-        response: pass.status === "completed" ? pass.response : "",
-        message: pass.status === "approval-required"
-          ? `Stopped waiting on approval for ${pass.toolName}.`
-          : "message" in pass ? pass.message : null,
-        edits: edits.slice(before),
-      };
-    },
+    runAgent: runAgentWith(agent),
+    ...(escalationRoute ? { escalation: { attempts: escalationAttemptsOption ?? 2, runAgent: runAgentWith(makeAgent(escalationRoute.provider, escalationRoute.model)) } } : {}),
     runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),
   }).run();
 

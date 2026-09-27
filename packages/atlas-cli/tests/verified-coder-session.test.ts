@@ -279,3 +279,62 @@ test("rejects an out-of-range repair budget", () => {
   assert.throws(() => new VerifiedCoderSession({ ...options, maxRepairAttempts: -1 }), RangeError);
   assert.throws(() => new VerifiedCoderSession({ ...options, maxRepairAttempts: 11 }), RangeError);
 });
+
+test("escalates to the stronger model once the repair budget is spent, continuing from the same checkpoint", async () => {
+  const calls: { runner: string; evidence: readonly AgentEvidence[] }[] = [];
+  const comparisons = [comparison("reject", 2), comparison("reject", 2), comparison("reject", 1), comparison("accept")];
+  const session = new VerifiedCoderSession({
+    plan,
+    maxRepairAttempts: 1,
+    runAgent: async (evidence) => { calls.push({ runner: "primary", evidence }); return pass([{ path: "a.ts", operation: "update" }]); },
+    escalation: {
+      attempts: 2,
+      runAgent: async (evidence) => { calls.push({ runner: "escalation", evidence }); return pass([{ path: "b.ts", operation: "create" }]); },
+    },
+    runValidation: async (label) => snapshot(label),
+    compare: () => comparisons.shift()!,
+  });
+  const result = await session.run();
+  assert.equal(result.verification.status, "verified");
+  assert.deepEqual(calls.map((call) => call.runner), ["primary", "primary", "escalation", "escalation"]);
+  assert.equal(result.verification.escalatedAtPass, 3);
+  assert.match(result.verification.message, /repaired by the escalation model from pass 3/u);
+  // No restart: the escalation model gets the failures the change introduced, and every edit is kept.
+  assert.match(calls[2]!.evidence.at(-1)!.content, /new failure/u);
+  assert.deepEqual(result.edits.map((edit) => edit.path), ["a.ts", "b.ts"]);
+});
+
+test("escalation has its own bounded budget and reports the regression honestly", async () => {
+  let escalationPasses = 0;
+  const session = new VerifiedCoderSession({
+    plan,
+    maxRepairAttempts: 1,
+    runAgent: async () => pass([{ path: "a.ts", operation: "update" }]),
+    escalation: { attempts: 2, runAgent: async () => { escalationPasses += 1; return pass([{ path: "a.ts", operation: "update" }]); } },
+    runValidation: async (label) => snapshot(label),
+    compare: () => comparison("reject", 1),
+  });
+  const result = await session.run();
+  assert.equal(result.verification.status, "regressed");
+  assert.equal(escalationPasses, 2);
+  assert.equal(result.verification.attempts, 4);
+  assert.match(result.verification.message, /including 2 by the escalation model/u);
+});
+
+test("without an escalation route the behaviour is unchanged", async () => {
+  const session = new VerifiedCoderSession({
+    plan,
+    maxRepairAttempts: 1,
+    runAgent: async () => pass([{ path: "a.ts", operation: "update" }]),
+    runValidation: async (label) => snapshot(label),
+    compare: () => comparison("reject", 1),
+  });
+  const result = await session.run();
+  assert.equal(result.verification.status, "regressed");
+  assert.equal(result.verification.attempts, 2);
+  assert.equal(result.verification.escalatedAtPass, undefined);
+});
+
+test("rejects an out-of-range escalation budget", () => {
+  assert.throws(() => new VerifiedCoderSession({ plan, runAgent: async () => pass([]), runValidation: async (label) => snapshot(label), escalation: { attempts: 0, runAgent: async () => pass([]) } }), RangeError);
+});
