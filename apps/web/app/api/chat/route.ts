@@ -17,6 +17,8 @@ import { chatTurns } from "./turns.mjs";
 import { resolveChatModel, threadTitle } from "./model-endpoint.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
+import { chatGovernorFor } from "../inference/governor-client.mjs";
+import { workerEnv } from "../inference/worker-env.mjs";
 import { createAgentTeam } from "./agent-team.mjs";
 import { instantToolDefinitions } from "./instant-tools.mjs";
 
@@ -40,10 +42,12 @@ export async function POST(request: Request) {
 
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
-  const endpoint = resolveChatModel(process.env);
-  if (!endpoint.configured) {
-    return Response.json({ message: endpoint.reason, needsModelEndpoint: true }, { status: 503 });
+  const resolved = resolveChatModel(process.env);
+  if (!resolved.configured) {
+    return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
   }
+  // Every model call reserves through the provider scope's quota ledger (Phase 1.2); none when unbound.
+  const endpoint = { ...resolved, governor: await chatGovernorFor(resolved, workerEnv) };
 
   const db = getDb();
   const now = new Date().toISOString();
