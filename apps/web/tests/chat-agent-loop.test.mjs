@@ -103,8 +103,17 @@ test("an endpoint without tool support is retried without tools", async () => {
 });
 
 test("model failures become an actionable error", async () => {
-  const { fetcher } = scripted([() => new Response("secret prompt echoed", { status: 500 })]);
-  assert.deepEqual(await run(fetcher).promise, { error: "The model endpoint answered 500.", status: 502 });
+  const failing = () => new Response("secret prompt echoed", { status: 500 });
+  const { fetcher, requests } = scripted([failing, failing, failing]);
+  const waits = [];
+  assert.deepEqual(await run(fetcher, { sleep: async (ms) => { waits.push(ms); } }).promise, { error: "The model endpoint answered 500.", status: 502 });
+  // A 5xx is retried a bounded number of times, never looped on.
+  assert.equal(requests.length, 3);
+  assert.equal(waits.length, 2);
+  const unauthorized = scripted([() => new Response("", { status: 401 })]);
+  assert.equal((await run(unauthorized.fetcher, { sleep: async () => {} }).promise).status, 502);
+  // A 401 is configuration, not load: asking again cannot help.
+  assert.equal(unauthorized.requests.length, 1);
   const down = async () => { throw new TypeError("fetch failed"); };
   assert.equal((await run(down).promise).status, 504);
 });
@@ -142,12 +151,34 @@ test("a long retry-after skips straight to the fallback; no fallback means a cle
   assert.match(failed.error, /rate limit/u);
 });
 
-test("a rate limit after some work keeps the work and says why it stopped", async () => {
-  const limited = () => new Response("", { status: 429, headers: { "retry-after": "60" } });
-  const { fetcher } = scripted([[say("Checking the page."), callTool("t1", "read_web_page", { url: "https://example.com/" })], limited]);
-  const outcome = await run(fetcher, { sleep: async () => {} }).promise;
-  assert.match(outcome.reply, /^Checking the page\.\n\n_Stopped early: .*rate limit/u);
+test("a rate limit after some work waits, then writes the answer from the work", async () => {
+  const limited = () => new Response("", { status: 429, headers: { "retry-after": "3" } });
+  const waits = [];
+  const { fetcher, requests } = scripted([
+    [say("Checking the page."), callTool("t1", "read_web_page", { url: "https://example.com/" })],
+    limited, // the round after the tool: refused
+    limited, // synthesis, first try: refused
+    [say("The page says Example body.")],
+  ]);
+  const outcome = await run(fetcher, { sleep: async (ms) => { waits.push(ms); } }).promise;
+  assert.equal(outcome.reply, "Checking the page.\n\nThe page says Example body.");
   assert.equal(outcome.steps.length, 1);
+  // The synthesis call carries the work and cannot start another tool cycle.
+  const synthesis = requests.at(-1);
+  assert.equal(synthesis.tools, undefined);
+  assert.match(synthesis.messages.at(-1).content, /Example body/u);
+  assert.match(synthesis.messages.at(-1).content, /rate limit/u);
+  assert.ok(waits.includes(3000));
+});
+
+test("when no model can answer at all, the work is still the reply, never an empty one", async () => {
+  const limited = () => new Response("", { status: 429, headers: { "retry-after": "600" } });
+  const { fetcher } = scripted([[say("Checking the page."), callTool("t1", "read_web_page", { url: "https://example.com/" })], limited, limited]);
+  const outcome = await run(fetcher, { sleep: async () => {} }).promise;
+  assert.match(outcome.reply, /^Checking the page\.\n\nI could not reach a model/u);
+  assert.match(outcome.reply, /Example/u);
+  assert.match(outcome.reply, /rate limit/u);
+  assert.match(outcome.reply, /Ask me to continue/u);
 });
 
 test("older tool results are shortened before later rounds", async () => {

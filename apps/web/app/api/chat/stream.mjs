@@ -16,12 +16,19 @@
 export function createDeltaParser() {
   let buffer = "";
   let done = false;
+  let finishReason = null;
   // Tool calls arrive in pieces keyed by index: the name once, the JSON
   // arguments split across many chunks. They are assembled, never streamed.
   const calls = new Map();
   let reasoning = "";
   return {
     get done() { return done; },
+    /** The finish_reason the server reported, if any ("stop", "length", "tool_calls"…). */
+    get finishReason() { return finishReason; },
+    /** Parses whatever is left once the stream ends; a final event may lack its trailing newline. */
+    finish(chunk = "") {
+      return this.push(`${chunk}\n`);
+    },
     /** Thinking text received since the last drain. */
     drainReasoning() {
       const text = reasoning;
@@ -66,7 +73,7 @@ export function createDeltaParser() {
           const text = content.map((part) => (typeof part === "string" ? part : part?.text ?? "")).join("");
           if (text) deltas.push(text);
         }
-        if (choice?.finish_reason) done = true;
+        if (choice?.finish_reason) { done = true; finishReason = choice.finish_reason; }
       }
       return deltas;
     },
