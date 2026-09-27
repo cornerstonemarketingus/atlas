@@ -83,17 +83,31 @@ export function registerGenesisTools(registry, getGenesis, getPublisher = () => 
   registry.register({
     ...common,
     name: "genesis.publish",
-    description: "Publish a ready Genesis project's code to a repository the person already created on their git host (GitHub, GitLab, Forgejo…), using their own git sign-in. This only files the request: Atlas's publish.remote policy decides, and by default the owner must approve it under Approvals before anything is pushed. Never call it unless the person asked to publish, push or put the code online, and never invent the repository address.",
-    inputSchema: { type: "object", required: ["remote"], properties: { projectId: { type: "string", pattern: "^gen_[0-9a-f-]{36}$" }, remote: { type: "string", maxLength: 300, description: "The repository address the person gave, e.g. https://github.com/them/app.git" } } },
+    description: "Publish a ready Genesis project: push it to a repository the person already created, create a new repository on their git host (GitHub, GitLab, Forgejo) and push to it, or deploy a built website to Vercel. This only files the request: the publish.remote / deploy.remote policies decide, and by default the owner approves it under Approvals before anything leaves this computer. Never call it unless the person asked to publish, push, create a repository, deploy or put it online, and never invent addresses.",
+    inputSchema: {
+      type: "object",
+      required: ["mode"],
+      properties: {
+        projectId: { type: "string", pattern: "^gen_[0-9a-f-]{36}$" },
+        mode: { type: "string", enum: ["push", "create-repository", "deploy"], description: "push: to a repository the person already created (needs remote). create-repository: create one on their git host first (needs host). deploy: put a built website online on Vercel." },
+        remote: { type: "string", maxLength: 300, description: "For push: the repository address the person gave, e.g. https://github.com/them/app.git" },
+        host: { type: "string", enum: ["github", "gitlab", "forgejo"] },
+        visibility: { type: "string", enum: ["private", "public"], default: "private" },
+        target: { type: "string", enum: ["preview", "production"], default: "preview" },
+      },
+    },
     async execute({ input }) {
       const publisher = getPublisher();
       if (!publisher) return "Publishing is not available in this Atlas.";
       const target = latest(getGenesis(), input.projectId);
       try {
-        const result = await publisher.request(target.id, { remote: input.remote });
-        if (result.status === "awaiting-approval") return `Waiting for the owner's approval under Approvals to publish ${target.name} (commit ${result.commit.slice(0, 8)}) to ${result.remote}. Nothing has been pushed yet.`;
-        if (result.status === "published") return `Published ${target.name} to ${result.remote}.`;
-        return `Publishing failed: ${result.message}`;
+        const result = input.mode === "create-repository" ? await publisher.requestRepository(target.id, { host: input.host ?? "github", visibility: input.visibility ?? "private" })
+          : input.mode === "deploy" ? await publisher.requestDeployment(target.id, { target: input.target ?? "preview" })
+            : await publisher.request(target.id, { remote: input.remote });
+        if (result.status === "awaiting-approval") return `Waiting for the owner's approval under Approvals (${result.plan?.target ?? result.remote}). Nothing has happened outside this computer yet.`;
+        if (result.status === "published") return `Published ${target.name}${result.repository?.webUrl ? ` at ${result.repository.webUrl}` : ` to ${result.remote}`}.`;
+        if (result.status === "deployed") return `Deployed ${target.name}: ${result.deployment.url}`;
+        return `Did not complete: ${result.message}`;
       } catch (error) {
         return `Not published: ${error instanceof Error ? error.message : "unknown error"}`;
       }

@@ -54,6 +54,7 @@ test("the lead tracker fixture goes from one sentence to a verified, running app
   // The inspection is recorded, and it says whether a browser was used.
   const inspection = done.tasks.find((t) => t.executor === "browser").evidence.at(-1);
   assert.ok(["browser", "http"].includes(inspection.mode));
+  if (process.env.GENESIS_REQUIRE_FULL === "1") assert.equal(inspection.mode, "browser", "the Genesis CI job must inspect in a real browser");
   if (inspection.mode === "browser") {
     assert.ok(inspection.checks.some((c) => c.name === "add customer through the form" && c.ok));
     assert.ok(inspection.checks.some((c) => c.name === "find customer by search" && c.ok));
@@ -238,4 +239,44 @@ test("chat tools build, report, and continue the same project", async () => {
   assert.match(shop, /\[payments\]/u, "open questions are shown with their ids");
   assert.match(await run("genesis.answer", { answers: { payments: "no" } }), /Plan approved/u);
   store.close();
+});
+
+test("the vision review reads screenshots, blocks once on real breakage, then only suggests", async () => {
+  const { createVisionReviewer, parseVisionAnswer, selectScreenshots, MAX_IMAGES } = await import("../src/platform/genesis/vision.mjs");
+  const { startScriptedModelServer } = await import("./helpers/scripted-model-server.mjs");
+  assert.deepEqual(parseVisionAnswer('Sure! {"issues":[{"screenshot":1,"problem":"The table overflows on a phone.","severity":"error"}]}'), [{ screenshot: 1, problem: "The table overflows on a phone.", severity: "error" }]);
+  assert.equal(parseVisionAnswer("Looks great to me!"), null);
+  assert.deepEqual(parseVisionAnswer('{"issues":[{"problem":"tight spacing","severity":"catastrophic"}]}')[0].severity, "warning");
+
+  const root = mkdtempSync(join(tmpdir(), "atlas-genesis-vision-"));
+  try {
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+    const shots = ["_dashboard-1280.png", "_dashboard-375.png", "_customers-1280.png", "_customers-375.png", "_a-1280.png", "_b-1280.png", "_c-1280.png", "_d-375.png"].map((name) => { const file = join(root, name); writeFileSync(file, png); return file; });
+    const chosen = selectScreenshots(shots);
+    assert.equal(chosen.length, MAX_IMAGES);
+    assert.ok(chosen.slice(0, 3).every((file) => file.endsWith("-375.png")), "phone widths first");
+
+    let imagesSeen = 0;
+    const model = await startScriptedModelServer(({ messages }) => {
+      imagesSeen = messages[0].content.filter((part) => part.type === "image_url" && part.image_url.url.startsWith("data:image/png;base64,")).length;
+      return { say: '{"issues":[{"screenshot":1,"problem":"The customer table is cut off on a phone.","severity":"error"},{"screenshot":2,"problem":"Buttons sit a little close together.","severity":"warning"}]}' };
+    });
+    try {
+      const review = createVisionReviewer({ environment: { ATLAS_GENESIS_VISION_BASE_URL: model.baseUrl, ATLAS_GENESIS_VISION_MODEL: "qwen2.5vl:7b" } });
+      const first = await review({ id: "gen_a" }, shots);
+      assert.equal(first.reviewed, true);
+      assert.equal(imagesSeen, MAX_IMAGES, "the screenshots were sent as images");
+      assert.deepEqual(first.findings.map((f) => [f.check, f.severity]), [["visual", "error"], ["visual", "warning"]]);
+      assert.match(first.findings[0].page, /-375\.png$/u);
+      const second = await review({ id: "gen_a" }, shots);
+      assert.ok(second.findings.every((f) => f.severity === "warning"), "after one visual repair, visual issues only suggest");
+      const none = await createVisionReviewer({ environment: { ATLAS_GENESIS_VISION_BASE_URL: "http://127.0.0.1:9/v1" } })({ id: "gen_b" }, shots);
+      assert.equal(none.reviewed, false);
+      assert.match(none.reason, /No vision model/u);
+    } finally {
+      await model.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
 });

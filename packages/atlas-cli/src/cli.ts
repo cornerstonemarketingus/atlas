@@ -10,6 +10,8 @@ import { SafeValidationProfileRunner } from "./infrastructure/validation-profile
 import { FilesystemRepositoryInspector } from "./infrastructure/filesystem-repository-inspector.js";
 import { RepositoryTextSearch } from "./infrastructure/repository-text-search.js";
 import { RepositorySymbolIndexer } from "./infrastructure/repository-symbol-indexer.js";
+import { RepositoryImportGraph, testsFor } from "./infrastructure/repository-import-graph.js";
+import { RepositoryConfigReferences } from "./infrastructure/repository-config-references.js";
 import { BoundedRepositorySourceReader } from "./infrastructure/bounded-repository-source-reader.js";
 import { RepositorySymbolReferenceFinder } from "./infrastructure/repository-symbol-reference-finder.js";
 import { BudgetedModelProvider } from "./infrastructure/budgeted-model-provider.js";
@@ -57,6 +59,8 @@ const USAGE = `Usage:
   atlas references <repository-path> <symbol-name> [--max-results N] [--format text|json]
   atlas read <repository-path> <relative-file-path> [--start-line N] [--end-line N] [--max-lines N] [--max-bytes N] [--format text|json]
   atlas tree <repository-path> [--max-depth N] [--max-entries N] [--format text|json]
+  atlas tests-for <repository-path> <relative-file-path> [--depth N] [--format text|json]
+  atlas env <repository-path> [--name NAME] [--undeclared] [--format text|json]
   atlas redact [--max-characters N] [--summary]   (reads stdin, writes redacted text to stdout)
   atlas replay <audit-log.jsonl> [--session <id>] [--format text|json]
   atlas github repo <owner>/<repository> [--format text|json]
@@ -64,7 +68,7 @@ const USAGE = `Usage:
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
-       [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
+       [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]`;
@@ -88,7 +92,7 @@ export async function main(args: readonly string[]): Promise<number> {
       writeError: (text) => process.stderr.write(text),
     });
   }
-  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
+  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "env" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
     console.error(USAGE);
     return 2;
   }
@@ -102,6 +106,55 @@ export async function main(args: readonly string[]): Promise<number> {
     if (args[0] === "inspect") {
       const summary = await new FilesystemRepositoryInspector().inspect(args[1]);
       console.log(format === "json" ? renderJson(summary) : renderText(summary));
+      return 0;
+    }
+    if (args[0] === "env") {
+      const nameIndex = args.indexOf("--name");
+      const name = nameIndex < 0 ? undefined : args[nameIndex + 1];
+      if (nameIndex >= 0 && (name === undefined || name.startsWith("--"))) {
+        console.error("The --name option requires a value.");
+        return 2;
+      }
+      const result = await new RepositoryConfigReferences().find(args[1]);
+      const variables = result.variables
+        .filter((variable) => name === undefined || variable.name === name)
+        .filter((variable) => !args.includes("--undeclared") || variable.undeclared);
+      if (format === "json") {
+        console.log(JSON.stringify({ ...result, variables }, null, 2));
+        return 0;
+      }
+      if (variables.length === 0) console.log(name === undefined ? "No environment variable references found." : `No references to ${name}.`);
+      for (const variable of variables) {
+        console.log(`${variable.name}${variable.undeclared ? "  (read, but not declared in any example file, workflow env or wrangler vars)" : ""}`);
+        for (const reference of variable.references) console.log(`  ${reference.kind.padEnd(8)} ${reference.file}:${reference.line}  ${reference.via}`);
+      }
+      for (const warning of result.warnings) console.error(`warning: ${warning.message}`);
+      return 0;
+    }
+    if (args[0] === "tests-for") {
+      const target = args[2];
+      if (target === undefined || target.startsWith("--")) {
+        console.error("tests-for needs a repository path and a repository-relative file path.");
+        return 2;
+      }
+      const depth = readOptionalInteger(args, "--depth", 1, 10);
+      if (depth === null) return 2;
+      const graph = await new RepositoryImportGraph().build(args[1]);
+      const result = testsFor(graph, target, depth ?? 4);
+      if (!graph.files.includes(result.path)) {
+        console.error(`${result.path} is not a TypeScript, JavaScript or Python source file in this repository.`);
+        return 1;
+      }
+      if (format === "json") {
+        console.log(JSON.stringify({ ...result, warnings: graph.warnings }, null, 2));
+      } else if (result.tests.length === 0) {
+        console.log(`No tests import ${result.path} within ${result.searchedDepth} hops.`);
+      } else {
+        for (const item of result.tests) {
+          console.log(item.test);
+          for (const link of item.chain) console.log(`  ${link.file}:${link.line} imports ${link.specifier}`);
+        }
+      }
       return 0;
     }
     if (args[0] === "symbols") {
@@ -526,12 +579,35 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     routes.push({ provider: makeRoute(fallbackModel, fallbackSelection.selection, fallbackKey), model: fallbackModel });
   }
   const routedProvider = routes.length === 1 ? routes[0]!.provider : new FallbackModelProvider(routes);
-  // Retries and fallbacks share one outer budget ledger, so changing routes
-  // cannot reset the task's hard output-token ceiling.
-  const provider = new BudgetedModelProvider(
-    routedProvider,
-    new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget }),
-  );
+  // Retries, fallbacks and escalation share one outer budget ledger, so
+  // changing routes or models cannot reset the task's hard output-token ceiling.
+  const budgetLedger = new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget });
+  const provider = new BudgetedModelProvider(routedProvider, budgetLedger);
+
+  // Optional stronger model for repairs the configured model could not finish
+  // (docs/PROGRAM.md 2.4): it continues from the same working tree and
+  // evidence, never restarts the task, and spends from the same budget.
+  let escalationRoute: { provider: BudgetedModelProvider; model: string } | undefined;
+  if (args.includes("--escalate")) {
+    const specification = readRequiredOption(args, "--escalate");
+    if (specification === null) return 2;
+    const parts = specification.split(":");
+    if (parts.length !== 3 || parts.some((part) => part.trim().length === 0)) {
+      console.error("--escalate must use provider:model:API_KEY_ENV.");
+      return 2;
+    }
+    const [escalationProvider, escalationModel, escalationKeyEnvironment] = parts as [string, string, string];
+    const escalationSelection = selectCoderProvider({ provider: escalationProvider, model: escalationModel, apiKeyEnvironmentVariable: escalationKeyEnvironment, tokenBudget, outputTokensPerTurn });
+    if (!escalationSelection.ok) { console.error(escalationSelection.message); return 2; }
+    const escalationKey = process.env[escalationSelection.selection.apiKeyEnvironmentVariable];
+    if (!escalationKey?.trim()) {
+      console.error(`Environment variable ${escalationSelection.selection.apiKeyEnvironmentVariable} is not set (required for escalation provider '${escalationProvider}').`);
+      return 2;
+    }
+    escalationRoute = { provider: new BudgetedModelProvider(makeRoute(escalationModel, escalationSelection.selection, escalationKey), budgetLedger), model: escalationModel };
+  }
+  const escalationAttemptsOption = readOptionalInteger(args, "--escalation-attempts", 1, 5);
+  if (escalationAttemptsOption === null) return 2;
   // A monorepo often declares no scripts at its root, so allow verification to
   // be pointed at the package that owns them. The path stays relative and
   // contained: BoundedCommandRunner rejects an absolute or escaping cwd, and
@@ -569,9 +645,9 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
 
   const sessionId = randomUUID();
   const audit = new InMemorySessionAuditLog();
-  const agent = new ProviderReadOnlyToolAgent({
-    provider,
-    model,
+  const makeAgent = (agentProvider: typeof provider, agentModel: string) => new ProviderReadOnlyToolAgent({
+    provider: agentProvider,
+    model: agentModel,
     registry,
     tools: COMPACT_CODER_MODEL_TOOLS,
     audit,
@@ -588,8 +664,36 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     ...(profile.providerId === "groq" && endpoint === undefined ? { maximumRequestBytes: groqRequestByteLimit(outputTokensPerTurn) } : {}),
     systemPrompt: CODE_SYSTEM_PROMPT,
   });
+  const agent = makeAgent(provider, model);
 
   let usage = { turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0 };
+  const runAgentWith = (passAgent: typeof agent) => async (evidence: readonly { label: string; content: string }[]) => {
+    // Each pass appends to the shared `edits` array; the delta is what this
+    // pass changed. The token ledger is deliberately shared across passes,
+    // so a repair loop spends from the same budget rather than a fresh one.
+    const before = edits.length;
+    const pass = await passAgent.run({
+      sessionId,
+      objective,
+      evidence: evidence.map((item) => ({ label: item.label, content: item.content })),
+      scope: { kind: "repository", repositoryId },
+      context: { repositoryId },
+    });
+    usage = {
+      turns: usage.turns + pass.trace.turns,
+      toolCalls: usage.toolCalls + pass.trace.toolCalls,
+      inputTokens: usage.inputTokens + pass.trace.usage.inputTokens,
+      outputTokens: usage.outputTokens + pass.trace.usage.outputTokens,
+    };
+    return {
+      status: pass.status,
+      response: pass.status === "completed" ? pass.response : "",
+      message: pass.status === "approval-required"
+        ? `Stopped waiting on approval for ${pass.toolName}.`
+        : "message" in pass ? pass.message : null,
+      edits: edits.slice(before),
+    };
+  };
   const result = await new VerifiedCoderSession({
     plan,
     maxRepairAttempts,
@@ -597,33 +701,8 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     // first request carries only a compact map so entry-level hosted-model TPM
     // limits cannot reject the run before the agent gets its first turn.
     baseEvidence: [{ label: "Deterministic repository summary", content: renderJson(compactRepositorySummary(summary)) }],
-    runAgent: async (evidence) => {
-      // Each pass appends to the shared `edits` array; the delta is what this
-      // pass changed. The token ledger is deliberately shared across passes,
-      // so a repair loop spends from the same budget rather than a fresh one.
-      const before = edits.length;
-      const pass = await agent.run({
-        sessionId,
-        objective,
-        evidence: evidence.map((item) => ({ label: item.label, content: item.content })),
-        scope: { kind: "repository", repositoryId },
-        context: { repositoryId },
-      });
-      usage = {
-        turns: usage.turns + pass.trace.turns,
-        toolCalls: usage.toolCalls + pass.trace.toolCalls,
-        inputTokens: usage.inputTokens + pass.trace.usage.inputTokens,
-        outputTokens: usage.outputTokens + pass.trace.usage.outputTokens,
-      };
-      return {
-        status: pass.status,
-        response: pass.status === "completed" ? pass.response : "",
-        message: pass.status === "approval-required"
-          ? `Stopped waiting on approval for ${pass.toolName}.`
-          : "message" in pass ? pass.message : null,
-        edits: edits.slice(before),
-      };
-    },
+    runAgent: runAgentWith(agent),
+    ...(escalationRoute ? { escalation: { attempts: escalationAttemptsOption ?? 2, runAgent: runAgentWith(makeAgent(escalationRoute.provider, escalationRoute.model)) } } : {}),
     runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),
   }).run();
 

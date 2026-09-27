@@ -29,8 +29,20 @@ export function createDefaultIntelligence() {
     async refinePlan({ draft }) { return draft; },
     async modelFor() { return null; },
     async explainFailure({ evidence }) {
-      const lines = String(evidence?.output ?? evidence?.stderr ?? "").split(/\r?\n/u).filter((line) => /error|fail|expected|cannot|undefined|not found|exception/iu.test(line)).slice(0, 12);
-      return { summary: lines[0] ?? "A check failed.", hints: lines.slice(1) };
+      if (evidence?.findings?.length) {
+        const first = evidence.findings[0];
+        return { summary: `${first.page}: expected ${first.expected}, saw ${first.observed}`.slice(0, 300), hints: evidence.findings.slice(1, 8).map((f) => `${f.page}: ${f.check} (${f.observed})`) };
+      }
+      if (evidence?.reason) return { summary: String(evidence.reason).slice(0, 300), hints: [] };
+      const lines = String(evidence?.output ?? evidence?.stderr ?? "").split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+      // Most useful first: a failing test's name, then an error message, then anything that looks wrong.
+      const ranked = [
+        ...lines.filter((line) => /^not ok \d+ - /u.test(line)).map((line) => `Failing test: ${line.replace(/^not ok \d+ - /u, "")}`),
+        ...lines.filter((line) => /^(\w*Error|AssertionError)\b|^error:|^✗ /u.test(line) || /\b(SyntaxError|TypeError|ReferenceError|AssertionError)\b/u.test(line)),
+        ...lines.filter((line) => /\b(expected|cannot|undefined|not found|exception|failed)\b/iu.test(line) && !/failureType|duration_ms|^#/u.test(line)),
+      ];
+      const unique = [...new Set(ranked)].slice(0, 12);
+      return { summary: unique[0]?.slice(0, 300) ?? "A check failed.", hints: unique.slice(1) };
     },
   };
 }
