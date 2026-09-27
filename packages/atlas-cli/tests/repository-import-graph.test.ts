@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { RepositoryImportGraph, isTestFile, testsFor } from "../src/infrastructure/repository-import-graph.js";
+import { RepositoryImportGraph, isTestFile, stripJsonComments, testsFor } from "../src/infrastructure/repository-import-graph.js";
 
 async function repository(files: Record<string, string>): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "atlas-imports-"));
@@ -127,4 +127,50 @@ test("atlas tests-for: JSON with evidence chains, and a clear error for a file t
     console.error = error;
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("resolves tsconfig paths and baseUrl aliases from the nearest config, following relative extends", async () => {
+  const root = await repository({
+    "tsconfig.base.json": "{\n  // shared\n  \"compilerOptions\": { \"paths\": { \"@shared/*\": [\"shared/*\"], }, },\n}\n",
+    "shared/format.ts": "export const format = 1;\n",
+    "web/tsconfig.json": "{ \"extends\": \"../tsconfig.base\", \"compilerOptions\": { \"baseUrl\": \".\", \"paths\": { \"@/*\": [\"src/*\"], \"@/lib/*\": [\"lib/*\"], \"config\": [\"src/config.ts\"] } } }\n",
+    "web/src/button.tsx": "import { format } from \"@/format\";\nimport { util } from \"@/lib/util\";\nimport config from \"config\";\nimport { page } from \"src/page\";\nimport react from \"react\";\n",
+    "web/src/format.ts": "export const format = 2;\n",
+    "web/src/config.ts": "export default {};\n",
+    "web/src/page.ts": "export const page = 1;\n",
+    "web/lib/util.ts": "export const util = 1;\n",
+    "api/tsconfig.json": "{ \"extends\": \"../tsconfig.base.json\" }\n",
+    "api/handler.ts": "import { format } from \"@shared/format\";\n",
+    "other/index.ts": "import { format } from \"@/format\";\n",
+  });
+  try {
+    const graph = await new RepositoryImportGraph().build(root);
+    const edge = (from: string, specifier: string) => graph.edges.find((item) => item.from === from && item.specifier === specifier);
+    assert.equal(edge("web/src/button.tsx", "@/format")?.to, "web/src/format.ts");
+    assert.equal(edge("web/src/button.tsx", "@/lib/util")?.to, "web/lib/util.ts", "the longest matching pattern wins");
+    assert.equal(edge("web/src/button.tsx", "config")?.to, "web/src/config.ts", "exact patterns without a star");
+    assert.equal(edge("web/src/button.tsx", "src/page")?.to, "web/src/page.ts", "baseUrl resolves bare specifiers");
+    assert.deepEqual([edge("web/src/button.tsx", "react")?.kind, edge("web/src/button.tsx", "react")?.to], ["package", null]);
+    assert.equal(edge("api/handler.ts", "@shared/format")?.to, "shared/format.ts", "paths inherited through extends resolve from the base config's directory");
+    assert.equal(edge("other/index.ts", "@/format")?.kind, "package", "a config only applies beneath its directory");
+    assert.ok(!graph.files.some((file) => file.endsWith(".json")), "configs are read, not listed as source files");
+    assert.deepEqual(testsFor(graph, "web/lib/util.ts").tests, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an unparseable tsconfig is a warning, not a failure", async () => {
+  const root = await repository({ "tsconfig.json": "{ nope", "a.ts": "import b from \"./b\";\n", "b.ts": "export default 1;\n" });
+  try {
+    const graph = await new RepositoryImportGraph().build(root);
+    assert.equal(graph.edges[0]?.to, "b.ts");
+    assert.ok(graph.warnings.some((warning) => warning.code === "PROJECT_CONFIG_UNREADABLE"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("stripJsonComments keeps comment-like text inside strings", () => {
+  assert.deepEqual(JSON.parse(stripJsonComments('{ "a": "http://x/*y*/", /* c */ "b": [1, 2,], // t\n "c": "q\\"//" }')), { a: "http://x/*y*/", b: [1, 2], c: 'q"//' });
 });
