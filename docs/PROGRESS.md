@@ -21,6 +21,18 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
   (reserve/release with outcomes), move the memory digest after the history
   (cache finding in #133), `ATLAS_CHAT_MODELS` pool from the target
   registry, resumable chat turns (task id, event log, SSE replay, polling).
+- **Phase 2 (coder) work that does not wait on chat:** escalation merged
+  (#135; its workflow wiring #136 is protected). Import graph and
+  `atlas tests-for` merged (#137, with tsconfig `paths`/`baseUrl`). In
+  review: the coder's `repository.tests_for` tool (#138; adds about 90
+  tokens per coder request, a deliberate contract change flagged for
+  review), package graph and workspace imports (#141), env/config
+  references (#142). Remaining 2.3: entrypoints, CI/deploy targets, schemas.
+- **CI:** "Genesis (real coder and browser)" failed intermittently on main
+  after #135 and on #137 (`repairsUsed 2 !== 1`). It passes on the same code
+  elsewhere and never fails locally. #139 makes the assertion print the
+  transitions so the next failure names its cause (merged). Root cause still
+  open.
 - **Blocked on owner, in order:**
   1. Merge [#123](https://github.com/cornerstonemarketingus/atlas/pull/123)
      (PR 0, CODEOWNERS), then add the branch ruleset below and turn on
@@ -63,3 +75,10 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 | 2026-09-27 | [#131](https://github.com/cornerstonemarketingus/atlas/pull/131) | 1.3 | Circuit breakers (HEALTHY/DEGRADED/OPEN/PROBING, one probe, doubling cooldown, config failures disable) | package 47/47; probe guard mutation-checked | Stacked | After #130 |
 | 2026-09-27 | [#132](https://github.com/cornerstonemarketingus/atlas/pull/132) | 1.3 | OpenAI-compatible listModels and probed target registry | package 53/53 | Stacked | After #131 |
 | 2026-09-27 | [#133](https://github.com/cornerstonemarketingus/atlas/pull/133) | 1.4 | Prompt fingerprints and cache-hit report; found chat's memory digest breaking the prefix cache | package 58/58 | Stacked; fix lands with chat wiring | After #132 |
+| 2026-09-27 | [#135](https://github.com/cornerstonemarketingus/atlas/pull/135) | 2.4 | Escalate a failing repair to a stronger model from the checkpoint (`--escalate`, shared budget ledger) | atlas-cli suite green | Workflow env in #136 (protected) | Merged |
+| 2026-09-27 | [#136](https://github.com/cornerstonemarketingus/atlas/pull/136) | 2.4 | Pass `ATLAS_CODER_ESCALATION*` into the coder and steward workflows | check-workflows.py clean | Protected path | Owner review |
+| 2026-09-27 | [#137](https://github.com/cornerstonemarketingus/atlas/pull/137) | 2.3 | Import graph (TS/JS/Python, tsconfig aliases) and `atlas tests-for` with import-chain evidence | atlas-cli 445/445 | Genesis failure on first run (see CI above) | Merged |
+| 2026-09-27 | [#138](https://github.com/cornerstonemarketingus/atlas/pull/138) | 2.3 | `repository.tests_for` coder tool | atlas-cli 442/442 | Contract change, about 90 tokens per request | Review |
+| 2026-09-27 | [#139](https://github.com/cornerstonemarketingus/atlas/pull/139) | CI | Genesis visual-repair test prints transitions when the repair count differs | forced failure shows the dump | Diagnostic, not the fix | Merged |
+| 2026-09-27 | [#141](https://github.com/cornerstonemarketingus/atlas/pull/141) | 2.3 | Package graph (npm/pnpm/PEP 621/Poetry, internal links) and workspace-package imports; `atlas packages` | atlas-cli 446/446 | TOML subset reader | Merge when green |
+| 2026-09-27 | [#142](https://github.com/cornerstonemarketingus/atlas/pull/142) | 2.3 | Env/config references: reads, declarations, workflow secrets/vars, undeclared reads; `atlas env` | atlas-cli 444/444; never-read-.env guard mutation-checked | Lexical only | Merge when green |
