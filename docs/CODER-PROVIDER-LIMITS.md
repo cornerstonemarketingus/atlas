@@ -15,6 +15,20 @@ intact. If those protected parts alone exceed the allowance, the run stops with
 instructions to split the task or configure a larger allowance. Baseline and
 post-edit verification remain mandatory under the existing verification policy.
 
+Rate limits (HTTP 429) are handled in three layers:
+
+- **Pacing.** Every Groq response reports how much of the tokens-per-minute
+  window is left (`x-ratelimit-remaining-tokens`, `x-ratelimit-reset-tokens`).
+  Before the next turn, a request estimated not to fit waits for the window to
+  refill (up to a minute) instead of being rejected.
+- **Exact retry waits.** A 429 carries the wait Groq names (`retry-after`, or
+  "Please try again in 2m59.56s." in the body, including minute and
+  millisecond forms), and the retry sleeps exactly that long.
+- **Fail fast past the cap.** A wait longer than `ATLAS_CODER_RETRY_MAX_DELAY_MS`
+  (default 60,000) is a daily quota (TPD/RPD); retrying sooner cannot succeed,
+  so the route fails at once and the next `ATLAS_CODER_FALLBACKS` route takes
+  over. Hosted chat does the same with `ATLAS_CHAT_FALLBACK_MODEL`.
+
 Use small, specific objectives and bounded source ranges. Large complete-file
 edits can still require a higher-tier provider. The byte policy does not apply
 to Anthropic or self-hosted endpoints.

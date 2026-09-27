@@ -6,6 +6,7 @@ import type {
   ModelResponse,
 } from "../model/model-provider.js";
 import { ModelProviderError } from "../model/model-provider.js";
+import { suggestedWaitFromMessage } from "./rate-limit-timing.js";
 
 export interface RetryingModelProviderOptions {
   /** Total attempts including the first, not additional retries. Defaults to 3. */
@@ -15,16 +16,17 @@ export interface RetryingModelProviderOptions {
   readonly sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 }
 
-// Groq's rate-limit body names a concrete wait, e.g. "Please try again in
-// 21.645s." — honoring it is far more precise than a fixed backoff schedule.
-const SUGGESTED_DELAY_PATTERN = /try again in ([\d.]+)\s*s/iu;
-
 /**
  * Retries a wrapped provider's transient failures (rate limits, 5xx) with
  * backoff. Non-retryable errors (auth, invalid request, cancellation) pass
  * through immediately. Wrap the raw provider with this *before* handing it
  * to BudgetedModelProvider so a retried call still only records usage once,
  * on the attempt that actually succeeds.
+ *
+ * When the provider names a wait (retry-after, or Groq's "Please try again in
+ * 2m59.56s.") that wait is honoured exactly. If it is longer than
+ * maximumDelayMs — a daily quota, typically — retrying sooner is certain to
+ * fail, so the error is raised at once and a fallback route can take over.
  */
 export class RetryingModelProvider implements ModelProvider {
   public readonly metadata: ModelProviderMetadata;
@@ -56,10 +58,9 @@ export class RetryingModelProvider implements ModelProvider {
         if (!(error instanceof ModelProviderError) || !error.retryable || attempt >= this.#maximumAttempts) {
           throw error;
         }
-        const delayMs = Math.min(
-          this.#maximumDelayMs,
-          suggestedDelayMs(error) ?? this.#baseDelayMs * 2 ** (attempt - 1),
-        );
+        const suggested = error.retryAfterMs ?? suggestedWaitFromMessage(error.message);
+        if (suggested !== undefined && suggested > this.#maximumDelayMs) throw error;
+        const delayMs = suggested ?? Math.min(this.#maximumDelayMs, this.#baseDelayMs * 2 ** (attempt - 1));
         try {
           await this.#sleep(delayMs, options.signal);
         } catch {
@@ -73,13 +74,6 @@ export class RetryingModelProvider implements ModelProvider {
       }
     }
   }
-}
-
-function suggestedDelayMs(error: ModelProviderError): number | undefined {
-  const match = SUGGESTED_DELAY_PATTERN.exec(error.message);
-  if (match?.[1] === undefined) return undefined;
-  const seconds = Number.parseFloat(match[1]);
-  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1000) : undefined;
 }
 
 function defaultSleep(delayMs: number, signal?: AbortSignal): Promise<void> {

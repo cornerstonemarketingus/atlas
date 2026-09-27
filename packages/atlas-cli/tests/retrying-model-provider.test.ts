@@ -99,14 +99,52 @@ test("gives up and rethrows once maximumAttempts is exhausted", async () => {
   assert.equal(inner.callCount, 2);
 });
 
-test("caps the delay at maximumDelayMs", async () => {
+test("caps exponential backoff at maximumDelayMs", async () => {
+  const inner = new ScriptedProvider([rateLimitError("no suggestion"), rateLimitError("no suggestion"), response()]);
+  const { sleep, delays } = recordingSleep();
+  const provider = new RetryingModelProvider(inner, { sleep, baseDelayMs: 4_000, maximumDelayMs: 5_000 });
+
+  await provider.complete({ model: "test", messages: [] });
+
+  assert.deepEqual(delays, [4_000, 5_000]);
+});
+
+test("raises at once when the provider's wait exceeds maximumDelayMs instead of retrying into it", async () => {
   const inner = new ScriptedProvider([rateLimitError("Please try again in 999s."), response()]);
   const { sleep, delays } = recordingSleep();
   const provider = new RetryingModelProvider(inner, { sleep, maximumDelayMs: 5_000 });
 
+  await assert.rejects(provider.complete({ model: "test", messages: [] }), (error: unknown) =>
+    error instanceof ModelProviderError && error.code === "rate-limit");
+  assert.equal(inner.callCount, 1);
+  assert.deepEqual(delays, []);
+});
+
+test("understands Groq's minute and millisecond waits", async () => {
+  const inner = new ScriptedProvider([
+    rateLimitError("Please try again in 1m2.5s."),
+    rateLimitError("Please try again in 340ms."),
+    response(),
+  ]);
+  const { sleep, delays } = recordingSleep();
+  const provider = new RetryingModelProvider(inner, { sleep, maximumDelayMs: 120_000 });
+
   await provider.complete({ model: "test", messages: [] });
 
-  assert.deepEqual(delays, [5_000]);
+  assert.deepEqual(delays, [62_500, 340]);
+});
+
+test("prefers the wait carried on the error over one in its message", async () => {
+  const error = new ModelProviderError({
+    message: "HTTP 429: Please try again in 9s.", code: "rate-limit", providerId: "stub", retryable: true, retryAfterMs: 3_000,
+  });
+  const inner = new ScriptedProvider([error, response()]);
+  const { sleep, delays } = recordingSleep();
+  const provider = new RetryingModelProvider(inner, { sleep });
+
+  await provider.complete({ model: "test", messages: [] });
+
+  assert.deepEqual(delays, [3_000]);
 });
 
 test("rejects an out-of-range maximumAttempts", () => {
