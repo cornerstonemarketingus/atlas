@@ -44,6 +44,10 @@ const MAX_TRACE_ENTRIES = 500;
 const MAX_BLOCKED_RECORDS = 100;
 const ACTION_RETRY_ATTEMPTS = 3;
 const ACTION_RETRY_BASE_MS = 150;
+// How long after a click/select Atlas watches for the navigation it may have
+// started. Playwright no longer waits for one, so without this the page can
+// still show the old URL while a request to another origin is on its way.
+const NAVIGATION_GRACE_MS = 300;
 
 /** Normalizes an origin string; only http(s) origins can be allowed. */
 export function normalizeOrigin(candidate) {
@@ -438,13 +442,48 @@ export class BrowserWorker {
   #assertStillConfined(session, urlBefore) {
     const urlAfter = session.page.url();
     if (urlAfter === "about:blank" || session.isAllowed(urlAfter)) return urlAfter;
+    throw this.#leftOrigins(urlBefore, urlAfter);
+  }
+
+  #leftOrigins(urlBefore, urlAfter) {
     const error = new BrowserWorkerError(
       "LEFT_ALLOWED_ORIGINS",
       `The page left the allowed origins (now at '${sanitizeUrl(urlAfter).slice(0, 200)}'); the session was closed.`,
       { urlBefore: sanitizeUrl(urlBefore), urlAfter: sanitizeUrl(urlAfter) },
     );
     error.closeSession = true;
-    throw error;
+    return error;
+  }
+
+  /**
+   * Runs an action that can navigate and judges confinement by the
+   * navigation it started, not only by the URL shown when it returns: a
+   * main-frame navigation request to a disallowed origin (issued during the
+   * action or within NAVIGATION_GRACE_MS after it) closes the session even
+   * though the egress layer blocks the request itself. An allowed navigation
+   * is waited for, then the resulting URL is checked as before.
+   */
+  async #confinedAction(session, urlBefore, run) {
+    const page = session.page;
+    const isNavigation = (request) => request.isNavigationRequest() && request.frame() === page.mainFrame();
+    const navigations = [];
+    const onRequest = (request) => { if (isNavigation(request)) navigations.push(request); };
+    page.on("request", onRequest);
+    let value;
+    try {
+      value = await run();
+      if (navigations.length === 0) await page.waitForEvent("request", { predicate: isNavigation, timeout: NAVIGATION_GRACE_MS }).catch(() => null);
+    } finally {
+      page.off("request", onRequest);
+    }
+    const offOrigin = navigations.find((request) => !session.isAllowed(request.url()));
+    if (offOrigin) throw this.#leftOrigins(urlBefore, offOrigin.url());
+    if (navigations.length > 0) {
+      const last = navigations.at(-1);
+      await Promise.race([last.response().catch(() => null), new Promise((resolve) => setTimeout(resolve, session.limits.actionTimeoutMs))]);
+    }
+    await this.#settle(session);
+    return { value, urlAfter: this.#assertStillConfined(session, urlBefore) };
   }
 
   #locator(session, target) {
@@ -541,9 +580,7 @@ export class BrowserWorker {
   async #consequentialClick(session, target, action) {
     const urlBefore = session.page.url();
     const locator = await this.#single(session, target);
-    await locator.click({ timeout: session.limits.actionTimeoutMs });
-    await this.#settle(session);
-    const urlAfter = this.#assertStillConfined(session, urlBefore);
+    const { urlAfter } = await this.#confinedAction(session, urlBefore, () => locator.click({ timeout: session.limits.actionTimeoutMs }));
     return {
       action,
       postcondition: {
@@ -590,9 +627,7 @@ export class BrowserWorker {
       const list = Array.isArray(values) ? values : [values];
       const urlBefore = session.page.url();
       const locator = await this.#single(session, target);
-      const selected = await locator.selectOption(list.map(String));
-      await this.#settle(session);
-      const urlAfter = this.#assertStillConfined(session, urlBefore);
+      const { value: selected, urlAfter } = await this.#confinedAction(session, urlBefore, () => locator.selectOption(list.map(String)));
       return { postcondition: { urlBefore, urlAfter, selected, allSelected: list.every((v) => selected.includes(String(v))) } };
     });
   }

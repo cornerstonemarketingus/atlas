@@ -238,8 +238,20 @@ if (metadata.mode === "inspect") {
     }
     codeArgs.push("--fallback", fallback);
   }
+  // A stronger model for repairs the configured one could not finish
+  // (docs/PROGRAM.md 2.4). Same shape and allowlist as a fallback route.
+  const escalation = (process.env.ATLAS_CODER_ESCALATION || "").trim();
+  if (escalation) {
+    if (!/^(?:anthropic|groq):[A-Za-z0-9._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY)$/.test(escalation)) {
+      writeStatus("failed", "ATLAS_CODER_ESCALATION is invalid. Expected provider:model:API_KEY_ENV.");
+      console.error("Atlas coder mode: invalid escalation route.");
+      process.exit(2);
+    }
+    codeArgs.push("--escalate", escalation);
+  }
   const boundedOptions = [
     ["ATLAS_CODER_RETRY_ATTEMPTS", "--retry-attempts", 1, 5],
+    ["ATLAS_CODER_ESCALATION_ATTEMPTS", "--escalation-attempts", 1, 5],
     ["ATLAS_CODER_RETRY_MAX_DELAY_MS", "--retry-max-delay-ms", 0, 120_000],
     ["ATLAS_TOKEN_BUDGET", "--token-budget", 1, 1_000_000],
     ["ATLAS_MAX_TURNS", "--max-turns", 1, 32],

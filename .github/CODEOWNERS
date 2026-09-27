@@ -1,0 +1,69 @@
+# Protected paths (docs/PROGRAM.md §3). With the branch ruleset's "Require
+# review from Code Owners", a change to any path below needs the owner's
+# review before it can merge. Agents open these PRs normally; they never edit
+# this file or the ruleset to unblock themselves.
+#
+# scripts/runner/codeowners.test.mjs fails if an entry stops matching any
+# file, so a rename cannot silently drop protection.
+
+# This file itself
+/.github/CODEOWNERS @cornerstonemarketingus
+
+# CI, deploy and every workflow; the workflow checker and self-improvement objective
+/.github/workflows/ @cornerstonemarketingus
+/.github/atlas/ @cornerstonemarketingus
+
+# Authentication, sessions, credentials and tenant isolation
+/apps/web/app/api/auth/ @cornerstonemarketingus
+/apps/web/app/api/tasks/operator-auth.mjs @cornerstonemarketingus
+/apps/web/app/api/tasks/github-token.mjs @cornerstonemarketingus
+/apps/web/app/api/tasks/github-app.mjs @cornerstonemarketingus
+/apps/web/app/api/computer/companion-auth.ts @cornerstonemarketingus
+/apps/web/app/api/computer/tenant.ts @cornerstonemarketingus
+/apps/web/app/chatgpt-auth.ts @cornerstonemarketingus
+/apps/local-control/src/agent/credential-vault.mjs @cornerstonemarketingus
+
+# Secret redaction
+/packages/atlas-cli/src/domain/secret-redaction.ts @cornerstonemarketingus
+/packages/atlas-cli/src/infrastructure/pattern-secret-redactor.ts @cornerstonemarketingus
+/packages/atlas-cli/src/infrastructure/redacting-model-provider.ts @cornerstonemarketingus
+/packages/atlas-cli/src/presentation/redacted-output.ts @cornerstonemarketingus
+/apps/local-control/src/platform/memory/redaction.mjs @cornerstonemarketingus
+/apps/local-control/src/platform/terminal/redaction.mjs @cornerstonemarketingus
+
+# Approval system
+/apps/web/app/api/computer/approval-state.mjs @cornerstonemarketingus
+/apps/web/app/api/computer/approvals/ @cornerstonemarketingus
+/apps/web/app/api/computer/companion/approval/ @cornerstonemarketingus
+/apps/local-control/src/platform/skills/approvals.mjs @cornerstonemarketingus
+/packages/atlas-cli/src/domain/approval-resume.ts @cornerstonemarketingus
+/packages/atlas-cli/src/domain/change-set-approval.ts @cornerstonemarketingus
+
+# Merge, auto-merge and PR steward logic
+/scripts/runner/merge-decision.mjs @cornerstonemarketingus
+/scripts/runner/pull-request-policy.mjs @cornerstonemarketingus
+/scripts/runner/create-coder-pull-request.mjs @cornerstonemarketingus
+/scripts/runner/push-repair.mjs @cornerstonemarketingus
+/scripts/runner/steward.mjs @cornerstonemarketingus
+/scripts/runner/steward-plan.mjs @cornerstonemarketingus
+
+# Self-improvement policy and self-protection
+/apps/local-control/src/platform/self-improve/ @cornerstonemarketingus
+/apps/web/app/api/tasks/self-protection.mjs @cornerstonemarketingus
+/scripts/local/self-improve.mjs @cornerstonemarketingus
+
+# Sandbox, command and tool policy, network egress
+/apps/local-control/src/platform/terminal/ @cornerstonemarketingus
+/apps/local-control/src/platform/policy.mjs @cornerstonemarketingus
+/apps/local-control/src/net/ssrf-guard.mjs @cornerstonemarketingus
+/apps/browser-worker/src/egress-proxy.mjs @cornerstonemarketingus
+/apps/web/app/api/computer/computer-policy.mjs @cornerstonemarketingus
+/apps/windows-companion/src/policy.mjs @cornerstonemarketingus
+/packages/atlas-cli/src/domain/tool-policy.ts @cornerstonemarketingus
+/packages/atlas-cli/src/infrastructure/policy-enforced-read-only-tool-registry.ts @cornerstonemarketingus
+
+# Security policy
+/apps/web/worker/security-headers.mjs @cornerstonemarketingus
+/docs/atlas-os/SECURITY-REVIEW.md @cornerstonemarketingus
+/docs/PROGRAM.md @cornerstonemarketingus
+/CLAUDE.md @cornerstonemarketingus

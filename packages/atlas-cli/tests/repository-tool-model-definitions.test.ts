@@ -7,6 +7,8 @@ test("keeps the rate-limited coder contract to discovery, exact reads, and atomi
   assert.deepEqual(COMPACT_CODER_MODEL_TOOLS.map((tool) => tool.name), [
     "repository.search",
     "repository.read_source",
+    // Deliberate addition: which tests cover a change, for about 90 tokens per request.
+    "repository.tests_for",
     "repository.propose_change_set",
   ]);
 });
@@ -20,11 +22,12 @@ test("repository model tool definitions are unique and contract-valid", () => {
     "repository.symbols",
     "repository.references",
     "repository.read_source",
+    "repository.tests_for",
   ]);
   const request = validateModelRequest({
     model: "test",
     messages: [],
     tools: REPOSITORY_READ_ONLY_MODEL_TOOLS,
   });
-  assert.equal(request.tools?.length, 5);
+  assert.equal(request.tools?.length, 6);
 });

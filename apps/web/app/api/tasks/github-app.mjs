@@ -47,7 +47,16 @@ export async function createInstallationToken(configuration, fetcher = fetch) {
     // the sole permission needed to dispatch and read Actions runs.
     body: JSON.stringify({ repositories: ["atlas"], permissions: { actions: "write" } }),
   });
-  if (!response.ok) throw new Error("GitHub App installation token request failed.");
+  if (!response.ok) {
+    // Which step failed decides the fix. The body is read only to recognise
+    // GitHub's "permissions not granted" refusal; it is never carried along.
+    const detail = response.status === 422 ? await response.text().catch(() => "") : "";
+    const code = response.status === 401 ? "GITHUB_APP_KEY_REJECTED"
+      : response.status === 404 ? "GITHUB_APP_INSTALLATION_NOT_FOUND"
+      : response.status === 422 && /permission/iu.test(detail) ? "GITHUB_APP_PERMISSION_MISSING"
+      : "GITHUB_APP_TOKEN_FAILED";
+    throw Object.assign(new Error("GitHub App installation token request failed."), { code, status: response.status });
+  }
   const value = await response.json();
   if (!value || typeof value.token !== "string" || value.token.length < 20) throw new Error("GitHub returned an invalid installation token.");
   return value.token;

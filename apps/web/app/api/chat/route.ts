@@ -13,6 +13,7 @@ import { platformGitHubToken } from "../tasks/github-token.mjs";
 import { GET as listDevices } from "../computer/devices/route";
 import { POST as startComputerTask } from "../computer/tasks/route";
 import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom } from "./atlas-knowledge.mjs";
+import { chatTurns } from "./turns.mjs";
 import { resolveChatModel, threadTitle } from "./model-endpoint.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
@@ -73,13 +74,8 @@ export async function POST(request: Request) {
     history = [];
   }
 
-  const turns = [
-    { role: "system", content: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository }) },
-    // Earlier conversations are data the person wrote (or Atlas replied), never instructions; the block cannot be closed from inside.
-    ...(memory ? [{ role: "system", content: `<data source="earlier conversations and recent runs in this workspace">\n${memory.replace(/<(\s*\/?\s*)data\b/giu, "&lt;$1data")}\n</data>` }] : []),
-    ...history.slice(-HISTORY_TURNS).map((turn) => ({ role: turn.role === "assistant" ? "assistant" : "user", content: turn.content })),
-    { role: "user", content: message },
-  ];
+  // Stable prefix first (system prompt, then history) so the provider's prompt cache can reuse it; see turns.mjs.
+  const turns = chatTurns({ system: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository }), history, memory, message, historyTurns: HISTORY_TURNS });
 
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
   const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
@@ -109,7 +105,8 @@ export async function POST(request: Request) {
     } catch { stored = false; }
   }
 
-  return Response.json({ conversationId, stored, steps: outcome.steps, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+  // `finalization` (metadata only) says the reply is the saved work because no model could write the answer.
+  return Response.json({ conversationId, stored, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
 }
 
 /** A GitHub credential for the read-only chat tools: the GitHub App's installation token when configured, else the platform token. Fetched once per request, only if a tool needs it. */
@@ -239,7 +236,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
           await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, userId)));
         } catch { persisted = false; }
       }
-      emit("done", { conversationId, stored: persisted, steps: outcome.steps, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+      emit("done", { conversationId, stored: persisted, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
       controller.close();
     },
   });

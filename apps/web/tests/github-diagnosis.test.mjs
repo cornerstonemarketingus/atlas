@@ -112,3 +112,15 @@ test("read failures and outages keep their existing explanations", async () => {
   assert.equal((await probeGitHubDispatch({ token: "", repository: "owner/repo", fetcher: github().fetcher })).ok, false);
   assert.equal((await probeGitHubDispatch({ token: FINE, repository: "owner/repo", fetcher: async () => { throw new Error("offline"); } })).code, "GITHUB_UNAVAILABLE");
 });
+
+test("a GitHub App without Actions: write is told exactly that, with the App's grant steps", async () => {
+  const { explainGitHubAppFailure } = await import("../app/api/tasks/github-diagnosis.mjs");
+  const missing = explainGitHubAppFailure({ code: "GITHUB_APP_PERMISSION_MISSING" }, { repository: "o/r" });
+  assert.equal(missing.code, "GITHUB_PERMISSION_MISSING");
+  assert.equal(missing.missingPermission, "Actions");
+  assert.equal(missing.credential, "github-app");
+  assert.match(missing.unblock, /GitHub App's settings → Permissions/u);
+  assert.equal(explainGitHubAppFailure({ code: "GITHUB_APP_INSTALLATION_NOT_FOUND" }).code, "GITHUB_APP_INSTALLATION_NOT_FOUND");
+  assert.equal(explainGitHubAppFailure({ code: "GITHUB_APP_KEY_REJECTED" }).code, "GITHUB_APP_KEY_REJECTED");
+  assert.equal(explainGitHubAppFailure(new Error("anything")).code, "GITHUB_APP_AUTH_FAILED");
+});
