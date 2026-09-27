@@ -8,6 +8,7 @@ import { GenesisService, GenesisStore } from "../../apps/local-control/src/platf
 import { GenesisExecutor } from "../../apps/local-control/src/platform/genesis/executor.mjs";
 import { PreviewManager } from "../../apps/local-control/src/platform/genesis/preview.mjs";
 import { createInspector } from "../../apps/local-control/src/platform/genesis/inspector.mjs";
+import { createVisionReviewer } from "../../apps/local-control/src/platform/genesis/vision.mjs";
 import { createGenesisCoder } from "../../apps/local-control/src/platform/genesis/coder.mjs";
 import { ModelPlanStore } from "../../apps/local-control/src/agent/models/hosting.mjs";
 import { runCheck } from "../../apps/local-control/src/platform/self-improve/runtime.mjs";
@@ -55,7 +56,7 @@ export async function runBenchmarks({ scenarios = SCENARIOS, useModel = true, ke
   const baseCoder = useModel ? createGenesisCoder({ atlasRoot, dataDirectory, modelPlan: new ModelPlanStore(join(dataDirectory, "model-plan.json")), intelligence: genesis.intelligence }) : null;
   const coder = baseCoder ? Object.assign(async (input) => { const result = await baseCoder(input); if (result.model) models.add(result.model); return result; }, { available: baseCoder.available }) : null;
   const modelAvailable = coder ? await coder.available() : false;
-  const executor = new GenesisExecutor({ genesis, projectsRoot: join(root, "projects"), runCheck, coder, preview, inspector: createInspector({ artifactsRoot: join(root, "inspections") }) });
+  const executor = new GenesisExecutor({ genesis, projectsRoot: join(root, "projects"), runCheck, coder, preview, inspector: createInspector({ artifactsRoot: join(root, "inspections"), vision: useModel ? createVisionReviewer() : null }) });
   const results = [];
   try {
     for (const scenario of scenarios) {
@@ -82,7 +83,7 @@ export async function runBenchmarks({ scenarios = SCENARIOS, useModel = true, ke
         build: Array.isArray(checks) ? checks.find((r) => r.name === "build")?.exitCode === 0 : false,
         tests: Array.isArray(checks) ? checks.find((r) => r.name === "test")?.summary ?? null : null,
         testsPassed: Array.isArray(checks) ? checks.find((r) => r.name === "test")?.exitCode === 0 : false,
-        browser: inspection ? { mode: inspection.mode, ok: inspection.kind === "inspection" && !inspection.findings, checks: inspection.checks?.length ?? 0 } : null,
+        browser: inspection ? { mode: inspection.mode, ok: inspection.kind === "inspection" && !inspection.findings, checks: inspection.checks?.length ?? 0, visual: inspection.visual ?? null } : null,
         repairs: view.repairsUsed,
         durationMs: Date.now() - started,
         models: [...models],

@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
 import { buildPlan, createApiClient, InfrastructureError, redactValue } from "./adapter.mjs";
+
+const MAX_STATIC_BYTES = 25 * 1024 * 1024;
 
 /**
  * Vercel: projects, deployments, domains, and encrypted environment
@@ -98,6 +101,61 @@ export function createVercelAdapter({ token, teamId = null, fetchImpl = fetch })
       return { verified: !remaining.some((entry) => entry.id === id) };
     },
 
+    /**
+     * Plans a static deployment of already-built files (the Genesis
+     * static-site template's dist/). The plan's digest covers every file's
+     * content hash, so the approval is for exactly these bytes.
+     */
+    planStaticDeployment({ name, files, target = "preview" }) {
+      if (!/^[a-z0-9][a-z0-9-]{0,99}$/u.test(name ?? "")) throw new InfrastructureError("BAD_NAME", "A Vercel project name uses lowercase letters, numbers and dashes.");
+      if (!["preview", "production"].includes(target)) throw new InfrastructureError("BAD_TARGET", "Target is preview or production.");
+      if (!files?.length) throw new InfrastructureError("NO_FILES", "There is nothing to deploy; build the site first.");
+      const bytes = files.reduce((sum, file) => sum + file.data.length, 0);
+      if (bytes > MAX_STATIC_BYTES) throw new InfrastructureError("TOO_LARGE", `The site is ${Math.round(bytes / 1024)} KiB; Atlas deploys static sites up to ${MAX_STATIC_BYTES / 1024 / 1024} MiB.`);
+      return buildPlan({
+        provider: "vercel",
+        operation: "create",
+        resource: "static_deployment",
+        target: `${name} (${target})`,
+        before: null,
+        after: { name, target, files: files.map((file) => ({ file: file.file, sha1: createHash("sha1").update(file.data).digest("hex"), bytes: file.data.length })) },
+        reversible: true,
+        notes: [
+          target === "production" ? "This publishes the site at the project's production address." : "A preview deployment gets its own public, hard-to-guess address.",
+          "Anyone with the address can see the site. Vercel keeps earlier deployments, so this can be rolled back.",
+        ],
+      });
+    },
+    async applyStaticDeployment({ plan, files, signal, pollMs = 2_000, timeoutMs = 180_000 }) {
+      // The files must be exactly the approved ones.
+      const approved = new Map(plan.after.files.map((file) => [file.file, file.sha1]));
+      if (files.length !== approved.size || files.some((file) => approved.get(file.file) !== createHash("sha1").update(file.data).digest("hex"))) {
+        throw new InfrastructureError("CHANGED_UNDERNEATH", "The site changed after this deployment was approved; plan it again.");
+      }
+      const created = await call("/v13/deployments", {
+        method: "POST",
+        signal,
+        query: { ...scope, skipAutoDetectionConfirmation: 1 },
+        body: {
+          name: plan.after.name,
+          target: plan.after.target === "production" ? "production" : undefined,
+          files: files.map((file) => ({ file: file.file, data: file.data.toString("base64"), encoding: "base64" })),
+          projectSettings: { framework: null, buildCommand: null, installCommand: null, outputDirectory: null },
+        },
+      });
+      const id = created?.id;
+      if (!id) throw new InfrastructureError("REQUEST_FAILED", "Vercel did not return a deployment id.");
+      const deadline = Date.now() + timeoutMs;
+      let observed = created;
+      while (Date.now() < deadline) {
+        observed = await call(`/v13/deployments/${id}`, { signal, query: scope });
+        const state = observed?.readyState ?? observed?.state;
+        if (state === "READY" || state === "ERROR" || state === "CANCELED") break;
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+      }
+      const state = observed?.readyState ?? observed?.state ?? "unknown";
+      return { verified: state === "READY", observed: { id, state, url: observed?.url ? `https://${observed.url}` : null, target: plan.after.target } };
+    },
     /** Vercel supports promoting an older deployment, which is a real rollback. */
     async rollbackDeployment({ projectId, deploymentId, signal }) {
       await call(`/v9/projects/${projectId}/promote/${deploymentId}`, { method: "POST", signal, query: scope });

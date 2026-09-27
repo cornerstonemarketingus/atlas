@@ -121,6 +121,40 @@ jobs:
       - name: End-to-end journey
         run: npm run e2e
 
+  genesis:
+    name: Genesis (real coder and browser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The coder CLI (built from source, as the daemon builds it) and the
+      # browser the inspector drives. Lifecycle scripts stay disabled.
+      - name: Install the coder and the browser
+        run: |
+          npm ci --ignore-scripts --prefix packages/atlas-cli
+          npm ci --ignore-scripts --prefix apps/browser-worker
+          cd apps/browser-worker && npx playwright-core install --with-deps chromium
+
+      # Genesis end to end with nothing skipped: real project creation, the
+      # project's own checks, a running preview, Chromium inspection, and
+      # Atlas's real coder answering a scripted model for repairs, a sign-in
+      # task and a visual fix.
+      - name: Genesis end to end
+        working-directory: apps/local-control
+        env:
+          GENESIS_REQUIRE_FULL: "1"
+        run: node --test tests/genesis-*.test.mjs
+
+      # The product scenarios on the template path (no model in CI).
+      - name: Genesis benchmarks
+        run: node scripts/local/genesis-bench.mjs --no-model --only marketing-site,crud,dashboard,rest-api
+
   local-control-windows:
     name: apps/local-control (Windows)
     runs-on: windows-latest

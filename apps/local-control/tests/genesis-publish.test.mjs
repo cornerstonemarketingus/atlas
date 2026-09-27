@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { GenesisService, GenesisStore } from "../src/platform/genesis/index.mjs";
-import { GenesisPublisher, PublishError, assertRemote, publishDigest, pushMain } from "../src/platform/genesis/publish.mjs";
+import { GenesisPublisher, PublishError, assertRemote, collectStaticFiles, publishDigest, pushMain } from "../src/platform/genesis/publish.mjs";
+import { createRepositoryCreator } from "../src/agent/infrastructure/git-hosts.mjs";
+import { createVercelAdapter } from "../src/agent/infrastructure/vercel.mjs";
 import { commitWorkspace, createWorkspace } from "../src/platform/genesis/workspace.mjs";
 import { createLocalControlServer } from "../src/server.mjs";
 import { LocalTaskStore } from "../src/store.mjs";
@@ -136,4 +138,117 @@ test("over HTTP: publish waits in Approvals, and approving it there publishes", 
     store.close();
     genesisStore.close();
   }
+}));
+
+function fakeGitHub({ taken = [] } = {}) {
+  const repos = new Map(taken.map((name) => [`owner/${name}`, { full_name: `owner/${name}` }]));
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    const { pathname } = new URL(url);
+    calls.push(`${init.method ?? "GET"} ${pathname}`);
+    assert.equal(init.headers.authorization, "Bearer gh-token", "the token is only ever sent to the host");
+    const json = (status, value) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+    if (pathname === "/user") return json(200, { login: "owner" });
+    if (pathname === "/user/repos" && init.method === "POST") {
+      const body = JSON.parse(init.body);
+      repos.set(`owner/${body.name}`, { full_name: `owner/${body.name}`, private: body.private, clone_url: `https://github.com/owner/${body.name}.git`, html_url: `https://github.com/owner/${body.name}` });
+      return json(201, repos.get(`owner/${body.name}`));
+    }
+    const repo = repos.get(pathname.replace(/^\/repos\//u, ""));
+    return repo ? json(200, repo) : json(404, { message: "Not Found" });
+  };
+  return { fetchImpl, calls, repos };
+}
+
+function fakeVercel({ finalState = "READY" } = {}) {
+  const deployments = [];
+  const fetchImpl = async (url, init = {}) => {
+    const { pathname } = new URL(url);
+    assert.equal(init.headers.authorization, "Bearer vc-token");
+    const json = (status, value) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+    if (pathname === "/v13/deployments" && init.method === "POST") {
+      const body = JSON.parse(init.body);
+      deployments.push(body);
+      return json(200, { id: "dpl_1", readyState: "QUEUED", url: `${body.name}-abc.vercel.app` });
+    }
+    if (pathname === "/v13/deployments/dpl_1") return json(200, { id: "dpl_1", readyState: finalState, url: `${deployments[0].name}-abc.vercel.app` });
+    return json(404, { error: { message: "not found" } });
+  };
+  return { fetchImpl, deployments };
+}
+
+async function readySite(root) {
+  const store = new GenesisStore(join(root, "genesis.sqlite"));
+  const genesis = new GenesisService({ store, policy: () => ({ decision: "allow" }) });
+  const project = await genesis.create("Build a website for my roofing company");
+  const workspace = await createWorkspace({ root: join(root, "projects"), projectId: project.id, spec: project.spec, templateId: project.plan.template });
+  execFileSync(process.execPath, ["scripts/build.mjs"], { cwd: workspace.folder });
+  genesis.advance(project.id, "scaffolding", { reason: "s" });
+  genesis.advance(project.id, "building", { reason: "b", patch: { workspace: workspace.folder } });
+  for (const to of ["verifying", "previewing", "reviewing", "ready"]) genesis.advance(project.id, to, { reason: to });
+  return { store, genesis, project: genesis.view(project.id) };
+}
+
+test("creating a repository is planned, approved, created on the host, verified and pushed to", () => withRoot(async (root) => {
+  const { store, genesis, project } = await readyProject(root);
+  const github = fakeGitHub({ taken: ["item-api"] });
+  const pushes = [];
+  const approvals = fakeApprovals("ask");
+  const publisher = new GenesisPublisher({
+    genesis, approvals,
+    credentials: async (name) => (name === "ATLAS_GITHUB_TOKEN" ? "gh-token" : null),
+    push: async (folder, remote) => { pushes.push(remote); return { ok: true, message: "pushed" }; },
+    adapters: { repositoryCreator: (options) => (0, createRepositoryCreator)({ ...options, fetchImpl: github.fetchImpl }) },
+  });
+  await assert.rejects(publisher.requestRepository(project.id, { host: "github" }), (error) => error.code === "EXISTS", "an existing name is refused before anything is asked");
+  const requested = await publisher.requestRepository(project.id, { host: "github", name: "inventory-api", visibility: "private" });
+  assert.equal(requested.status, "awaiting-approval");
+  assert.match(approvals.created[0].summary, /Create owner\/inventory-api \(private\) on github/u);
+  assert.ok(!github.calls.includes("POST /user/repos"), "nothing is created before approval");
+  assert.doesNotMatch(JSON.stringify(genesis.view(project.id)), /gh-token/u, "the token never reaches project state");
+  const result = await publisher.onApprovalDecided({ ...approvals.created[0], status: "approved" });
+  assert.equal(result.status, "published", JSON.stringify(result));
+  assert.ok(github.calls.includes("POST /user/repos"));
+  assert.deepEqual(pushes, ["https://github.com/owner/inventory-api.git"]);
+  assert.equal(genesis.view(project.id).transitions.at(-1).evidence.repository.webUrl, "https://github.com/owner/inventory-api");
+  await assert.rejects(new GenesisPublisher({ genesis, approvals, credentials: async () => null }).requestRepository(project.id, { host: "github" }), (error) => error.code === "NO_CREDENTIAL");
+  store.close();
+}));
+
+test("a static site deploys to Vercel only after approval, only with the approved files, and is verified ready", () => withRoot(async (root) => {
+  const { store, genesis, project } = await readySite(root);
+  const vercel = fakeVercel();
+  const approvals = fakeApprovals("ask");
+  const publisher = new GenesisPublisher({
+    genesis, approvals,
+    credentials: async (name) => (name === "ATLAS_VERCEL_TOKEN" ? "vc-token" : null),
+    adapters: { vercel: (options) => createVercelAdapter({ ...options, fetchImpl: vercel.fetchImpl }) },
+  });
+  const requested = await publisher.requestDeployment(project.id, { target: "preview" });
+  assert.equal(requested.status, "awaiting-approval");
+  assert.equal(approvals.created[0].capability, "deploy.remote");
+  assert.equal(requested.plan.files, collectStaticFiles(project.workspace).length);
+  assert.equal(vercel.deployments.length, 0, "nothing is deployed before approval");
+  const result = await publisher.onApprovalDecided({ ...approvals.created[0], status: "approved" });
+  assert.equal(result.status, "deployed", JSON.stringify(result));
+  assert.equal(result.deployment.url, "https://roofing-company-abc.vercel.app");
+  const sent = vercel.deployments[0];
+  assert.ok(sent.files.some((file) => file.file === "index.html" && Buffer.from(file.data, "base64").toString().includes("<h1>")), "the built pages were uploaded");
+  assert.equal(genesis.view(project.id).state, "published");
+
+  // A rebuilt site no longer matches the approved plan.
+  const again = await publisher.requestDeployment(project.id, { target: "preview" });
+  writeFileSync(join(project.workspace, "dist", "index.html"), "<h1>changed</h1>");
+  const stale = await publisher.onApprovalDecided({ ...approvals.created.at(-1), id: again.approvalId, status: "approved" });
+  assert.equal(stale.status, "failed");
+  assert.match(stale.message, /changed after this deployment was approved/u);
+  store.close();
+}));
+
+test("apps that need a server are not deployed to static hosting, and say where they can run", () => withRoot(async (root) => {
+  const { store, genesis, project } = await readyProject(root);
+  const publisher = new GenesisPublisher({ genesis, approvals: fakeApprovals("allow"), credentials: async () => "token" });
+  await assert.rejects(publisher.requestDeployment(project.id, {}), (error) => error.code === "NEEDS_SERVER" && /Reach Atlas/u.test(error.message));
+  await assert.rejects(new GenesisPublisher({ genesis, approvals: fakeApprovals("deny"), credentials: async () => "token" }).requestRepository(project.id, { host: "github" }), (error) => error.code === "DENIED_BY_POLICY");
+  store.close();
 }));

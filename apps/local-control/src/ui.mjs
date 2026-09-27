@@ -623,6 +623,9 @@ async function loadBuild(){
   const {project:v}=await getJson('/v1/genesis/'+encodeURIComponent(id));
   const ready=v.transitions.findLast(t=>t.to==='ready')?.evidence?.summary;
   const last=v.transitions.at(-1);
+  const online=v.transitions.findLast(t=>t.evidence?.kind==='deployed')?.evidence?.deployment?.url;
+  const publishedTo=v.transitions.findLast(t=>t.evidence?.kind==='published')?.evidence;
+  const where=(online?'<p>Online at <a href="'+esc(online)+'" target="_blank" rel="noopener">'+esc(online)+'</a></p>':'')+(publishedTo?'<p class="hint">Code published to '+esc(publishedTo.repository?.webUrl||publishedTo.remote||'')+'</p>':'');
   const questions=v.state==='blocked'&&v.resumeTo==='requirements'?v.spec.questions:[];
   const actions=[];
   if(GEN_ACTIVE.includes(v.state)||v.state==='approved')actions.push('<button type="button" class="secondary" data-gen="pause">Pause</button>');
@@ -632,18 +635,28 @@ async function loadBuild(){
   if(!['cancelled'].includes(v.state))actions.push('<button type="button" class="secondary" data-gen="cancel">Cancel</button>');
   detail.hidden=false;
   detail.innerHTML='<div class="panel"><div class="task-top"><h3>'+esc(v.name)+'</h3>'+pill(v.label)+'</div>'
-   +(ready?'<div class="card success"><h4>Ready</h4><p><a class="button" href="'+esc(ready.preview)+'" target="_blank" rel="noopener">Open the application</a></p><p>'+esc(ready.features.join(' · '))+'</p><p class="hint">Verified: '+esc(ready.verification.map(x=>x.step+(x.ok?' ✓':' ✗')+(x.tests?' ('+x.tests.pass+' tests)':'')).join(', '))+'; interface checked '+(ready.inspection.limited?'over HTTP only':'in a browser')+(ready.repairs?'; '+ready.repairs+' repair(s)':'')+'.</p>'+(ready.limitations.length?'<ul class="hint">'+ready.limitations.map(l=>'<li>'+esc(l)+'</li>').join('')+'</ul>':'')+'<p class="hint">Files: <code>'+esc(ready.folder)+'</code></p></div>':'')
+   +(ready?'<div class="card success"><h4>Ready</h4><p><a class="button" href="'+esc(ready.preview)+'" target="_blank" rel="noopener">Open the application</a></p><p>'+esc(ready.features.join(' · '))+'</p><p class="hint">Verified: '+esc(ready.verification.map(x=>x.step+(x.ok?' ✓':' ✗')+(x.tests?' ('+x.tests.pass+' tests)':'')).join(', '))+'; interface checked '+(ready.inspection.limited?'over HTTP only':'in a browser')+(ready.repairs?'; '+ready.repairs+' repair(s)':'')+'.</p>'+(ready.limitations.length?'<ul class="hint">'+ready.limitations.map(l=>'<li>'+esc(l)+'</li>').join('')+'</ul>':'')+'<p class="hint">Files: <code>'+esc(ready.folder)+'</code></p>'+where+'</div>':'')
    +(!ready||v.state!=='ready'?'<p>'+esc(last?.reason||'')+'</p>':'')
    +(questions.length?'<form id="gen-answers" class="card"><h4>Atlas needs to know</h4>'+questions.map(q=>'<label>'+esc(q.question)+'<input name="'+esc(q.id)+'" placeholder="'+esc(q.default||'')+'"></label>').join('')+'<button>Answer</button></form>':'')
    +'<ol class="steps-list">'+v.progress.steps.map(s=>'<li class="step '+(s.done?'done':s.status||'')+'"><span aria-hidden="true">'+genIcon(s)+'</span> '+esc(s.label)+(s.attempts>1?' <span class="hint">('+s.attempts+' attempts)</span>':'')+'</li>').join('')+'</ol>'
    +'<div class="actions">'+actions.join('')+'</div>'
-   +(['ready','published'].includes(v.state)?'<form id="gen-publish" class="row"><label class="grow">Publish to a repository you created (GitHub, GitLab, Forgejo…)<input id="gen-publish-remote" placeholder="https://github.com/you/app.git"></label><button class="secondary">Publish…</button></form><p class="hint">Publishing pushes the code with your own git sign-in. Atlas asks for your approval first (Approvals) unless your publish.remote policy says otherwise.</p>':'')
+   +(['ready','published'].includes(v.state)?'<details class="card"><summary>Publish or put it online</summary>'
+     +'<form id="gen-publish" class="row"><label class="grow">Push to a repository you already created<input id="gen-publish-remote" placeholder="https://github.com/you/app.git"></label><button class="secondary">Publish…</button></form>'
+     +'<form id="gen-repo" class="row"><label>Create a repository on<select id="gen-repo-host"><option value="github">GitHub</option><option value="gitlab">GitLab</option></select></label><label>Visibility<select id="gen-repo-visibility"><option value="private">Private</option><option value="public">Public</option></select></label><button class="secondary">Create and publish…</button></form>'
+     +(v.plan?.template==='static-site'?'<form id="gen-deploy" class="row"><label>Put the website online with Vercel<select id="gen-deploy-target"><option value="preview">Preview address</option><option value="production">Production address</option></select></label><button class="secondary">Deploy…</button></form>':'<p class="hint">This app runs its own server and database, so it stays on this computer (reach it from your phone under Settings → Reach Atlas) or on a server you control.</p>')
+     +'<p class="hint">Nothing leaves this computer until you approve it under Approvals. Creating repositories and deploying use tokens you add as ATLAS_GITHUB_TOKEN, ATLAS_GITLAB_TOKEN or ATLAS_VERCEL_TOKEN.</p></details>':'')
    +(['ready','published','failed','planned','approved'].includes(v.state)?'<form id="gen-change" class="row"><label class="grow">Ask for a change<input id="gen-change-text" placeholder="Add Google login"></label><button>Change it</button></form>':'')
    +'<details><summary>Assumptions</summary><ul>'+(v.spec?.assumptions||[]).map(a=>'<li>'+esc(a)+'</li>').join('')+'</ul></details>'
    +'<details><summary>Technical details</summary><p class="hint">Template '+esc(v.plan?.template||'—')+' · folder <code>'+esc(v.workspace||'not created yet')+'</code> · repairs '+v.repairsUsed+'/'+v.repairBudget+'</p><table class="table"><thead><tr><th>When</th><th>Stage</th><th>Why</th></tr></thead><tbody>'+v.transitions.slice().reverse().map(t=>'<tr><td>'+when(t.at)+'</td><td>'+esc(t.to)+'</td><td>'+esc(t.reason)+'<details><summary>Evidence</summary><pre class="log">'+esc(JSON.stringify(t.evidence,null,1).slice(0,6000))+'</pre></details></td></tr>').join('')+'</tbody></table></details></div>';
   detail.querySelectorAll('[data-gen]').forEach(b=>b.onclick=()=>genAction(v.id,b.dataset.gen,{}));
   const answers=detail.querySelector('#gen-answers');
   if(answers)answers.onsubmit=e=>{e.preventDefault();genAction(v.id,'answers',{answers:Object.fromEntries(new FormData(answers).entries())})};
+  const external=async(action,body)=>{const notice=$('#build-notice');notice.textContent='Asking…';
+   try{const r=await sendJson('/v1/genesis/'+encodeURIComponent(v.id)+'/'+action,'POST',body);const p=r.publish;notice.textContent=p.status==='awaiting-approval'?'Waiting for your approval under Approvals.':p.status==='deployed'?'Online at '+p.deployment.url:p.status==='published'?'Published.':'Did not complete: '+(p.message||'')}catch(error){notice.textContent=error.message}loadBuild();loadBadge().catch(()=>{})};
+  const repo=detail.querySelector('#gen-repo');
+  if(repo)repo.onsubmit=e=>{e.preventDefault();external('repository',{host:$('#gen-repo-host').value,visibility:$('#gen-repo-visibility').value})};
+  const deploy=detail.querySelector('#gen-deploy');
+  if(deploy)deploy.onsubmit=e=>{e.preventDefault();external('deploy',{target:$('#gen-deploy-target').value})};
   const publish=detail.querySelector('#gen-publish');
   if(publish)publish.onsubmit=async e=>{e.preventDefault();const remote=$('#gen-publish-remote').value.trim();if(!remote)return;const notice=$('#build-notice');
    try{const r=await sendJson('/v1/genesis/'+encodeURIComponent(v.id)+'/publish','POST',{remote});notice.textContent=r.publish.status==='awaiting-approval'?'Waiting for your approval under Approvals.':r.publish.status==='published'?'Published.':'Publishing failed: '+(r.publish.message||'')}catch(error){notice.textContent=error.message}loadBuild();loadBadge().catch(()=>{})};

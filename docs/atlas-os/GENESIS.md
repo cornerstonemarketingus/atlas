@@ -61,8 +61,24 @@ coder, worktree system, approval system or agent framework.
      publishing → published, or back to ready with the reason.
    - This is available from the Build page and through the `genesis.publish`
      chat tool.
-   - Creating repositories and deploying to hosting providers (the existing
-     Cloudflare and Vercel adapters) are the next handoffs.
+   - **Creating a repository**: `git-hosts.mjs` `createRepositoryCreator` for
+     GitHub, GitLab and Forgejo. It plans the repository and refuses a name
+     that is taken. After approval under `publish.remote` it creates the
+     repository, reads it back and pushes the project.
+   - **Deploying**: `vercel.mjs` `planStaticDeployment` /
+     `applyStaticDeployment` for the website template's built `dist/`.
+     - The plan's digest covers every file's hash, so a rebuilt site needs a
+       new approval, under the new `deploy.remote` policy (default `ask`).
+     - The deployment counts as done only when Vercel reports it `READY`.
+     - Web apps and APIs, which need a running server and database, are
+       refused for static hosting, with the alternatives stated.
+   - **Tokens**: `ATLAS_GITHUB_TOKEN`, `ATLAS_GITLAB_TOKEN`,
+     `ATLAS_FORGEJO_TOKEN` and `ATLAS_VERCEL_TOKEN` come from the credential
+     vault, then the environment. They never appear in plans, approvals or
+     evidence.
+   - **Why not Cloudflare Pages**: its direct upload needs BLAKE3 file hashes,
+     which Node cannot compute without a native dependency. Cloudflare DNS
+     (already in the adapter) can point a domain at the deployment.
 10. Repeatable end-to-end scenarios with recorded metrics.
 
 ## Collision boundaries with the Intelligence Layer
@@ -192,12 +208,57 @@ the owner's applied model plan by difficulty (through the existing
 local model. The endpoint is the local model server unless the owner sets
 `ATLAS_GENESIS_BASE_URL`, so paid APIs are never used silently.
 
+## Testing with the real coder and a browser
+
+`tests/genesis-coder.test.mjs` runs Atlas's **real** coder (`atlas code`),
+built and spawned as in production. It talks to a scripted
+OpenAI-compatible model server (`tests/helpers/scripted-model-server.mjs`),
+so only the model's answers are fixed. It proves three things:
+
+1. A planted bug is repaired. The repair objective names the failing test,
+   the coder's change set is applied and verified, and Genesis re-checks and
+   reaches ready.
+2. A sign-in task is built by the coder, and its tests run with the app's
+   own.
+3. A visual problem reported from the screenshots is fixed in the
+   stylesheet by the coder, and the app is checked again. The second
+   review's suggestion is reported without blocking.
+
+The **Genesis** CI job installs the coder CLI and Chromium and runs every
+Genesis test with `GENESIS_REQUIRE_FULL=1`, so nothing can skip. It also
+runs the benchmarks on the template path.
+
+## Running the benchmarks with a real local model
+
+Model downloads are blocked in Atlas's cloud sandbox, so the benchmarks run
+there without a model. On your own machine:
+
+1. Open **Models** and press **Use this plan**, installing what it
+   recommends. Add `qwen2.5vl:7b` if you want the visual review.
+2. Run `node scripts/local/genesis-bench.mjs`. Add `--keep` to keep the
+   generated projects, or `--only crud,auth-app` to run a subset.
+3. Results go to `~/.atlas/genesis/benchmarks/<time>.json`. They record
+   completion, build, test counts, browser verification (and whether a
+   visual review ran), repairs, time, the models the coder used, and any
+   human intervention. The authenticated app is the scenario that needs the
+   coder: sign-in is a coder task.
+
 ## PR sequence
 
 1. **Lifecycle, durable store, requirements, plan, routes** (`/v1/genesis`). Done in this PR.
 2. **Local workspace and curated templates** (`web-app`, `static-site`, `api-service`). Done: see "Templates" below.
 3–6. **Executor, verify/repair loop, preview manager and browser verification.** Done: see "Execution" below.
-7. UI quality pass (vision review of the saved screenshots; bounded polish already runs when a model exists).
+7. **Visual review.** Done: `vision.mjs`.
+   - After a clean browser inspection, a vision-capable local model (for
+     example `qwen2.5vl:7b`, or `ATLAS_GENESIS_VISION_MODEL`) reviews up to 6
+     screenshots, phone widths first. It checks a fixed list: overflow,
+     overlap, unreadable text, broken spacing, missing content, unfinished
+     default UI, broken phone layouts and error pages.
+   - Its answer must be JSON; anything else is recorded and ignored.
+   - Only issues it marks as errors can block, and only on the project's first
+     review. That triggers one repair; after that, visual issues are
+     suggestions passed to polish and listed as limitations.
+   - Without a vision model the review is skipped, and the summary says so.
 8. **Live Genesis UX.** Done:
    - **Build** page in the local app: prompt box with examples, plain
      progress (✓ / ● / ✗ / – per step), answer form for open questions,

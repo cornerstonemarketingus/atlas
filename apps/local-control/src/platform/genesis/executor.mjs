@@ -369,12 +369,14 @@ export function readySummary(project, tasks, inspection) {
     features: project.spec.workflows.map((flow) => flow.title),
     pages: (project.spec.pages ?? []).map((page) => page.title),
     verification: checks.map((result) => ({ step: result.name, ok: result.exitCode === 0, tests: result.summary ?? null })),
-    inspection: { limited: Boolean(inspection.limited), checks: inspection.evidence?.checks ?? null },
+    inspection: { limited: Boolean(inspection.limited), checks: inspection.evidence?.checks ?? null, visual: inspection.evidence?.visual ?? null },
     repairs: project.repairsUsed,
     limitations: [
       ...skipped.map((task) => `${task.title}: skipped (${task.evidence.at(-1)?.note ?? "not run"})`),
       ...project.spec.integrations.map((integration) => `${integration.label} is built switched off until you connect ${integration.needs}.`),
       ...(inspection.limited ? ["The interface was checked over HTTP only; no browser was available for a full visual check."] : []),
+      ...(inspection.evidence?.visual && !inspection.evidence.visual.reviewed ? [`No visual review: ${inspection.evidence.visual.reason}`] : []),
+      ...(inspection.findings ?? []).filter((f) => f.check === "visual" && f.severity !== "error").map((f) => `Visual suggestion (${f.page}): ${f.observed}`),
     ],
     next: ["Open the app", "Ask for a change", "Publish (asks first)"],
   };

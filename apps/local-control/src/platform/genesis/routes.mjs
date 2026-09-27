@@ -19,6 +19,8 @@ import { PublishError } from "./publish.mjs";
  * GET  /v1/genesis/:id/preview         preview state and recent logs
  * POST /v1/genesis/:id/preview         { action: "start" | "stop" } (a ready project only)
  * POST /v1/genesis/:id/publish         { remote } — goes through the publish.remote policy and approvals
+ * POST /v1/genesis/:id/repository      { host, name?, visibility?, baseUrl? } — create a repository, then publish (publish.remote)
+ * POST /v1/genesis/:id/deploy          { target: "preview" | "production" } — static sites to Vercel (deploy.remote)
  */
 const STATUS = {
   PROMPT_REQUIRED: 400, PROMPT_TOO_LONG: 400, NOT_WAITING: 409, ANSWERS_MISSING: 400, NOT_PLANNED: 409, BUSY: 409, NOT_PAUSED: 409, NOT_FAILED: 409,
@@ -34,7 +36,7 @@ export function createGenesisRoutes({ genesis, previews = null, publisher = null
       if (request.method === "GET" && url.pathname === "/v1/genesis/templates") {
         return send(response, 200, { templates: Object.values(TEMPLATES).map(({ id, version, title, description, archetypes, commands, preview, structure }) => ({ id, version, title, description, archetypes, commands, preview, structure })) });
       }
-      const match = /^\/v1\/genesis\/(gen_[0-9a-f-]{36})(?:\/(answers|approve|changes|pause|resume|cancel|retry|preview|publish))?$/u.exec(url.pathname);
+      const match = /^\/v1\/genesis\/(gen_[0-9a-f-]{36})(?:\/(answers|approve|changes|pause|resume|cancel|retry|preview|publish|repository|deploy))?$/u.exec(url.pathname);
       if (match?.[2] === "preview") {
         if (!previews) return send(response, 503, { message: "Previews are not available in this Atlas." });
         const project = genesis.store.get(genesis.tenantId, match[1]);
@@ -53,10 +55,12 @@ export function createGenesisRoutes({ genesis, previews = null, publisher = null
       const body = await parseBody(request, response); if (!body) return true;
       if (url.pathname === "/v1/genesis") return send(response, 201, { project: await genesis.create(body.prompt) });
       if (!match || !match[2]) return send(response, 404, { message: "Route not found." });
-      if (match[2] === "publish") {
+      if (["publish", "repository", "deploy"].includes(match[2])) {
         if (!publisher) return send(response, 503, { message: "Publishing is not available in this Atlas." });
-        const result = await publisher.request(match[1], { remote: body.remote });
-        return send(response, result.status === "awaiting-approval" ? 202 : result.status === "published" ? 200 : 502, { publish: result, project: genesis.view(match[1]) });
+        const result = match[2] === "publish" ? await publisher.request(match[1], { remote: body.remote })
+          : match[2] === "repository" ? await publisher.requestRepository(match[1], { host: body.host, name: body.name || null, visibility: body.visibility, baseUrl: body.baseUrl || null })
+            : await publisher.requestDeployment(match[1], { target: body.target });
+        return send(response, result.status === "awaiting-approval" ? 202 : ["published", "deployed"].includes(result.status) ? 200 : 502, { publish: result, project: genesis.view(match[1]) });
       }
       const [, id, action] = match;
       const result = action === "answers" ? await genesis.answer(id, body.answers)
@@ -68,7 +72,7 @@ export function createGenesisRoutes({ genesis, previews = null, publisher = null
                 : genesis.view(genesis.cancel(id).id);
       return send(response, 200, { project: result });
     } catch (error) {
-      if (error instanceof PublishError) return send(response, error.code === "DENIED_BY_POLICY" ? 403 : error.code === "NOT_READY" ? 409 : 400, { code: error.code, message: error.message });
+      if (error instanceof PublishError) return send(response, error.code === "DENIED_BY_POLICY" ? 403 : ["NOT_READY", "NEEDS_SERVER", "EXISTS", "NO_CREDENTIAL"].includes(error.code) ? 409 : 400, { code: error.code, message: error.message });
       if (error instanceof GenesisError || error instanceof GenesisStoreError || error instanceof GenesisTransitionError) {
         return send(response, STATUS[error.code] ?? 400, { code: error.code, message: error.message });
       }
