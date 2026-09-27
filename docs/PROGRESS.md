@@ -25,7 +25,9 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
   (#135; its workflow wiring #136 is protected). Repository intelligence
   (2.3) merged: `atlas tests-for` (#137, tsconfig aliases), `atlas env`
   (#142), `atlas ci` (#143), `atlas packages` (#141, workspace imports),
-  `atlas schemas` (#145); `atlas map` combines them (this PR). The coder's
+  `atlas schemas` (#145), `atlas map` (#147), `atlas surfaces` (#150).
+  Every 2.3 TODO item not needing an owner decision is done. 2.5: coder
+  edits now keep file mode and the UTF-8 BOM (#151). The coder's
   `repository.tests_for` tool (#138) waits on the owner: it adds about 90
   tokens per coder request. Groq pacing and exact waits merged (#118).
 - **CI:** the intermittent "Genesis (real coder and browser)" failure was a
@@ -89,4 +91,8 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 | 2026-09-27 | [#144](https://github.com/cornerstonemarketingus/atlas/pull/144) | CI | Genesis web-app template render race (root cause of the Genesis CI failures) | race tests fail on the old template, pass now | | Merged |
 | 2026-09-27 | [#145](https://github.com/cornerstonemarketingus/atlas/pull/145) | 2.3 | Migrations, tables, drift and API schemas (`atlas schemas`) | atlas-cli 465/465 | | Merged |
 | 2026-09-27 | [#146](https://github.com/cornerstonemarketingus/atlas/pull/146) | security | Browser worker judges a click by the navigation it starts | new test fails on old code as CI did | Protected | Owner review |
-| 2026-09-27 | this PR | 2.3 | `atlas map`: packages with test reach and resolved entries, most-imported files, config gaps, delivery, data; each section states its basis | atlas-cli 467/467; 0.7 s on this repo | Lexical | Merge when green |
+| 2026-09-27 | [#147](https://github.com/cornerstonemarketingus/atlas/pull/147) | 2.3 | `atlas map`: packages with test reach and resolved entries, most-imported files, config gaps, delivery, data; each section states its basis | atlas-cli 467/467; 0.7 s on this repo | Lexical | Merged |
+| 2026-09-27 | [#148](https://github.com/cornerstonemarketingus/atlas/pull/148) | 2.3 | `apps/local-control/.env.example`: the daemon's 27 settings with defaults and formats, no values | undeclared daemon reads 27 -> 0 | | Merged |
+| 2026-09-27 | [#149](https://github.com/cornerstonemarketingus/atlas/pull/149) | 2.3 | `atlas env` counts PowerShell `$env:`, shell `export` and workflow `run:` exports as declarations (no plaintext companion template: its start script sets them from DPAPI) | atlas-cli 466/466 | | Merged |
+| 2026-09-27 | [#150](https://github.com/cornerstonemarketingus/atlas/pull/150) | 2.3 | `atlas surfaces`: HTTP entry points with same-file auth guards; command, eval, raw SQL, computed-URL and secret-env sinks | 469/469; the 3 unguarded web routes are public by design | Guard check is per file | Merged |
+| 2026-09-27 | [#151](https://github.com/cornerstonemarketingus/atlas/pull/151) | 2.5 | Coder edits keep permission bits and the UTF-8 BOM (were reset to 0600 and stripped), including delete rollback | 3 new tests fail on the old code | | Merged |
