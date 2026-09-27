@@ -2,6 +2,7 @@ import { extname, posix } from "node:path";
 import { GitClient } from "./git-client.js";
 import { RepositoryFileEnumerator } from "./repository-file-enumerator.js";
 import { nodeRepositoryFileSystem, type RepositoryFileSystem } from "./repository-file-system.js";
+import { RepositoryPackageGraph } from "./repository-package-graph.js";
 
 /**
  * Who imports what, and which tests exercise a file (docs/PROGRAM.md 2.3).
@@ -15,7 +16,9 @@ import { nodeRepositoryFileSystem, type RepositoryFileSystem } from "./repositor
  * TypeScript/JavaScript: import/export-from, dynamic import(), require(),
  * with extension and index resolution, including ESM ".js" specifiers that
  * point at ".ts" sources, and the nearest tsconfig.json/jsconfig.json's
- * `baseUrl` and `paths` aliases (following relative `extends`). Python: import and from-import, relative (dots)
+ * `baseUrl` and `paths` aliases (following relative `extends`), and bare
+ * specifiers naming a workspace package in this repository (resolved to its
+ * source entry, as a workspace symlink would at runtime). Python: import and from-import, relative (dots)
  * and repository-rooted modules.
  */
 
@@ -82,6 +85,10 @@ export class RepositoryImportGraph {
     const sources = enumeration.files.filter((file) => SOURCE_EXTENSIONS.has(extname(file.relativePath).toLowerCase()));
     const files = sources.map((file) => file.relativePath.replaceAll("\\", "/"));
     const known = new Set(files);
+    const workspace = (await new RepositoryPackageGraph(this.gitClient, this.fileSystem).build(repositoryPath, { maxFiles: limits.maxFiles, maxDepth: limits.maxDepth })).packages
+      .filter((item) => item.ecosystem === "npm" && item.name !== null)
+      .map((item) => ({ name: item.name!, directory: item.directory, entries: item.entries.map((entry) => entry.path) }))
+      .sort((a, b) => b.name.length - a.name.length);
     const configs = await this.#projectConfigs(enumeration.files.filter((file) => !SOURCE_EXTENSIONS.has(extname(file.relativePath).toLowerCase())), warnings);
     const edges: ImportEdge[] = [];
     for (const file of sources) {
@@ -99,7 +106,7 @@ export class RepositoryImportGraph {
       const python = extname(from).toLowerCase() === ".py";
       const found = python ? pythonSpecifiers(text) : scriptSpecifiers(text);
       for (const { specifier, line } of found) {
-        const to = python ? resolvePython(from, specifier, known) : resolveScript(from, specifier, known, nearestConfig(configs, from));
+        const to = python ? resolvePython(from, specifier, known) : resolveScript(from, specifier, known, nearestConfig(configs, from), workspace);
         const kind = to !== null ? "file" : isRelative(specifier, python) ? "unresolved" : "package";
         edges.push({ from, to, specifier, line, kind });
       }
@@ -234,8 +241,42 @@ function isRelative(specifier: string, python: boolean): boolean {
   return python ? specifier.startsWith(".") : specifier.startsWith("./") || specifier.startsWith("../");
 }
 
-function resolveScript(from: string, specifier: string, known: ReadonlySet<string>, config: AliasConfig | null = null): string | null {
+interface WorkspacePackage {
+  readonly name: string;
+  readonly directory: string;
+  readonly entries: readonly string[];
+}
+
+function resolveScript(from: string, specifier: string, known: ReadonlySet<string>, config: AliasConfig | null = null, workspace: readonly WorkspacePackage[] = []): string | null {
   if (isRelative(specifier, false)) return resolveScriptPath(posix.normalize(posix.join(posix.dirname(from), specifier)), known);
+  return resolveAlias(specifier, known, config) ?? resolveWorkspacePackage(specifier, known, workspace);
+}
+
+/**
+ * "@acme/ui" or "@acme/ui/button" when @acme/ui is a package in this
+ * repository: its manifest entries (built paths like dist/index.js are
+ * mapped back to src/), then src/index and index.
+ */
+function resolveWorkspacePackage(specifier: string, known: ReadonlySet<string>, workspace: readonly WorkspacePackage[]): string | null {
+  const owner = workspace.find((item) => specifier === item.name || specifier.startsWith(`${item.name}/`));
+  if (!owner) return null;
+  const inside = (path: string) => owner.directory === "." ? posix.normalize(path) : posix.normalize(posix.join(owner.directory, path));
+  const subpath = specifier.slice(owner.name.length + 1);
+  const targets = subpath ? [subpath, `src/${subpath}`] : [...owner.entries.flatMap(sourceCandidates), "src/index", "index"];
+  for (const target of targets) {
+    const resolved = resolveScriptPath(inside(target), known);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+function sourceCandidates(entry: string): string[] {
+  const path = entry.replace(/^\.\//u, "");
+  const built = /^(?:dist|build|lib|out)\/(.+?)(?:\.d)?\.(?:[cm]?js|[cm]?ts)$/u.exec(path);
+  return built ? [path, `src/${built[1]}`, built[1]!] : [path];
+}
+
+function resolveAlias(specifier: string, known: ReadonlySet<string>, config: AliasConfig | null): string | null {
   if (!config) return null;
   // Like TypeScript: the longest matching "paths" pattern first, then baseUrl.
   const matches = config.paths

@@ -11,6 +11,7 @@ import { FilesystemRepositoryInspector } from "./infrastructure/filesystem-repos
 import { RepositoryTextSearch } from "./infrastructure/repository-text-search.js";
 import { RepositorySymbolIndexer } from "./infrastructure/repository-symbol-indexer.js";
 import { RepositoryImportGraph, testsFor } from "./infrastructure/repository-import-graph.js";
+import { RepositoryPackageGraph } from "./infrastructure/repository-package-graph.js";
 import { RepositoryDeliveryMap } from "./infrastructure/repository-delivery-map.js";
 import { RepositoryConfigReferences } from "./infrastructure/repository-config-references.js";
 import { BoundedRepositorySourceReader } from "./infrastructure/bounded-repository-source-reader.js";
@@ -61,6 +62,7 @@ const USAGE = `Usage:
   atlas read <repository-path> <relative-file-path> [--start-line N] [--end-line N] [--max-lines N] [--max-bytes N] [--format text|json]
   atlas tree <repository-path> [--max-depth N] [--max-entries N] [--format text|json]
   atlas tests-for <repository-path> <relative-file-path> [--depth N] [--format text|json]
+  atlas packages <repository-path> [--format text|json]
   atlas ci <repository-path> [--format text|json]
   atlas env <repository-path> [--name NAME] [--undeclared] [--format text|json]
   atlas redact [--max-characters N] [--summary]   (reads stdin, writes redacted text to stdout)
@@ -94,7 +96,7 @@ export async function main(args: readonly string[]): Promise<number> {
       writeError: (text) => process.stderr.write(text),
     });
   }
-  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "ci" && args[0] !== "env" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
+  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "ci" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
     console.error(USAGE);
     return 2;
   }
@@ -108,6 +110,25 @@ export async function main(args: readonly string[]): Promise<number> {
     if (args[0] === "inspect") {
       const summary = await new FilesystemRepositoryInspector().inspect(args[1]);
       console.log(format === "json" ? renderJson(summary) : renderText(summary));
+      return 0;
+    }
+    if (args[0] === "packages") {
+      const graph = await new RepositoryPackageGraph().build(args[1]);
+      if (format === "json") {
+        console.log(JSON.stringify(graph, null, 2));
+        return 0;
+      }
+      if (graph.packages.length === 0) console.log("No package.json or pyproject.toml packages found.");
+      for (const item of graph.packages) {
+        const counts = (["runtime", "dev", "peer", "optional"] as const)
+          .map((kind) => [kind, item.dependencies.filter((dependency) => dependency.kind === kind).length] as const)
+          .filter(([, count]) => count > 0).map(([kind, count]) => `${count} ${kind}`).join(", ");
+        console.log(`${item.directory}  ${item.name ?? "(unnamed)"}${item.version ? `@${item.version}` : ""}  [${item.ecosystem}${item.private ? ", private" : ""}]${counts ? `  ${counts}` : ""}`);
+        for (const dependency of item.dependencies.filter((entry) => entry.internal !== null)) {
+          console.log(`  -> ${dependency.internal} (${dependency.name} ${dependency.range}, ${dependency.field})`);
+        }
+      }
+      for (const warning of graph.warnings) console.error(`warning: ${warning.message}`);
       return 0;
     }
     if (args[0] === "ci") {
