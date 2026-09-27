@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loading…</title>
+  <meta name="description" content="">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <a class="brand" href="#/" id="brand">…</a>
+    <button type="button" class="menu" id="menu" aria-expanded="false" aria-controls="nav">Menu</button>
+    <nav id="nav" aria-label="Main"></nav>
+  </header>
+  <main id="main" tabindex="-1">
+    <p class="loading" role="status">Loading…</p>
+  </main>
+  <p id="toast" class="toast" role="status" aria-live="polite" hidden></p>
+</body>
+</html>

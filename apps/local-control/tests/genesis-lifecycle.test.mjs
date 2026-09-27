@@ -177,6 +177,7 @@ test("routes: read for any signed-in caller, act for the owner", () => withDirec
   assert.equal(created.status, 201);
   const id = created.body.project.id;
   assert.equal((await call("GET", "/v1/genesis", "device")).body.projects[0].id, id);
+  assert.deepEqual((await call("GET", "/v1/genesis/templates", "device")).body.templates.map((t) => t.id), ["web-app", "static-site", "api-service"]);
   assert.equal((await call("GET", `/v1/genesis/${id}`, "device")).body.project.state, "approved");
   const paused = await call("POST", `/v1/genesis/${id}/pause`, "admin", {});
   assert.deepEqual([paused.status, paused.body.project.state], [200, "paused"]);
