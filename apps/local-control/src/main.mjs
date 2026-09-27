@@ -47,6 +47,7 @@ import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.
 import { createCredentialVault } from "./agent/credential-vault.mjs";
 import { openInBrowser, ownerAccount, resolveOwnerToken, signInUrl } from "./identity/owner.mjs";
 import { RemoteAccess } from "./remote/access.mjs";
+import { GenesisService, GenesisStore } from "./platform/genesis/index.mjs";
 import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
 import { createVercelAdapter } from "./agent/infrastructure/vercel.mjs";
 import { createGitHostAdapter } from "./agent/infrastructure/git-hosts.mjs";
@@ -166,6 +167,10 @@ const recoveredMissions = missionService.recover();
 team.reattach();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
 
+// Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
+const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
+const genesis = new GenesisService({ store: genesisStore, policy: (capability) => store.policy(capability), onChange: (project) => store.audit("genesis.transition", `${project.name}: ${project.state}`) });
+for (const project of genesis.recover()) console.log(`Genesis: ${project.name} was interrupted and is paused.`);
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
 // Remote access stays customer-managed (your VPN or HTTPS proxy); Atlas itself keeps listening on loopback.
 const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, "remote-access.json") });
@@ -186,6 +191,7 @@ const server = createLocalControlServer({
   selfImprove,
   identity: { owner, tokenStorage: ownerToken.storage },
   remoteAccess,
+  genesis,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -225,6 +231,7 @@ function shutdown() {
     await outbox.stop();
     sessions.close();
     innovation.close();
+    genesisStore.close();
     platformStore.close();
     store.close();
     process.exit(0);
