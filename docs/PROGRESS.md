@@ -15,6 +15,10 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
   (claude-1). B, eval harness and dogfood log,
   [#128](https://github.com/cornerstonemarketingus/atlas/issues/128)
   (claude-2; brief in the issue's first comment).
+- **Merged by the owner since the last entry:** #119 (Phase 0 chat
+  guarantees), #123 (CODEOWNERS), #125, #136, #138 (`repository.tests_for`
+  coder tool), #146. The Phase 1 stack (#129 → #133) can now be rebased on
+  `main` and the chat wiring started.
 - **Merge order for the Phase 1 stack:** #129 → #130 → #131 → #132 → #133
   (each is based on the one before; retarget to `main` as each merges).
 - **Next for workstream A once #119 merges:** wire chat through the ledger
@@ -27,9 +31,8 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
   (#142), `atlas ci` (#143), `atlas packages` (#141, workspace imports),
   `atlas schemas` (#145), `atlas map` (#147), `atlas surfaces` (#150).
   Every 2.3 TODO item not needing an owner decision is done. 2.5: coder
-  edits now keep file mode and the UTF-8 BOM (#151). The coder's
-  `repository.tests_for` tool (#138) waits on the owner: it adds about 90
-  tokens per coder request. Groq pacing and exact waits merged (#118).
+  edits now keep file mode and the UTF-8 BOM (#151), and their diffs are
+  real hunks instead of whole-file rewrites (see the last row). Groq pacing and exact waits merged (#118).
 - **CI:** the intermittent "Genesis (real coder and browser)" failure was a
   render race in the generated web app (a slow response replaced the
   current screen); fixed in #144 with browser tests that reproduce it. A
@@ -38,13 +41,10 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 - **Vercel previews** hit the free plan's 100 deployments/day; the red
   "Vercel" status is not a required check.
 - **Blocked on owner, in order:**
-  1. Merge [#123](https://github.com/cornerstonemarketingus/atlas/pull/123)
-     (PR 0, CODEOWNERS), then add the branch ruleset below and turn on
-     "Allow auto-merge" (Settings → General → Pull Requests).
-  2. Merge [#119](https://github.com/cornerstonemarketingus/atlas/pull/119)
-     and [#125](https://github.com/cornerstonemarketingus/atlas/pull/125)
-     (both protected; #124 is already merged), then run "Deploy Atlas web
-     to Cloudflare Workers".
+  1. Add the branch ruleset below and turn on "Allow auto-merge"
+     (Settings → General → Pull Requests), if not done with #123's merge.
+  2. Run "Deploy Atlas web to Cloudflare Workers" so #119 and #125 reach
+     production.
   3. Fix the GitHub credential: a fine-grained PAT with Actions, Contents and
      Pull requests read and write on this repository saved as
      `ATLAS_GITHUB_TOKEN` (or the GitHub App with the same permissions),
@@ -96,3 +96,4 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 | 2026-09-27 | [#149](https://github.com/cornerstonemarketingus/atlas/pull/149) | 2.3 | `atlas env` counts PowerShell `$env:`, shell `export` and workflow `run:` exports as declarations (no plaintext companion template: its start script sets them from DPAPI) | atlas-cli 466/466 | | Merged |
 | 2026-09-27 | [#150](https://github.com/cornerstonemarketingus/atlas/pull/150) | 2.3 | `atlas surfaces`: HTTP entry points with same-file auth guards; command, eval, raw SQL, computed-URL and secret-env sinks | 469/469; the 3 unguarded web routes are public by design | Guard check is per file | Merged |
 | 2026-09-27 | [#151](https://github.com/cornerstonemarketingus/atlas/pull/151) | 2.5 | Coder edits keep permission bits and the UTF-8 BOM (were reset to 0600 and stripped), including delete rollback | 3 new tests fail on the old code | | Merged |
+| 2026-09-27 | (this PR) | 2.5 | Coder edit diffs are unified hunks with 3 lines of context (Myers diff between common prefix and suffix, capped edit distance falls back to one replacement hunk; `\\ No newline at end of file`; `/dev/null` sides). A one-line change in a 200-line file went from 400 diff lines to 8; the model sees this diff after every edit | atlas-cli 479/479; property test applies 1,200 generated diffs back; `git apply` accepts the editor's diff; hunk-boundary, backtrack and header mutations each fail a test; 100,000-line rewrite in 0.26 s | Diffs are text only (no JSON/web/IDE renderings yet) | 2.5: generated/vendored-file protection for coder edits |
