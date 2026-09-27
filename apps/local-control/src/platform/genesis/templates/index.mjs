@@ -130,7 +130,7 @@ function siteConfig(spec) {
 export const TEMPLATES = Object.freeze({
   "web-app": {
     id: "web-app",
-    version: "1.0.0",
+    version: "1.0.1",
     title: "Full-stack web application",
     description: "Dashboard, record screens with search, add/edit/delete, status tracking and an optional public booking form, backed by a local SQLite file.",
     archetypes: ["webapp", "dashboard"],
