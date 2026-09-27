@@ -63,6 +63,19 @@ export const REPOSITORY_READ_ONLY_MODEL_TOOLS: readonly ModelToolDefinition[] = 
       ...noAdditionalProperties,
     },
   },
+  {
+    name: "repository.tests_for",
+    description: "List tests that import a source file (directly or via other files), with the import chain.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", minLength: 1, maxLength: 4096 },
+        depth: { type: "integer", minimum: 1, maximum: 10 },
+      },
+      required: ["path"],
+      ...noAdditionalProperties,
+    },
+  }
 ];
 
 export const REPOSITORY_WRITE_MODEL_TOOLS: readonly ModelToolDefinition[] = [
@@ -153,5 +166,6 @@ export const REPOSITORY_WRITE_MODEL_TOOLS: readonly ModelToolDefinition[] = [
 export const COMPACT_CODER_MODEL_TOOLS: readonly ModelToolDefinition[] = [
   REPOSITORY_READ_ONLY_MODEL_TOOLS[1]!,
   REPOSITORY_READ_ONLY_MODEL_TOOLS[4]!,
+  REPOSITORY_READ_ONLY_MODEL_TOOLS.find((tool) => tool.name === "repository.tests_for")!,
   REPOSITORY_WRITE_MODEL_TOOLS[1]!,
 ];

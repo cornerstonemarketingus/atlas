@@ -22,6 +22,7 @@ import type {
   RepositorySymbolResult,
 } from "../domain/repository-symbol.js";
 import type { RepositorySummary } from "../domain/repository-summary.js";
+import { testsFor, type ImportGraph, type TestsForResult } from "./repository-import-graph.js";
 
 const MAX_QUERY_LENGTH = 1_000;
 const MAX_PATH_LENGTH = 4_096;
@@ -47,6 +48,8 @@ export interface RepositoryReadOnlyToolServices {
   readonly symbolIndexer: RepositorySymbolIndexer;
   readonly referenceFinder: RepositorySymbolReferenceFinder;
   readonly sourceReader: RepositorySourceReader;
+  /** Optional: when present, repository.tests_for is offered. */
+  readonly importGraph?: { build(repositoryRoot: string): Promise<ImportGraph> };
 }
 
 export interface InspectRepositoryInput {}
@@ -67,6 +70,19 @@ export interface FindRepositoryReferencesInput {
   readonly maxResults?: number;
 }
 
+export interface FindTestsForInput {
+  readonly path: string;
+  readonly depth?: number;
+}
+
+export interface TestsForToolResult extends TestsForResult {
+  /** False when the path is not a TypeScript, JavaScript or Python source file in the repository. */
+  readonly known: boolean;
+  readonly truncated: boolean;
+}
+
+const MAX_TESTS_REPORTED = 50;
+
 export interface ReadRepositorySourceInput {
   readonly path: string;
   readonly startLine?: number;
@@ -81,6 +97,7 @@ export interface RepositoryReadOnlyTools {
   readonly symbols: ReadOnlyToolDefinition<IndexRepositorySymbolsInput, RepositorySymbolResult>;
   readonly references: ReadOnlyToolDefinition<FindRepositoryReferencesInput, RepositorySymbolReferenceResult>;
   readonly readSource: ReadOnlyToolDefinition<ReadRepositorySourceInput, RepositorySourceReadResult>;
+  readonly testsFor?: ReadOnlyToolDefinition<FindTestsForInput, TestsForToolResult>;
 }
 
 /**
@@ -159,6 +176,25 @@ export function createRepositoryReadOnlyTools(
         });
       },
     },
+    ...(services.importGraph === undefined ? {} : {
+      testsFor: {
+        name: "repository.tests_for",
+        description: "Find the tests that exercise a source file through imports, each with the import chain as evidence.",
+        risk: "low" as const,
+        validateInput: validateTestsForInput,
+        execute: async (input: FindTestsForInput, context: ReadOnlyToolContext) => {
+          assertRepositoryBinding(binding, context);
+          const graph = await services.importGraph!.build(binding.repositoryRoot);
+          const result = testsFor(graph, input.path, input.depth ?? 4);
+          return {
+            ...result,
+            tests: result.tests.slice(0, MAX_TESTS_REPORTED),
+            known: graph.files.includes(result.path),
+            truncated: result.tests.length > MAX_TESTS_REPORTED,
+          };
+        },
+      },
+    }),
   };
 }
 
@@ -171,6 +207,7 @@ export function registerRepositoryReadOnlyTools(
   registry.register(tools.symbols);
   registry.register(tools.references);
   registry.register(tools.readSource);
+  if (tools.testsFor !== undefined) registry.register(tools.testsFor);
 }
 
 function assertRepositoryBinding(binding: RepositoryToolBinding, context: ReadOnlyToolContext): void {
@@ -207,6 +244,13 @@ function validateReferencesInput(input: unknown): FindRepositoryReferencesInput 
   const symbolName = validateRequiredString(object, "symbolName", MAX_QUERY_LENGTH);
   const maxResults = validateOptionalInteger(object, "maxResults", MAX_RESULTS);
   return { symbolName, ...(maxResults === undefined ? {} : { maxResults }) };
+}
+
+function validateTestsForInput(input: unknown): FindTestsForInput {
+  const object = validateObject(input, ["path", "depth"]);
+  const path = validateRequiredString(object, "path", MAX_PATH_LENGTH);
+  const depth = validateOptionalInteger(object, "depth", 10);
+  return { path, ...(depth === undefined ? {} : { depth }) };
 }
 
 function validateReadSourceInput(input: unknown): ReadRepositorySourceInput {
