@@ -29,6 +29,23 @@ For the exact Groq base URL `https://api.groq.com/openai/v1`, deployment can reu
 the existing `GROQ_API_KEY` when no separate model key is set. It never forwards
 that fallback credential to another model host.
 
+Optional repository secrets, uploaded to the Worker by the deploy:
+`ATLAS_CHAT_FALLBACK_MODEL` (a second model on the same endpoint for when the
+first is rate-limited; on Groq it defaults to `openai/gpt-oss-20b`, and `none`
+turns it off), `ATLAS_TAVILY_API_KEY` (chat's web search), and
+`ATLAS_ALLOWED_REPOSITORIES`. `GET /api/setup/status` reports under
+`optional.chat` whether chat, its fallback model and web search are configured,
+as flags only. `apps/web/tests/deploy-configuration.test.mjs` fails if chat reads
+a variable the deploy does not upload.
+
+A chat turn always ends in words. If the model's last response carried none (an
+empty HTTP 200, a tool call on the final round, a reasoning model that spent its
+budget thinking) or a rate limit interrupts work already done, one final
+synthesis call writes the answer from the completed work, with tools disabled
+and its own bounded retries. If no model can answer, the reply is the work
+itself and says how to continue. Each such event is logged to the Worker as a
+metadata-only `{"atlas":"inference",...}` line.
+
 Coder uses its own repository variables. To use the existing hosted provider,
 unset `ATLAS_SELF_HOSTED_MODEL`, select `ATLAS_CODER_PROVIDER=groq` and a supported
 `ATLAS_CODER_MODEL`, and remove local-only context/output-window overrides.

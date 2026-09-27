@@ -16,12 +16,27 @@
 export function createDeltaParser() {
   let buffer = "";
   let done = false;
+  let finishReason = null;
+  // Whether the server streamed any reasoning at all, and its token counts:
+  // what tells an empty answer caused by a reasoning model running out of
+  // room apart from any other empty answer. Neither carries content.
+  let sawReasoning = false;
+  let usage = null;
   // Tool calls arrive in pieces keyed by index: the name once, the JSON
   // arguments split across many chunks. They are assembled, never streamed.
   const calls = new Map();
   let reasoning = "";
   return {
     get done() { return done; },
+    /** The finish_reason the server reported, if any ("stop", "length", "tool_calls"…). */
+    get finishReason() { return finishReason; },
+    get sawReasoning() { return sawReasoning; },
+    /** Token counts from the stream's usage chunk (OpenAI `usage` or Groq `x_groq.usage`), if sent. */
+    get usage() { return usage; },
+    /** Parses whatever is left once the stream ends; a final event may lack its trailing newline. */
+    finish(chunk = "") {
+      return this.push(`${chunk}\n`);
+    },
     /** Thinking text received since the last drain. */
     drainReasoning() {
       const text = reasoning;
@@ -59,14 +74,16 @@ export function createDeltaParser() {
           }
         }
         const thought = choice?.delta?.reasoning ?? choice?.delta?.reasoning_content;
-        if (typeof thought === "string" && thought) reasoning += thought;
+        if (typeof thought === "string" && thought) { reasoning += thought; sawReasoning = true; }
+        const reported = event?.usage ?? event?.x_groq?.usage;
+        if (reported && typeof reported === "object") usage = reported;
         const content = choice?.delta?.content ?? choice?.message?.content;
         if (typeof content === "string" && content) deltas.push(content);
         else if (Array.isArray(content)) {
           const text = content.map((part) => (typeof part === "string" ? part : part?.text ?? "")).join("");
           if (text) deltas.push(text);
         }
-        if (choice?.finish_reason) done = true;
+        if (choice?.finish_reason) { done = true; finishReason = choice.finish_reason; }
       }
       return deltas;
     },

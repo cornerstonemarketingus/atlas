@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { githubOAuthConfiguration } from "../../auth/github-oauth.mjs";
 import { stripeConfiguration } from "../../billing/stripe.mjs";
+import { chatReadiness } from "../../chat/model-endpoint.mjs";
 import { createInstallationToken, githubAppConfiguration } from "../../tasks/github-app.mjs";
 import { allowedRepositories } from "../../tasks/dispatch.mjs";
 import { probeGitHubDispatch } from "../../tasks/github-diagnosis.mjs";
@@ -78,6 +79,6 @@ export async function GET(request: Request) {
     completedSteps,
     totalSteps: steps.length,
     steps,
-    optional: { stripeConfigured: stripe.configured },
+    optional: { stripeConfigured: stripe.configured, chat: chatReadiness(process.env) },
   }, { headers: { "cache-control": "no-store" } });
 }
