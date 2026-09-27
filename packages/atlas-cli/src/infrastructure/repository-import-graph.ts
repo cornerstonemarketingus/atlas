@@ -14,7 +14,8 @@ import { nodeRepositoryFileSystem, type RepositoryFileSystem } from "./repositor
  *
  * TypeScript/JavaScript: import/export-from, dynamic import(), require(),
  * with extension and index resolution, including ESM ".js" specifiers that
- * point at ".ts" sources. Python: import and from-import, relative (dots)
+ * point at ".ts" sources, and the nearest tsconfig.json/jsconfig.json's
+ * `baseUrl` and `paths` aliases (following relative `extends`). Python: import and from-import, relative (dots)
  * and repository-rooted modules.
  */
 
@@ -41,6 +42,8 @@ export interface TestsForResult {
 const SCRIPT_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 const SOURCE_EXTENSIONS = new Set([...SCRIPT_EXTENSIONS, ".py"]);
 const DEFAULTS = { maxFiles: 20_000, maxFileBytes: 1024 * 1024, maxDepth: 25 };
+const PROJECT_CONFIG = /^(?:tsconfig(?:\.[\w-]+)?|jsconfig)\.json$/u;
+const MAX_EXTENDS = 5;
 
 // Matched over the whole file, not line by line: `import {\n a,\n b\n} from "x"`
 // spans lines, and most real imports of more than one name do. The line
@@ -73,13 +76,15 @@ export class RepositoryImportGraph {
     const enumeration = await new RepositoryFileEnumerator(this.gitClient, this.fileSystem).enumerate(repositoryPath, {
       maxFiles: limits.maxFiles,
       maxDepth: limits.maxDepth,
-      include: (path) => SOURCE_EXTENSIONS.has(extname(path).toLowerCase()),
+      include: (path) => SOURCE_EXTENSIONS.has(extname(path).toLowerCase()) || PROJECT_CONFIG.test(posix.basename(path.replaceAll("\\", "/"))),
     });
     const warnings: { code: string; message: string }[] = [...enumeration.warnings];
-    const files = enumeration.files.map((file) => file.relativePath.replaceAll("\\", "/"));
+    const sources = enumeration.files.filter((file) => SOURCE_EXTENSIONS.has(extname(file.relativePath).toLowerCase()));
+    const files = sources.map((file) => file.relativePath.replaceAll("\\", "/"));
     const known = new Set(files);
+    const configs = await this.#projectConfigs(enumeration.files.filter((file) => !SOURCE_EXTENSIONS.has(extname(file.relativePath).toLowerCase())), warnings);
     const edges: ImportEdge[] = [];
-    for (const file of enumeration.files) {
+    for (const file of sources) {
       if (file.size > limits.maxFileBytes) continue;
       let text: string;
       try {
@@ -94,7 +99,7 @@ export class RepositoryImportGraph {
       const python = extname(from).toLowerCase() === ".py";
       const found = python ? pythonSpecifiers(text) : scriptSpecifiers(text);
       for (const { specifier, line } of found) {
-        const to = python ? resolvePython(from, specifier, known) : resolveScript(from, specifier, known);
+        const to = python ? resolvePython(from, specifier, known) : resolveScript(from, specifier, known, nearestConfig(configs, from));
         const kind = to !== null ? "file" : isRelative(specifier, python) ? "unresolved" : "package";
         edges.push({ from, to, specifier, line, kind });
       }
@@ -102,6 +107,94 @@ export class RepositoryImportGraph {
     if (enumeration.limitReached) warnings.push({ code: "FILE_LIMIT_REACHED", message: `Import graph stopped after ${limits.maxFiles} files.` });
     return { files, edges, warnings };
   }
+
+  /** Alias settings per directory, from tsconfig.json (or jsconfig.json) there. */
+  async #projectConfigs(candidates: readonly { relativePath: string; absolutePath: string; size: number }[], warnings: { code: string; message: string }[]): Promise<Map<string, AliasConfig>> {
+    const raw = new Map<string, Record<string, unknown>>();
+    for (const file of candidates) {
+      if (file.size > 256 * 1024) continue;
+      try {
+        const parsed: unknown = JSON.parse(stripJsonComments((await this.fileSystem.readFile(file.absolutePath)).toString("utf8")));
+        if (parsed && typeof parsed === "object") raw.set(file.relativePath.replaceAll("\\", "/"), parsed as Record<string, unknown>);
+      } catch {
+        warnings.push({ code: "PROJECT_CONFIG_UNREADABLE", message: `Could not parse ${file.relativePath}; its path aliases are ignored.` });
+      }
+    }
+    const byDirectory = new Map<string, AliasConfig>();
+    // tsconfig.json wins over jsconfig.json and tsconfig.*.json in the same directory.
+    const rank = (path: string) => posix.basename(path) === "tsconfig.json" ? 0 : posix.basename(path) === "jsconfig.json" ? 1 : 2;
+    for (const path of [...raw.keys()].sort((a, b) => rank(b) - rank(a))) {
+      const config = aliasConfig(path, raw);
+      if (config) byDirectory.set(posix.dirname(path), config);
+    }
+    return byDirectory;
+  }
+}
+
+interface AliasConfig {
+  /** Repository-relative directory non-relative specifiers resolve from, or null. */
+  readonly baseUrl: string | null;
+  /** Patterns with at most one "*", targets repository-relative. */
+  readonly paths: readonly { readonly pattern: string; readonly targets: readonly string[] }[];
+}
+
+/** compilerOptions.baseUrl/paths for one config, following relative `extends`. */
+function aliasConfig(path: string, raw: ReadonlyMap<string, Record<string, unknown>>): AliasConfig | null {
+  let baseUrl: string | null = null;
+  let paths: AliasConfig["paths"] | null = null;
+  let current: string | null = path;
+  for (let hop = 0; current !== null && hop <= MAX_EXTENDS && (baseUrl === null || paths === null); hop += 1) {
+    const config = raw.get(current);
+    if (!config) break;
+    const directory = posix.dirname(current);
+    const options = config["compilerOptions"] && typeof config["compilerOptions"] === "object" ? config["compilerOptions"] as Record<string, unknown> : {};
+    const ownBase = typeof options["baseUrl"] === "string" ? posix.normalize(posix.join(directory, options["baseUrl"])) : null;
+    if (baseUrl === null && ownBase !== null) baseUrl = ownBase;
+    if (paths === null && options["paths"] && typeof options["paths"] === "object") {
+      // Targets resolve from this config's baseUrl, or from its own directory without one.
+      const from = ownBase ?? directory;
+      paths = Object.entries(options["paths"] as Record<string, unknown>)
+        .filter(([pattern, targets]) => (pattern.match(/\*/gu) ?? []).length <= 1 && Array.isArray(targets))
+        .map(([pattern, targets]) => ({
+          pattern,
+          targets: (targets as unknown[]).filter((target): target is string => typeof target === "string").map((target) => posix.normalize(posix.join(from, target))),
+        }));
+    }
+    const parent = typeof config["extends"] === "string" && (config["extends"].startsWith("./") || config["extends"].startsWith("../")) ? config["extends"] : null;
+    current = parent === null ? null : posix.normalize(posix.join(directory, parent.endsWith(".json") ? parent : `${parent}.json`));
+  }
+  if (baseUrl === null && (paths === null || paths.length === 0)) return null;
+  return { baseUrl: baseUrl === "." ? "" : baseUrl, paths: paths ?? [] };
+}
+
+function nearestConfig(configs: ReadonlyMap<string, AliasConfig>, from: string): AliasConfig | null {
+  for (let directory = posix.dirname(from); ; directory = posix.dirname(directory)) {
+    const config = configs.get(directory);
+    if (config) return config;
+    if (directory === "." || directory === "/" || directory === "") return null;
+  }
+}
+
+/** tsconfig allows comments and trailing commas; JSON.parse does not. */
+export function stripJsonComments(text: string): string {
+  let out = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (char === "\"") {
+      const start = index;
+      for (index += 1; index < text.length && text[index] !== "\""; index += 1) if (text[index] === "\\") index += 1;
+      out += text.slice(start, index + 1);
+    } else if (char === "/" && text[index + 1] === "/") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+      out += "\n";
+    } else if (char === "/" && text[index + 1] === "*") {
+      const end = text.indexOf("*/", index + 2);
+      index = end === -1 ? text.length : end + 1;
+    } else {
+      out += char;
+    }
+  }
+  return out.replace(/,(\s*[}\]])/gu, "$1");
 }
 
 function lineAt(text: string, offset: number): number {
@@ -141,9 +234,35 @@ function isRelative(specifier: string, python: boolean): boolean {
   return python ? specifier.startsWith(".") : specifier.startsWith("./") || specifier.startsWith("../");
 }
 
-function resolveScript(from: string, specifier: string, known: ReadonlySet<string>): string | null {
-  if (!isRelative(specifier, false)) return null;
-  const base = posix.normalize(posix.join(posix.dirname(from), specifier));
+function resolveScript(from: string, specifier: string, known: ReadonlySet<string>, config: AliasConfig | null = null): string | null {
+  if (isRelative(specifier, false)) return resolveScriptPath(posix.normalize(posix.join(posix.dirname(from), specifier)), known);
+  if (!config) return null;
+  // Like TypeScript: the longest matching "paths" pattern first, then baseUrl.
+  const matches = config.paths
+    .map((entry) => ({ entry, capture: matchPattern(entry.pattern, specifier) }))
+    .filter((item): item is { entry: AliasConfig["paths"][number]; capture: string } => item.capture !== null)
+    .sort((a, b) => b.entry.pattern.length - a.entry.pattern.length);
+  for (const { entry, capture } of matches) {
+    for (const target of entry.targets) {
+      const resolved = resolveScriptPath(target.replace("*", capture), known);
+      if (resolved) return resolved;
+    }
+  }
+  return config.baseUrl === null ? null : resolveScriptPath(posix.normalize(posix.join(config.baseUrl, specifier)), known);
+}
+
+function matchPattern(pattern: string, specifier: string): string | null {
+  const star = pattern.indexOf("*");
+  if (star === -1) return pattern === specifier ? "" : null;
+  const prefix = pattern.slice(0, star);
+  const suffix = pattern.slice(star + 1);
+  return specifier.length >= prefix.length + suffix.length && specifier.startsWith(prefix) && specifier.endsWith(suffix)
+    ? specifier.slice(prefix.length, specifier.length - suffix.length)
+    : null;
+}
+
+function resolveScriptPath(base: string, known: ReadonlySet<string>): string | null {
+  if (base.startsWith("../")) return null;
   const candidates = [base];
   // ESM TypeScript writes "./x.js" for a source file "./x.ts".
   const withoutJs = base.replace(/\.(?:m|c)?js$/u, "");
