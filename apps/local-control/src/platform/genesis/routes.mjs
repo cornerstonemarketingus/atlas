@@ -1,12 +1,14 @@
 import { GenesisTransitionError } from "./lifecycle.mjs";
 import { GenesisError } from "./service.mjs";
 import { GenesisStoreError } from "./store.mjs";
+import { TEMPLATES } from "./templates/index.mjs";
 
 /**
  * /v1/genesis — any authenticated caller can read; creating and steering
  * projects needs the owner.
  *
  * GET  /v1/genesis                     projects
+ * GET  /v1/genesis/templates           curated templates (id, version, commands, structure)
  * GET  /v1/genesis/:id                 project, spec, plan, tasks, transitions, progress
  * POST /v1/genesis                     { prompt }
  * POST /v1/genesis/:id/answers         { answers: { id: text } }
@@ -25,6 +27,9 @@ export function createGenesisRoutes({ genesis, parseBody, send }) {
     if (!url.pathname.startsWith("/v1/genesis")) return false;
     try {
       if (request.method === "GET" && url.pathname === "/v1/genesis") return send(response, 200, { projects: genesis.list() });
+      if (request.method === "GET" && url.pathname === "/v1/genesis/templates") {
+        return send(response, 200, { templates: Object.values(TEMPLATES).map(({ id, version, title, description, archetypes, commands, preview, structure }) => ({ id, version, title, description, archetypes, commands, preview, structure })) });
+      }
       const match = /^\/v1\/genesis\/(gen_[0-9a-f-]{36})(?:\/(answers|approve|changes|pause|resume|cancel))?$/u.exec(url.pathname);
       if (request.method === "GET" && match && !match[2]) return send(response, 200, { project: genesis.view(match[1]) });
       if (request.method !== "POST") return send(response, 405, { message: "Method not allowed." });

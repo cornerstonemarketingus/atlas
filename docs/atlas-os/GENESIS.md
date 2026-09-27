@@ -93,10 +93,34 @@ state change, with a reason, evidence and actor.
   because building locally only writes inside the project folder. Set it to
   `ask` to approve each plan yourself.
 
+## Templates (`platform/genesis/templates/`)
+
+| Template | For | What the configuration drives |
+| --- | --- | --- |
+| `web-app` 1.0.0 | web apps, dashboards, internal tools | Record types, typed fields and validation, search, status, dashboard counts, optional public booking form (`app.config.json`) |
+| `static-site` 1.0.0 | business and marketing sites | Pages, trade-appropriate copy, SEO basics, sitemap, working enquiry form (`site.json`) |
+| `api-service` 1.0.0 | REST APIs | CRUD, search and stats endpoints per record type (`app.config.json`) |
+
+All three use only Node's standard library (`node:http`, `node:sqlite`,
+`node:test`). A generated project has nothing to install, works offline and
+runs wherever Atlas runs. Each template declares its `check`, `test` and
+`build` commands, its preview command, environment and health URL, and its
+structure. Servers send a strict CSP (no inline scripts), `nosniff`,
+`no-referrer` and `DENY` framing headers. They cap request bodies at 64 KiB,
+bind to 127.0.0.1, and render stored text with `textContent` or escaping.
+The generated tests exercise every record type in the configuration, so the
+features a spec asks for are verified behaviour, not stubs.
+
+`workspace.mjs` creates `~/.atlas/genesis/projects/<name>-<id>`. It copies the
+template, writes the configuration from the spec and `.atlas/genesis.json`
+(template, version, spec digest), then runs `git init -b main` and makes an
+initial commit as Atlas. No remote is involved. `commitWorkspace` commits
+each later change.
+
 ## PR sequence
 
 1. **Lifecycle, durable store, requirements, plan, routes** (`/v1/genesis`). Done in this PR.
-2. Local workspace and curated templates (static-site, web-app, api-service), zero-dependency where possible so they run offline.
+2. **Local workspace and curated templates** (`web-app`, `static-site`, `api-service`). Done: see "Templates" below.
 3. Task executor: template tasks, plus coder tasks via `createCoderBuilder`.
 4. Verify/repair loop with budget and evidence.
 5. Preview manager.

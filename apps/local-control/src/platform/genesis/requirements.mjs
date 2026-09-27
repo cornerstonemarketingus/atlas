@@ -312,6 +312,7 @@ export function inferSpecification(prompt, { answers = {} } = {}) {
     name,
     objective: text,
     archetype,
+    business: business ? { kind: business.kind, noun: business.noun, phrase: business.phrase } : null,
     targetUsers: archetype === "website"
       ? `Prospective customers of ${business ? `your ${business.phrase}` : "the business"}`
       : `${business ? `Your ${business.phrase}` : "You and your team"}${booking ? ", and customers who book" : ""}`,
