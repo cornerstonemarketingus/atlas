@@ -22,17 +22,19 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
   (cache finding in #133), `ATLAS_CHAT_MODELS` pool from the target
   registry, resumable chat turns (task id, event log, SSE replay, polling).
 - **Phase 2 (coder) work that does not wait on chat:** escalation merged
-  (#135; its workflow wiring #136 is protected). Import graph and
-  `atlas tests-for` merged (#137, with tsconfig `paths`/`baseUrl`). In
-  review: the coder's `repository.tests_for` tool (#138; adds about 90
-  tokens per coder request, a deliberate contract change flagged for
-  review), package graph and workspace imports (#141), env/config
-  references (#142). Remaining 2.3: entrypoints, CI/deploy targets, schemas.
-- **CI:** "Genesis (real coder and browser)" failed intermittently on main
-  after #135 and on #137 (`repairsUsed 2 !== 1`). It passes on the same code
-  elsewhere and never fails locally. #139 makes the assertion print the
-  transitions so the next failure names its cause (merged). Root cause still
-  open.
+  (#135; its workflow wiring #136 is protected). Repository intelligence
+  (2.3) merged: `atlas tests-for` (#137, tsconfig aliases), `atlas env`
+  (#142), `atlas ci` (#143), `atlas packages` (#141, workspace imports),
+  `atlas schemas` (#145); `atlas map` combines them (this PR). The coder's
+  `repository.tests_for` tool (#138) waits on the owner: it adds about 90
+  tokens per coder request. Groq pacing and exact waits merged (#118).
+- **CI:** the intermittent "Genesis (real coder and browser)" failure was a
+  render race in the generated web app (a slow response replaced the
+  current screen); fixed in #144 with browser tests that reproduce it. A
+  separate browser-worker race (an off-origin click reported before its
+  navigation began) is fixed in #146, protected: owner review.
+- **Vercel previews** hit the free plan's 100 deployments/day; the red
+  "Vercel" status is not a required check.
 - **Blocked on owner, in order:**
   1. Merge [#123](https://github.com/cornerstonemarketingus/atlas/pull/123)
      (PR 0, CODEOWNERS), then add the branch ruleset below and turn on
@@ -80,5 +82,11 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 | 2026-09-27 | [#137](https://github.com/cornerstonemarketingus/atlas/pull/137) | 2.3 | Import graph (TS/JS/Python, tsconfig aliases) and `atlas tests-for` with import-chain evidence | atlas-cli 445/445 | Genesis failure on first run (see CI above) | Merged |
 | 2026-09-27 | [#138](https://github.com/cornerstonemarketingus/atlas/pull/138) | 2.3 | `repository.tests_for` coder tool | atlas-cli 442/442 | Contract change, about 90 tokens per request | Review |
 | 2026-09-27 | [#139](https://github.com/cornerstonemarketingus/atlas/pull/139) | CI | Genesis visual-repair test prints transitions when the repair count differs | forced failure shows the dump | Diagnostic, not the fix | Merged |
-| 2026-09-27 | [#141](https://github.com/cornerstonemarketingus/atlas/pull/141) | 2.3 | Package graph (npm/pnpm/PEP 621/Poetry, internal links) and workspace-package imports; `atlas packages` | atlas-cli 446/446 | TOML subset reader | Merge when green |
-| 2026-09-27 | [#142](https://github.com/cornerstonemarketingus/atlas/pull/142) | 2.3 | Env/config references: reads, declarations, workflow secrets/vars, undeclared reads; `atlas env` | atlas-cli 444/444; never-read-.env guard mutation-checked | Lexical only | Merge when green |
+| 2026-09-27 | [#141](https://github.com/cornerstonemarketingus/atlas/pull/141) | 2.3 | Package graph (npm/pnpm/PEP 621/Poetry, internal links) and workspace-package imports; `atlas packages` | atlas-cli 446/446 | TOML subset reader | Merged |
+| 2026-09-27 | [#142](https://github.com/cornerstonemarketingus/atlas/pull/142) | 2.3 | Env/config references: reads, declarations, workflow secrets/vars, undeclared reads; `atlas env` | atlas-cli 444/444; never-read-.env guard mutation-checked | Lexical only | Merged |
+| 2026-09-27 | [#118](https://github.com/cornerstonemarketingus/atlas/pull/118) | 0 | Groq pacing to the TPM window, exact waits, fail fast on daily quotas | atlas-cli 455/455, web 234/234 | | Merged |
+| 2026-09-27 | [#143](https://github.com/cornerstonemarketingus/atlas/pull/143) | 2.3 | CI workflows and deploy targets (`atlas ci`) | atlas-cli 447/447 | | Merged |
+| 2026-09-27 | [#144](https://github.com/cornerstonemarketingus/atlas/pull/144) | CI | Genesis web-app template render race (root cause of the Genesis CI failures) | race tests fail on the old template, pass now | | Merged |
+| 2026-09-27 | [#145](https://github.com/cornerstonemarketingus/atlas/pull/145) | 2.3 | Migrations, tables, drift and API schemas (`atlas schemas`) | atlas-cli 465/465 | | Merged |
+| 2026-09-27 | [#146](https://github.com/cornerstonemarketingus/atlas/pull/146) | security | Browser worker judges a click by the navigation it starts | new test fails on old code as CI did | Protected | Owner review |
+| 2026-09-27 | this PR | 2.3 | `atlas map`: packages with test reach and resolved entries, most-imported files, config gaps, delivery, data; each section states its basis | atlas-cli 467/467; 0.7 s on this repo | Lexical | Merge when green |
