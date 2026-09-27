@@ -49,6 +49,7 @@ import { openInBrowser, ownerAccount, resolveOwnerToken, signInUrl } from "./ide
 import { RemoteAccess } from "./remote/access.mjs";
 import { ACTIVE_STATES, GenesisService, GenesisStore } from "./platform/genesis/index.mjs";
 import { GenesisExecutor } from "./platform/genesis/executor.mjs";
+import { registerGenesisTools } from "./platform/genesis/tools.mjs";
 import { PreviewManager } from "./platform/genesis/preview.mjs";
 import { createInspector } from "./platform/genesis/inspector.mjs";
 import { createGenesisCoder } from "./platform/genesis/coder.mjs";
@@ -215,6 +216,7 @@ const server = createLocalControlServer({
   identity: { owner, tokenStorage: ownerToken.storage },
   remoteAccess,
   genesis,
+  genesisPreviews,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -324,6 +326,8 @@ function buildToolRegistry() {
   registerCommunicationsTools(registry, { send: null });
   // Starting a run asks the owner first (requiresApproval); merging a result is a second, separate decision.
   registerSelfImproveTool(registry, selfImprove);
+  // Genesis is created after the registry; the tools look it up when they run.
+  registerGenesisTools(registry, () => genesis);
   registerWorkflowTools(registry);
   // The browser family is registered whether or not a companion is attached:
   // its tools then fail closed with "no browser on this machine", which is a

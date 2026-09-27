@@ -184,3 +184,58 @@ test("test output is summarised from node:test", () => {
   assert.deepEqual(testSummary("ok 1\n# tests 12\n# suites 0\n# pass 11\n# fail 1\n"), { tests: 12, pass: 11, fail: 1 });
   assert.equal(testSummary("no tests here"), null);
 });
+
+test("an observer that starts runs on every transition still gets exactly one run (the daemon's wiring)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "atlas-genesis-observer-"));
+  const store = new GenesisStore(join(root, "genesis.sqlite"));
+  let executor = null;
+  const runs = [];
+  const genesis = new GenesisService({
+    store, policy: () => ({ decision: "allow" }),
+    onChange: (project) => {
+      if (["approved", "scaffolding", "building", "verifying", "previewing", "reviewing"].includes(project.state) && executor && !executor.isRunning(project.id)) runs.push(executor.run(project.id));
+    },
+  });
+  const preview = new PreviewManager({ registryPath: join(root, "previews.json"), runPrepare: runCheck });
+  executor = new GenesisExecutor({ genesis, projectsRoot: join(root, "projects"), runCheck, preview, inspector: async (project, running) => inspectOverHttp(project, running) });
+  try {
+    const project = await genesis.create("Build a REST API for managing inventory items");
+    assert.equal(runs.length, 1, "creating an approved project starts one run");
+    const done = await runs[0];
+    assert.equal(done.state, "ready", JSON.stringify(done.transitions.at(-1)));
+    assert.equal(runs.length, 1, "its own transitions never start a second run");
+    assert.equal(done.transitions.filter((t) => t.to === "scaffolding").length, 1);
+    assert.equal(project.id, done.id);
+  } finally {
+    await preview.stopAll();
+    store.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
+});
+
+test("chat tools build, report, and continue the same project", async () => {
+  const { ToolRegistry } = await import("../src/agent/tool-registry.mjs");
+  const { registerGenesisTools } = await import("../src/platform/genesis/tools.mjs");
+  const store = new GenesisStore(":memory:");
+  const genesis = new GenesisService({ store, policy: () => ({ decision: "allow" }) });
+  const registry = new ToolRegistry({ policy: () => "allow" });
+  registerGenesisTools(registry, () => genesis);
+  const tools = Object.fromEntries(["genesis.build", "genesis.status", "genesis.change", "genesis.answer"].map((name) => [name, registry.list().find((tool) => tool.name === name)]));
+  for (const tool of Object.values(tools)) assert.ok(tool, "registered");
+  const run = (name, input) => registry.get(name).execute({ input });
+  const started = await run("genesis.build", { prompt: "Atlas, build me a simple CRM for my construction company." });
+  assert.match(started, /Construction CRM — Plan approved/u);
+  assert.match(started, /Plan: \d+ tasks/u);
+  assert.match(started, /#\/build\/gen_/u);
+  assert.match(await run("genesis.status", {}), /Construction CRM/u);
+  const [project] = genesis.list();
+  for (const [to, reason] of [["scaffolding", "s"], ["building", "b"], ["verifying", "v"], ["previewing", "p"], ["reviewing", "r"], ["ready", "done"]]) genesis.advance(project.id, to, { reason });
+  const changed = await run("genesis.change", { request: "Add Google login" });
+  assert.match(changed, /Change accepted/u);
+  assert.equal(genesis.list().length, 1, "the change continued the same project");
+  assert.equal(genesis.view(project.id).spec.auth.method, "google");
+  const shop = await run("genesis.build", { prompt: "Build an online store that takes payments for my bakery" });
+  assert.match(shop, /\[payments\]/u, "open questions are shown with their ids");
+  assert.match(await run("genesis.answer", { answers: { payments: "no" } }), /Plan approved/u);
+  store.close();
+});

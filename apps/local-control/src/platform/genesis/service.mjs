@@ -97,7 +97,7 @@ export class GenesisService {
     const { spec, refinedBy } = await this.#specify(text, {});
     let project = this.store.create({ tenantId: this.tenantId, prompt: text, name: spec.name, actor });
     project = this.#move(project.id, "requirements", {
-      reason: `Requirements written (${spec.pages.length} pages, ${spec.entities.length} record types, ${spec.acceptanceCriteria.length} acceptance criteria).`,
+      reason: `Requirements written (${plural(spec.pages.length, "page")}, ${plural(spec.entities.length, "record type")}, ${plural(spec.acceptanceCriteria.length, "acceptance criterion")}).`.replace("criterions", "criteria"),
       evidence: { kind: "specification", refinedBy, assumptions: spec.assumptions, questions: spec.questions },
       patch: { spec, name: spec.name },
     });
@@ -219,12 +219,14 @@ export class GenesisService {
   }
 }
 
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+
 /** A short, jargon-free progress list derived from durable state (never from UI state). */
 export function progressOf(project, tasks, transitions) {
   const reached = new Set(transitions.map((t) => t.to));
   const steps = [
     { label: "Understanding your idea", done: reached.has("requirements") },
-    { label: project.spec ? `Requirements: ${project.spec.pages.length} pages, ${project.spec.entities.length} record types` : "Requirements", done: reached.has("planned") || reached.has("blocked") },
+    { label: project.spec ? `Requirements: ${plural(project.spec.pages.length, "page")}, ${plural(project.spec.entities.length, "record type")}` : "Requirements", done: reached.has("planned") || reached.has("blocked") },
     { label: project.plan ? `Plan: ${tasks.length} tasks` : "Planning", done: reached.has("planned") },
     ...tasks.map((t) => ({ label: t.title, done: t.status === "passed", status: t.status, attempts: t.attempts })),
     { label: "Ready", done: project.state === "ready" || project.state === "published" },

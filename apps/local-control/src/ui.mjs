@@ -17,6 +17,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
  <a class="brand" href="#/home"><span class="mark" aria-hidden="true">A</span><span><strong>Atlas</strong><small>on this computer</small></span></a>
  <nav class="nav" aria-label="Sections">
   <a href="#/home" data-nav="home"><span class="ico" aria-hidden="true">⌂</span>Home</a>
+  <a href="#/build" data-nav="build"><span class="ico" aria-hidden="true">✚</span>Build</a>
   <a href="#/missions" data-nav="missions"><span class="ico" aria-hidden="true">◎</span>Missions</a>
   <a href="#/improve" data-nav="improve"><span class="ico" aria-hidden="true">↻</span>Improve Atlas<span class="badge" id="improve-badge" hidden></span></a>
   <a href="#/models" data-nav="models"><span class="ico" aria-hidden="true">◈</span>Models</a>
@@ -74,6 +75,15 @@ export const LOCAL_UI_HTML = `<!doctype html>
   </div>
  </section>
 
+ <section class="view" data-view="build" hidden aria-labelledby="build-heading">
+  <div class="section-title"><div><p class="eyebrow">PROJECT GENESIS</p><h2 id="build-heading">Build something</h2></div><button type="button" class="secondary" id="build-refresh">Refresh</button></div>
+  <form id="build-form" class="panel"><label for="build-prompt">What should Atlas build?</label><textarea id="build-prompt" rows="3" maxlength="4000" placeholder="Build me a simple CRM for my construction company"></textarea>
+   <div class="chips" id="build-examples"><button type="button" class="chip" data-example="Build a website for my roofing company">Roofing website</button><button type="button" class="chip" data-example="Build me a booking website for my landscaping company">Booking site</button><button type="button" class="chip" data-example="Build a simple customer lead tracker with name, email, phone, status, notes and search">Lead tracker</button><button type="button" class="chip" data-example="Build a REST API for managing inventory items">Inventory API</button></div>
+   <div class="actions"><button id="build-start">Build it</button></div><p id="build-notice" class="hint" role="status" aria-live="polite"></p>
+   <p class="hint">Atlas writes the requirements with sensible assumptions, plans the work, builds it on this computer, tests it, runs it, checks it in a browser and fixes problems. It asks only when an answer changes cost, data rules or who gets contacted, and it asks before publishing anything.</p></form>
+  <div id="build-detail" hidden></div>
+  <section aria-labelledby="build-projects-heading"><h3 id="build-projects-heading">Projects</h3><div id="build-projects" class="list"><p class="empty">Unlock this tab to see projects.</p></div></section>
+ </section>
  <section class="view" data-view="missions" hidden aria-labelledby="missions-view-heading">
   <div class="hero"><h2 id="missions-view-heading">Missions</h2><p class="lede">Describe an outcome. The Product Executive plans it into steps, each step goes to the agent best placed to do it, and every step is checked against its own completion test before the mission counts as done.</p></div>
   <form id="goal-form" class="panel"><label for="goal-text">Goal</label><textarea id="goal-text" maxlength="4000" required placeholder="For example: research three competitors' pricing pages and summarize how ours compares"></textarea><div class="actions"><button>Plan and start</button></div><p id="goal-notice" class="hint" role="status" aria-live="polite"></p></form>
@@ -256,7 +266,7 @@ main{padding:16px 16px calc(96px + env(safe-area-inset-bottom))}.toast:not(:empt
 input,textarea,select{font-size:16px}
 .transcript{max-height:46vh}
 }
-@media (prefers-reduced-motion:reduce){*{transition:none!important}}.pair-form{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.check{display:flex;gap:8px;align-items:center;margin:10px 0}.check input{width:auto}.log{max-height:360px;overflow:auto;margin:8px 0 0;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}.steps-list{list-style:none;padding:0;margin:12px 0}.steps-list .step{padding:4px 0;color:var(--muted)}.steps-list .step.done{color:var(--text)}.steps-list .step.running{color:var(--accent);font-weight:600}.steps-list .step.failed{color:var(--danger,#b42318)}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}button.chip{cursor:pointer;background:none}.row{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.row .grow{flex:1 1 240px}.pair-form{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.check{display:flex;gap:8px;align-items:center;margin:10px 0}.check input{width:auto}.log{max-height:360px;overflow:auto;margin:8px 0 0;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
 `;
 
 export const LOCAL_UI_JS = `/* Signed in by open-atlas: the owner token arrives in the URL fragment (never sent to a server) and is kept for this tab only. */{const m=/[#&]signin=([A-Za-z0-9_-]{32,128})/.exec(location.hash);if(m){sessionStorage.setItem('atlas-token',m[1]);history.replaceState(null,'',location.pathname+'#/home')}}/* A paired device keeps its own revocable token on this device. */try{const d=localStorage.getItem('atlas-device-token');if(d&&!sessionStorage.getItem('atlas-token'))sessionStorage.setItem('atlas-token',d)}catch{}const pairFromLink=(/[#&]pair=([0-9]{6})/.exec(location.hash)||[])[1]||'';if(pairFromLink)history.replaceState(null,'',location.pathname+'#/home');const q=s=>document.querySelector(s),tokenInput=q('#token'),tasks=q('#tasks'),notice=q('#notice');let knownApprovals=new Set;tokenInput.value=sessionStorage.getItem('atlas-token')||'';const headers=()=>({authorization:'Bearer '+sessionStorage.getItem('atlas-token')}),api=(url,options={})=>fetch(url,{...options,headers:{...headers(),...(options.headers||{})}});function esc(v){const d=document.createElement('div');d.textContent=v??'';return d.innerHTML}async function load(){const [tr,ar,pr,lr,dr]=await Promise.all(['/v1/tasks','/v1/approvals','/v1/policies','/v1/audit','/v1/devices'].map(u=>api(u)));if(tr.status===401){tasks.innerHTML='<p class="empty">Unlock this tab to load tasks.</p>';return}const list=(await tr.json()).tasks;tasks.innerHTML=list.length?list.map(t=>'<article class="task"><div class="task-top"><h3>'+esc(t.objective)+'</h3><span class="status '+t.status+'">'+t.status+'</span></div><p>'+esc(t.repository)+' · '+esc(t.model)+'</p>'+(t.message?'<p>'+esc(t.message)+'</p>':'')+'<time>'+new Date(t.createdAt).toLocaleString()+'</time></article>').join(''):'<p class="empty">No local tasks yet.</p>';const approvals=(await ar.json()).approvals,pending=approvals.filter(a=>a.status==='pending');if('Notification'in window&&Notification.permission==='granted')pending.filter(a=>!knownApprovals.has(a.id)).forEach(a=>new Notification('Atlas approval required',{body:a.capability+': '+a.summary,tag:a.id}));knownApprovals=new Set(pending.map(a=>a.id));q('#approvals').innerHTML=pending.map(a=>'<article class="task"><h3>'+esc(a.capability)+'</h3><p>'+esc(a.summary)+'</p><div class="actions"><button data-decision="approved" data-id="'+a.id+'">Approve</button><button class="secondary" data-decision="denied" data-id="'+a.id+'">Deny</button></div></article>').join('')||'<p class="empty">No pending approvals.</p>';q('#approvals').querySelectorAll('button').forEach(b=>b.onclick=()=>decide(b.dataset.id,b.dataset.decision));const policies=(await pr.json()).policies;q('#policies').innerHTML=policies.map(p=>'<div class="policy"><span>'+esc(p.capability)+'</span><select data-capability="'+esc(p.capability)+'"><option'+(p.decision==='allow'?' selected':'')+'>allow</option><option'+(p.decision==='ask'?' selected':'')+'>ask</option><option'+(p.decision==='deny'?' selected':'')+'>deny</option></select></div>').join('');q('#policies').querySelectorAll('select').forEach(s=>s.onchange=()=>api('/v1/policies',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({capability:s.dataset.capability,decision:s.value})}).then(load));const events=(await lr.json()).events;q('#audit').innerHTML=events.slice(0,50).map(e=>'<article class="task"><div class="task-top"><h3>'+esc(e.category)+'</h3><time>'+new Date(e.createdAt).toLocaleString()+'</time></div><p>'+esc(e.summary)+'</p></article>').join('')||'<p class="empty">No audit events.</p>';const devices=(await dr.json()).devices;q('#devices').innerHTML=devices.filter(d=>!d.revokedAt).map(d=>'<article class="task"><div class="task-top"><h3>'+esc(d.name)+'</h3><button class="secondary" data-device="'+d.id+'">Revoke</button></div><time>'+new Date(d.createdAt).toLocaleString()+'</time></article>').join('')||'<p class="empty">No paired devices.</p>';q('#devices').querySelectorAll('button').forEach(b=>b.onclick=()=>api('/v1/devices/'+b.dataset.device,{method:'DELETE'}).then(load))}async function decide(id,decision){await api('/v1/approvals/'+id+'/decision',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({decision})});load()}async function models(){const r=await api('/v1/models');if(!r.ok)return;const v=await r.json();if(v.models.length)q('#model').innerHTML=v.models.map(m=>'<option>'+esc(m)+'</option>').join('')}q('#save-token').onclick=()=>{sessionStorage.setItem('atlas-token',tokenInput.value);load();models();loadSessions();if(sessionId)selectSession(sessionId)};q('#refresh').onclick=load;q('#notify').onclick=async()=>{if(!('Notification'in window))return notice.textContent='Notifications are unavailable in this browser.';const result=await Notification.requestPermission();notice.textContent=result==='granted'?'Approval notifications enabled.':'Notification permission was not granted.'};q('#task-form').onsubmit=async e=>{e.preventDefault();notice.textContent='Queueing…';const r=await api('/v1/tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repository:q('#repository').value,objective:q('#objective').value,model:q('#model').value})});const data=await r.json();notice.textContent=r.ok?(data.approval?'Waiting for approval.':'Task queued in an isolated worktree.'):data.message;load()};q('#pair').onclick=async()=>{const r=await api('/v1/pair',{method:'POST'}),v=await r.json();q('#pair-code').textContent=r.ok?'Pairing code '+v.code+' expires '+new Date(v.expiresAt).toLocaleTimeString():v.message};q('#export').onclick=async()=>{const r=await api('/v1/export',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:q('#passphrase').value})}),v=await r.json();q('#backup').value=r.ok?JSON.stringify(v.backup):v.message};q('#import').onclick=async()=>{let backup;try{backup=JSON.parse(q('#backup').value)}catch{return notice.textContent='Backup JSON is invalid.'}const r=await api('/v1/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:q('#passphrase').value,backup})});notice.textContent=r.ok?'Backup imported.':'Import failed.';load()};fetch('/health').then(r=>r.json()).then(v=>q('#health').textContent=v.status==='ok'?'Atlas is running':'Atlas is not responding').catch(()=>q('#health').textContent='Unavailable');if(tokenInput.value){load();models()}setInterval(()=>{if(sessionStorage.getItem('atlas-token'))load()},5000);
@@ -466,7 +476,7 @@ if(sessionStorage.getItem('atlas-token')){loadMissions();loadMissionModels()}
 setInterval(()=>{if(sessionStorage.getItem('atlas-token'))loadMissions()},5000);
 
 /* ---- Shell: sections, theme, lock state, and the views built on the platform APIs. ---- */
-const VIEWS={home:'Home',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
+const VIEWS={home:'Home',build:'Build',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
 const $=q,$$=s=>[...document.querySelectorAll(s)];
 const isUnlocked=()=>Boolean(sessionStorage.getItem('atlas-token'));
 let currentView='home',openMissionId=null,shownMission='';
@@ -598,9 +608,61 @@ $('#remote-proxy-form').onsubmit=e=>{e.preventDefault();remoteAction('/v1/remote
 $('#remote-owner').onchange=e=>remoteAction('/v1/remote/owner',{allow:e.target.checked},'Saving…');
 $('#remote-pair').onclick=async()=>{const out=$('#remote-pair-code');try{const [v,r]=await Promise.all([sendJson('/v1/pair','POST',{}),getJson('/v1/remote').catch(()=>null)]);const link=r&&r.settings.url?r.settings.url+'/#pair='+v.code:null;out.innerHTML='Code <strong>'+esc(v.code)+'</strong>, valid until '+esc(new Date(v.expiresAt).toLocaleTimeString())+'.'+(link?' On your phone open <code>'+esc(link)+'</code>':' Turn on remote access to get a link for your phone.')}catch(error){out.textContent=error.message}};
 
+/* Build (Project Genesis): one sentence in, a working local application out. */
+const GEN_ACTIVE=['scaffolding','building','verifying','previewing','repairing','reviewing','publishing'];
+function genIcon(step){return step.done?'✓':step.status==='running'?'●':step.status==='failed'?'✗':step.status==='blocked'?'!':step.status==='skipped'?'–':'○'}
+async function loadBuild(){
+ const list=$('#build-projects'),detail=$('#build-detail');
+ const id=location.hash.split('/')[2]||'';
+ /* Do not redraw under someone typing an answer or a change. */
+ if(detail.contains(document.activeElement)&&document.activeElement.matches('input,textarea'))return;
+ try{
+  const {projects}=await getJson('/v1/genesis');
+  list.innerHTML=projects.length?projects.map(p=>'<a class="card" href="#/build/'+esc(p.id)+'"><div class="task-top"><h4>'+esc(p.name)+'</h4>'+pill(p.label)+'</div><time>'+when(p.updatedAt)+'</time></a>').join(''):'<p class="empty">Nothing built yet. Describe an app above.</p>';
+  if(!id){detail.hidden=true;return}
+  const {project:v}=await getJson('/v1/genesis/'+encodeURIComponent(id));
+  const ready=v.transitions.findLast(t=>t.to==='ready')?.evidence?.summary;
+  const last=v.transitions.at(-1);
+  const questions=v.state==='blocked'&&v.resumeTo==='requirements'?v.spec.questions:[];
+  const actions=[];
+  if(GEN_ACTIVE.includes(v.state)||v.state==='approved')actions.push('<button type="button" class="secondary" data-gen="pause">Pause</button>');
+  if(v.state==='paused'||(v.state==='blocked'&&!questions.length))actions.push('<button type="button" data-gen="resume">Resume</button>');
+  if(v.state==='planned')actions.push('<button type="button" data-gen="approve">Approve plan</button>');
+  if(v.state==='failed')actions.push('<button type="button" data-gen="retry">Try again</button>');
+  if(!['cancelled'].includes(v.state))actions.push('<button type="button" class="secondary" data-gen="cancel">Cancel</button>');
+  detail.hidden=false;
+  detail.innerHTML='<div class="panel"><div class="task-top"><h3>'+esc(v.name)+'</h3>'+pill(v.label)+'</div>'
+   +(ready?'<div class="card success"><h4>Ready</h4><p><a class="button" href="'+esc(ready.preview)+'" target="_blank" rel="noopener">Open the application</a></p><p>'+esc(ready.features.join(' · '))+'</p><p class="hint">Verified: '+esc(ready.verification.map(x=>x.step+(x.ok?' ✓':' ✗')+(x.tests?' ('+x.tests.pass+' tests)':'')).join(', '))+'; interface checked '+(ready.inspection.limited?'over HTTP only':'in a browser')+(ready.repairs?'; '+ready.repairs+' repair(s)':'')+'.</p>'+(ready.limitations.length?'<ul class="hint">'+ready.limitations.map(l=>'<li>'+esc(l)+'</li>').join('')+'</ul>':'')+'<p class="hint">Files: <code>'+esc(ready.folder)+'</code></p></div>':'')
+   +(!ready||v.state!=='ready'?'<p>'+esc(last?.reason||'')+'</p>':'')
+   +(questions.length?'<form id="gen-answers" class="card"><h4>Atlas needs to know</h4>'+questions.map(q=>'<label>'+esc(q.question)+'<input name="'+esc(q.id)+'" placeholder="'+esc(q.default||'')+'"></label>').join('')+'<button>Answer</button></form>':'')
+   +'<ol class="steps-list">'+v.progress.steps.map(s=>'<li class="step '+(s.done?'done':s.status||'')+'"><span aria-hidden="true">'+genIcon(s)+'</span> '+esc(s.label)+(s.attempts>1?' <span class="hint">('+s.attempts+' attempts)</span>':'')+'</li>').join('')+'</ol>'
+   +'<div class="actions">'+actions.join('')+'</div>'
+   +(['ready','published','failed','planned','approved'].includes(v.state)?'<form id="gen-change" class="row"><label class="grow">Ask for a change<input id="gen-change-text" placeholder="Add Google login"></label><button>Change it</button></form>':'')
+   +'<details><summary>Assumptions</summary><ul>'+(v.spec?.assumptions||[]).map(a=>'<li>'+esc(a)+'</li>').join('')+'</ul></details>'
+   +'<details><summary>Technical details</summary><p class="hint">Template '+esc(v.plan?.template||'—')+' · folder <code>'+esc(v.workspace||'not created yet')+'</code> · repairs '+v.repairsUsed+'/'+v.repairBudget+'</p><table class="table"><thead><tr><th>When</th><th>Stage</th><th>Why</th></tr></thead><tbody>'+v.transitions.slice().reverse().map(t=>'<tr><td>'+when(t.at)+'</td><td>'+esc(t.to)+'</td><td>'+esc(t.reason)+'<details><summary>Evidence</summary><pre class="log">'+esc(JSON.stringify(t.evidence,null,1).slice(0,6000))+'</pre></details></td></tr>').join('')+'</tbody></table></details></div>';
+  detail.querySelectorAll('[data-gen]').forEach(b=>b.onclick=()=>genAction(v.id,b.dataset.gen,{}));
+  const answers=detail.querySelector('#gen-answers');
+  if(answers)answers.onsubmit=e=>{e.preventDefault();genAction(v.id,'answers',{answers:Object.fromEntries(new FormData(answers).entries())})};
+  const change=detail.querySelector('#gen-change');
+  if(change)change.onsubmit=e=>{e.preventDefault();const request=$('#gen-change-text').value.trim();if(request)genAction(v.id,'changes',{request})};
+ }catch(error){(id?detail:list).innerHTML=problem(error);if(id)detail.hidden=false}
+}
+async function genAction(id,action,body){
+ const notice=$('#build-notice');
+ if(action==='cancel'&&!confirm('Cancel this project? Its files stay on this computer.'))return;
+ try{await sendJson('/v1/genesis/'+encodeURIComponent(id)+'/'+action,'POST',body);notice.textContent=''}catch(error){notice.textContent=error.message}
+ loadBuild();
+}
+$('#build-form').onsubmit=async e=>{e.preventDefault();const prompt=$('#build-prompt').value.trim();const notice=$('#build-notice');if(!prompt){notice.textContent='Describe what to build.';return}
+ $('#build-start').disabled=true;notice.textContent='Understanding your idea…';
+ try{const {project}=await sendJson('/v1/genesis','POST',{prompt});$('#build-prompt').value='';notice.textContent='';location.hash='#/build/'+project.id}
+ catch(error){notice.textContent=error.message}finally{$('#build-start').disabled=false}};
+$$('#build-examples [data-example]').forEach(b=>b.onclick=()=>{$('#build-prompt').value=b.dataset.example;$('#build-prompt').focus()});
+$('#build-refresh').onclick=()=>loadBuild();
+
 function refreshView(){
  if(!isUnlocked())return;
- const run={home:loadHome,missions:loadTeam,improve:loadImprove,models:loadModels,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections,settings:loadRemote}[currentView];
+ const run={home:loadHome,missions:loadTeam,improve:loadImprove,models:loadModels,build:loadBuild,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections,settings:loadRemote}[currentView];
  if(run)run().catch(()=>{});
  loadBadge().catch(()=>{});
 }
@@ -747,5 +809,5 @@ async function loadConnections(){
 
 syncLock();
 show(viewFromHash());
-setInterval(()=>{if(isUnlocked()&&!document.hidden&&['home','missions','improve','models'].includes(currentView))refreshView()},5000);
+setInterval(()=>{if(isUnlocked()&&!document.hidden&&['home','missions','improve','models','build'].includes(currentView))refreshView()},5000);
 `;

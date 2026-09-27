@@ -182,7 +182,15 @@ local model. The endpoint is the local model server unless the owner sets
 1. **Lifecycle, durable store, requirements, plan, routes** (`/v1/genesis`). Done in this PR.
 2. **Local workspace and curated templates** (`web-app`, `static-site`, `api-service`). Done: see "Templates" below.
 3–6. **Executor, verify/repair loop, preview manager and browser verification.** Done: see "Execution" below.
-7. UI quality pass.
-8. Live Genesis UX (local app and chat tool).
+7. UI quality pass (vision review of the saved screenshots; bounded polish already runs when a model exists).
+8. **Live Genesis UX.** Done:
+   - **Build** page in the local app: prompt box with examples, plain
+     progress (✓ / ● / ✗ / – per step), answer form for open questions,
+     **Open the application**, what was verified, limitations, files, **Ask
+     for a change**, pause/resume/cancel/retry/approve, and expandable
+     assumptions and technical details (every transition with its evidence).
+   - **Chat tools** `genesis.build`, `genesis.status`, `genesis.change` and
+     `genesis.answer` (capability `genesis.build`, allowed by default).
+     "Add Google login" continues the most recent project.
 9. Publishing handoff through the existing adapters and approvals.
-10. End-to-end scenario benchmarks: marketing site, CRUD, dashboard, REST API, authenticated app.
+10. **Benchmarks.** Done: `node scripts/local/genesis-bench.mjs` runs the five scenarios (marketing site, CRUD, dashboard, REST API, authenticated app) for real. It records completion, build, test counts, browser verification, repairs, time, models used and human intervention in `~/.atlas/genesis/benchmarks/`. The first baseline, with no model available: 4/5 ready, 3 browser-verified and the API verified over HTTP, 0 repairs. The authenticated app correctly blocks until a coding model is set up.

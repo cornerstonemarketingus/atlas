@@ -101,8 +101,13 @@ export class GenesisExecutor {
   /** Drives the project from its current state until ready, a hold, or failure. One run per project at a time. */
   run(id) {
     if (this.running.has(id)) return this.running.get(id);
-    const promise = this.#drive(id).finally(() => this.running.delete(id));
+    // Registered before the first step: that step's own transition notifies
+    // observers synchronously, and they must already see this run.
+    let release;
+    const gate = new Promise((resolveGate) => { release = resolveGate; });
+    const promise = gate.then(() => this.#drive(id)).finally(() => this.running.delete(id));
     this.running.set(id, promise);
+    release();
     return promise;
   }
 
