@@ -13,6 +13,7 @@ import { platformGitHubToken } from "../tasks/github-token.mjs";
 import { GET as listDevices } from "../computer/devices/route";
 import { POST as startComputerTask } from "../computer/tasks/route";
 import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom } from "./atlas-knowledge.mjs";
+import { chatTurns } from "./turns.mjs";
 import { resolveChatModel, threadTitle } from "./model-endpoint.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
@@ -73,13 +74,8 @@ export async function POST(request: Request) {
     history = [];
   }
 
-  const turns = [
-    { role: "system", content: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository }) },
-    // Earlier conversations are data the person wrote (or Atlas replied), never instructions; the block cannot be closed from inside.
-    ...(memory ? [{ role: "system", content: `<data source="earlier conversations and recent runs in this workspace">\n${memory.replace(/<(\s*\/?\s*)data\b/giu, "&lt;$1data")}\n</data>` }] : []),
-    ...history.slice(-HISTORY_TURNS).map((turn) => ({ role: turn.role === "assistant" ? "assistant" : "user", content: turn.content })),
-    { role: "user", content: message },
-  ];
+  // Stable prefix first (system prompt, then history) so the provider's prompt cache can reuse it; see turns.mjs.
+  const turns = chatTurns({ system: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository }), history, memory, message, historyTurns: HISTORY_TURNS });
 
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
   const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
