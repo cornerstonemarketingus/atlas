@@ -74,3 +74,18 @@ and leave the smoke PR unmerged unless the documentation is wanted.
 Public Workers must leave `ATLAS_TRUST_PLATFORM_HEADERS` unset. Only deployments
 behind an ingress that removes client identity headers may opt in to that legacy
 platform-header authentication path.
+
+## Actions budget availability
+
+Self-hosted coder jobs check usage before starting the model. Missing credentials,
+billing API failures, and malformed usage produce an explicit UNKNOWN verdict and
+block by default. The guard writes budget.json; blocked runs also write status.json.
+The job summary and hosted task result include the budget verdict even when a later
+coder step completes successfully.
+
+ATLAS_ACTIONS_UNKNOWN_POLICY accepts block (the default) or allow. Set allow only
+for a workload permitted to run without confirmed allowance, such as a small CI
+job invoking this guard. Invalid values block. This override never bypasses a
+known insufficient allowance. Ordinary CI does not invoke the coder budget guard.
+ATLAS_ESTIMATED_RUN_MINUTES and ATLAS_ACTIONS_MINUTES_RESERVE still control the
+reservation arithmetic; they are estimates, not measured run-time guarantees.
