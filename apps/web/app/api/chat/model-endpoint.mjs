@@ -68,6 +68,24 @@ export function resolveChatModel(environment = process.env) {
   return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel: fallbackModelFor(environment, url, model) };
 }
 
+/**
+ * What the live Worker's chat configuration amounts to, as flags only: no
+ * endpoint, model name or key ever leaves the Worker through setup status.
+ * The fallback is reported because production ran without one for weeks —
+ * the runtime read ATLAS_CHAT_FALLBACK_MODEL but the deploy never uploaded
+ * it, and nothing showed the gap.
+ */
+export function chatReadiness(environment = process.env) {
+  const resolved = resolveChatModel(environment);
+  const searchKey = (environment.ATLAS_TAVILY_API_KEY || environment.TAVILY_API_KEY || "").trim();
+  return {
+    configured: resolved.configured,
+    ...(resolved.configured ? {} : { reason: resolved.reason }),
+    fallbackModelConfigured: Boolean(resolved.fallbackModel),
+    webSearchConfigured: Boolean(searchKey),
+  };
+}
+
 /** The absolute chat-completions URL for a resolved endpoint. */
 export function completionsUrl(baseUrl) {
   return new URL("chat/completions", baseUrl).toString();

@@ -46,6 +46,7 @@ export class FallbackModelProvider implements ModelProvider {
             code: error.code,
             providerId: error.providerId,
             retryable: error.retryable,
+            ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
             cause: error,
           });
         }

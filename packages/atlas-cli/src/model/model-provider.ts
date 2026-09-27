@@ -134,12 +134,15 @@ export class ModelProviderError extends Error {
   public readonly code: ModelProviderErrorCode;
   public readonly providerId: string;
   public readonly retryable: boolean;
+  /** How long the provider said to wait before trying again, when it said. */
+  public readonly retryAfterMs: number | undefined;
 
   public constructor(options: {
     readonly message: string;
     readonly code: ModelProviderErrorCode;
     readonly providerId: string;
     readonly retryable: boolean;
+    readonly retryAfterMs?: number;
     readonly cause?: unknown;
   }) {
     super(options.message, options.cause === undefined ? undefined : { cause: options.cause });
@@ -147,5 +150,6 @@ export class ModelProviderError extends Error {
     this.code = options.code;
     this.providerId = options.providerId;
     this.retryable = options.retryable;
+    this.retryAfterMs = options.retryAfterMs;
   }
 }

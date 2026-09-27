@@ -1,6 +1,6 @@
 import type { ModelMessage, ModelRequest } from "./model-provider.js";
 
-const REREADABLE = new Set(["repository.read_source", "repository.search", "repository.inspect", "repository.symbols", "repository.references"]);
+const REREADABLE = new Set(["repository.read_source", "repository.search", "repository.inspect", "repository.symbols", "repository.references", "repository.tests_for"]);
 const OMITTED = "Read result omitted to fit the request budget. Read a smaller source range with startLine/endLine and maxBytes, or search with fewer maxResults. Do not reconstruct missing file contents from memory.";
 
 /** Bound a request without altering objectives, edit arguments, errors, or tool pairing.

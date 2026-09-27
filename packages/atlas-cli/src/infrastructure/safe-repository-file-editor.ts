@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { link, lstat, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, open, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
@@ -221,16 +221,37 @@ async function assertAbsent(path: string, message: string): Promise<void> {
   throw editError("FILE_ALREADY_EXISTS", message);
 }
 
-async function writeAtomically(target: string, content: string): Promise<void> {
+/**
+ * Writes through a temporary file and rename, keeping what the edit did not
+ * mean to change: an existing file's permission bits (an executable script
+ * stays executable) and its UTF-8 byte-order mark. Hashes and diffs are over
+ * the text without the mark, as the read tools report it. A new file gets
+ * the process default mode (umask applies), like any file the user creates.
+ */
+export async function writeAtomically(target: string, content: string): Promise<void> {
   const temporary = resolve(dirname(target), `.atlas-${randomBytes(12).toString("hex")}.tmp`);
+  let existing: { mode: number; bom: boolean } | null = null;
   try {
-    await writeFile(temporary, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    const info = await stat(target);
+    const head = Buffer.alloc(3);
+    const handle = await open(target, "r");
+    try { await handle.read(head, 0, 3, 0); } finally { await handle.close(); }
+    existing = { mode: info.mode & 0o7777, bom: head.equals(UTF8_BOM) };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw editError("IO_ERROR", "Could not inspect edit target.", error);
+  }
+  try {
+    const text = existing?.bom && !content.startsWith("\uFEFF") ? `\uFEFF${content}` : content;
+    await writeFile(temporary, text, { encoding: "utf8", flag: "wx" });
+    if (existing) await chmod(temporary, existing.mode);
     await rename(temporary, target);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);
     throw editError("IO_ERROR", "Could not atomically apply the repository edit.", error);
   }
 }
+
+const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
 async function readCurrent(path: string, maxBytes: number): Promise<string | null> {
   let info; try { info = await lstat(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw editError("IO_ERROR", "Could not inspect edit target.", error); }

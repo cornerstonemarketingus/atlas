@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -109,4 +109,36 @@ test("bounds and explicitly discards pending edit content", async () => {
   await editor.preview(root, {
     operation: "create", path: "src/two.ts", content: "two\n", mustNotExist: true,
   });
+});
+
+const posixModes = process.platform !== "win32";
+
+test("an update keeps the file's permission bits; a new file gets the default mode", { skip: !posixModes && "POSIX modes only" }, async () => {
+  const root = await fixture();
+  const script = join(root, "src/run.sh");
+  await writeFile(script, "#!/bin/sh\necho old\n");
+  await chmod(script, 0o755);
+  await writeFile(join(root, "src/reference.txt"), "x");
+  const editor = new SafeRepositoryFileEditor();
+  const update = await editor.preview(root, { operation: "update", path: "src/run.sh", content: "#!/bin/sh\necho new\n", expectedSha256: hash("#!/bin/sh\necho old\n") });
+  await editor.apply(update, { approved: true, planDigest: update.planDigest });
+  assert.equal((await stat(script)).mode & 0o7777, 0o755, "an executable script stays executable");
+  const create = await editor.preview(root, { operation: "create", path: "src/new.txt", content: "n\n", mustNotExist: true });
+  await editor.apply(create, { approved: true, planDigest: create.planDigest });
+  assert.equal((await stat(join(root, "src/new.txt"))).mode & 0o777, (await stat(join(root, "src/reference.txt"))).mode & 0o777, "same mode as any file the user creates (umask applies), not 0600");
+});
+
+test("an update keeps a UTF-8 byte-order mark; hashes stay over the text without it", async () => {
+  const root = await fixture();
+  const path = join(root, "src/bom.cs");
+  await writeFile(path, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("class A {}\r\n")]));
+  const editor = new SafeRepositoryFileEditor();
+  const plan = await editor.preview(root, { operation: "update", path: "src/bom.cs", content: "class B {}\n", expectedSha256: hash("class A {}\r\n") });
+  const result = await editor.apply(plan, { approved: true, planDigest: plan.planDigest });
+  const bytes = await readFile(path);
+  assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], "the mark is written back");
+  assert.equal(bytes.subarray(3).toString("utf8"), "class B {}\r\n", "and CRLF is kept as before");
+  assert.equal(result.afterSha256, hash("class B {}\r\n"));
+  const next = await editor.preview(root, { operation: "update", path: "src/bom.cs", content: "class C {}\n", expectedSha256: hash("class B {}\r\n") });
+  assert.equal(next.beforeSha256, hash("class B {}\r\n"), "a follow-up edit sees the same hash the result reported");
 });
