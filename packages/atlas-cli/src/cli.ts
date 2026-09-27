@@ -13,6 +13,7 @@ import { RepositorySymbolIndexer } from "./infrastructure/repository-symbol-inde
 import { RepositoryImportGraph, testsFor } from "./infrastructure/repository-import-graph.js";
 import { RepositoryPackageGraph } from "./infrastructure/repository-package-graph.js";
 import { RepositoryDeliveryMap } from "./infrastructure/repository-delivery-map.js";
+import { RepositoryMap } from "./infrastructure/repository-map.js";
 import { RepositorySchemaMap } from "./infrastructure/repository-schema-map.js";
 import { RepositoryConfigReferences } from "./infrastructure/repository-config-references.js";
 import { BoundedRepositorySourceReader } from "./infrastructure/bounded-repository-source-reader.js";
@@ -65,6 +66,7 @@ const USAGE = `Usage:
   atlas tests-for <repository-path> <relative-file-path> [--depth N] [--format text|json]
   atlas packages <repository-path> [--format text|json]
   atlas ci <repository-path> [--format text|json]
+  atlas map <repository-path> [--format text|json]
   atlas schemas <repository-path> [--format text|json]
   atlas env <repository-path> [--name NAME] [--undeclared] [--format text|json]
   atlas redact [--max-characters N] [--summary]   (reads stdin, writes redacted text to stdout)
@@ -98,7 +100,7 @@ export async function main(args: readonly string[]): Promise<number> {
       writeError: (text) => process.stderr.write(text),
     });
   }
-  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "ci" && args[0] !== "schemas" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
+  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "ci" && args[0] !== "map" && args[0] !== "schemas" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
     console.error(USAGE);
     return 2;
   }
@@ -153,6 +155,30 @@ export async function main(args: readonly string[]): Promise<number> {
       for (const table of live) console.log(`  ${table.name}  [${table.source}] ${table.defined.file}:${table.defined.line}`);
       console.log(map.apis.length === 0 ? "API schemas: none found." : "API schemas:");
       for (const api of map.apis) console.log(`  ${api.kind}: ${api.file}${api.title ? `  "${api.title}"` : ""}${api.version ? ` ${api.version}` : ""}  ${api.operations} operation(s)`);
+      for (const warning of map.warnings) console.error(`warning: ${warning.message}`);
+      return 0;
+    }
+    if (args[0] === "map") {
+      const map = await new RepositoryMap().build(args[1]);
+      if (format === "json") {
+        console.log(JSON.stringify(map, null, 2));
+        return 0;
+      }
+      console.log("Packages:");
+      for (const item of map.packages) {
+        const reach = item.sourceFiles ? `, tests reach ${item.reachedByTests}/${item.sourceFiles} source files` : "";
+        console.log(`  ${item.directory}  ${item.name ?? "(unnamed)"} [${item.ecosystem}]  ${item.sourceFiles} source, ${item.testFiles} test${reach}`);
+        for (const entry of item.entries) console.log(`    entry ${entry.field}: ${entry.path}${entry.source && entry.source !== posix.normalize(posix.join(item.directory, entry.path)) ? ` -> ${entry.source}` : ""}`);
+        if (item.dependsOn.length) console.log(`    depends on ${item.dependsOn.join(", ")}`);
+      }
+      console.log("Most-imported files:");
+      for (const hub of map.hubs) console.log(`  ${hub.file}  imported by ${hub.importers} (e.g. ${hub.evidence.map((item) => `${item.file}:${item.line}`).join(", ")})`);
+      console.log(`Configuration: ${map.configuration.variables} variable(s), ${map.configuration.secrets.length} workflow secret(s)${map.configuration.undeclared.length ? `; read but undeclared (${map.configuration.undeclared.length}): ${map.configuration.undeclared.slice(0, 15).join(", ")}${map.configuration.undeclared.length > 15 ? ", ... (atlas env --undeclared lists all)" : ""}` : ""}`);
+      console.log(`Delivery: ${map.delivery.ci.join(", ") || "no CI found"}`);
+      for (const target of map.delivery.targets) console.log(`  ${target.target}${target.triggeredBy.length ? ` on ${target.triggeredBy.join(", ")}` : ""}  (${target.evidence.map((item) => `${item.file}:${item.line}`).join(", ")})`);
+      console.log(`Data: ${map.data.tables} table(s)`);
+      for (const set of map.data.migrations) console.log(`  ${set.system} ${set.directory}: ${set.files} migration(s)${set.drift ? set.drift.onlyInMigrations.length || set.drift.onlyInSchema.length ? ", drifts from the ORM schema" : ", matches the ORM schema" : ""}`);
+      for (const api of map.data.apis) console.log(`  ${api.kind}: ${api.file} (${api.operations} operation(s))`);
       for (const warning of map.warnings) console.error(`warning: ${warning.message}`);
       return 0;
     }
