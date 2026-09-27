@@ -10,6 +10,7 @@ import { SafeValidationProfileRunner } from "./infrastructure/validation-profile
 import { FilesystemRepositoryInspector } from "./infrastructure/filesystem-repository-inspector.js";
 import { RepositoryTextSearch } from "./infrastructure/repository-text-search.js";
 import { RepositorySymbolIndexer } from "./infrastructure/repository-symbol-indexer.js";
+import { RepositoryImportGraph, testsFor } from "./infrastructure/repository-import-graph.js";
 import { BoundedRepositorySourceReader } from "./infrastructure/bounded-repository-source-reader.js";
 import { RepositorySymbolReferenceFinder } from "./infrastructure/repository-symbol-reference-finder.js";
 import { BudgetedModelProvider } from "./infrastructure/budgeted-model-provider.js";
@@ -57,6 +58,7 @@ const USAGE = `Usage:
   atlas references <repository-path> <symbol-name> [--max-results N] [--format text|json]
   atlas read <repository-path> <relative-file-path> [--start-line N] [--end-line N] [--max-lines N] [--max-bytes N] [--format text|json]
   atlas tree <repository-path> [--max-depth N] [--max-entries N] [--format text|json]
+  atlas tests-for <repository-path> <relative-file-path> [--depth N] [--format text|json]
   atlas redact [--max-characters N] [--summary]   (reads stdin, writes redacted text to stdout)
   atlas replay <audit-log.jsonl> [--session <id>] [--format text|json]
   atlas github repo <owner>/<repository> [--format text|json]
@@ -88,7 +90,7 @@ export async function main(args: readonly string[]): Promise<number> {
       writeError: (text) => process.stderr.write(text),
     });
   }
-  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
+  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
     console.error(USAGE);
     return 2;
   }
@@ -102,6 +104,32 @@ export async function main(args: readonly string[]): Promise<number> {
     if (args[0] === "inspect") {
       const summary = await new FilesystemRepositoryInspector().inspect(args[1]);
       console.log(format === "json" ? renderJson(summary) : renderText(summary));
+      return 0;
+    }
+    if (args[0] === "tests-for") {
+      const target = args[2];
+      if (target === undefined || target.startsWith("--")) {
+        console.error("tests-for needs a repository path and a repository-relative file path.");
+        return 2;
+      }
+      const depth = readOptionalInteger(args, "--depth", 1, 10);
+      if (depth === null) return 2;
+      const graph = await new RepositoryImportGraph().build(args[1]);
+      const result = testsFor(graph, target, depth ?? 4);
+      if (!graph.files.includes(result.path)) {
+        console.error(`${result.path} is not a TypeScript, JavaScript or Python source file in this repository.`);
+        return 1;
+      }
+      if (format === "json") {
+        console.log(JSON.stringify({ ...result, warnings: graph.warnings }, null, 2));
+      } else if (result.tests.length === 0) {
+        console.log(`No tests import ${result.path} within ${result.searchedDepth} hops.`);
+      } else {
+        for (const item of result.tests) {
+          console.log(item.test);
+          for (const link of item.chain) console.log(`  ${link.file}:${link.line} imports ${link.specifier}`);
+        }
+      }
       return 0;
     }
     if (args[0] === "symbols") {
