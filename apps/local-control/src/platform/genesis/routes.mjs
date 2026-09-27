@@ -2,6 +2,7 @@ import { GenesisTransitionError } from "./lifecycle.mjs";
 import { GenesisError } from "./service.mjs";
 import { GenesisStoreError } from "./store.mjs";
 import { TEMPLATES } from "./templates/index.mjs";
+import { PublishError } from "./publish.mjs";
 
 /**
  * /v1/genesis — any authenticated caller can read; creating and steering
@@ -17,13 +18,14 @@ import { TEMPLATES } from "./templates/index.mjs";
  * POST /v1/genesis/:id/pause | resume | cancel | retry
  * GET  /v1/genesis/:id/preview         preview state and recent logs
  * POST /v1/genesis/:id/preview         { action: "start" | "stop" } (a ready project only)
+ * POST /v1/genesis/:id/publish         { remote } — goes through the publish.remote policy and approvals
  */
 const STATUS = {
   PROMPT_REQUIRED: 400, PROMPT_TOO_LONG: 400, NOT_WAITING: 409, ANSWERS_MISSING: 400, NOT_PLANNED: 409, BUSY: 409, NOT_PAUSED: 409, NOT_FAILED: 409,
   NOT_FOUND: 404, STALE_VERSION: 409, ILLEGAL_TRANSITION: 409, REASON_REQUIRED: 400,
 };
 
-export function createGenesisRoutes({ genesis, previews = null, parseBody, send }) {
+export function createGenesisRoutes({ genesis, previews = null, publisher = null, parseBody, send }) {
   return async function handle(request, response, identity) {
     const url = new URL(request.url ?? "/", "http://local.atlas");
     if (!url.pathname.startsWith("/v1/genesis")) return false;
@@ -32,7 +34,7 @@ export function createGenesisRoutes({ genesis, previews = null, parseBody, send 
       if (request.method === "GET" && url.pathname === "/v1/genesis/templates") {
         return send(response, 200, { templates: Object.values(TEMPLATES).map(({ id, version, title, description, archetypes, commands, preview, structure }) => ({ id, version, title, description, archetypes, commands, preview, structure })) });
       }
-      const match = /^\/v1\/genesis\/(gen_[0-9a-f-]{36})(?:\/(answers|approve|changes|pause|resume|cancel|retry|preview))?$/u.exec(url.pathname);
+      const match = /^\/v1\/genesis\/(gen_[0-9a-f-]{36})(?:\/(answers|approve|changes|pause|resume|cancel|retry|preview|publish))?$/u.exec(url.pathname);
       if (match?.[2] === "preview") {
         if (!previews) return send(response, 503, { message: "Previews are not available in this Atlas." });
         const project = genesis.store.get(genesis.tenantId, match[1]);
@@ -51,6 +53,11 @@ export function createGenesisRoutes({ genesis, previews = null, parseBody, send 
       const body = await parseBody(request, response); if (!body) return true;
       if (url.pathname === "/v1/genesis") return send(response, 201, { project: await genesis.create(body.prompt) });
       if (!match || !match[2]) return send(response, 404, { message: "Route not found." });
+      if (match[2] === "publish") {
+        if (!publisher) return send(response, 503, { message: "Publishing is not available in this Atlas." });
+        const result = await publisher.request(match[1], { remote: body.remote });
+        return send(response, result.status === "awaiting-approval" ? 202 : result.status === "published" ? 200 : 502, { publish: result, project: genesis.view(match[1]) });
+      }
       const [, id, action] = match;
       const result = action === "answers" ? await genesis.answer(id, body.answers)
         : action === "approve" ? genesis.approve(id)
@@ -61,6 +68,7 @@ export function createGenesisRoutes({ genesis, previews = null, parseBody, send 
                 : genesis.view(genesis.cancel(id).id);
       return send(response, 200, { project: result });
     } catch (error) {
+      if (error instanceof PublishError) return send(response, error.code === "DENIED_BY_POLICY" ? 403 : error.code === "NOT_READY" ? 409 : 400, { code: error.code, message: error.message });
       if (error instanceof GenesisError || error instanceof GenesisStoreError || error instanceof GenesisTransitionError) {
         return send(response, STATUS[error.code] ?? 400, { code: error.code, message: error.message });
       }

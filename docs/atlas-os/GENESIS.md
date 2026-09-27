@@ -47,7 +47,22 @@ coder, worktree system, approval system or agent framework.
 6. Browser verification of the running preview (DOM and console evidence first, screenshots when a vision model exists).
 7. A bounded UI polish pass.
 8. Live Genesis UX in the local app and chat (plain progress, expandable details).
-9. Publishing handoff through the existing adapters and approvals.
+9. **Publishing handoff.** Done: `publish.mjs`.
+   - A ready project is pushed to a repository the owner already created, on
+     any git host, using the owner's own git sign-in. Atlas stores no host
+     token and never prompts.
+   - The existing `publish.remote` policy decides: `deny` refuses, `ask` (the
+     default) files an approval in the normal Approvals list and on paired
+     phones, and `allow` proceeds.
+   - The approval is bound to the project, the destination and the exact
+     commit. A project changed after the request makes the approval stale,
+     and nothing is pushed.
+   - Pending requests survive restarts. The lifecycle goes ready →
+     publishing → published, or back to ready with the reason.
+   - This is available from the Build page and through the `genesis.publish`
+     chat tool.
+   - Creating repositories and deploying to hosting providers (the existing
+     Cloudflare and Vercel adapters) are the next handoffs.
 10. Repeatable end-to-end scenarios with recorded metrics.
 
 ## Collision boundaries with the Intelligence Layer
