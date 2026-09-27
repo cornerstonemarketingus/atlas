@@ -1,5 +1,6 @@
 import fs from "node:fs";
-const base = "https://atlas-web.cornerstonemarketingus.workers.dev";
+// Overridable only to exercise this script against a local stand-in; the workflow never sets it.
+const base = process.env.ATLAS_SMOKE_BASE_URL || "https://atlas-web.cornerstonemarketingus.workers.dev";
 const headers = { authorization: `Bearer ${process.env.ATLAS_OPERATOR_TOKEN}`, "content-type": "application/json" };
 async function api(route, body) {
   const response = await fetch(`${base}${route}`, { method: body ? "POST" : "GET", headers, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(190000) });
@@ -14,6 +15,32 @@ async function api(route, body) {
   }
   return response.json();
 }
+/**
+ * Sends one chat turn with stream:true and reads Atlas's server-sent events
+ * to the end: `done` carries the stored reply, `error` a message for the
+ * person. Anything else (thinking, deltas, tool and agent steps) is progress.
+ */
+async function streamChat(message) {
+  const response = await fetch(`${base}/api/chat`, { method: "POST", headers, body: JSON.stringify({ message, stream: true }), signal: AbortSignal.timeout(190000) });
+  if (!response.ok || !response.body) throw new Error(`/api/chat (stream): HTTP ${response.status}`);
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let outcome = null;
+  for await (const chunk of response.body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const type = /^event: (.+)$/mu.exec(block)?.[1]?.trim();
+      const data = block.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("");
+      if (type === "done") outcome = JSON.parse(data);
+      if (type === "error") outcome = { error: String(JSON.parse(data)?.message ?? "unknown error").slice(0, 300) };
+    }
+  }
+  return outcome ?? { error: "the stream ended without a reply or an error" };
+}
+
 const mode = process.env.ATLAS_SMOKE_MODE || "inspect";
 const status = await api("/api/setup/status");
 console.log(`Setup: ${status.overall} (${status.completedSteps}/${status.totalSteps})`);
@@ -21,9 +48,36 @@ console.log(`Setup: ${status.overall} (${status.completedSteps}/${status.totalSt
 const forged = await fetch(`${base}/api/tasks`, { headers: { "oai-authenticated-user-id": "operator" } });
 if (forged.status !== 401) throw new Error("Untrusted identity header was accepted");
 if (mode === "chat") {
-  const reply = await api("/api/chat", { message: "Reply with exactly: Atlas connection works" });
-  if (!reply.reply?.content?.trim() || !reply.stored) throw new Error("Chat did not return and persist a reply");
-  console.log(`Chat replied and persisted conversation ${reply.conversationId}.`);
+  // Release gate: the conversation that failed in production must now get a
+  // real, stored answer both ways the product asks for one. A reply that is
+  // only the saved-work notice (no model could write the answer), a
+  // "Stopped early" note, or an error event fails the gate.
+  const message = (process.env.ATLAS_SMOKE_CHAT_MESSAGE || "").trim()
+    || "Read https://example.com and tell me in two sentences what the page is for, then name one thing it does not say.";
+  const evidence = { mode: "chat", messageChars: message.length };
+  const judge = (label, outcome) => {
+    const content = outcome.reply?.content ?? "";
+    const problems = [];
+    if (!content.trim()) problems.push("empty reply");
+    if (!outcome.stored) problems.push("reply not persisted");
+    if (outcome.finalization) problems.push(`no model wrote the answer (${outcome.finalization.reason})`);
+    if (/_Stopped early:/u.test(content)) problems.push("stopped early");
+    evidence[label] = {
+      conversationId: outcome.conversationId, replyChars: content.length, stored: Boolean(outcome.stored),
+      steps: (outcome.steps ?? []).map((step) => ({ label: String(step.label).slice(0, 120), ok: Boolean(step.ok) })),
+      ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.error ? { error: outcome.error } : {}),
+      passed: problems.length === 0 && !outcome.error,
+    };
+    const verdict = outcome.error ? `error: ${outcome.error}` : problems.length ? problems.join("; ") : "answered and stored";
+    console.log(`${label}: ${verdict} (${content.length} chars, ${evidence[label].steps.length} tool steps)`);
+  };
+
+  judge("nonStreaming", await api("/api/chat", { message }));
+  judge("streaming", await streamChat(message));
+  fs.writeFileSync("smoke-result.json", JSON.stringify(evidence, null, 2));
+  const failed = ["nonStreaming", "streaming"].filter((label) => !evidence[label].passed);
+  if (failed.length) throw new Error(`Chat release gate failed: ${failed.join(", ")}`);
+  console.log("Chat release gate passed in streaming and non-streaming modes.");
 } else {
   if (mode === "coder") {
     const settings = await api("/api/settings/repositories");

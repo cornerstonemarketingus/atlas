@@ -2,12 +2,12 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { githubOAuthConfiguration } from "../../auth/github-oauth.mjs";
 import { stripeConfiguration } from "../../billing/stripe.mjs";
-import { resolveChatModel } from "../../chat/model-endpoint.mjs";
+import { chatReadiness, resolveChatModel } from "../../chat/model-endpoint.mjs";
 import { governorReadiness } from "../../inference/governor-client.mjs";
 import { workerEnv } from "../../inference/worker-env.mjs";
 import { createInstallationToken, githubAppConfiguration } from "../../tasks/github-app.mjs";
 import { allowedRepositories } from "../../tasks/dispatch.mjs";
-import { probeGitHubDispatch } from "../../tasks/github-diagnosis.mjs";
+import { explainGitHubAppFailure, probeGitHubDispatch } from "../../tasks/github-diagnosis.mjs";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { platformGitHubToken } from "../../tasks/github-token.mjs";
 
@@ -42,8 +42,8 @@ async function githubDispatchReadiness(githubApp: ReturnType<typeof githubAppCon
   let token = platformGitHubToken();
   try {
     if (githubApp.configured) token = await createInstallationToken(githubApp);
-  } catch {
-    return { ok: false, message: "GitHub App authentication failed.", unblock: "Check the ATLAS_GITHUB_APP_* secrets and redeploy." };
+  } catch (error) {
+    return { ok: false, ...explainGitHubAppFailure(error, { repository }) };
   }
   return probeGitHubDispatch({ token, repository, workflow: process.env.ATLAS_GITHUB_WORKFLOW || "atlas-runner.yml", githubApp: githubApp.configured });
 }
@@ -81,6 +81,6 @@ export async function GET(request: Request) {
     completedSteps,
     totalSteps: steps.length,
     steps,
-    optional: { stripeConfigured: stripe.configured, inferenceGovernor: await governorReadiness(resolveChatModel(process.env), workerEnv) },
+    optional: { stripeConfigured: stripe.configured, chat: chatReadiness(process.env), inferenceGovernor: await governorReadiness(resolveChatModel(process.env), workerEnv) },
   }, { headers: { "cache-control": "no-store" } });
 }

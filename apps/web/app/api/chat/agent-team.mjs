@@ -1,6 +1,6 @@
 import { MAX_STEPS, planMission } from "../../../../local-control/src/agent/team/planner.mjs";
 import { parseJsonReply } from "../../../../local-control/src/agent/team/model.mjs";
-import { callModel, converse } from "./agent-loop.mjs";
+import { callModel, converse, inferenceDiagnostic } from "./agent-loop.mjs";
 import { asData, instantToolDefinitions } from "./instant-tools.mjs";
 import { replyText } from "./model-endpoint.mjs";
 
@@ -96,15 +96,35 @@ const DELEGATE_TOOL = {
   },
 };
 
-/** Adapts the chat endpoint to the daemon planner's `client.stream` interface (with the chat loop's rate-limit handling). */
+/**
+ * Adapts the chat endpoint to the daemon planner's `client.stream` interface (with the chat loop's rate-limit handling).
+ *
+ * An HTTP 200 with no text is not a reply. Handing "" to the planner costs a
+ * whole "that plan was rejected" round trip and, to the verifier, a failed
+ * check and a needless retry of the agent's step. So an empty reply is asked
+ * again once — with more room if a reasoning model ran out while thinking —
+ * and otherwise raised as EMPTY_MODEL_RESPONSE.
+ */
 export function plannerClient(endpoint, fetcher = fetch, sleep = undefined) {
   return {
     async *stream({ messages, maxOutputTokens = 1500 }) {
-      const response = await callModel(endpoint, messages, { stream: false, tools: null, fetcher, maxTokens: maxOutputTokens, sleep });
-      if (!response.ok) throw Object.assign(new Error(`The model endpoint answered ${response.status}.`), { code: "MODEL_UNAVAILABLE" });
-      const payload = await response.json();
-      yield { type: "text", delta: replyText(payload) };
-      yield { type: "done", usage: payload?.usage ?? null };
+      let maxTokens = maxOutputTokens;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await callModel(endpoint, messages, { stream: false, tools: null, fetcher, maxTokens, sleep });
+        if (!response.ok) throw Object.assign(new Error(`The model endpoint answered ${response.status}.`), { code: "MODEL_UNAVAILABLE" });
+        let payload = null;
+        try { payload = await response.json(); } catch { /* treated as empty below */ }
+        const text = replyText(payload);
+        if (text) {
+          yield { type: "text", delta: text };
+          yield { type: "done", usage: payload?.usage ?? null };
+          return;
+        }
+        const finishReason = payload?.choices?.[0]?.finish_reason ?? null;
+        inferenceDiagnostic("inference.empty_response", { role: "planner", model: endpoint.model, status: response.status, finishReason, attempt });
+        if (finishReason === "length") maxTokens = Math.min(maxTokens * 2, 8_192);
+      }
+      throw Object.assign(new Error("The model returned an empty reply."), { code: "EMPTY_MODEL_RESPONSE" });
     },
   };
 }

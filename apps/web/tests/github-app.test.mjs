@@ -23,3 +23,18 @@ test("creates a GitHub App JWT and installation token request", async () => {
   });
   assert.equal(token, "github-installation-token-value");
 });
+test("a refused installation token names the step that failed, never the body", async () => {
+  const configuration = githubAppConfiguration({ ATLAS_GITHUB_APP_ID: "123", ATLAS_GITHUB_INSTALLATION_ID: "456", ATLAS_GITHUB_APP_PRIVATE_KEY: pem });
+  const refusal = (status, body = "") => async () => new Response(body, { status });
+  const codeFor = async (status, body) => {
+    try { await createInstallationToken(configuration, refusal(status, body)); } catch (error) { return { code: error.code, status: error.status, text: JSON.stringify(error) + error.message }; }
+    return null;
+  };
+  // GitHub's answer when the App was never granted Actions: write.
+  const missing = await codeFor(422, '{"message":"The permissions requested are not granted to this installation."}');
+  assert.equal(missing.code, "GITHUB_APP_PERMISSION_MISSING");
+  assert.doesNotMatch(missing.text, /not granted/u, "the body is not carried along");
+  assert.equal((await codeFor(404)).code, "GITHUB_APP_INSTALLATION_NOT_FOUND");
+  assert.equal((await codeFor(401)).code, "GITHUB_APP_KEY_REJECTED");
+  assert.equal((await codeFor(500)).code, "GITHUB_APP_TOKEN_FAILED");
+});
