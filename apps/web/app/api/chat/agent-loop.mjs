@@ -3,7 +3,7 @@ import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } f
 import { completionsUrl, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
 import {
-  InferenceErrorKind, RateLimitState, classifyCompletion, classifyHttpFailure, classifyThrown, describeForPerson,
+  InferenceErrorKind, InferenceGovernor, RateLimitState, classifyCompletion, classifyHttpFailure, classifyThrown, describeForPerson,
   estimateRequestTokens, isTransient, parseDurationMs, retryAfterHeaderMs, suggestedWaitMs, targetKey,
 } from "../../../../../packages/atlas-inference/src/index.mjs";
 
@@ -49,6 +49,45 @@ const FIRST_CALL_RETRIES = 2;
  */
 export const sharedCapacity = new RateLimitState();
 
+/**
+ * How long one model call may queue for capacity before its work is handed
+ * back as WAITING_FOR_INFERENCE (the loop then waits within its own budget or
+ * synthesizes from what is done).
+ */
+const MAX_QUEUE_WAIT_MS = 20_000;
+/** Attempts per call across targets: a refusal re-queues, it does not fail the call. */
+const CALL_ATTEMPTS = 3;
+/**
+ * Model calls in flight per target. Groq's per-minute token allowance is
+ * enforced separately from the headers, so this is about the endpoint's own
+ * concurrency, not a cap on Atlas: agents beyond it wait their turn.
+ */
+const DEFAULT_INFERENCE_CONCURRENCY = 4;
+
+function configuredConcurrency() {
+  const value = Number.parseInt(globalThis.process?.env?.ATLAS_INFERENCE_CONCURRENCY ?? "", 10);
+  return Number.isSafeInteger(value) && value >= 1 && value <= 64 ? value : DEFAULT_INFERENCE_CONCURRENCY;
+}
+
+/** One governor per capacity view: every agent in this isolate queues through the same one. */
+const governors = new WeakMap();
+export function governorFor(capacity = sharedCapacity, pause = sleep) {
+  let governor = governors.get(capacity);
+  if (!governor) {
+    governor = new InferenceGovernor({
+      capacity, sleep: pause, concurrencyPerTarget: configuredConcurrency(),
+      onEvent: (type, data) => {
+        if (type === "inference.queued" || type === "inference.deferred" || type === "inference.target_changed") inferenceDiagnostic(type, data);
+      },
+    });
+    governors.set(capacity, governor);
+  }
+  return governor;
+}
+
+/** Scheduling priority: the person is waiting on the lead; children can wait on everyone. */
+export const INFERENCE_PRIORITY = Object.freeze({ lead: 3, planner: 2, verifier: 2, agent: 1, child: 0 });
+
 /** Which model actually answered a response, when the fallback was used. */
 const answeredBy = new WeakMap();
 
@@ -58,8 +97,7 @@ const heldBack = new WeakSet();
 async function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, capacity = sharedCapacity }) {
   const body = JSON.stringify({ model: endpoint.model, messages: turns, stream, temperature: 0.2, max_tokens: maxTokens, ...(tools ? { tools, tool_choice: toolChoice } : {}) });
   const key = targetKey(endpoint);
-  const finished = capacity.begin(key, estimateRequestTokens(body));
-  try {
+  {
     const response = await fetcher(completionsUrl(endpoint.baseUrl), {
       method: "POST",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -74,8 +112,6 @@ async function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", 
       capacity.rateLimited(key, { retryAfterMs: failure.retryAfterMs, scope: failure.scope });
     }
     return response;
-  } finally {
-    finished();
   }
 }
 
@@ -99,46 +135,50 @@ export function retryAfterMs(headers, body = "") {
 }
 
 /**
- * Sends a model request, riding out rate limits. Before sending, the target's
- * known capacity is checked: a short known wait is waited out, a long one goes
- * to the fallback model without first spending a request on a target that is
- * certain to refuse it. On a 429, wait what the provider asks (when that is
- * short) and retry once, then try the fallback model on the same endpoint.
- * Other statuses are returned as they are.
+ * Sends a model request through the inference governor. The governor picks
+ * the target (the configured model, or the fallback when the model cannot
+ * take the request soon) and holds the request while capacity is known to be
+ * out, so nothing is sent into a certain refusal. A 429 re-queues the request:
+ * the refusing target is tried once more after its stated wait, then moved
+ * behind the others. When no target can take it before MAX_QUEUE_WAIT_MS, a
+ * 429 carrying the expected wait is answered without sending, and the caller
+ * decides whether to wait longer or finish from the work it has.
  */
 export async function callModel(endpoint, turns, options) {
   const capacity = options.capacity ?? sharedCapacity;
-  const pause = options.sleep ?? sleep;
+  const governor = governorFor(capacity, options.sleep ?? sleep);
   const estimate = estimateRequestTokens(turns);
-  const fallbackEndpoint = endpoint.fallbackModel ? { ...endpoint, model: endpoint.fallbackModel } : null;
-  const viaFallback = async () => {
-    const response = await sendModel(fallbackEndpoint, turns, options);
-    answeredBy.set(response, endpoint.fallbackModel);
-    return response;
-  };
-
-  const gate = capacity.check(targetKey(endpoint), estimate);
-  if (!gate.ok) {
-    if (gate.waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
-      await pause(gate.waitMs);
-    } else if (fallbackEndpoint && capacity.check(targetKey(fallbackEndpoint), estimate).ok) {
-      return viaFallback();
-    } else {
-      const fallbackGate = fallbackEndpoint ? capacity.check(targetKey(fallbackEndpoint), estimate) : gate;
-      return heldBackResponse(Math.min(gate.waitMs, fallbackGate.ok ? gate.waitMs : fallbackGate.waitMs));
+  const candidates = [endpoint, ...(endpoint.fallbackModel ? [{ ...endpoint, model: endpoint.fallbackModel }] : [])];
+  const refusals = new Map();
+  let last = null;
+  for (let attempt = 0; attempt < CALL_ATTEMPTS; attempt += 1) {
+    // A target that has refused this request twice goes behind the others.
+    const ordered = [...candidates].sort((a, b) => Number((refusals.get(a.model) ?? 0) >= 2) - Number((refusals.get(b.model) ?? 0) >= 2));
+    let lease;
+    try {
+      lease = await governor.acquire({
+        targets: ordered.map(targetKey), estimatedTokens: estimate,
+        priority: options.priority ?? INFERENCE_PRIORITY.lead, role: options.role,
+        maxWaitMs: options.maxQueueWaitMs ?? MAX_QUEUE_WAIT_MS, preferFirstWithinMs: MAX_RATE_LIMIT_WAIT_MS,
+        onEvent: options.onInferenceEvent,
+      });
+    } catch (error) {
+      if (error?.code === "WAITING_FOR_INFERENCE") return heldBackResponse(error.retryInMs);
+      throw error;
     }
-  }
-
-  let response = await sendModel(endpoint, turns, options);
-  if (response.status !== 429) return response;
-  const wait = retryAfterMs(response.headers, await response.clone().text().catch(() => ""));
-  if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
-    await pause(wait);
-    response = await sendModel(endpoint, turns, options);
+    const target = ordered[lease.index];
+    let response;
+    try {
+      response = await sendModel(target, turns, { ...options, capacity });
+    } finally {
+      lease.release();
+    }
+    if (target.model !== endpoint.model) answeredBy.set(response, target.model);
     if (response.status !== 429) return response;
+    refusals.set(target.model, (refusals.get(target.model) ?? 0) + 1);
+    last = response;
   }
-  if (fallbackEndpoint) return viaFallback();
-  return response;
+  return last;
 }
 
 /**
@@ -179,11 +219,11 @@ function sleep(ms) {
  * reason, which model answered, and whether an HTTP 200 carried anything at
  * all (EMPTY_MODEL_RESPONSE is not a successful inference).
  */
-async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, capacity }) {
-  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, capacity });
+async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, capacity, schedule = {} }) {
+  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, capacity, ...schedule });
   let toolsDropped = false;
   if (tools && (response.status === 400 || response.status === 422)) {
-    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, capacity });
+    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, capacity, ...schedule });
     toolsDropped = true;
   }
   const model = answeredBy.get(response) ?? endpoint.model;
@@ -326,7 +366,7 @@ function reasonFor(result) {
  * }} options
  * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[] } | { error: string, status: number }>}
  */
-export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause = sleep, capacity = sharedCapacity }) {
+export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause = sleep, capacity = sharedCapacity, role = "lead", priority = INFERENCE_PRIORITY.lead }) {
   // Child agents get their own, narrower tool list and no task starting; the lead gets everything.
   const tools = toolOverride ?? [...(allowTasks ? [TASK_TOOL] : []), ...instantToolDefinitions(toolContext?.environment ?? {})];
   const offered = new Set(tools.map((tool) => tool.function.name));
@@ -348,6 +388,16 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   let waitBudget = SYNTHESIS_WAIT_BUDGET_MS;
   let firstCallRetries = 0;
   const diagnostics = { provider: providerHost(endpoint), streaming: Boolean(stream), ...(agentId ? { agentId } : {}) };
+  // Waiting for model capacity is shown as a step, in words, and the work is not touched while it waits.
+  const queueId = `capacity-${agentId ?? "lead"}`;
+  const schedule = {
+    role, priority,
+    onInferenceEvent: (type, data) => {
+      if (type === "inference.queued") emit("tool", { id: queueId, label: "Waiting briefly for model capacity…", state: "running", ...tag });
+      else if (type === "inference.started" && data.waitedMs > 0) emit("tool", { id: queueId, label: "Model capacity available, continuing", state: "done", ...tag });
+      if (type === "inference.target_changed") emit("tool", { id: `${queueId}-route`, label: "Continuing with another available model", state: "done", ...tag });
+    },
+  };
 
   // Words from separate rounds read as separate paragraphs.
   const sinkFor = () => {
@@ -376,7 +426,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     let result;
     try {
       // The last round keeps the tool definitions (earlier rounds' results refer to them) but must answer in words.
-      result = await modelStep({ endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sinkFor(), toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause, capacity });
+      result = await modelStep({ endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sinkFor(), toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause, capacity, schedule });
     } catch (error) {
       const { kind } = classifyThrown(error);
       const message = kind === InferenceErrorKind.TIMEOUT ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.";
@@ -476,7 +526,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       let result;
       try {
         // No tools: the model cannot start another tool cycle, only answer.
-        result = await modelStep({ endpoint, turns: [...turns, message], tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause, capacity });
+        result = await modelStep({ endpoint, turns: [...turns, message], tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause, capacity, schedule });
       } catch (error) {
         result = { ok: false, status: null, kind: classifyThrown(error).kind, retryAfterMs: 2_000 };
       }

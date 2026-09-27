@@ -1,6 +1,6 @@
 import { MAX_STEPS, planMission } from "../../../../local-control/src/agent/team/planner.mjs";
 import { parseJsonReply } from "../../../../local-control/src/agent/team/model.mjs";
-import { callModel, converse, inferenceDiagnostic } from "./agent-loop.mjs";
+import { INFERENCE_PRIORITY, callModel, converse, inferenceDiagnostic } from "./agent-loop.mjs";
 import { asData, instantToolDefinitions } from "./instant-tools.mjs";
 import { replyText } from "./model-endpoint.mjs";
 
@@ -30,8 +30,14 @@ export const DELEGATE_TOOL_NAME = "delegate_to_child_agents";
 /** Levels below the lead: its team (1) and their children (2). */
 export const MAX_DEPTH = 2;
 export const MAX_AGENTS = 14;
-/** Two at a time: parallel enough to feel fast, gentle enough for small provider rate limits. */
-export const PARALLEL_STEPS = 2;
+/**
+ * Steps whose dependencies are met all start together: this is the team's
+ * logical parallelism, and it is not cut to fit a provider. How many of their
+ * model calls run at once is the inference governor's decision (see
+ * callModel), made from the capacity actually available: on a small free
+ * allowance the agents queue for inference, on more compute they run at once.
+ */
+export const PARALLEL_STEPS = MAX_AGENTS;
 const CHILD_ROUNDS = 4;
 const CHILD_TOKENS = 1500;
 const REPORT_CHARS = 4000;
@@ -105,12 +111,12 @@ const DELEGATE_TOOL = {
  * again once — with more room if a reasoning model ran out while thinking —
  * and otherwise raised as EMPTY_MODEL_RESPONSE.
  */
-export function plannerClient(endpoint, fetcher = fetch, sleep = undefined, capacity = undefined) {
+export function plannerClient(endpoint, fetcher = fetch, sleep = undefined, capacity = undefined, role = "planner") {
   return {
     async *stream({ messages, maxOutputTokens = 1500 }) {
       let maxTokens = maxOutputTokens;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const response = await callModel(endpoint, messages, { stream: false, tools: null, fetcher, maxTokens, sleep, capacity });
+        const response = await callModel(endpoint, messages, { stream: false, tools: null, fetcher, maxTokens, sleep, capacity, role, priority: INFERENCE_PRIORITY[role] ?? INFERENCE_PRIORITY.agent });
         if (!response.ok) throw Object.assign(new Error(`The model endpoint answered ${response.status}.`), { code: "MODEL_UNAVAILABLE" });
         let payload = null;
         try { payload = await response.json(); } catch { /* treated as empty below */ }
@@ -164,7 +170,7 @@ export function createAgentTeam({ endpoint, toolContext, fetcher = fetch, idPref
   async function verify({ title, instructions, doneWhen, report }) {
     try {
       let text = "";
-      for await (const chunk of plannerClient(endpoint, fetcher, sleep, capacity).stream({
+      for await (const chunk of plannerClient(endpoint, fetcher, sleep, capacity, "verifier").stream({
         maxOutputTokens: 300,
         messages: [
           { role: "system", content: "You check an agent's report against its step. Reply with JSON only: {\"passed\": true|false, \"reason\": \"one sentence\"}. Pass only if the report actually satisfies the condition; a report that says it could not find something fails unless the step allowed that." },
@@ -206,6 +212,7 @@ export function createAgentTeam({ endpoint, toolContext, fetcher = fetch, idPref
       if (attempt > 0) turns.push({ role: "assistant", content: report }, { role: "user", content: `A reviewer checked your report and it does not yet satisfy "${doneWhen}": ${verdict.reason} Continue the step and report again.` });
       const outcome = await converse({
         endpoint, turns, toolContext, stream: false, emit, fetcher, agentId: id, sleep, capacity,
+        role: depth > 1 ? "child" : "agent", priority: depth > 1 ? INFERENCE_PRIORITY.child : INFERENCE_PRIORITY.agent,
         tools: [...tools, ...(canDelegate ? [DELEGATE_TOOL] : [])], handlers, allowTasks: false, maxRounds: CHILD_ROUNDS, maxTokens: CHILD_TOKENS,
       });
       if ("error" in outcome) {
@@ -242,7 +249,7 @@ export function createAgentTeam({ endpoint, toolContext, fetcher = fetch, idPref
     };
   }
 
-  /** Runs a validated plan: ready steps in parallel (PARALLEL_STEPS at a time), dependents after, failures skip their dependents. */
+  /** Runs a validated plan: ready steps in parallel (PARALLEL_STEPS at a time; model calls queue in the governor), dependents after, failures skip their dependents. */
   async function executePlan(plan, { parentId, emit }) {
     const byId = new Map(plan.steps.map((step) => [step.id, step]));
     const results = new Map();

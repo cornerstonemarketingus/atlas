@@ -97,3 +97,41 @@ test("a 401 is configuration: one request, a plain message, no loop", async () =
   assert.equal(outcome.kind, "AUTHENTICATION");
   assert.match(outcome.error, /key was rejected/u);
 });
+
+async function fourteenAgents(concurrency) {
+  const previous = process.env.ATLAS_INFERENCE_CONCURRENCY;
+  process.env.ATLAS_INFERENCE_CONCURRENCY = String(concurrency);
+  try {
+    const capacity = new RateLimitState();
+    let inFlight = 0;
+    let peak = 0;
+    const fetcher = async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return ok();
+    };
+    const agents = Array.from({ length: 14 }, (_, index) => callModel({ ...endpoint, fallbackModel: undefined }, [{ role: "user", content: `agent ${index}` }], {
+      stream: false, tools: null, fetcher, capacity, role: "agent", priority: 1,
+    }));
+    const responses = await Promise.all(agents);
+    return { peak, statuses: responses.map((response) => response.status) };
+  } finally {
+    if (previous === undefined) delete process.env.ATLAS_INFERENCE_CONCURRENCY;
+    else process.env.ATLAS_INFERENCE_CONCURRENCY = previous;
+  }
+}
+
+test("fourteen agents on constrained inference: all fourteen are served, two model calls at a time", async () => {
+  const { peak, statuses } = await fourteenAgents(2);
+  assert.equal(statuses.length, 14);
+  assert.ok(statuses.every((status) => status === 200));
+  assert.equal(peak, 2);
+});
+
+test("the same fourteen agents on abundant inference run together", async () => {
+  const { peak, statuses } = await fourteenAgents(16);
+  assert.ok(statuses.every((status) => status === 200));
+  assert.equal(peak, 14);
+});

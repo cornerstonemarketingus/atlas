@@ -67,6 +67,11 @@ export class RateLimitState {
     this.#now = now;
   }
 
+  /** The clock this state measures resets against. */
+  now() {
+    return this.#now();
+  }
+
   #entry(key) {
     let entry = this.#targets.get(key);
     if (!entry) {

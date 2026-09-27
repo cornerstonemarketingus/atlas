@@ -162,24 +162,39 @@ test("a long retry-after skips straight to the fallback; no fallback means a cle
   assert.equal(failed.error, "Model capacity is temporarily full. Ask again in about 60 seconds.");
 });
 
-test("a rate limit after some work waits, then writes the answer from the work", async () => {
+test("a rate limit after some work is queued out within the round, and the work carries on", async () => {
   const limited = () => new Response("", { status: 429, headers: { "retry-after": "3" } });
   const waits = [];
   const { fetcher, requests } = scripted([
     [say("Checking the page."), callTool("t1", "read_web_page", { url: "https://example.com/" })],
-    limited, // the round after the tool: refused
-    limited, // synthesis, first try: refused
+    limited, // the round after the tool: refused, then re-queued behind the stated wait
     [say("The page says Example body.")],
   ]);
   const outcome = await run(fetcher, { sleep: async (ms) => { waits.push(ms); } }).promise;
   assert.equal(outcome.reply, "Checking the page.\n\nThe page says Example body.");
   assert.equal(outcome.steps.length, 1);
-  // The synthesis call carries the work and cannot start another tool cycle.
+  assert.deepEqual(waits, [3000]);
+  // Still a normal round, tools and all: the refusal cost a wait, not capability.
+  assert.ok(Array.isArray(requests.at(-1).tools));
+});
+
+test("a rate limit longer than a call may queue hands off to final synthesis, which waits and answers", async () => {
+  const limited = () => new Response("", { status: 429, headers: { "retry-after": "25" } });
+  const waits = [];
+  const { fetcher, requests } = scripted([
+    [say("Checking the page."), callTool("t1", "read_web_page", { url: "https://example.com/" })],
+    limited, // refused for longer than one call may queue
+    [say("The page says Example body.")],
+  ]);
+  const outcome = await run(fetcher, { sleep: async (ms) => { waits.push(ms); } }).promise;
+  assert.equal(outcome.reply, "Checking the page.\n\nThe page says Example body.");
   const synthesis = requests.at(-1);
+  // Nothing was sent into the refusal: two model requests besides the answer's.
+  assert.equal(requests.length, 3);
   assert.equal(synthesis.tools, undefined);
   assert.match(synthesis.messages.at(-1).content, /Example body/u);
   assert.match(synthesis.messages.at(-1).content, /rate limit/u);
-  assert.ok(waits.includes(3000));
+  assert.ok(waits.some((ms) => ms >= 25_000));
 });
 
 test("when no model can answer at all, the work is still the reply, never an empty one", async () => {

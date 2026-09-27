@@ -89,6 +89,9 @@ jobs:
           ATLAS_CHAT_FALLBACK_MODEL: ${{ secrets.ATLAS_CHAT_FALLBACK_MODEL }}
           # Chat's web_search tool. Without it the tool reports it is not set up.
           ATLAS_TAVILY_API_KEY: ${{ secrets.ATLAS_TAVILY_API_KEY }}
+          # Model calls in flight per model (default 4). Agents beyond it queue
+          # for inference; raising it when there is more compute runs them at once.
+          ATLAS_INFERENCE_CONCURRENCY: ${{ secrets.ATLAS_INFERENCE_CONCURRENCY }}
           # Comma-separated owner/name repositories chat tools and tasks may act
           # on. Read by chat, tasks and settings; unset keeps the built-in default.
           ATLAS_ALLOWED_REPOSITORIES: ${{ secrets.ATLAS_ALLOWED_REPOSITORIES }}
@@ -123,6 +126,7 @@ jobs:
             ATLAS_MODEL_API_KEY \
             ATLAS_CHAT_FALLBACK_MODEL \
             ATLAS_TAVILY_API_KEY \
+            ATLAS_INFERENCE_CONCURRENCY \
             ATLAS_ALLOWED_REPOSITORIES \
             ATLAS_STRIPE_SECRET_KEY \
             ATLAS_STRIPE_WEBHOOK_SECRET \
