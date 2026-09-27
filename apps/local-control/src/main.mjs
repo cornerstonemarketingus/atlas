@@ -50,6 +50,7 @@ import { RemoteAccess } from "./remote/access.mjs";
 import { ACTIVE_STATES, GenesisService, GenesisStore } from "./platform/genesis/index.mjs";
 import { GenesisExecutor } from "./platform/genesis/executor.mjs";
 import { registerGenesisTools } from "./platform/genesis/tools.mjs";
+import { GenesisPublisher } from "./platform/genesis/publish.mjs";
 import { PreviewManager } from "./platform/genesis/preview.mjs";
 import { createInspector } from "./platform/genesis/inspector.mjs";
 import { createGenesisCoder } from "./platform/genesis/coder.mjs";
@@ -195,6 +196,11 @@ const genesisExecutor = new GenesisExecutor({
   inspector: createInspector({ artifactsRoot: join(dataDirectory, "genesis", "inspections") }),
 });
 for (const project of genesis.recover()) console.log(`Genesis: ${project.name} was interrupted and is paused.`);
+// Publishing a finished project is external: it goes through the publish.remote policy and the normal approvals.
+const genesisPublisher = new GenesisPublisher({
+  genesis,
+  approvals: { policy: (capability) => store.policy(capability), create: (request) => store.createApproval(request), get: (id) => store.approval(id) },
+});
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
 // Remote access stays customer-managed (your VPN or HTTPS proxy); Atlas itself keeps listening on loopback.
 const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, "remote-access.json") });
@@ -217,6 +223,8 @@ const server = createLocalControlServer({
   remoteAccess,
   genesis,
   genesisPreviews,
+  genesisPublisher,
+  onApprovalDecided: (approval) => genesisPublisher.onApprovalDecided(approval),
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -327,7 +335,7 @@ function buildToolRegistry() {
   // Starting a run asks the owner first (requiresApproval); merging a result is a second, separate decision.
   registerSelfImproveTool(registry, selfImprove);
   // Genesis is created after the registry; the tools look it up when they run.
-  registerGenesisTools(registry, () => genesis);
+  registerGenesisTools(registry, () => genesis, () => genesisPublisher);
   registerWorkflowTools(registry);
   // The browser family is registered whether or not a companion is attached:
   // its tools then fail closed with "no browser on this machine", which is a

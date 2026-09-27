@@ -47,7 +47,7 @@ function latest(genesis, projectId) {
   return genesis.view(first.id);
 }
 
-export function registerGenesisTools(registry, getGenesis) {
+export function registerGenesisTools(registry, getGenesis, getPublisher = () => null) {
   const common = { capability: "genesis.build", risk: "low", requiresApproval: false, timeoutMs: 30_000, maxOutputCharacters: 4_000 };
   registry.register({
     ...common,
@@ -78,6 +78,25 @@ export function registerGenesisTools(registry, getGenesis) {
       const target = latest(genesis, input.projectId);
       const view = await genesis.change(target.id, input.request);
       return `Change accepted.\n${describe(view)}`;
+    },
+  });
+  registry.register({
+    ...common,
+    name: "genesis.publish",
+    description: "Publish a ready Genesis project's code to a repository the person already created on their git host (GitHub, GitLab, Forgejo…), using their own git sign-in. This only files the request: Atlas's publish.remote policy decides, and by default the owner must approve it under Approvals before anything is pushed. Never call it unless the person asked to publish, push or put the code online, and never invent the repository address.",
+    inputSchema: { type: "object", required: ["remote"], properties: { projectId: { type: "string", pattern: "^gen_[0-9a-f-]{36}$" }, remote: { type: "string", maxLength: 300, description: "The repository address the person gave, e.g. https://github.com/them/app.git" } } },
+    async execute({ input }) {
+      const publisher = getPublisher();
+      if (!publisher) return "Publishing is not available in this Atlas.";
+      const target = latest(getGenesis(), input.projectId);
+      try {
+        const result = await publisher.request(target.id, { remote: input.remote });
+        if (result.status === "awaiting-approval") return `Waiting for the owner's approval under Approvals to publish ${target.name} (commit ${result.commit.slice(0, 8)}) to ${result.remote}. Nothing has been pushed yet.`;
+        if (result.status === "published") return `Published ${target.name} to ${result.remote}.`;
+        return `Publishing failed: ${result.message}`;
+      } catch (error) {
+        return `Not published: ${error instanceof Error ? error.message : "unknown error"}`;
+      }
     },
   });
   registry.register({

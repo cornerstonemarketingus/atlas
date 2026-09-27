@@ -637,12 +637,16 @@ async function loadBuild(){
    +(questions.length?'<form id="gen-answers" class="card"><h4>Atlas needs to know</h4>'+questions.map(q=>'<label>'+esc(q.question)+'<input name="'+esc(q.id)+'" placeholder="'+esc(q.default||'')+'"></label>').join('')+'<button>Answer</button></form>':'')
    +'<ol class="steps-list">'+v.progress.steps.map(s=>'<li class="step '+(s.done?'done':s.status||'')+'"><span aria-hidden="true">'+genIcon(s)+'</span> '+esc(s.label)+(s.attempts>1?' <span class="hint">('+s.attempts+' attempts)</span>':'')+'</li>').join('')+'</ol>'
    +'<div class="actions">'+actions.join('')+'</div>'
+   +(['ready','published'].includes(v.state)?'<form id="gen-publish" class="row"><label class="grow">Publish to a repository you created (GitHub, GitLab, Forgejo…)<input id="gen-publish-remote" placeholder="https://github.com/you/app.git"></label><button class="secondary">Publish…</button></form><p class="hint">Publishing pushes the code with your own git sign-in. Atlas asks for your approval first (Approvals) unless your publish.remote policy says otherwise.</p>':'')
    +(['ready','published','failed','planned','approved'].includes(v.state)?'<form id="gen-change" class="row"><label class="grow">Ask for a change<input id="gen-change-text" placeholder="Add Google login"></label><button>Change it</button></form>':'')
    +'<details><summary>Assumptions</summary><ul>'+(v.spec?.assumptions||[]).map(a=>'<li>'+esc(a)+'</li>').join('')+'</ul></details>'
    +'<details><summary>Technical details</summary><p class="hint">Template '+esc(v.plan?.template||'—')+' · folder <code>'+esc(v.workspace||'not created yet')+'</code> · repairs '+v.repairsUsed+'/'+v.repairBudget+'</p><table class="table"><thead><tr><th>When</th><th>Stage</th><th>Why</th></tr></thead><tbody>'+v.transitions.slice().reverse().map(t=>'<tr><td>'+when(t.at)+'</td><td>'+esc(t.to)+'</td><td>'+esc(t.reason)+'<details><summary>Evidence</summary><pre class="log">'+esc(JSON.stringify(t.evidence,null,1).slice(0,6000))+'</pre></details></td></tr>').join('')+'</tbody></table></details></div>';
   detail.querySelectorAll('[data-gen]').forEach(b=>b.onclick=()=>genAction(v.id,b.dataset.gen,{}));
   const answers=detail.querySelector('#gen-answers');
   if(answers)answers.onsubmit=e=>{e.preventDefault();genAction(v.id,'answers',{answers:Object.fromEntries(new FormData(answers).entries())})};
+  const publish=detail.querySelector('#gen-publish');
+  if(publish)publish.onsubmit=async e=>{e.preventDefault();const remote=$('#gen-publish-remote').value.trim();if(!remote)return;const notice=$('#build-notice');
+   try{const r=await sendJson('/v1/genesis/'+encodeURIComponent(v.id)+'/publish','POST',{remote});notice.textContent=r.publish.status==='awaiting-approval'?'Waiting for your approval under Approvals.':r.publish.status==='published'?'Published.':'Publishing failed: '+(r.publish.message||'')}catch(error){notice.textContent=error.message}loadBuild();loadBadge().catch(()=>{})};
   const change=detail.querySelector('#gen-change');
   if(change)change.onsubmit=e=>{e.preventDefault();const request=$('#gen-change-text').value.trim();if(request)genAction(v.id,'changes',{request})};
  }catch(error){(id?detail:list).innerHTML=problem(error);if(id)detail.hidden=false}

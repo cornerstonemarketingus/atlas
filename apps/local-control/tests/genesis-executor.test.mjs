@@ -220,7 +220,7 @@ test("chat tools build, report, and continue the same project", async () => {
   const genesis = new GenesisService({ store, policy: () => ({ decision: "allow" }) });
   const registry = new ToolRegistry({ policy: () => "allow" });
   registerGenesisTools(registry, () => genesis);
-  const tools = Object.fromEntries(["genesis.build", "genesis.status", "genesis.change", "genesis.answer"].map((name) => [name, registry.list().find((tool) => tool.name === name)]));
+  const tools = Object.fromEntries(["genesis.build", "genesis.status", "genesis.change", "genesis.answer", "genesis.publish"].map((name) => [name, registry.list().find((tool) => tool.name === name)]));
   for (const tool of Object.values(tools)) assert.ok(tool, "registered");
   const run = (name, input) => registry.get(name).execute({ input });
   const started = await run("genesis.build", { prompt: "Atlas, build me a simple CRM for my construction company." });

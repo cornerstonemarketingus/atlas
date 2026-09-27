@@ -95,6 +95,15 @@ export class GenesisStore {
         PRIMARY KEY (project_id, task_id)
       );
     `);
+    this.#db.exec(`
+      CREATE TABLE IF NOT EXISTS genesis_publish_requests (
+        approval_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES genesis_projects(id),
+        remote TEXT NOT NULL,
+        commit_sha TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
     // Additive migration for databases created before tasks recorded their executor.
     try { this.#db.exec("ALTER TABLE genesis_tasks ADD COLUMN executor TEXT NOT NULL DEFAULT 'template'"); } catch { /* already present */ }
   }
@@ -223,6 +232,18 @@ export class GenesisStore {
         .run(status ?? row.status, row.attempts + (attempt ? 1 : 0), boundedEvidence(list.slice(-20)), this.#stamp(), id, taskId);
       return this.tasks(tenantId, id).find((task) => task.id === taskId);
     });
+  }
+
+  /** A publish waiting for the owner's approval; survives restarts. */
+  recordPublishRequest(projectId, { approvalId, remote, commit }) {
+    this.#db.prepare("INSERT OR REPLACE INTO genesis_publish_requests (approval_id, project_id, remote, commit_sha, created_at) VALUES (?, ?, ?, ?, ?)").run(approvalId, projectId, remote, commit, this.#stamp());
+  }
+
+  takePublishRequest(approvalId) {
+    const row = this.#db.prepare("SELECT * FROM genesis_publish_requests WHERE approval_id = ?").get(String(approvalId));
+    if (!row) return null;
+    this.#db.prepare("DELETE FROM genesis_publish_requests WHERE approval_id = ?").run(String(approvalId));
+    return { approvalId: row.approval_id, projectId: row.project_id, remote: row.remote, commit: row.commit_sha };
   }
 
   /** Projects that were mid-work when Atlas stopped. */
