@@ -14,9 +14,9 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
      (PR 0, CODEOWNERS), then add the branch ruleset below and turn on
      "Allow auto-merge" (Settings → General → Pull Requests).
   2. Merge [#119](https://github.com/cornerstonemarketingus/atlas/pull/119)
-     and [#124](https://github.com/cornerstonemarketingus/atlas/pull/124)
-     (+ [#125](https://github.com/cornerstonemarketingus/atlas/pull/125),
-     protected), then run "Deploy Atlas web to Cloudflare Workers".
+     and [#125](https://github.com/cornerstonemarketingus/atlas/pull/125)
+     (both protected; #124 is already merged), then run "Deploy Atlas web
+     to Cloudflare Workers".
   3. Fix the GitHub credential: a fine-grained PAT with Actions, Contents and
      Pull requests read and write on this repository saved as
      `ATLAS_GITHUB_TOKEN` (or the GitHub App with the same permissions),
@@ -42,5 +42,5 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 | 2026-09-27 | [#121](https://github.com/cornerstonemarketingus/atlas/pull/121) (draft) | 1.2 (early) | In-memory inference governor and queue; logical parallelism (all ready team steps) separated from inference concurrency | 33 package tests, web 253/253; CI green | Must move into the Durable Object with reservations, idempotency, resumable chat stream | After #120 rework |
 | 2026-09-27 | [#122](https://github.com/cornerstonemarketingus/atlas/pull/122) (merged) | program setup | docs/PROGRAM.md, CLAUDE.md, this log, docs/TODO-MAP.md (299 unchecked TODO items mapped to program phases: 273 tasks, 13 rules, 6 decisions, 4 owner, 3 another agent's) | docs only | — | PR 0 (CODEOWNERS), then 0.1 credential handling |
 | 2026-09-27 | [#123](https://github.com/cornerstonemarketingus/atlas/pull/123) | PR 0 | CODEOWNERS for every protected category in PROGRAM.md §3 (workflows, auth/credentials/tenancy, redaction, approvals, merge/steward, self-improvement, sandbox/policy/egress, security policy, the program and CLAUDE.md); guard test fails if an entry matches no file | runner scripts 49/49; guard mutation-checked | Owner merges; ruleset is owner-only | Owner: ruleset + auto-merge setting |
-| 2026-09-27 | [#124](https://github.com/cornerstonemarketingus/atlas/pull/124) | 0.1 | Setup probe checks Actions: write (dispatch to a branch that cannot exist: 403 = missing, 422 "No ref found" = granted, nothing runs); credential kind from prefix; exact missing permission with per-kind grant steps; rate-limit 403 told apart; dispatch failures use the same explanation and are never recorded as started | web 232/232; 9 new tests; guard mutation-checked (5 fail without it) | Auto-resume needs durable execution (1.2) | Merge when green |
-| 2026-09-27 | [#125](https://github.com/cornerstonemarketingus/atlas/pull/125) (stacked on #124) | 0.1 | GitHub App token refusals named: key rejected, installation not found, Actions permission not granted | web 234/234 | Protected (github-app.mjs): owner review | Owner review |
+| 2026-09-27 | [#124](https://github.com/cornerstonemarketingus/atlas/pull/124) (merged) | 0.1 | Setup probe checks Actions: write (dispatch to a branch that cannot exist: 403 = missing, 422 "No ref found" = granted, nothing runs); credential kind from prefix; exact missing permission with per-kind grant steps; rate-limit 403 told apart; dispatch failures use the same explanation and are never recorded as started | web 232/232; 9 new tests; guard mutation-checked (5 fail without it) | Auto-resume needs durable execution (1.2) | — |
+| 2026-09-27 | [#125](https://github.com/cornerstonemarketingus/atlas/pull/125) (retargeted to main) | 0.1 | GitHub App token refusals named: key rejected, installation not found, Actions permission not granted | web 234/234 | Protected (github-app.mjs): owner review | Owner review |
