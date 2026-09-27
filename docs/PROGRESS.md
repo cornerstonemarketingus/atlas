@@ -7,9 +7,12 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 
 ## Current position
 
-- **Phase:** 0 exit gate pending (owner: deploy + live session). Phase 1
-  package work is built and in review as a stack; wiring hosted chat through
-  it waits for #119 (both change the chat loop).
+- **Phase:** 0 exit gate: code merged and deployed (#119, #125; deploy runs
+  64 and 65 green); chat release gate passed in production, streaming and
+  non-streaming ("Verify hosted Atlas" run 36319927595, a multi-tool
+  GitHub request). Still owner: the GitHub credential permissions and one
+  real usage session with no empty replies or user-visible 429s. Phase 1
+  package work is built and in review as a stack (#129-#133).
 - **Workstreams (PROGRAM.md §4):** A, inference control plane,
   [#127](https://github.com/cornerstonemarketingus/atlas/issues/127)
   (claude-1). B, eval harness and dogfood log,
@@ -17,10 +20,12 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
   (claude-2; brief in the issue's first comment).
 - **Merge order for the Phase 1 stack:** #129 → #130 → #131 → #132 → #133
   (each is based on the one before; retarget to `main` as each merges).
-- **Next for workstream A once #119 merges:** wire chat through the ledger
-  (reserve/release with outcomes), move the memory digest after the history
-  (cache finding in #133), `ATLAS_CHAT_MODELS` pool from the target
-  registry, resumable chat turns (task id, event log, SSE replay, polling).
+- **Next for workstream A (#119 is merged):** memory digest after the
+  history is done (#153). Next: wire chat through the ledger (reserve/release
+  with outcomes) and the `ATLAS_CHAT_MODELS` pool from the target registry,
+  both needing the #129-#133 stack (it adds a Durable Object migration and a
+  CI job: owner approval); resumable chat turns (task id, event log, SSE
+  replay, polling).
 - **Phase 2 (coder) work that does not wait on chat:** escalation merged
   (#135; its workflow wiring #136 is protected). Repository intelligence
   (2.3) merged: `atlas tests-for` (#137, tsconfig aliases), `atlas env`
@@ -38,21 +43,18 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 - **Vercel previews** hit the free plan's 100 deployments/day; the red
   "Vercel" status is not a required check.
 - **Blocked on owner, in order:**
-  1. Merge [#123](https://github.com/cornerstonemarketingus/atlas/pull/123)
-     (PR 0, CODEOWNERS), then add the branch ruleset below and turn on
+  1. #123 (CODEOWNERS) is merged: add the branch ruleset below and turn on
      "Allow auto-merge" (Settings → General → Pull Requests).
-  2. Merge [#119](https://github.com/cornerstonemarketingus/atlas/pull/119)
-     and [#125](https://github.com/cornerstonemarketingus/atlas/pull/125)
-     (both protected; #124 is already merged), then run "Deploy Atlas web
-     to Cloudflare Workers".
+  2. Done: #119 and #125 merged (owner-approved in the session) and
+     deployed.
   3. Fix the GitHub credential: a fine-grained PAT with Actions, Contents and
      Pull requests read and write on this repository saved as
      `ATLAS_GITHUB_TOKEN` (or the GitHub App with the same permissions),
      then redeploy. `/api/setup/status` now says exactly which permission is
      missing for which kind of credential.
-  4. Run "Verify hosted Atlas" in `chat` mode with the conversation that
-     failed in production; streaming and non-streaming must both pass. Then
-     a real usage session with no empty replies and no user-visible 429s.
+  4. Chat release gate passed (see Phase). Remaining: a real usage session
+     with no empty replies and no user-visible 429s.
+  5. Approve the Phase 1 stack #129-#133 (Durable Object migration, CI job).
 - **Ruleset (GitHub → Settings → Rules → Rulesets, target `main`):** require
   a pull request; require review from Code Owners; require the CI status
   checks; block force pushes and deletions. Agents never edit this.
@@ -96,3 +98,6 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 | 2026-09-27 | [#149](https://github.com/cornerstonemarketingus/atlas/pull/149) | 2.3 | `atlas env` counts PowerShell `$env:`, shell `export` and workflow `run:` exports as declarations (no plaintext companion template: its start script sets them from DPAPI) | atlas-cli 466/466 | | Merged |
 | 2026-09-27 | [#150](https://github.com/cornerstonemarketingus/atlas/pull/150) | 2.3 | `atlas surfaces`: HTTP entry points with same-file auth guards; command, eval, raw SQL, computed-URL and secret-env sinks | 469/469; the 3 unguarded web routes are public by design | Guard check is per file | Merged |
 | 2026-09-27 | [#151](https://github.com/cornerstonemarketingus/atlas/pull/151) | 2.5 | Coder edits keep permission bits and the UTF-8 BOM (were reset to 0600 and stripped), including delete rollback | 3 new tests fail on the old code | | Merged |
+| 2026-09-27 | #119 #123 #125 #136 #138 #146 | 0, 2 | Owner-approved merges of the protected/contract PRs; main verified after: web 266, atlas-cli 473, browser-worker 20, runner 49, workflows valid | Deploy runs 64-65 green | | Merged |
+| 2026-09-27 | release gate | 0 | "Verify hosted Atlas" chat mode on production: streaming and non-streaming both answered and stored | run 36319927595 | Owner: credential, live session | Gate evidence |
+| 2026-09-27 | [#153](https://github.com/cornerstonemarketingus/atlas/pull/153) | 1.4 | Chat memory digest after the history so the prompt cache reuses the conversation | web 237; prefix byte-identical across memory changes | | Merged |
