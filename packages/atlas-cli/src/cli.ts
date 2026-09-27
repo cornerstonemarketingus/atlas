@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, posix } from "node:path";
 import { ProviderReadOnlyToolAgent } from "./agent/provider-read-only-tool-agent.js";
 import { VerifiedCoderSession } from "./agent/verified-coder-session.js";
 import { planVerification } from "./agent/verification-planning.js";
@@ -11,6 +11,7 @@ import { FilesystemRepositoryInspector } from "./infrastructure/filesystem-repos
 import { RepositoryTextSearch } from "./infrastructure/repository-text-search.js";
 import { RepositorySymbolIndexer } from "./infrastructure/repository-symbol-indexer.js";
 import { RepositoryImportGraph, testsFor } from "./infrastructure/repository-import-graph.js";
+import { RepositorySchemaMap } from "./infrastructure/repository-schema-map.js";
 import { BoundedRepositorySourceReader } from "./infrastructure/bounded-repository-source-reader.js";
 import { RepositorySymbolReferenceFinder } from "./infrastructure/repository-symbol-reference-finder.js";
 import { BudgetedModelProvider } from "./infrastructure/budgeted-model-provider.js";
@@ -59,6 +60,7 @@ const USAGE = `Usage:
   atlas read <repository-path> <relative-file-path> [--start-line N] [--end-line N] [--max-lines N] [--max-bytes N] [--format text|json]
   atlas tree <repository-path> [--max-depth N] [--max-entries N] [--format text|json]
   atlas tests-for <repository-path> <relative-file-path> [--depth N] [--format text|json]
+  atlas schemas <repository-path> [--format text|json]
   atlas redact [--max-characters N] [--summary]   (reads stdin, writes redacted text to stdout)
   atlas replay <audit-log.jsonl> [--session <id>] [--format text|json]
   atlas github repo <owner>/<repository> [--format text|json]
@@ -90,7 +92,7 @@ export async function main(args: readonly string[]): Promise<number> {
       writeError: (text) => process.stderr.write(text),
     });
   }
-  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
+  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "schemas" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
     console.error(USAGE);
     return 2;
   }
@@ -104,6 +106,29 @@ export async function main(args: readonly string[]): Promise<number> {
     if (args[0] === "inspect") {
       const summary = await new FilesystemRepositoryInspector().inspect(args[1]);
       console.log(format === "json" ? renderJson(summary) : renderText(summary));
+      return 0;
+    }
+    if (args[0] === "schemas") {
+      const map = await new RepositorySchemaMap().build(args[1]);
+      if (format === "json") {
+        console.log(JSON.stringify(map, null, 2));
+        return 0;
+      }
+      console.log(map.migrations.length === 0 ? "Migrations: none found." : "Migrations:");
+      for (const set of map.migrations) {
+        console.log(`  ${set.system}: ${set.directory} (${set.files.length} file(s), latest ${posix.basename(set.files.at(-1) ?? "")})${set.duplicateSequences.length ? `  duplicate numbers: ${set.duplicateSequences.join(", ")}` : ""}`);
+        if (set.drift) {
+          console.log(set.drift.onlyInMigrations.length || set.drift.onlyInSchema.length
+            ? `    drift from the ORM schema: only in migrations [${set.drift.onlyInMigrations.join(", ")}], only in schema [${set.drift.onlyInSchema.join(", ")}]`
+            : "    matches the ORM schema's tables");
+        }
+      }
+      const live = map.tables.filter((table) => !table.dropped);
+      console.log(live.length === 0 ? "Tables: none found." : `Tables (${live.length}):`);
+      for (const table of live) console.log(`  ${table.name}  [${table.source}] ${table.defined.file}:${table.defined.line}`);
+      console.log(map.apis.length === 0 ? "API schemas: none found." : "API schemas:");
+      for (const api of map.apis) console.log(`  ${api.kind}: ${api.file}${api.title ? `  "${api.title}"` : ""}${api.version ? ` ${api.version}` : ""}  ${api.operations} operation(s)`);
+      for (const warning of map.warnings) console.error(`warning: ${warning.message}`);
       return 0;
     }
     if (args[0] === "tests-for") {
