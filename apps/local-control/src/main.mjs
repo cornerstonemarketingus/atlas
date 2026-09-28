@@ -22,6 +22,7 @@ import { createConversationExecutor } from "./agent/conversation-executor.mjs";
 import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
+import { createLaneApplier } from "./agent/lane-apply.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
 import { ModelManager } from "./agent/models/manager.mjs";
 import { ModelPlanStore } from "./agent/models/hosting.mjs";
@@ -146,6 +147,8 @@ const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
 const missionService = new MissionService({ store, execute: runMissionChild });
+// Applying a finished lane's patch to the owner's repository goes through code.write approvals.
+const laneApplier = createLaneApplier({ missionService, store, dataDirectory });
 // Agent missions: goal → plan over the agent organization → steps run by the
 // assigned agents on the same mission scheduler as coder missions.
 const teamStep = createAgentStepExecutor({
@@ -228,7 +231,11 @@ const server = createLocalControlServer({
   genesis,
   genesisPreviews,
   genesisPublisher,
-  onApprovalDecided: (approval) => genesisPublisher.onApprovalDecided(approval),
+  onApprovalDecided: async (approval) => {
+    await laneApplier.onApprovalDecided(approval);
+    return genesisPublisher.onApprovalDecided(approval);
+  },
+  laneApplier,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },

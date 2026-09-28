@@ -20,12 +20,12 @@ import { createCommandCenterRoutes } from "./platform/command-center.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, onApprovalDecided = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, onApprovalDecided = null, laneApplier = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
-  const missionRoutes = missionService ? createMissionRoutes({ missionService }) : null;
+  const missionRoutes = missionService ? createMissionRoutes({ missionService, laneApplier }) : null;
   const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore, stream: platformStream }) : null;
   const teamRoutes = team ? createTeamRoutes({ team, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const knowledgeRoutes = createKnowledgeRoutes({ memory, connections, send: (response, status, value) => { send(response, status, value); return true; } });

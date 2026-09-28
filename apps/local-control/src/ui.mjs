@@ -729,7 +729,7 @@ async function loadCommand(){
   const act=(registry.get(b.dataset.command)||[])[Number(b.dataset.index)];if(!act)return;
   if(act.name==='cancel'&&!confirm('Cancel this? Work already finished is kept.'))return;
   const notice=$('#command-notice');b.disabled=true;notice.textContent='Asking Atlas to '+act.label.toLowerCase()+'…';
-  try{await sendJson(act.path,act.method,act.body);notice.textContent=''}catch(error){notice.textContent=error.message}
+  try{const r=await sendJson(act.path,act.method,act.body);notice.textContent=r.apply?(r.apply.status==='awaiting-approval'?'Waiting for your approval under Approvals.':r.apply.message||''):''}catch(error){notice.textContent=error.message}
   b.blur();loadCommand().catch(()=>{});
  });
 }

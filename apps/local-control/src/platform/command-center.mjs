@@ -84,6 +84,9 @@ function laneOf(mission, child, team) {
   if (["failed", "cancelled", "blocked"].includes(child.state) && !(mission.status === "cancelled" && child.error?.code === "MISSION_CANCELLED")) {
     actions.push(action("retry", "Retry", base));
   }
+  if (child.state === "completed" && !team && child.result?.handoff?.patch) {
+    actions.push({ name: "apply", label: child.metadata?.variant ? "Use this version" : "Apply to repository", method: "POST", path: base.replace(/\/control$/u, "/apply"), body: {} });
+  }
   return {
     id: child.id,
     title: team ? (child.metadata?.stepTitle ?? child.objective)
