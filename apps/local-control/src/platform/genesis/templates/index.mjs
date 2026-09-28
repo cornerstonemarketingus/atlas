@@ -23,6 +23,15 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const COMMON_SHARED = ["src/http.mjs", "scripts/check.mjs"];
+/**
+ * Atlas backend primitives every generated app gets by default: sign-in,
+ * file storage, per-app secrets and scheduled jobs. The cron parser is the
+ * one Atlas automations use, copied in so the app stays dependency-free.
+ */
+const BACKEND = ["tests/backend.test.mjs", "src/backend.mjs", "src/auth.mjs", "src/files.mjs", "src/secrets.mjs", "scripts/secret.mjs", "src/jobs.mjs", { from: "../../automations/cron.mjs", target: "src/cron.mjs" }];
+
+/** Secret names for the integrations a spec asks for; values are set by the owner, never generated. */
+const INTEGRATION_SECRETS = { payments: ["PAYMENTS_SECRET_KEY"], email: ["EMAIL_API_KEY"], sms: ["SMS_API_KEY"], "google-oauth": ["GOOGLE_CLIENT_SECRET"], calendar: [] };
 
 const ACCENTS = { blue: "#2563eb", green: "#15803d", red: "#b91c1c", orange: "#c2410c", purple: "#7c3aed", teal: "#0f766e", earthy: "#8a5a2b", warm: "#c2410c", dark: "#334155", black: "#1f2937" };
 
@@ -70,6 +79,18 @@ function appConfig(spec) {
     home: booking ? "book" : "dashboard",
     booking,
     entities,
+    ...backendConfig(spec),
+  };
+}
+
+/** Which backend primitives the app turns on. Sign-in is on when the spec asks for email and password sign-in. */
+function backendConfig(spec) {
+  const password = Boolean(spec.auth?.required && spec.auth.method === "password");
+  return {
+    auth: { required: password, signup: "first-user" },
+    files: { enabled: true, maxBytes: 10 * 1024 * 1024 },
+    secrets: [...new Set((spec.integrations ?? []).flatMap((integration) => INTEGRATION_SECRETS[integration.id] ?? []))],
+    jobs: password ? [{ name: "purge-expired-sessions", schedule: "17 * * * *" }] : [],
   };
 }
 
@@ -90,7 +111,14 @@ ${commands.map((line) => line).join("\n")}
 
 ${[...spec.workflows.map((flow) => `- ${flow.title}`), ...(spec.pages?.length ? [`- Pages: ${spec.pages.map((page) => page.title).join(", ")}`] : [])].join("\n")}
 
-## Assumptions
+${template.shared.includes("src/auth.mjs") ? `## Built in
+
+- **Sign-in** (\`src/auth.mjs\`): email and password, scrypt hashes, HttpOnly session cookies. ${spec.auth?.required && spec.auth.method === "password" ? "On: the first person to sign up becomes the owner and adds everyone else." : "Off: set \`auth.required\` to \`true\` in app.config.json to require it."}
+- **Files** (\`src/files.mjs\`): uploads at \`/api/files\` with a size limit and checked file types, stored in \`data/files/\`.
+- **Secrets** (\`src/secrets.mjs\`): \`node scripts/secret.mjs set NAME\` stores a key in \`data/secrets.json\` (git-ignored); an environment variable of the same name wins. Never sent to the browser.
+- **Scheduled jobs** (\`src/jobs.mjs\`): cron schedules in app.config.json \`jobs\`, the work in server.mjs.
+
+` : ""}## Assumptions
 
 ${spec.assumptions.map((line) => `- ${line}`).join("\n")}
 `;
@@ -130,14 +158,14 @@ function siteConfig(spec) {
 export const TEMPLATES = Object.freeze({
   "web-app": {
     id: "web-app",
-    version: "1.0.1",
+    version: "1.1.0",
     title: "Full-stack web application",
     description: "Dashboard, record screens with search, add/edit/delete, status tracking and an optional public booking form, backed by a local SQLite file.",
     archetypes: ["webapp", "dashboard"],
-    shared: [...COMMON_SHARED, "src/store.mjs"],
+    shared: [...COMMON_SHARED, "src/store.mjs", ...BACKEND],
     commands: { install: null, check: ["node", "scripts/check.mjs"], test: ["node", "--test"], build: ["node", "scripts/build.mjs"] },
     preview: { prepare: null, command: ["node", "server.mjs"], env: { HOST: "127.0.0.1", PORT: "{port}" }, health: "/api/health", startupTimeoutMs: 15_000 },
-    structure: { "server.mjs": "HTTP server and JSON API", "app.config.json": "record types, fields, pages and theme", "public/": "the browser app", "src/": "storage, validation and HTTP helpers", "tests/": "API tests for every record type", "scripts/": "check and build" },
+    structure: { "server.mjs": "HTTP server and JSON API", "app.config.json": "record types, fields, pages, theme, sign-in, files, secrets and jobs", "public/": "the browser app", "src/": "storage, sign-in, files, secrets, jobs, validation and HTTP helpers", "tests/": "API tests for every record type", "scripts/": "check and build" },
     configure(spec) {
       const config = appConfig(spec);
       return {
@@ -170,14 +198,14 @@ export const TEMPLATES = Object.freeze({
   },
   "api-service": {
     id: "api-service",
-    version: "1.0.0",
+    version: "1.1.0",
     title: "REST API",
     description: "JSON API with create, list/search, read, update and delete for each record type, validation and a local SQLite file.",
     archetypes: ["api"],
-    shared: [...COMMON_SHARED, "src/store.mjs"],
+    shared: [...COMMON_SHARED, "src/store.mjs", ...BACKEND],
     commands: { install: null, check: ["node", "scripts/check.mjs"], test: ["node", "--test"], build: ["node", "scripts/build.mjs"] },
     preview: { prepare: null, command: ["node", "server.mjs"], env: { HOST: "127.0.0.1", PORT: "{port}" }, health: "/api/health", startupTimeoutMs: 15_000 },
-    structure: { "server.mjs": "HTTP server and routes", "app.config.json": "record types and fields", "src/": "storage, validation and HTTP helpers", "tests/": "endpoint tests" },
+    structure: { "server.mjs": "HTTP server and routes", "app.config.json": "record types, fields, sign-in, files, secrets and jobs", "src/": "storage, sign-in, files, secrets, jobs, validation and HTTP helpers", "tests/": "endpoint tests" },
     configure(spec) {
       const config = appConfig(spec);
       return {
@@ -209,6 +237,8 @@ function walk(directory, base = directory, out = []) {
 export function templateFiles(id) {
   const template = getTemplate(id);
   const own = walk(join(here, id, "files")).map((target) => ({ source: join(here, id, "files", target), target }));
-  const shared = template.shared.map((target) => ({ source: join(here, "shared", target), target }));
+  const shared = template.shared.map((entry) => (typeof entry === "string"
+    ? { source: join(here, "shared", entry), target: entry }
+    : { source: join(here, entry.from), target: entry.target }));
   return [...shared, ...own];
 }
