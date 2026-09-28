@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createBackend } from "./src/backend.mjs";
 import { readJson, sendJson } from "./src/http.mjs";
 import { RecordStore } from "./src/store.mjs";
 
@@ -13,18 +14,23 @@ import { RecordStore } from "./src/store.mjs";
 //   PATCH  /api/<type>/:id  update
 //   DELETE /api/<type>/:id  delete
 //   GET    /api/stats       counts   ·   GET /api/health
+// plus sign-in (/api/auth/*, "Authorization: Bearer <token>" from login),
+// files (/api/files), secrets status and jobs, from src/backend.mjs.
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const config = JSON.parse(readFileSync(join(here, "app.config.json"), "utf8"));
 
-export function createApp({ dataFile = join(here, "data", "app.sqlite") } = {}) {
+export function createApp({ dataFile = join(here, "data", "app.sqlite"), filesDir, secretsFile = join(here, "data", "secrets.json"), env = process.env, runJobs = false } = {}) {
   const store = new RecordStore(config.entities, dataFile);
+  // The work of each scheduled job in app.config.json "jobs" goes in `jobs`.
+  const backend = createBackend({ config, dataFile, filesDir, secretsFile, env, bearer: true, jobs: {} });
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     try {
       if (url.pathname === "/" && request.method === "GET") {
         return sendJson(response, 200, { name: config.name, endpoints: config.entities.map((entity) => `/api/${entity.slug}`) });
       }
+      if (url.pathname.startsWith("/api/") && (await backend.route(request, response, url)).handled) return;
       const [, prefix, slug, id, extra] = url.pathname.split("/");
       if (prefix !== "api" || extra !== undefined) return sendJson(response, 404, { error: "Not found." });
       if (slug === "health" && request.method === "GET") return sendJson(response, 200, { ok: true, name: config.name });
@@ -52,12 +58,16 @@ export function createApp({ dataFile = join(here, "data", "app.sqlite") } = {}) 
       return sendJson(response, status, { error: status >= 500 ? "Something went wrong." : error.message, ...(error.errors ? { errors: error.errors } : {}) });
     }
   });
-  server.on("close", () => store.close());
+  if (runJobs) backend.scheduler.start();
+  server.on("close", () => {
+    backend.close();
+    store.close();
+  });
   return server;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || "127.0.0.1";
-  createApp().listen(port, host, () => console.log(`${config.name} API at http://${host}:${port}`));
+  createApp({ runJobs: true }).listen(port, host, () => console.log(`${config.name} API at http://${host}:${port}`));
 }

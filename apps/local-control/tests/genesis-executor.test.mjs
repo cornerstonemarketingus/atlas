@@ -67,21 +67,21 @@ test("the lead tracker fixture goes from one sentence to a verified, running app
   assert.equal(preview.status(project.id).state, "running");
 }));
 
-/** A scripted coder: writes a broken module for the sign-in task, then repairs it when asked. */
+/** A scripted coder: writes a broken module for the email task, then repairs it when asked. */
 function scriptedCoder({ breakTests = false } = {}) {
   const calls = [];
   const coder = async ({ workspace, task, kind, objective }) => {
     calls.push({ kind, task: task.id, objective });
     if (kind === "task") {
-      writeFileSync(join(workspace, "src", "auth.mjs"), "export function signIn( {\n");
-      return { ok: true, summary: "Added sign-in", model: "scripted" };
+      writeFileSync(join(workspace, "src", "notify.mjs"), "export function notify( {\n");
+      return { ok: true, summary: "Added email notifications", model: "scripted" };
     }
     if (kind === "repair") {
       if (breakTests) {
         for (const file of ["tests/app.test.mjs"]) if (existsSync(join(workspace, file))) unlinkSync(join(workspace, file));
         return { ok: true, summary: "Deleted the failing tests", model: "scripted" };
       }
-      writeFileSync(join(workspace, "src", "auth.mjs"), "export function signIn() {\n  return false;\n}\n");
+      writeFileSync(join(workspace, "src", "notify.mjs"), "export function notify() {\n  return false;\n}\n");
       return { ok: true, summary: "Fixed the syntax error", model: "scripted" };
     }
     return { ok: true, summary: "No polish needed", model: "scripted" };
@@ -94,7 +94,7 @@ function scriptedCoder({ breakTests = false } = {}) {
 test("a failed check is repaired with its evidence and verified again", async () => {
   const coder = scriptedCoder();
   await harness(async ({ genesis, executor }) => {
-    const project = await genesis.create("Build a small app where my team can log in and track tasks");
+    const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
     const done = await executor.run(project.id);
     assert.equal(done.state, "ready", JSON.stringify(done.transitions.at(-1), null, 1));
     const path = done.transitions.map((t) => t.to);
@@ -102,11 +102,12 @@ test("a failed check is repaired with its evidence and verified again", async ()
     assert.equal(path.filter((s) => s === "verifying").length >= 2, true, "verified again after the repair");
     const failure = done.transitions.find((t) => t.to === "repairing" && t.evidence.kind === "failure").evidence.failure;
     assert.equal(failure.check, "check");
-    assert.match(failure.output, /auth\.mjs/u, "the repair receives the real failure output");
+    assert.match(failure.output, /notify\.mjs/u, "the repair receives the real failure output");
     const repairCall = coder.calls.find((c) => c.kind === "repair");
-    assert.match(repairCall.objective, /auth\.mjs/u);
+    assert.match(repairCall.objective, /notify\.mjs/u);
     assert.equal(done.repairsUsed, 1);
-    assert.equal(done.tasks.find((t) => /sign-in/u.test(t.title)).status, "passed");
+    assert.equal(done.tasks.find((t) => /email notifications/iu.test(t.title)).status, "passed");
+    assert.equal(done.tasks.find((t) => /sign-in/u.test(t.title)).executor, "template", "sign-in comes from the template");
     assert.equal(done.tasks.find((t) => t.kind === "polish").status, "passed", "one polish pass ran");
   }, { coder, inspector: async (project, preview) => inspectOverHttp(project, preview) });
 });
@@ -114,7 +115,7 @@ test("a failed check is repaired with its evidence and verified again", async ()
 test("a repair that deletes tests is rolled back, and the budget ends the loop", async () => {
   const coder = scriptedCoder({ breakTests: true });
   await harness(async ({ genesis, executor }) => {
-    const project = await genesis.create("Build a small app where my team can log in and track tasks");
+    const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
     const done = await executor.run(project.id);
     assert.equal(done.state, "failed");
     assert.match(done.transitions.at(-1).reason, /Still failing after 3 repair attempt/u);
@@ -130,11 +131,11 @@ test("a task that needs a model blocks with the reason, then continues when resu
   const coder = scriptedCoder();
   coder.available = async () => available;
   await harness(async ({ genesis, executor }) => {
-    const project = await genesis.create("Build a small app where my team can log in and track tasks");
+    const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
     const blocked = await executor.run(project.id);
     assert.equal(blocked.state, "blocked");
     assert.match(blocked.transitions.at(-1).reason, /needs a coding model/u);
-    assert.equal(blocked.tasks.find((t) => /sign-in/u.test(t.title)).status, "blocked");
+    assert.equal(blocked.tasks.find((t) => /email notifications/iu.test(t.title)).status, "blocked");
     available = true;
     genesis.resume(project.id);
     const done = await executor.run(project.id);
