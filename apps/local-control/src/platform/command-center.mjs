@@ -86,13 +86,18 @@ function laneOf(mission, child, team) {
   }
   return {
     id: child.id,
-    title: team ? (child.metadata?.stepTitle ?? child.objective) : child.objective || child.id,
+    title: team ? (child.metadata?.stepTitle ?? child.objective)
+      : child.metadata?.variant ? `Version ${child.metadata.variant} of ${child.metadata.variants}` : child.objective || child.id,
     agent: team ? child.metadata?.agentName ?? null : null,
     state: child.state,
     held,
     attempts: child.attempts,
     usage: child.usage ?? null,
     message: child.error?.message ?? null,
+    // What a finished coder lane produced: its report and the patch from its isolated worktree.
+    result: child.state === "completed" && child.result
+      ? { summary: typeof child.result.summary === "string" ? child.result.summary.slice(0, 600) : null, patch: child.result.handoff?.patch ?? null, worktree: child.result.handoff?.worktree ?? null }
+      : null,
     updatedAt: child.completedAt ?? child.startedAt ?? null,
     actions,
   };

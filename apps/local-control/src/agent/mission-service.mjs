@@ -56,7 +56,8 @@ export class MissionService {
     return snapshot ? publicMission(snapshot) : null;
   }
 
-  create({ id = randomUUID(), title = "", repository, model, children, maxConcurrency = this.#defaultConcurrency }) {
+  create({ id = randomUUID(), title = "", repository, model, children, tasks, objective, variants, maxConcurrency = this.#defaultConcurrency }) {
+    if (children === undefined) ({ children, title } = expandLaunch({ tasks, objective, variants, title }));
     if (this.get(id)) throw new MissionServiceError("MISSION_EXISTS", `Mission '${id}' already exists.`);
     if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 8) {
       throw new MissionServiceError("INVALID_CONCURRENCY", "maxConcurrency must be an integer from 1 to 8.");
@@ -159,6 +160,47 @@ export class MissionService {
     }));
     for (const listener of this.#listeners.get(snapshot.plan.id) ?? []) listener(event);
   }
+}
+
+const MAX_LAUNCH_LANES = 8;
+const MAX_VARIANTS = 5;
+const MAX_OBJECTIVE = 10_000;
+
+/**
+ * Two ways to start parallel lanes without writing a lane plan:
+ *
+ * - `tasks`: one independent lane per task (each runs in its own worktree,
+ *   so lanes on one repository do not collide);
+ * - `objective` + `variants`: the same objective built N times in parallel,
+ *   each told it is one of N versions, so the owner can compare them.
+ */
+export function expandLaunch({ tasks, objective, variants, title = "" }) {
+  if (Array.isArray(tasks)) {
+    const list = tasks.map((task) => (typeof task === "string" ? task.trim() : "")).filter(Boolean);
+    if (list.length === 0) throw new MissionServiceError("INVALID_MISSION", "Give at least one task.");
+    if (list.length > MAX_LAUNCH_LANES) throw new MissionServiceError("INVALID_MISSION", `At most ${MAX_LAUNCH_LANES} tasks run in one launch.`);
+    if (list.some((task) => task.length > MAX_OBJECTIVE)) throw new MissionServiceError("INVALID_MISSION", "A task is too long.");
+    return {
+      title: title || (list.length === 1 ? list[0] : `${list.length} tasks in parallel`).slice(0, 200),
+      children: list.map((task, index) => ({ id: `lane-${index + 1}`, objective: task, dependencies: [] })),
+    };
+  }
+  if (variants !== undefined) {
+    const count = Number(variants);
+    const text = typeof objective === "string" ? objective.trim() : "";
+    if (!Number.isInteger(count) || count < 2 || count > MAX_VARIANTS) throw new MissionServiceError("INVALID_MISSION", `variants must be a whole number from 2 to ${MAX_VARIANTS}.`);
+    if (!text || text.length > MAX_OBJECTIVE) throw new MissionServiceError("INVALID_MISSION", "Describe what each version should do.");
+    return {
+      title: title || `${count} versions: ${text}`.slice(0, 200),
+      children: Array.from({ length: count }, (_, index) => ({
+        id: `version-${index + 1}`,
+        objective: `${text}\n\n(Version ${index + 1} of ${count}. Other versions are being built in parallel for comparison; make your own design choices.)`,
+        dependencies: [],
+        metadata: { variant: index + 1, variants: count, request: text },
+      })),
+    };
+  }
+  throw new MissionServiceError("INVALID_MISSION", "Give lanes (children), a list of tasks, or an objective with a number of versions.");
 }
 
 function publicEvent(event) {

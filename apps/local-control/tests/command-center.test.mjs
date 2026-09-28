@@ -124,3 +124,61 @@ test("over HTTP: the owner pauses and resumes one lane while the other keeps run
   assert.equal((await call("/v1/missions/parallel/lanes/left/control", { method: "POST", headers: admin, body: JSON.stringify({ action: "resume" }) })).status, 409, "resuming a lane that is not paused");
   assert.equal((await call("/v1/missions/parallel/lanes/left/control", { method: "POST", headers: admin, body: JSON.stringify({ action: "explode" }) })).status, 400);
 });
+
+test("one request launches separate tasks or several versions of one task as parallel lanes", async () => {
+  const { expandLaunch } = await import("../src/agent/mission-service.mjs");
+  const tasks = expandLaunch({ tasks: ["Fix login", "  ", "Add export"] });
+  assert.deepEqual(tasks.children.map((lane) => [lane.id, lane.objective, lane.dependencies]), [["lane-1", "Fix login", []], ["lane-2", "Add export", []]]);
+  assert.equal(tasks.title, "2 tasks in parallel");
+
+  const versions = expandLaunch({ objective: "Redesign pricing", variants: 3 });
+  assert.deepEqual(versions.children.map((lane) => lane.id), ["version-1", "version-2", "version-3"]);
+  assert.ok(versions.children.every((lane) => lane.dependencies.length === 0 && lane.objective.startsWith("Redesign pricing")));
+  assert.match(versions.children[1].objective, /Version 2 of 3/);
+  assert.deepEqual(versions.children[2].metadata, { variant: 3, variants: 3, request: "Redesign pricing" });
+
+  for (const bad of [{ tasks: [] }, { tasks: Array(9).fill("x") }, { objective: "x", variants: 1 }, { objective: "x", variants: 6 }, { objective: "", variants: 2 }, {}]) {
+    assert.throws(() => expandLaunch(bad), { code: "INVALID_MISSION" }, JSON.stringify(bad));
+  }
+});
+
+test("over HTTP: three versions run in parallel and each one's result shows in the command center", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-command-versions-"));
+  const store = new LocalTaskStore(join(directory, "atlas.sqlite"));
+  const objectives = [];
+  const missionService = new MissionService({
+    store,
+    maxConcurrency: 3,
+    execute: async ({ child }) => {
+      objectives.push(child.objective);
+      return { summary: `Built ${child.id}`, handoff: { patch: join(directory, `${child.id}.patch`), worktree: join(directory, child.id) } };
+    },
+  });
+  const server = createLocalControlServer({ store, token: TOKEN, runTask: async () => ({ ok: true }), missionService });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const admin = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+
+  const created = await fetch(`${origin}/v1/missions`, { method: "POST", headers: admin, body: JSON.stringify({ repository: directory, model: "m", objective: "Redesign the pricing page", variants: 3, maxConcurrency: 3 }) });
+  assert.equal(created.status, 201);
+  const mission = (await created.json()).mission;
+  await tick();
+
+  const view = await (await fetch(`${origin}/v1/command-center`, { headers: admin })).json();
+  const item = view.items.find((entry) => entry.id === mission.id);
+  assert.equal(item.title, "3 versions: Redesign the pricing page");
+  assert.equal(item.state, "completed");
+  assert.deepEqual(item.lanes.map((lane) => lane.title), ["Version 1 of 3", "Version 2 of 3", "Version 3 of 3"]);
+  assert.deepEqual(item.lanes.map((lane) => lane.result.summary), ["Built version-1", "Built version-2", "Built version-3"]);
+  assert.equal(item.lanes[0].result.patch, join(directory, "version-1.patch"));
+  assert.equal(objectives.length, 3);
+  assert.ok(objectives.every((text) => text.startsWith("Redesign the pricing page")));
+
+  const bad = await fetch(`${origin}/v1/missions`, { method: "POST", headers: admin, body: JSON.stringify({ repository: directory, model: "m", tasks: [] }) });
+  assert.equal(bad.status, 400);
+});
