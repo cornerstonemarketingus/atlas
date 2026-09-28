@@ -50,7 +50,8 @@ function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetche
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
     body: JSON.stringify({
-      model: endpoint.model, messages: turns, stream, temperature: 0.2, max_tokens: maxTokens,
+      model: endpoint.model, messages: turns, stream,
+      ...(endpoint.provider === "openai" ? { max_completion_tokens: maxTokens, reasoning_effort: reasoningEffort ?? "none" } : { temperature: 0.2, max_tokens: maxTokens }),
       // Only ever sent to a server that has already streamed reasoning back, i.e. one that runs a reasoning model.
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       ...(tools ? { tools, tool_choice: toolChoice } : {}),
@@ -122,7 +123,7 @@ export function retryAfterMs(headers, body = "") {
  * provider asks (when that is short) and retry once, then try the fallback
  * model on the same endpoint. Other statuses are returned as they are.
  */
-export async function callModel(endpoint, turns, options) {
+async function callConfiguredModel(endpoint, turns, options) {
   let response = await sendModel(endpoint, turns, options);
   if (response.status !== 429) return response;
   const wait = retryAfterMs(response.headers, await response.clone().text().catch(() => ""));
@@ -137,6 +138,20 @@ export async function callModel(endpoint, turns, options) {
     return fallback;
   }
   return response;
+}
+
+/** Preserve existing same-provider recovery before crossing to a configured provider. */
+export async function callModel(endpoint, turns, options) {
+  let response;
+  try { response = await callConfiguredModel(endpoint, turns, options); }
+  catch (error) {
+    if (!endpoint.providerFallback) throw error;
+  }
+  if (!endpoint.providerFallback || (response && !TRANSIENT_STATUSES.has(response.status))) return response;
+  await response?.body?.cancel().catch(() => {});
+  const fallback = await callConfiguredModel(endpoint.providerFallback, turns, options);
+  answeredBy.set(fallback, endpoint.providerFallback.model);
+  return fallback;
 }
 
 /**
