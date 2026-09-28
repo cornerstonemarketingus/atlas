@@ -7,6 +7,16 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 
 ## Current position
 
+- **Build sequence (owner, 2026-09-28):** [`ROADMAP.md`](ROADMAP.md) —
+  Command Center → Automate → backend primitives → Visual Genesis editor →
+  Cloud sandbox → Take Control → Connector/Skill marketplace → org knowledge
+  graph → Reviewer/Security/QA agents → general artifacts, plus the
+  capability loop. Stage 1 (Command Center) is in progress.
+- **Previous scope (Phase 2, agent side):** done. 2.3 repository
+  intelligence, 2.4 validation (baseline comparison with new / pre-existing /
+  fixed / flaky / infrastructure classes, bounded repair, escalation) and
+  2.5 safe tool runtime (#151, #154, #162, #163). Open: eval harness
+  (workstream B), security/dependency scans (moved to roadmap stage 9).
 - **Phase:** 0 exit gate pending (owner: deploy + live session). Phase 1
   package work is built and in review as a stack; wiring hosted chat through
   it waits for #119 (both change the chat loop).
@@ -100,3 +110,4 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 | 2026-09-27 | [#154](https://github.com/cornerstonemarketingus/atlas/pull/154) | 2.5 | Coder edits to lockfiles, installed dependencies, vendored directories and files marked generated are refused once with the reason and remedy; `allowGenerated: true` per edit confirms (the coder cannot run a package manager or generator, so no hard block); `.gitattributes` linguist-generated/-vendored decide first | atlas-cli 486/486; skipping the guard, one confirmation covering a whole change set, and checking before preview (reads a symlink target) each fail a test | Stacked on #154 because this session can push one branch; #154 merged after the owner's ruleset change (approvals 0, code-owner review kept) | — |
 | 2026-09-28 | [#162](https://github.com/cornerstonemarketingus/atlas/pull/162) | 2.5 | Coder command runner: each command runs in its own process group and a timeout, cancel or exit stops the whole group (taskkill /T on Windows); Ctrl-C/SIGTERM to Atlas is passed on. Output past the limit keeps its start and end with an omission marker and the command runs to completion, so validation judges it by exit code (was: killed and reported as an execution failure). Failure output keeps its end, where the summary is | atlas-cli 491/491; a 500 ms timeout on a command with a grandchild returned after 6 s before, 0.3 s now; no process group, killing only the direct child, head-only capture and skipping the post-exit cleanup each fail a test | Interactive commands already get no stdin (EOF), so no prompt can hang; a TTY-only prompt still fails the command rather than being reported as interactive | — |
 | 2026-09-28 | [#163](https://github.com/cornerstonemarketingus/atlas/pull/163) | 2.5 | Undo checkpoints: `atlas code` records each touched file's bytes and mode (or absence) before the session's first edit to it and saves a checkpoint under `.git/atlas/checkpoints` however the session ends; `atlas undo <repo> [--session id] [--dry-run]` restores all of it, all-or-nothing, refusing any file changed since the session; no Git history is touched | atlas-cli 500/500; end-to-end test runs `atlas code` against a loopback model that edits and creates a file, then `atlas undo` restores both; all-or-nothing, first-state, symlink containment, mode restore and the CLI wiring each fail a test when broken | Local CLI only; the hosted runner discards failed work already. No undo of an individual edit within a session | 2.4 validation engine: classify results NEW/PREEXISTING/FIXED/FLAKY/INFRA against baseline (audit what exists first) |
+| 2026-09-28 | (this PR) | roadmap | docs/ROADMAP.md: the owner's ten-stage build sequence and the capability loop, each stage with what exists today (audited: several modules are tested but never wired into the daemon) and its first slice | docs | — | Stage 1: Command Center view across all running work, per-lane control |
