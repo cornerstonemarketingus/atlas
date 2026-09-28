@@ -180,3 +180,110 @@ test("an automation that paused itself shows under Needs you with a resume actio
   assert.equal(view.items[0].bucket, "attention");
   assert.deepEqual(view.items[0].actions, [{ name: "resume", label: "Resume", method: "POST", path: "/v1/automations/auto-1/resume", body: {} }]);
 });
+
+test("GitHub: only signed deliveries run, filtered by event and branch, with a summary instead of the payload", async (t) => {
+  const { createHmac } = await import("node:crypto");
+  const { service, missionService } = await setup(t);
+  const created = service.create({ name: "On push to main", trigger: { kind: "github", events: ["push"], branches: ["main"] }, action: coding });
+  const { automation, webhookSecret, githubSigningSecret } = created;
+  assert.match(githubSigningSecret, /^[0-9a-f]{64}$/);
+  const sign = (body, secret = githubSigningSecret) => `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+  const deliver = (event, payload, { delivery = "d-1", signature } = {}) => {
+    const body = JSON.stringify(payload);
+    return service.deliver(automation.id, webhookSecret, { body, headers: { "x-github-event": event, "x-github-delivery": delivery, "x-hub-signature-256": signature ?? sign(body) } });
+  };
+  const push = { ref: "refs/heads/main", repository: { full_name: "acme/app" }, sender: { login: "dev" }, head_commit: { id: "abc123", message: "Fix login" }, huge: "x".repeat(20_000) };
+
+  await assert.rejects(deliver("push", push, { signature: sign("{}") }), { code: "UNAUTHORIZED" }, "a signature over another body");
+  await assert.rejects(deliver("push", push, { signature: sign(JSON.stringify(push), "0".repeat(64)) }), { code: "UNAUTHORIZED" }, "a signature with another secret");
+  assert.equal((await deliver("ping", { zen: "hi" })).status, "ignored");
+  assert.equal((await deliver("issues", { action: "opened" })).status, "ignored", "not an event it runs on");
+  assert.equal((await deliver("push", { ...push, ref: "refs/heads/feature" })).status, "ignored", "not a branch it runs on");
+  assert.equal(missionService.all.size, 0);
+
+  const run = await deliver("push", push, { delivery: "d-2" });
+  assert.equal(run.status, "running");
+  const task = missionService.get(run.missionId).input.tasks[0];
+  assert.match(task, /"repository":"acme\/app"/);
+  assert.match(task, /"branch":"main"/);
+  assert.match(task, /"message":"Fix login"/);
+  assert.doesNotMatch(task, /xxxxxxxx/, "the rest of the payload stays out");
+  missionService.finish(run.missionId);
+  assert.equal((await deliver("push", push, { delivery: "d-2" })).status, "duplicate", "GitHub's redelivery of the same delivery id");
+});
+
+test("file trigger: changes are batched into one run, noise folders are ignored, and pausing stops watching", async (t) => {
+  const { service, missionService } = await (async () => {
+    const directory = await mkdtemp(join(tmpdir(), "atlas-automations-files-"));
+    const store = new AutomationStore(join(directory, "automations.sqlite"));
+    const watchers = [];
+    const timers = [];
+    const missionService = missions();
+    const service = new AutomationService({
+      store, missionService,
+      watch: (path, options, listener) => { const watcher = { path, options, listener, closed: false, close() { this.closed = true; } }; watchers.push(watcher); return watcher; },
+      setTimer: (fn) => { const timer = { fn, cleared: false }; timers.push(timer); return timer; },
+      clearTimer: (timer) => { timer.cleared = true; },
+    });
+    t.after(async () => { service.stopWatchers(); store.close(); await rm(directory, { recursive: true, force: true }); });
+    Object.assign(service, { watchers, timers, directory });
+    return { service, missionService };
+  })();
+  const { automation } = service.create({ name: "Inbox", trigger: { kind: "file", path: service.directory, debounceSeconds: 5 }, action: coding });
+  assert.equal(service.watchers.length, 1);
+  const [watcher] = service.watchers;
+  assert.deepEqual(watcher.options, { recursive: true });
+  watcher.listener("change", "invoices/a.csv");
+  watcher.listener("change", ".git/index");
+  watcher.listener("rename", "node_modules/x/index.js");
+  watcher.listener("change", "invoices/b.csv");
+  const pending = service.timers.filter((timer) => !timer.cleared);
+  assert.equal(pending.length, 1, "one debounce timer for the burst");
+  pending[0].fn();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(missionService.all.size, 1);
+  const task = [...missionService.all.values()][0].input.tasks[0];
+  assert.match(task, /invoices\/a\.csv\ninvoices\/b\.csv/);
+  assert.doesNotMatch(task, /\.git|node_modules/);
+
+  service.pause(automation.id);
+  assert.equal(watcher.closed, true);
+  service.resume(automation.id);
+  assert.equal(service.watchers.length, 2, "resuming watches again");
+  assert.throws(() => service.create({ name: "x", trigger: { kind: "file", path: "relative/folder" }, action: coding }), { code: "INVALID_AUTOMATION" });
+  assert.throws(() => service.create({ name: "x", trigger: { kind: "github", events: ["deployment_status"] }, action: coding }), { code: "INVALID_AUTOMATION" });
+});
+
+test("'Automate this?' appears after the same tasks were finished by hand three times, and not once automated", async () => {
+  const { buildCommandCenter } = await import("../src/platform/command-center.mjs");
+  const done = (id, completedAt, extra = {}) => ({ id, title: "Deps", status: "completed", completedAt, children: [{ id: "lane-1", objective: "Update dependencies", state: "completed", metadata: { repository: "/repo", model: "m", ...extra } }] });
+  const three = [done("m1", "2026-09-01"), done("m2", "2026-09-02"), done("m3", "2026-09-03")];
+  let items = buildCommandCenter({ missions: three }).items.filter((item) => item.kind === "suggestion");
+  assert.equal(items.length, 1);
+  assert.equal(items[0].link, "#/automations/new/m3", "prefilled from the latest run");
+  assert.match(items[0].detail, /3 times on \/repo/);
+
+  assert.equal(buildCommandCenter({ missions: three.slice(0, 2) }).items.filter((item) => item.kind === "suggestion").length, 0, "twice is not a pattern yet");
+  items = buildCommandCenter({ missions: three, automations: [{ id: "a", enabled: true, consecutiveFailures: 0, action: { kind: "mission", repository: "/repo", tasks: ["Update dependencies"] } }] }).items;
+  assert.equal(items.filter((item) => item.kind === "suggestion").length, 0, "already automated");
+  const versions = [1, 2, 3].map((n) => done(`v${n}`, `2026-09-0${n}`, { variant: 1, variants: 3 }));
+  assert.equal(buildCommandCenter({ missions: versions }).items.filter((item) => item.kind === "suggestion").length, 0, "comparing versions is not a routine");
+});
+
+test("file trigger with the real watcher: a new file in the folder starts a run", async (t) => {
+  const { writeFile, mkdir } = await import("node:fs/promises");
+  const directory = await mkdtemp(join(tmpdir(), "atlas-automations-watch-"));
+  const watched = join(directory, "inbox");
+  await mkdir(watched);
+  const store = new AutomationStore(join(directory, "automations.sqlite"));
+  const missionService = missions();
+  const service = new AutomationService({ store, missionService });
+  t.after(async () => { service.stopWatchers(); store.close(); await rm(directory, { recursive: true, force: true }); });
+  service.create({ name: "Inbox", trigger: { kind: "file", path: watched, debounceSeconds: 1 }, action: coding });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await writeFile(join(watched, "order-17.json"), "{}");
+  const deadline = Date.now() + 8_000;
+  while (missionService.all.size === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(missionService.all.size, 1);
+  assert.match([...missionService.all.values()][0].input.tasks[0], /order-17\.json/);
+});

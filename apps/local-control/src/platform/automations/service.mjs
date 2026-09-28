@@ -1,4 +1,6 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { statSync, watch as fsWatch } from "node:fs";
+import { isAbsolute, relative, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { CronError, nextRun, parseCron } from "./cron.mjs";
@@ -140,8 +142,22 @@ export function normalizeAutomation(input) {
     catch (error) { throw new AutomationError("INVALID_SCHEDULE", error instanceof CronError ? error.message : "Invalid schedule."); }
   } else if (kind === "webhook" || kind === "manual") {
     trigger = { kind };
+  } else if (kind === "github") {
+    const events = Array.isArray(input.trigger.events) && input.trigger.events.length ? [...new Set(input.trigger.events.map(String))] : ["push"];
+    if (events.some((event) => !GITHUB_EVENTS.has(event))) throw new AutomationError("INVALID_AUTOMATION", `GitHub events must be among: ${[...GITHUB_EVENTS].join(", ")}.`);
+    const branches = Array.isArray(input.trigger.branches) ? input.trigger.branches.map((branch) => String(branch).trim()).filter(Boolean) : [];
+    if (branches.some((branch) => branch.length > 200)) throw new AutomationError("INVALID_AUTOMATION", "Branch names are too long.");
+    trigger = { kind, events, branches };
+  } else if (kind === "file") {
+    const path = typeof input.trigger.path === "string" ? input.trigger.path.trim() : "";
+    let directory = false;
+    try { directory = isAbsolute(path) && statSync(path).isDirectory(); } catch { directory = false; }
+    if (!directory) throw new AutomationError("INVALID_AUTOMATION", "A file automation needs the full path of an existing folder to watch.");
+    const debounceSeconds = input.trigger.debounceSeconds === undefined ? 10 : Number(input.trigger.debounceSeconds);
+    if (!Number.isInteger(debounceSeconds) || debounceSeconds < 1 || debounceSeconds > 3600) throw new AutomationError("INVALID_AUTOMATION", "debounceSeconds must be 1-3600.");
+    trigger = { kind, path, debounceSeconds };
   } else {
-    throw new AutomationError("INVALID_AUTOMATION", "trigger.kind must be schedule, webhook or manual.");
+    throw new AutomationError("INVALID_AUTOMATION", "trigger.kind must be schedule, webhook, github, file or manual.");
   }
 
   const action = input.action ?? {};
@@ -171,6 +187,12 @@ export function normalizeAutomation(input) {
 }
 
 const hashSecret = (secret) => createHash("sha256").update(secret).digest("hex");
+/** GitHub's signing secret, derived from the stored hash so the URL secret itself is never kept. */
+const githubSigningSecret = (storedHash) => createHash("sha256").update(`atlas-github-signing\0${storedHash}`).digest("hex");
+const GITHUB_EVENTS = new Set(["push", "pull_request", "issues", "issue_comment", "release", "workflow_run", "check_suite"]);
+/** Folders whose churn is never a reason to run: version control, dependencies, build output. */
+const IGNORED_SEGMENTS = new Set([".git", "node_modules", ".atlas", "dist", "build", ".next", "__pycache__"]);
+const MAX_CHANGED_PATHS = 50;
 
 export class AutomationService {
   #store;
@@ -182,7 +204,15 @@ export class AutomationService {
   /**
    * @param {{ store: AutomationStore, missionService: object, team?: object | null, clock?: () => number, onChange?: (event: object) => void }} options
    */
-  constructor({ store, missionService, team = null, clock = () => Date.now(), onChange = () => {} }) {
+  #watch;
+  #watchers = new Map();
+  #setTimer;
+  #clearTimer;
+
+  constructor({ store, missionService, team = null, clock = () => Date.now(), onChange = () => {}, watch = fsWatch, setTimer = setTimeout, clearTimer = clearTimeout }) {
+    this.#watch = watch;
+    this.#setTimer = setTimer;
+    this.#clearTimer = clearTimer;
     this.#store = store;
     this.#missionService = missionService;
     this.#team = team;
@@ -201,28 +231,37 @@ export class AutomationService {
   create(input) {
     const normalized = normalizeAutomation(input);
     const now = new Date(this.#clock()).toISOString();
-    const secret = normalized.trigger.kind === "webhook" ? randomBytes(32).toString("base64url") : null;
+    const secret = ["webhook", "github"].includes(normalized.trigger.kind) ? randomBytes(32).toString("base64url") : null;
     const automation = this.#store.insert({
       id: `auto-${randomUUID()}`, ...normalized, enabled: true, pausedReason: null,
       nextRunAt: this.#nextFor(normalized.trigger), createdAt: now, updatedAt: now,
     }, secret ? hashSecret(secret) : null);
+    this.#syncWatcher(automation);
     this.#onChange({ type: "automation.created", automationId: automation.id });
-    return { automation: this.#view(automation), ...(secret ? { webhookSecret: secret } : {}) };
+    return {
+      automation: this.#view(automation),
+      ...(secret ? { webhookSecret: secret } : {}),
+      ...(normalized.trigger.kind === "github" ? { githubSigningSecret: githubSigningSecret(hashSecret(secret)) } : {}),
+    };
   }
 
   remove(id) {
+    this.#stopWatcher(id);
     if (!this.#store.remove(id)) throw new AutomationError("UNKNOWN_AUTOMATION", "Automation not found.");
     return true;
   }
 
   pause(id, reason = "Paused by the owner.") {
     this.#require(id);
+    this.#stopWatcher(id);
     return this.#view(this.#store.update(id, { enabled: false, pausedReason: reason }));
   }
 
   resume(id) {
     const automation = this.#require(id);
-    return this.#view(this.#store.update(id, { enabled: true, pausedReason: null, consecutiveFailures: 0, nextRunAt: this.#nextFor(automation.trigger) }));
+    const resumed = this.#store.update(id, { enabled: true, pausedReason: null, consecutiveFailures: 0, nextRunAt: this.#nextFor(automation.trigger) });
+    this.#syncWatcher(resumed);
+    return this.#view(resumed);
   }
 
   /** "Run now": always a new key, still subject to the overlap and daily guards. */
@@ -236,14 +275,99 @@ export class AutomationService {
    * hash; the caller's Idempotency-Key (or delivery id) makes redeliveries
    * harmless. Input is kept as bounded, labelled data.
    */
-  async deliver(id, secret, { idempotencyKey = null, body = "" } = {}) {
+  async deliver(id, secret, { idempotencyKey = null, body = "", headers = {} } = {}) {
     const hash = this.#store.secretHash(id);
     const given = Buffer.from(hashSecret(String(secret ?? "")), "hex");
     if (!hash || !timingSafeEqual(given, Buffer.from(hash, "hex"))) throw new AutomationError("UNAUTHORIZED", "Unknown webhook.");
     const automation = this.#store.get(id);
+    if (automation.trigger.kind === "github") return this.#deliverGitHub(automation, hash, { body: String(body), headers });
     const key = idempotencyKey && /^[\x21-\x7e]{1,200}$/u.test(idempotencyKey) ? `webhook:${idempotencyKey}` : `webhook:${randomUUID()}`;
     const input = Buffer.from(String(body)).subarray(0, MAX_INPUT_BYTES).toString("utf8");
     return this.#fire(automation, { kind: "webhook", key, input });
+  }
+
+  /**
+   * A GitHub delivery: signed with X-Hub-Signature-256 (HMAC-SHA256 of the
+   * raw body), filtered by event and branch, deduplicated by
+   * X-GitHub-Delivery. Only a summary of the payload reaches the run.
+   */
+  async #deliverGitHub(automation, storedHash, { body, headers }) {
+    const signature = String(headers["x-hub-signature-256"] ?? "");
+    const expected = `sha256=${createHmac("sha256", githubSigningSecret(storedHash)).update(body).digest("hex")}`;
+    if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+      throw new AutomationError("UNAUTHORIZED", "The GitHub signature does not match.");
+    }
+    const event = String(headers["x-github-event"] ?? "");
+    if (event === "ping") return { status: "ignored", message: "GitHub ping received; the webhook is connected." };
+    if (!automation.trigger.events.includes(event)) return { status: "ignored", message: `Event ${event || "(none)"} is not one this automation runs on.` };
+    let payload;
+    try { payload = JSON.parse(body); } catch { throw new AutomationError("INVALID_PAYLOAD", "The GitHub payload is not JSON."); }
+    const branch = event === "push" ? String(payload.ref ?? "").replace(/^refs\/heads\//u, "")
+      : event === "pull_request" ? String(payload.pull_request?.base?.ref ?? "") : null;
+    if (automation.trigger.branches.length && branch !== null && !automation.trigger.branches.includes(branch)) {
+      return { status: "ignored", message: `Branch ${branch || "(none)"} is not one this automation runs on.` };
+    }
+    const summary = {
+      event, action: payload.action ?? null, repository: payload.repository?.full_name ?? null, branch,
+      sender: payload.sender?.login ?? null,
+      pullRequest: payload.pull_request ? { number: payload.pull_request.number, title: payload.pull_request.title, url: payload.pull_request.html_url } : null,
+      issue: payload.issue ? { number: payload.issue.number, title: payload.issue.title, url: payload.issue.html_url } : null,
+      headCommit: payload.head_commit ? { id: payload.head_commit.id, message: String(payload.head_commit.message ?? "").slice(0, 500) } : null,
+    };
+    const delivery = String(headers["x-github-delivery"] ?? "");
+    const key = /^[\x21-\x7e]{1,200}$/u.test(delivery) ? `github:${delivery}` : `github:${randomUUID()}`;
+    return this.#fire(automation, { kind: "github", key, input: JSON.stringify(summary).slice(0, MAX_INPUT_BYTES) });
+  }
+
+  /** Starts watchers for every enabled file automation (called once at startup). */
+  startWatchers() {
+    for (const automation of this.#store.list()) this.#syncWatcher(automation);
+  }
+
+  stopWatchers() {
+    for (const id of [...this.#watchers.keys()]) this.#stopWatcher(id);
+  }
+
+  #syncWatcher(automation) {
+    this.#stopWatcher(automation.id);
+    if (!automation.enabled || automation.trigger.kind !== "file") return;
+    const state = { changed: new Set(), timer: null, watcher: null };
+    const flush = () => {
+      state.timer = null;
+      const paths = [...state.changed].sort();
+      state.changed.clear();
+      if (!paths.length) return;
+      const listed = paths.slice(0, MAX_CHANGED_PATHS);
+      const input = `Changed under ${automation.trigger.path}:\n${listed.join("\n")}${paths.length > listed.length ? `\n(and ${paths.length - listed.length} more)` : ""}`;
+      const latest = this.#store.get(automation.id);
+      if (latest) void this.#fire(latest, { kind: "file", key: `file:${new Date(this.#clock()).toISOString()}:${randomUUID()}`, input }).catch(() => {});
+    };
+    try {
+      state.watcher = this.#watch(automation.trigger.path, { recursive: true }, (_event, filename) => {
+        const name = filename ? String(filename).split(/[\\/]/u) : [];
+        if (!name.length || name.some((segment) => IGNORED_SEGMENTS.has(segment))) return;
+        state.changed.add(name.join("/"));
+        if (state.timer) this.#clearTimer(state.timer);
+        state.timer = this.#setTimer(flush, automation.trigger.debounceSeconds * 1000);
+        state.timer?.unref?.();
+      });
+      state.watcher.on?.("error", (error) => {
+        this.#stopWatcher(automation.id);
+        this.#store.update(automation.id, { enabled: false, pausedReason: `Stopped watching the folder: ${error.message}`.slice(0, 1000) });
+      });
+    } catch (error) {
+      this.#store.update(automation.id, { enabled: false, pausedReason: `Could not watch the folder: ${error.message}`.slice(0, 1000) });
+      return;
+    }
+    this.#watchers.set(automation.id, state);
+  }
+
+  #stopWatcher(id) {
+    const state = this.#watchers.get(id);
+    if (!state) return;
+    if (state.timer) this.#clearTimer(state.timer);
+    try { state.watcher?.close(); } catch { /* already closed */ }
+    this.#watchers.delete(id);
   }
 
   /**

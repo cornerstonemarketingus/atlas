@@ -178,6 +178,7 @@ const team = createTeamService({
 // Automations: schedule, webhook and manual triggers that start normal missions.
 const automationStore = new AutomationStore(join(dataDirectory, "automations.sqlite"));
 const automations = new AutomationService({ store: automationStore, missionService, team });
+automations.startWatchers();
 const automationTimer = setInterval(() => { automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`)); }, 30_000);
 automationTimer.unref();
 const recoveredMissions = missionService.recover();
@@ -287,6 +288,7 @@ function shutdown() {
     innovation.close();
     genesisStore.close();
     clearInterval(automationTimer);
+    automations.stopWatchers();
     automationStore.close();
     platformStore.close();
     store.close();
