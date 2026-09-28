@@ -14,12 +14,13 @@ const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encodi
 /** A repository, a patch Atlas "produced" for it, and a mission whose finished lane points at that patch. */
 async function fixture(t, { policy = "ask", patchInside = true } = {}) {
   const root = await mkdtemp(join(tmpdir(), "atlas-lane-apply-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const repository = join(root, "repo");
   const dataDirectory = join(root, "data");
   await mkdir(repository);
   await mkdir(join(dataDirectory, "patches"), { recursive: true });
   git(repository, "init", "-q");
+  // Byte-for-byte on every platform: a Windows runner's autocrlf would rewrite the checkout.
+  git(repository, "config", "core.autocrlf", "false");
   git(repository, "config", "user.email", "t@example.com");
   git(repository, "config", "user.name", "t");
   await writeFile(join(repository, "page.html"), "<h1>Pricing</h1>\n");
@@ -33,7 +34,8 @@ async function fixture(t, { policy = "ask", patchInside = true } = {}) {
   await writeFile(patch, diff);
 
   const store = new LocalTaskStore(join(root, "atlas.sqlite"));
-  t.after(() => store.close());
+  // Closed before the folder is removed: Windows cannot delete an open database.
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
   store.setPolicy("code.write", policy);
   const mission = {
     id: "m1", title: "3 versions: Redesign pricing", status: "completed",
