@@ -3,6 +3,11 @@
 Requested priorities, audited against main `a1ec6ab` on 2026-09-28. These are
 acceptance criteria for upcoming work, not claims of shipped features.
 
+Follow-up audit at `f7d7dbf`: Command Center, parallel launches, approved
+patch application and local cron/webhook automations have landed (#167–169).
+The Genesis runtime branch adds the first database/jobs slice described below.
+The original acceptance criteria remain here to track the broader gaps.
+
 ## 1. Parallel agents and Agent Command Center
 
 Extend `apps/local-control/src/agent/mission-scheduler.mjs`,
@@ -63,4 +68,11 @@ queues physical model calls. Never turn capacity waits into lost task state.
 
 This change fixes web typechecking, Windows workflow-test paths/line endings,
 and Genesis's assumption that Node always defaults to TAP test output.
-The three product slices above remain unimplemented by this build-fix PR.
+The original build-fix PR did not implement these product slices. The runtime
+follow-up now wires `createAtlas` into generated web/API servers and ships a
+durable daily summary job through `npm run jobs`, including built output.
+Runtime v1 reuses validated SQLite records; jobs add restart persistence,
+deduplication, bounded retries and leased/fenced execution. Each application
+owns separate database files. This is not hosted tenancy or authentication.
+Remaining: job cancellation/lease renewal, richer worker scheduling, schema
+evolution, and the auth/storage/secrets/email/realtime/payments/analytics adapters.

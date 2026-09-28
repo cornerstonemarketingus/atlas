@@ -130,11 +130,11 @@ function siteConfig(spec) {
 export const TEMPLATES = Object.freeze({
   "web-app": {
     id: "web-app",
-    version: "1.0.1",
+    version: "1.1.0",
     title: "Full-stack web application",
     description: "Dashboard, record screens with search, add/edit/delete, status tracking and an optional public booking form, backed by a local SQLite file.",
     archetypes: ["webapp", "dashboard"],
-    shared: [...COMMON_SHARED, "src/store.mjs"],
+    shared: [...COMMON_SHARED, "src/store.mjs", "src/atlas.mjs", "src/jobs.mjs", "src/run-jobs.mjs", "ATLAS-RUNTIME.md"],
     commands: { install: null, check: ["node", "scripts/check.mjs"], test: ["node", "--test", "--test-reporter=tap"], build: ["node", "scripts/build.mjs"] },
     preview: { prepare: null, command: ["node", "server.mjs"], env: { HOST: "127.0.0.1", PORT: "{port}" }, health: "/api/health", startupTimeoutMs: 15_000 },
     structure: { "server.mjs": "HTTP server and JSON API", "app.config.json": "record types, fields, pages and theme", "public/": "the browser app", "src/": "storage, validation and HTTP helpers", "tests/": "API tests for every record type", "scripts/": "check and build" },
@@ -142,7 +142,7 @@ export const TEMPLATES = Object.freeze({
       const config = appConfig(spec);
       return {
         "app.config.json": `${JSON.stringify(config, null, 2)}\n`,
-        "package.json": packageJson(spec, { start: "node server.mjs", dev: "node --watch server.mjs", check: "node scripts/check.mjs", test: "node --test --test-reporter=tap", build: "node scripts/build.mjs" }),
+        "package.json": packageJson(spec, { start: "node server.mjs", dev: "node --watch server.mjs", jobs: "node src/run-jobs.mjs", check: "node scripts/check.mjs", test: "node --test --test-reporter=tap", build: "node scripts/build.mjs" }),
         "README.md": readme(spec, this, ["npm start        # http://127.0.0.1:3000", "npm test", "npm run build"]),
         ".gitignore": GITIGNORE,
       };
@@ -170,11 +170,11 @@ export const TEMPLATES = Object.freeze({
   },
   "api-service": {
     id: "api-service",
-    version: "1.0.0",
+    version: "1.1.0",
     title: "REST API",
     description: "JSON API with create, list/search, read, update and delete for each record type, validation and a local SQLite file.",
     archetypes: ["api"],
-    shared: [...COMMON_SHARED, "src/store.mjs"],
+    shared: [...COMMON_SHARED, "src/store.mjs", "src/atlas.mjs", "src/jobs.mjs", "src/run-jobs.mjs", "ATLAS-RUNTIME.md"],
     commands: { install: null, check: ["node", "scripts/check.mjs"], test: ["node", "--test", "--test-reporter=tap"], build: ["node", "scripts/build.mjs"] },
     preview: { prepare: null, command: ["node", "server.mjs"], env: { HOST: "127.0.0.1", PORT: "{port}" }, health: "/api/health", startupTimeoutMs: 15_000 },
     structure: { "server.mjs": "HTTP server and routes", "app.config.json": "record types and fields", "src/": "storage, validation and HTTP helpers", "tests/": "endpoint tests" },
@@ -182,7 +182,7 @@ export const TEMPLATES = Object.freeze({
       const config = appConfig(spec);
       return {
         "app.config.json": `${JSON.stringify({ ...config, home: null, booking: null }, null, 2)}\n`,
-        "package.json": packageJson(spec, { start: "node server.mjs", dev: "node --watch server.mjs", check: "node scripts/check.mjs", test: "node --test --test-reporter=tap", build: "node scripts/build.mjs" }),
+        "package.json": packageJson(spec, { start: "node server.mjs", dev: "node --watch server.mjs", jobs: "node src/run-jobs.mjs", check: "node scripts/check.mjs", test: "node --test --test-reporter=tap", build: "node scripts/build.mjs" }),
         "README.md": readme(spec, this, ["npm start        # http://127.0.0.1:3000/api/…", "npm test"]),
         ".gitignore": GITIGNORE,
       };
