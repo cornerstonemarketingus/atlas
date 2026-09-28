@@ -10,6 +10,7 @@ import {
   type RepositoryFileEditRequest,
   type RepositoryFileEditResult,
 } from "../domain/repository-file-edit.js";
+import { unifiedLineDiff } from "./line-diff.js";
 
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const DEFAULT_MAX_DIFF_BYTES = 128 * 1024;
@@ -274,13 +275,10 @@ function validateText(value: string, maxBytes: number): void {
 function sha(value: string): string { return createHash("sha256").update(value, "utf8").digest("hex"); }
 function positiveLimit(value: number): number { if (!Number.isSafeInteger(value) || value < 1) throw new TypeError("Limits must be positive integers."); return value; }
 function unifiedDiff(path: string, before: string, after: string, maxBytes: number, created: boolean): { text: string; truncated: boolean } {
-  const oldLines = before.replace(/\r\n/g, "\n").split("\n"); const newLines = after.replace(/\r\n/g, "\n").split("\n");
-  return boundedDiff([`--- ${created ? "/dev/null" : `a/${path}`}`, `+++ b/${path}`, `@@ -1,${created ? 0 : oldLines.length} +1,${newLines.length} @@`,
-    ...(!created ? oldLines.map((line) => `-${line}`) : []), ...newLines.map((line) => `+${line}`)], maxBytes);
+  return boundedDiff(unifiedLineDiff(before, after, created ? null : `a/${path}`, `b/${path}`), maxBytes);
 }
 function deleteDiff(path: string, before: string, maxBytes: number): { text: string; truncated: boolean } {
-  const oldLines = before.replace(/\r\n/g, "\n").split("\n");
-  return boundedDiff([`--- a/${path}`, "+++ /dev/null", `@@ -1,${oldLines.length} +1,0 @@`, ...oldLines.map((line) => `-${line}`)], maxBytes);
+  return boundedDiff(unifiedLineDiff(before, "", `a/${path}`, null), maxBytes);
 }
 function renameDiff(path: string, toPath: string, maxBytes: number): { text: string; truncated: boolean } {
   return boundedDiff([`--- a/${path}`, `+++ b/${toPath}`, "@@ rename with unchanged contents @@"], maxBytes);
