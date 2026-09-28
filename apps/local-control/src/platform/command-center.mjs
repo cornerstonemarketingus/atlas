@@ -25,8 +25,9 @@ const DONE_LIMIT = 20;
 /**
  * @param {{ missions?: object[], genesisProjects?: object[], tasks?: object[], selfImprove?: object | null, now?: number }} sources
  */
-export function buildCommandCenter({ missions = [], genesisProjects = [], tasks = [], selfImprove = null, now = Date.now() } = {}) {
+export function buildCommandCenter({ missions = [], genesisProjects = [], tasks = [], selfImprove = null, automations = [], now = Date.now() } = {}) {
   const items = [
+    ...automations.filter((automation) => !automation.enabled && automation.consecutiveFailures > 0).map(automationItem),
     ...missions.map(missionItem),
     ...genesisProjects.map(genesisItem),
     ...tasks.map(taskItem),
@@ -84,6 +85,9 @@ function laneOf(mission, child, team) {
   if (["failed", "cancelled", "blocked"].includes(child.state) && !(mission.status === "cancelled" && child.error?.code === "MISSION_CANCELLED")) {
     actions.push(action("retry", "Retry", base));
   }
+  if (child.state === "completed" && !team && child.result?.handoff?.patch) {
+    actions.push({ name: "apply", label: child.metadata?.variant ? "Use this version" : "Apply to repository", method: "POST", path: base.replace(/\/control$/u, "/apply"), body: {} });
+  }
   return {
     id: child.id,
     title: team ? (child.metadata?.stepTitle ?? child.objective)
@@ -100,6 +104,16 @@ function laneOf(mission, child, team) {
       : null,
     updatedAt: child.completedAt ?? child.startedAt ?? null,
     actions,
+  };
+}
+
+/** Only automations that paused themselves need the owner here; their runs show as missions. */
+function automationItem(automation) {
+  const base = `/v1/automations/${encodeURIComponent(automation.id)}`;
+  return {
+    kind: "automation", id: automation.id, title: automation.name, state: "paused", bucket: "attention",
+    updatedAt: automation.updatedAt ?? null, link: "#/automations", detail: automation.pausedReason ?? null, progress: null, lanes: [],
+    actions: [{ name: "resume", label: "Resume", method: "POST", path: `${base}/resume`, body: {} }],
   };
 }
 
@@ -174,7 +188,7 @@ function latest(values) {
 }
 
 /** GET /v1/command-center — any authenticated caller; every action goes through its own owner-only route. */
-export function createCommandCenterRoutes({ missionService = null, genesis = null, store = null, selfImprove = null, send }) {
+export function createCommandCenterRoutes({ missionService = null, genesis = null, store = null, selfImprove = null, automations = null, send }) {
   return function handle(request, response) {
     if (request.method !== "GET" || new URL(request.url ?? "/", "http://local.atlas").pathname !== "/v1/command-center") return false;
     const read = (fn, fallback) => { try { return fn() ?? fallback; } catch { return fallback; } };
@@ -183,6 +197,7 @@ export function createCommandCenterRoutes({ missionService = null, genesis = nul
       genesisProjects: read(() => genesis?.list(), []),
       tasks: read(() => store?.list(50), []),
       selfImprove: read(() => selfImprove?.status(), null),
+      automations: read(() => automations?.list(), []),
     }));
   };
 }

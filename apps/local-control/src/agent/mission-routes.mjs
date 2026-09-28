@@ -3,7 +3,7 @@ const SSE_KEEPALIVE_MS = 15_000;
 const MISSION_ID = "[A-Za-z0-9_-]{1,128}";
 
 /** Authenticated HTTP adapter for the durable mission service. */
-export function createMissionRoutes({ missionService, keepaliveMs = SSE_KEEPALIVE_MS }) {
+export function createMissionRoutes({ missionService, laneApplier = null, keepaliveMs = SSE_KEEPALIVE_MS }) {
   if (!missionService) throw new TypeError("missionService is required.");
 
   async function handle(request, response, identity) {
@@ -24,6 +24,18 @@ export function createMissionRoutes({ missionService, keepaliveMs = SSE_KEEPALIV
       if (body === null) return true;
       try {
         return send(response, 201, { mission: await missionService.create(body) });
+      } catch (error) {
+        return sendError(response, error);
+      }
+    }
+
+    const apply = new RegExp(`^/v1/missions/(${MISSION_ID})/lanes/([a-z0-9][a-z0-9._-]{0,63})/apply$`, "u").exec(path);
+    if (apply && request.method === "POST") {
+      if (identity.role !== "admin") return send(response, 403, { message: "Only the local owner can apply changes to a repository." });
+      if (!laneApplier) return send(response, 503, { message: "Applying lanes is not available in this Atlas." });
+      try {
+        const result = await laneApplier.request(apply[1], apply[2]);
+        return send(response, result.status === "awaiting-approval" ? 202 : result.status === "applied" ? 200 : 409, { apply: result, ...(result.message ? { message: result.message } : {}) });
       } catch (error) {
         return sendError(response, error);
       }
@@ -144,6 +156,10 @@ function sendError(response, error) {
   const status = error?.statusCode ?? ({
     UNKNOWN_MISSION: 404,
     UNKNOWN_LANE: 404,
+    NOT_FINISHED: 409,
+    NO_PATCH: 409,
+    NO_REPOSITORY: 409,
+    DENIED_BY_POLICY: 403,
     MISSION_NOT_FOUND: 404,
     MISSION_EXISTS: 409,
     INVALID_STATE: 409,

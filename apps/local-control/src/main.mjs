@@ -22,6 +22,8 @@ import { createConversationExecutor } from "./agent/conversation-executor.mjs";
 import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
+import { createLaneApplier } from "./agent/lane-apply.mjs";
+import { AutomationService, AutomationStore } from "./platform/automations/service.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
 import { ModelManager } from "./agent/models/manager.mjs";
 import { ModelPlanStore } from "./agent/models/hosting.mjs";
@@ -146,6 +148,8 @@ const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
 const missionService = new MissionService({ store, execute: runMissionChild });
+// Applying a finished lane's patch to the owner's repository goes through code.write approvals.
+const laneApplier = createLaneApplier({ missionService, store, dataDirectory });
 // Agent missions: goal → plan over the agent organization → steps run by the
 // assigned agents on the same mission scheduler as coder missions.
 const teamStep = createAgentStepExecutor({
@@ -171,9 +175,16 @@ const team = createTeamService({
   model: process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
   workspace: join(dataDirectory, "workspace"),
 });
+// Automations: schedule, webhook and manual triggers that start normal missions.
+const automationStore = new AutomationStore(join(dataDirectory, "automations.sqlite"));
+const automations = new AutomationService({ store: automationStore, missionService, team });
+const automationTimer = setInterval(() => { automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`)); }, 30_000);
+automationTimer.unref();
 const recoveredMissions = missionService.recover();
 team.reattach();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
+// A schedule that fell due while Atlas was stopped runs once now.
+automations.tick().catch((error) => console.error(`Automation catch-up failed: ${error.message}`));
 
 // Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
 const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
@@ -228,7 +239,12 @@ const server = createLocalControlServer({
   genesis,
   genesisPreviews,
   genesisPublisher,
-  onApprovalDecided: (approval) => genesisPublisher.onApprovalDecided(approval),
+  onApprovalDecided: async (approval) => {
+    await laneApplier.onApprovalDecided(approval);
+    return genesisPublisher.onApprovalDecided(approval);
+  },
+  laneApplier,
+  automations,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -270,6 +286,8 @@ function shutdown() {
     sessions.close();
     innovation.close();
     genesisStore.close();
+    clearInterval(automationTimer);
+    automationStore.close();
     platformStore.close();
     store.close();
     process.exit(0);
