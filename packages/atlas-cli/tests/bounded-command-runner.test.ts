@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SafeCommandError } from "../src/domain/safe-command-runner.js";
 import { BoundedCommandRunner } from "../src/infrastructure/bounded-command-runner.js";
+
+/** Running, as opposed to gone or a zombie waiting for a parent to reap it (killed all the same). */
+async function running(pid: number): Promise<boolean> {
+  try { process.kill(pid, 0); } catch { return false; }
+  const stat = await readFile(`/proc/${pid}/stat`, "utf8").catch(() => null);
+  return stat === null ? true : stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
+}
 
 async function fixture(options: Record<string, unknown> = {}): Promise<{
   root: string;
@@ -106,12 +113,64 @@ test("classifies timeout and cancellation and cleans up the child", async () => 
   assert.equal(cancelled.cancelled, true);
 });
 
-test("bounds stream and combined output and marks truncation", async () => {
+test("keeps the start and end of long output, marks the gap, and lets the command finish", async () => {
   const { runner } = await fixture({ maxStdoutBytes: 16, maxStderrBytes: 16, maxCombinedOutputBytes: 20 });
   const result = await runner.run({
     executable: process.execPath,
-    args: ["-e", "process.stdout.write('x'.repeat(10000))"],
+    args: ["-e", "process.stdout.write('START' + 'x'.repeat(10000) + 'END'); process.exitCode = 3"],
   });
   assert.equal(result.truncated, true);
-  assert.ok(Buffer.byteLength(result.stdout) <= 16);
+  assert.equal(result.exitCode, 3, "the command ran to completion rather than being killed");
+  assert.match(result.stdout, /^START/);
+  assert.match(result.stdout, /END$/);
+  const [head, tail] = result.stdout.split(/\n\[\.\.\. \d+ bytes of output omitted \.\.\.\]\n/);
+  assert.ok(tail !== undefined, "the omission is marked");
+  assert.ok(Buffer.byteLength(head!) + Buffer.byteLength(tail) <= 10, "stdout keeps its share of the combined limit");
+  assert.equal(result.stdout.match(/(\d+) bytes/)?.[1], String(10008 - 10));
+});
+
+test("output within the limits is returned whole and unmarked", async () => {
+  const { runner } = await fixture({ maxStdoutBytes: 64, maxStderrBytes: 64, maxCombinedOutputBytes: 128 });
+  const result = await runner.run({ executable: process.execPath, args: ["-e", "process.stdout.write('ok\\n'); process.stderr.write('warn')"] });
+  assert.equal(result.truncated, false);
+  assert.equal(result.stdout, "ok\n");
+  assert.equal(result.stderr, "warn");
+});
+
+test("a timeout stops the processes the command started, not only the command", { skip: process.platform === "win32" }, async () => {
+  const { root } = await fixture();
+  const marker = join(root, "grandchild.pid");
+  const runner = new BoundedCommandRunner({ repositoryRoot: root, allowedExecutables: [process.execPath], timeoutMs: 300 });
+  // The command starts a grandchild that shares its output pipe and outlives it by far.
+  const script = [
+    "const { spawn } = require('node:child_process');",
+    "const fs = require('node:fs');",
+    "const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)'], { stdio: 'inherit' });",
+    `fs.writeFileSync(${JSON.stringify(marker)}, String(child.pid));`,
+    "setTimeout(()=>{}, 30000);",
+  ].join("\n");
+  const started = Date.now();
+  const result = await runner.run({ executable: process.execPath, args: ["-e", script] });
+  assert.equal(result.timedOut, true);
+  assert.ok(Date.now() - started < 5_000, `returned after ${Date.now() - started} ms`);
+  const grandchild = Number(await readFile(marker, "utf8"));
+  await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  assert.equal(await running(grandchild), false, "the grandchild was stopped too");
+});
+
+test("a finished command's leftover background processes are stopped", { skip: process.platform === "win32" }, async () => {
+  const { root, runner } = await fixture();
+  const marker = join(root, "daemon.pid");
+  const script = [
+    "const { spawn } = require('node:child_process');",
+    "const fs = require('node:fs');",
+    "const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)'], { stdio: 'ignore' });",
+    `fs.writeFileSync(${JSON.stringify(marker)}, String(child.pid));`,
+    "child.unref();",
+  ].join("\n");
+  const result = await runner.run({ executable: process.execPath, args: ["-e", script] });
+  assert.equal(result.exitCode, 0);
+  const daemon = Number(await readFile(marker, "utf8"));
+  await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  assert.equal(await running(daemon), false);
 });

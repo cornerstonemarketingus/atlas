@@ -108,7 +108,9 @@ function toObservation(
   } as const;
   if (result.cancelled) return { ...base, outcome: "cancelled", diagnostics: [diagnostic("command-cancelled", "Validation command was cancelled.")] };
   if (result.timedOut) return { ...base, outcome: "execution-failed", diagnostics: [diagnostic("command-timed-out", "Validation command timed out.")] };
-  if (result.truncated) return { ...base, outcome: "execution-failed", diagnostics: [diagnostic("command-output-truncated", "Validation command output was truncated.")] };
+  // Long output is not a failure: the runner keeps its start and end (the
+  // omission is marked in the text) and the exit code decides. No extra
+  // diagnostic for it, since the comparator would count one as a new failure.
   if (result.exitCode === 0) return { ...base, outcome: "passed", diagnostics: [] };
   const output = boundedSanitizedOutput(result, maxOutputCharacters);
   const diagnostics: ValidationDiagnostic[] = [diagnostic("command-exit-nonzero", `Validation command exited with code ${result.exitCode ?? "unknown"}.`)];
@@ -125,7 +127,9 @@ function boundedSanitizedOutput(result: SafeCommandResult, maxCharacters: number
   const redacted = combined
     .replace(/\b(authorization\s*:\s*bearer\s+)[^\s]+/giu, "$1[REDACTED]")
     .replace(/\b(api[_-]?key|token|password|secret)\s*([=:])\s*[^\s]+/giu, "$1$2[REDACTED]");
-  return redacted.length <= maxCharacters ? redacted : `${redacted.slice(0, maxCharacters)}…`;
+  if (redacted.length <= maxCharacters) return redacted;
+  // A failing run explains itself at the end (the summary, the assertion), so keep that end.
+  return `…${redacted.slice(redacted.length - maxCharacters)}`;
 }
 
 function validateRequest(request: ValidationProfileRunRequest, maxProfiles: number, maxAttempts: number): void {
