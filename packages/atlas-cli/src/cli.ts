@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, posix } from "node:path";
 import { ProviderReadOnlyToolAgent } from "./agent/provider-read-only-tool-agent.js";
 import { VerifiedCoderSession } from "./agent/verified-coder-session.js";
@@ -18,6 +18,7 @@ import { RepositorySecuritySurfaces } from "./infrastructure/repository-security
 import { RepositorySchemaMap } from "./infrastructure/repository-schema-map.js";
 import { RepositoryConfigReferences } from "./infrastructure/repository-config-references.js";
 import { BoundedRepositorySourceReader } from "./infrastructure/bounded-repository-source-reader.js";
+import { SessionCheckpointError, SessionCheckpointRecorder, undoSession } from "./infrastructure/session-checkpoint.js";
 import { RepositorySymbolReferenceFinder } from "./infrastructure/repository-symbol-reference-finder.js";
 import { BudgetedModelProvider } from "./infrastructure/budgeted-model-provider.js";
 import { InMemorySessionAuditLog } from "./infrastructure/in-memory-session-audit-log.js";
@@ -81,7 +82,8 @@ const USAGE = `Usage:
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N]
-       [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]`;
+       [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]
+  atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
 
 export async function main(args: readonly string[]): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
@@ -102,7 +104,7 @@ export async function main(args: readonly string[]): Promise<number> {
       writeError: (text) => process.stderr.write(text),
     });
   }
-  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "ci" && args[0] !== "map" && args[0] !== "surfaces" && args[0] !== "schemas" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
+  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "ci" && args[0] !== "map" && args[0] !== "surfaces" && args[0] !== "schemas" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code" && args[0] !== "undo") || args[1] === undefined) {
     console.error(USAGE);
     return 2;
   }
@@ -340,6 +342,9 @@ export async function main(args: readonly string[]): Promise<number> {
     }
     if (args[0] === "code") {
       return await runCode(args, format);
+    }
+    if (args[0] === "undo") {
+      return await runUndo(args, format);
     }
     const query = args[2];
     if (query === undefined) {
@@ -615,6 +620,8 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     },
   ));
   const edits: CodeEditSummary[] = [];
+  // What each touched file held before the session, so `atlas undo` can put it back.
+  const checkpoint = new SessionCheckpointRecorder(summary.root);
   const writeTools = createRepositoryWriteTools(
     { repositoryId, repositoryRoot: summary.root },
     { editor: new SafeRepositoryFileEditor() },
@@ -629,6 +636,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     proposeFileEdit: {
       ...writeTools.proposeFileEdit,
       execute: async (input, context) => {
+        await checkpoint.recordBefore(editedPaths(input));
         const result = await writeTools.proposeFileEdit.execute(input, context);
         edits.push({ path: result.path, operation: result.operation });
         return result;
@@ -637,6 +645,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     proposeChangeSet: {
       ...writeTools.proposeChangeSet,
       execute: async (input, context) => {
+        await checkpoint.recordBefore(editedPaths(input));
         const result = await writeTools.proposeChangeSet.execute(input, context);
         // A rename moves a file, so the destination is what the pull request
         // has to describe; recording only the source would leave the new path
@@ -807,7 +816,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       edits: edits.slice(before),
     };
   };
-  const result = await new VerifiedCoderSession({
+  const session = new VerifiedCoderSession({
     plan,
     maxRepairAttempts,
     // Full repository detail remains available through bounded read tools. The
@@ -817,7 +826,19 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     runAgent: runAgentWith(agent),
     ...(escalationRoute ? { escalation: { attempts: escalationAttemptsOption ?? 2, runAgent: runAgentWith(makeAgent(escalationRoute.provider, escalationRoute.model)) } } : {}),
     runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),
-  }).run();
+  });
+  let result: Awaited<ReturnType<typeof session.run>>;
+  try {
+    result = await session.run();
+  } finally {
+    // Saved however the session ended, so its edits can be taken back.
+    // stderr, never stdout: stdout is the result the runner parses.
+    const saved = await checkpoint.save(sessionId).catch((error: unknown) => {
+      console.error(`Undo checkpoint not saved: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
+    if (saved !== null) console.error(`To take back this session's edits: atlas undo ${JSON.stringify(summary.root)} --session ${saved}`);
+  }
 
   // Flushed after the run, not during it: the agent records events
   // synchronously mid-turn, and putting a disk write on that path to persist a
@@ -844,6 +865,50 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     new PatternSecretRedactor(),
   ));
   return result.status === "completed" ? 0 : 1;
+}
+
+/** Paths a write tool's raw input names; the tool itself validates them. */
+function editedPaths(input: unknown): string[] {
+  if (typeof input !== "object" || input === null) return [];
+  const record = input as Record<string, unknown>;
+  const paths: unknown[] = [record["path"]];
+  if (Array.isArray(record["edits"])) {
+    for (const edit of record["edits"] as unknown[]) {
+      if (typeof edit === "object" && edit !== null) paths.push((edit as Record<string, unknown>)["path"], (edit as Record<string, unknown>)["toPath"]);
+    }
+  }
+  return paths.filter((path): path is string => typeof path === "string");
+}
+
+async function runUndo(args: readonly string[], format: "text" | "json"): Promise<number> {
+  const sessionId = args.includes("--session") ? readRequiredOption(args, "--session") : undefined;
+  if (sessionId === null) return 2;
+  let root: string;
+  try { root = await realpath(args[1]!); } catch {
+    console.error(`Repository not found: ${args[1]}`);
+    return 2;
+  }
+  try {
+    const result = await undoSession(root, { ...(sessionId === undefined ? {} : { sessionId }), dryRun: args.includes("--dry-run") });
+    if (format === "json") {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      const lines = [`Session ${result.sessionId}${result.dryRun ? " (dry run)" : ""}`];
+      if (result.conflicts.length > 0) {
+        lines.push("Nothing was restored: these files changed after the session:", ...result.conflicts.map((path) => `  ${path}`));
+      } else {
+        lines.push(`${result.dryRun ? "Would restore" : "Restored"} ${result.restored.length} file(s)${result.unchanged.length > 0 ? `, ${result.unchanged.length} already as before` : ""}.`, ...result.restored.map((path) => `  ${path}`));
+      }
+      console.log(lines.join("\n"));
+    }
+    return result.conflicts.length > 0 ? 1 : 0;
+  } catch (error) {
+    if (error instanceof SessionCheckpointError) {
+      console.error(error.message);
+      return 1;
+    }
+    throw error;
+  }
 }
 
 function readRequiredOption(args: readonly string[], option: string): string | null {
