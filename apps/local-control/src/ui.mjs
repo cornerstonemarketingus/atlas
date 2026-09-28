@@ -18,6 +18,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
  <nav class="nav" aria-label="Sections">
   <a href="#/home" data-nav="home"><span class="ico" aria-hidden="true">⌂</span>Home</a>
   <a href="#/command" data-nav="command"><span class="ico" aria-hidden="true">▦</span>Command center</a>
+  <a href="#/automations" data-nav="automations"><span class="ico" aria-hidden="true">⟳</span>Automations</a>
   <a href="#/build" data-nav="build"><span class="ico" aria-hidden="true">✚</span>Build</a>
   <a href="#/missions" data-nav="missions"><span class="ico" aria-hidden="true">◎</span>Missions</a>
   <a href="#/improve" data-nav="improve"><span class="ico" aria-hidden="true">↻</span>Improve Atlas<span class="badge" id="improve-badge" hidden></span></a>
@@ -90,6 +91,24 @@ export const LOCAL_UI_HTML = `<!doctype html>
   <div class="chips" id="command-counts" aria-live="polite"></div>
   <p id="command-notice" class="hint" role="status" aria-live="polite"></p>
   <div id="command-items" class="list"><p class="empty">Unlock this tab to see what Atlas is doing.</p></div>
+ </section>
+
+ <section class="view" data-view="automations" hidden aria-labelledby="automations-heading">
+  <div class="section-title"><div><p class="eyebrow">RUNS WHILE YOU ARE AWAY</p><h2 id="automations-heading">Automations</h2></div><button type="button" class="secondary" id="automations-refresh">Refresh</button></div>
+  <p class="hint">A schedule, a webhook or a button starts the same kind of work you start by hand, with the same approvals and budgets. A run is skipped while the previous one is still going, each automation has a daily limit, and one that fails to start three times in a row pauses itself and tells you why.</p>
+  <details class="panel" id="automation-new-panel"><summary>New automation</summary>
+   <form id="automation-form"><label>Name<input id="auto-name" required maxlength="120" placeholder="Nightly dependency check"></label>
+    <label>Starts<select id="auto-trigger"><option value="schedule">On a schedule</option><option value="webhook">When a webhook is called</option><option value="manual">Only when I press Run now</option></select></label>
+    <label id="auto-cron-label">Schedule (minute hour day month weekday, this computer's time)<input id="auto-cron" value="0 9 * * 1-5" placeholder="0 9 * * 1-5"></label>
+    <label>Does<select id="auto-kind"><option value="mission">Coding tasks in a repository</option><option value="team">A goal for the agent team</option></select></label>
+    <label class="auto-mission">Repository folder<input id="auto-repository" placeholder="C:\\path\\to\\project"></label>
+    <label class="auto-mission">Model<select id="auto-model"><option>qwen2.5-coder:7b</option></select></label>
+    <label>What to do (for coding tasks, one per line)<textarea id="auto-text" required maxlength="4000" rows="3" placeholder="Update dependencies and run the tests"></textarea></label>
+    <label>Most runs per day<input id="auto-max" type="number" min="1" max="288" value="24"></label>
+    <div class="actions"><button>Create</button></div></form></details>
+  <p id="automations-notice" class="hint" role="status" aria-live="polite"></p>
+  <div id="automation-secret" class="card" hidden></div>
+  <div id="automations-list" class="list"><p class="empty">Unlock this tab to see automations.</p></div>
  </section>
 
  <section class="view" data-view="build" hidden aria-labelledby="build-heading">
@@ -493,7 +512,7 @@ if(sessionStorage.getItem('atlas-token')){loadMissions();loadMissionModels()}
 setInterval(()=>{if(sessionStorage.getItem('atlas-token'))loadMissions()},5000);
 
 /* ---- Shell: sections, theme, lock state, and the views built on the platform APIs. ---- */
-const VIEWS={home:'Home',command:'Command center',build:'Build',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
+const VIEWS={home:'Home',command:'Command center',automations:'Automations',build:'Build',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
 const $=q,$$=s=>[...document.querySelectorAll(s)];
 const isUnlocked=()=>Boolean(sessionStorage.getItem('atlas-token'));
 let currentView='home',openMissionId=null,shownMission='';
@@ -696,13 +715,13 @@ $('#build-refresh').onclick=()=>loadBuild();
 
 function refreshView(){
  if(!isUnlocked())return;
- const run={home:loadHome,command:loadCommand,missions:loadTeam,improve:loadImprove,models:loadModels,build:loadBuild,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections,settings:loadRemote}[currentView];
+ const run={home:loadHome,command:loadCommand,automations:loadAutomations,missions:loadTeam,improve:loadImprove,models:loadModels,build:loadBuild,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections,settings:loadRemote}[currentView];
  if(run)run().catch(()=>{});
  loadBadge().catch(()=>{});
 }
 
 /* ---- Command center: every running thing, with per-lane control. ---- */
-const COMMAND_KINDS={mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
+const COMMAND_KINDS={automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
 const COMMAND_BUCKETS={attention:'Needs you',running:'Running',waiting:'Waiting',done:'Recently finished'};
 function commandButtons(actions,key){return (actions||[]).map((a,i)=>'<button type="button" class="'+(a.name==='cancel'?'ghost':'secondary')+'" data-command="'+esc(key)+'" data-index="'+i+'">'+esc(a.label)+'</button>').join('')}
 async function loadCommand(){
@@ -743,6 +762,40 @@ $('#command-launch').onsubmit=async e=>{e.preventDefault();const notice=$('#comm
  try{await sendJson('/v1/missions','POST',body);notice.textContent='Started.';$('#launch-text').value='';$('#command-launch-panel').open=false}catch(error){notice.textContent=error.message}
  loadCommand().catch(()=>{})};
 setInterval(()=>{if(currentView==='command'&&isUnlocked()&&!document.hidden)loadCommand().catch(()=>{})},4000);
+
+/* ---- Automations ---- */
+const triggerText=a=>a.trigger.kind==='schedule'?'Schedule '+a.trigger.cron:a.trigger.kind==='webhook'?'Webhook':'Run now only';
+async function loadAutomations(){
+ const list=$('#automations-list');
+ let data;try{data=await getJson('/v1/automations')}catch(error){list.innerHTML=problem(error);return}
+ list.innerHTML=data.automations.length?data.automations.map(a=>'<article class="card"><div class="task-top"><h4>'+esc(a.name)+'</h4>'+pill(a.enabled?'active':'paused')+'</div>'
+  +'<div class="meta"><span>'+esc(triggerText(a))+'</span><span>'+esc(a.action.kind==='team'?'Team goal':a.action.tasks.length+' coding task(s)')+'</span>'+(a.nextRunAt&&a.enabled?'<span>Next '+when(a.nextRunAt)+'</span>':'')+'</div>'
+  +(a.pausedReason?'<p class="hint">'+esc(a.pausedReason)+'</p>':'')
+  +(a.lastRun?'<p class="hint">Last run '+when(a.lastRun.startedAt)+': '+esc(a.lastRun.status)+(a.lastRun.message?' · '+esc(a.lastRun.message):'')+'</p>':'')
+  +'<div class="actions"><button type="button" class="secondary" data-auto="run" data-id="'+esc(a.id)+'">Run now</button>'+(a.enabled?'<button type="button" class="secondary" data-auto="pause" data-id="'+esc(a.id)+'">Pause</button>':'<button type="button" data-auto="resume" data-id="'+esc(a.id)+'">Resume</button>')+'<button type="button" class="ghost" data-auto="history" data-id="'+esc(a.id)+'">History</button><button type="button" class="ghost" data-auto="delete" data-id="'+esc(a.id)+'">Delete</button></div>'
+  +'<div class="auto-history" data-history="'+esc(a.id)+'" hidden></div></article>').join(''):'<p class="empty">No automations yet. Create one above.</p>';
+ list.querySelectorAll('[data-auto]').forEach(b=>b.onclick=()=>automationAction(b.dataset.id,b.dataset.auto));
+}
+async function automationAction(id,action){
+ const notice=$('#automations-notice');
+ try{
+  if(action==='history'){const box=document.querySelector('[data-history="'+id+'"]');const {automation}=await getJson('/v1/automations/'+encodeURIComponent(id));box.hidden=false;box.innerHTML=automation.runs.length?'<table class="table"><thead><tr><th>Started</th><th>By</th><th>Result</th></tr></thead><tbody>'+automation.runs.map(r=>'<tr><td>'+when(r.startedAt)+'</td><td>'+esc(r.triggerKind)+'</td><td>'+esc(r.status)+(r.message?' · '+esc(r.message):'')+(r.missionId?' · <a href="#/command">see run</a>':'')+'</td></tr>').join('')+'</tbody></table>':'<p class="empty">No runs yet.</p>';return}
+  if(action==='delete'){if(!confirm('Delete this automation and its history?'))return;await getJson('/v1/automations/'+encodeURIComponent(id),{method:'DELETE'});notice.textContent='Deleted.'}
+  else{const r=await sendJson('/v1/automations/'+encodeURIComponent(id)+'/'+action,'POST',{});notice.textContent=action==='run'?(r.run.status==='running'?'Started. Follow it in the Command center.':(r.run.message||r.run.status)):''}
+ }catch(error){notice.textContent=error.message}
+ loadAutomations().catch(()=>{});
+}
+const syncAutomationForm=()=>{$('#auto-cron-label').hidden=$('#auto-trigger').value!=='schedule';const mission=$('#auto-kind').value==='mission';$$('.auto-mission').forEach(el=>{el.hidden=!mission})};
+$('#auto-trigger').onchange=syncAutomationForm;$('#auto-kind').onchange=syncAutomationForm;
+$('#automation-new-panel').addEventListener('toggle',async()=>{if(!$('#automation-new-panel').open)return;syncAutomationForm();const r=await api('/v1/models');if(!r.ok)return;const m=(await r.json()).models||[];if(m.length)$('#auto-model').innerHTML=m.map(x=>'<option>'+esc(x)+'</option>').join('')});
+$('#automation-form').onsubmit=async e=>{e.preventDefault();const notice=$('#automations-notice'),kind=$('#auto-kind').value,text=$('#auto-text').value.trim(),trigger=$('#auto-trigger').value;
+ const body={name:$('#auto-name').value.trim(),trigger:trigger==='schedule'?{kind:trigger,cron:$('#auto-cron').value.trim()}:{kind:trigger},maxRunsPerDay:Number($('#auto-max').value),
+  action:kind==='team'?{kind,goal:text}:{kind,repository:$('#auto-repository').value.trim(),model:$('#auto-model').value,tasks:text.split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean)}};
+ try{const r=await sendJson('/v1/automations','POST',body);notice.textContent='Created.';$('#automation-new-panel').open=false;$('#automation-form').reset();
+  const secret=$('#automation-secret');if(r.webhookPath){secret.hidden=false;secret.innerHTML='<h4>Webhook address</h4><p><code>'+esc(location.origin+r.webhookPath)+'</code></p><p class="hint">'+esc(r.note)+' Send a POST to it; an Idempotency-Key header makes retries safe.</p>'}else secret.hidden=true}
+ catch(error){notice.textContent=error.message}
+ loadAutomations().catch(()=>{})};
+$('#automations-refresh').onclick=()=>loadAutomations();
 
 /* ---- Home ---- */
 async function loadBadge(){
