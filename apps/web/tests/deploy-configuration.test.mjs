@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { chatReadiness } from "../app/api/chat/model-endpoint.mjs";
 
@@ -9,8 +10,8 @@ import { chatReadiness } from "../app/api/chat/model-endpoint.mjs";
 // so production stopped on every 429 a fallback would have absorbed. These
 // tests fail the moment chat code reads a variable the deploy does not supply.
 
-const root = new URL("../../../", import.meta.url).pathname;
-const workflow = readFileSync(join(root, ".github/workflows/deploy-cloudflare.yml"), "utf8");
+const root = fileURLToPath(new URL("../../../", import.meta.url));
+const workflow = readFileSync(join(root, ".github/workflows/deploy-cloudflare.yml"), "utf8").replaceAll("\r\n", "\n");
 const chatDirectory = join(root, "apps/web/app/api/chat");
 
 /** Variables the upload step maps from secrets into its environment. */
