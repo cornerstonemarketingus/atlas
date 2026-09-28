@@ -98,8 +98,11 @@ export const LOCAL_UI_HTML = `<!doctype html>
   <p class="hint">A schedule, a webhook or a button starts the same kind of work you start by hand, with the same approvals and budgets. A run is skipped while the previous one is still going, each automation has a daily limit, and one that fails to start three times in a row pauses itself and tells you why.</p>
   <details class="panel" id="automation-new-panel"><summary>New automation</summary>
    <form id="automation-form"><label>Name<input id="auto-name" required maxlength="120" placeholder="Nightly dependency check"></label>
-    <label>Starts<select id="auto-trigger"><option value="schedule">On a schedule</option><option value="webhook">When a webhook is called</option><option value="manual">Only when I press Run now</option></select></label>
+    <label>Starts<select id="auto-trigger"><option value="schedule">On a schedule</option><option value="github">On a GitHub event</option><option value="file">When files in a folder change</option><option value="webhook">When a webhook is called</option><option value="manual">Only when I press Run now</option></select></label>
     <label id="auto-cron-label">Schedule (minute hour day month weekday, this computer's time)<input id="auto-cron" value="0 9 * * 1-5" placeholder="0 9 * * 1-5"></label>
+    <label id="auto-github-label" hidden>GitHub events<select id="auto-github-events" multiple size="4"><option value="push" selected>push</option><option value="pull_request">pull_request</option><option value="issues">issues</option><option value="issue_comment">issue_comment</option><option value="release">release</option><option value="workflow_run">workflow_run</option><option value="check_suite">check_suite</option></select></label>
+    <label id="auto-branches-label" hidden>Only these branches (comma-separated, empty for all)<input id="auto-branches" placeholder="main"></label>
+    <label id="auto-path-label" hidden>Folder to watch (full path)<input id="auto-path" placeholder="C:\\path\\to\\inbox"></label>
     <label>Does<select id="auto-kind"><option value="mission">Coding tasks in a repository</option><option value="team">A goal for the agent team</option></select></label>
     <label class="auto-mission">Repository folder<input id="auto-repository" placeholder="C:\\path\\to\\project"></label>
     <label class="auto-mission">Model<select id="auto-model"><option>qwen2.5-coder:7b</option></select></label>
@@ -721,7 +724,7 @@ function refreshView(){
 }
 
 /* ---- Command center: every running thing, with per-lane control. ---- */
-const COMMAND_KINDS={automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
+const COMMAND_KINDS={suggestion:'Suggestion',automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
 const COMMAND_BUCKETS={attention:'Needs you',running:'Running',waiting:'Waiting',done:'Recently finished'};
 function commandButtons(actions,key){return (actions||[]).map((a,i)=>'<button type="button" class="'+(a.name==='cancel'?'ghost':'secondary')+'" data-command="'+esc(key)+'" data-index="'+i+'">'+esc(a.label)+'</button>').join('')}
 async function loadCommand(){
@@ -764,9 +767,12 @@ $('#command-launch').onsubmit=async e=>{e.preventDefault();const notice=$('#comm
 setInterval(()=>{if(currentView==='command'&&isUnlocked()&&!document.hidden)loadCommand().catch(()=>{})},4000);
 
 /* ---- Automations ---- */
-const triggerText=a=>a.trigger.kind==='schedule'?'Schedule '+a.trigger.cron:a.trigger.kind==='webhook'?'Webhook':'Run now only';
+const triggerText=a=>a.trigger.kind==='schedule'?'Schedule '+a.trigger.cron:a.trigger.kind==='github'?'GitHub '+a.trigger.events.join(', ')+(a.trigger.branches.length?' on '+a.trigger.branches.join(', '):''):a.trigger.kind==='file'?'Files change in '+a.trigger.path:a.trigger.kind==='webhook'?'Webhook':'Run now only';
 async function loadAutomations(){
  const list=$('#automations-list');
+ /* #/automations/new/<mission>: "Automate this?" from the Command Center prefills the form. */
+ const from=location.hash.split('/')[3];
+ if(from){history.replaceState(null,'','#/automations');getJson('/v1/missions/'+encodeURIComponent(from)).then(({mission})=>{const lanes=mission.children||[];$('#automation-new-panel').open=true;$('#auto-name').value=(mission.title||'Repeated task').slice(0,120);$('#auto-kind').value='mission';$('#auto-repository').value=mission.repository||'';$('#auto-text').value=lanes.map(l=>l.objective).join(String.fromCharCode(10));syncAutomationForm()}).catch(()=>{})}
  let data;try{data=await getJson('/v1/automations')}catch(error){list.innerHTML=problem(error);return}
  list.innerHTML=data.automations.length?data.automations.map(a=>'<article class="card"><div class="task-top"><h4>'+esc(a.name)+'</h4>'+pill(a.enabled?'active':'paused')+'</div>'
   +'<div class="meta"><span>'+esc(triggerText(a))+'</span><span>'+esc(a.action.kind==='team'?'Team goal':a.action.tasks.length+' coding task(s)')+'</span>'+(a.nextRunAt&&a.enabled?'<span>Next '+when(a.nextRunAt)+'</span>':'')+'</div>'
@@ -785,14 +791,14 @@ async function automationAction(id,action){
  }catch(error){notice.textContent=error.message}
  loadAutomations().catch(()=>{});
 }
-const syncAutomationForm=()=>{$('#auto-cron-label').hidden=$('#auto-trigger').value!=='schedule';const mission=$('#auto-kind').value==='mission';$$('.auto-mission').forEach(el=>{el.hidden=!mission})};
+const syncAutomationForm=()=>{const t=$('#auto-trigger').value;$('#auto-cron-label').hidden=t!=='schedule';$('#auto-github-label').hidden=t!=='github';$('#auto-branches-label').hidden=t!=='github';$('#auto-path-label').hidden=t!=='file';const mission=$('#auto-kind').value==='mission';$$('.auto-mission').forEach(el=>{el.hidden=!mission})};
 $('#auto-trigger').onchange=syncAutomationForm;$('#auto-kind').onchange=syncAutomationForm;
 $('#automation-new-panel').addEventListener('toggle',async()=>{if(!$('#automation-new-panel').open)return;syncAutomationForm();const r=await api('/v1/models');if(!r.ok)return;const m=(await r.json()).models||[];if(m.length)$('#auto-model').innerHTML=m.map(x=>'<option>'+esc(x)+'</option>').join('')});
 $('#automation-form').onsubmit=async e=>{e.preventDefault();const notice=$('#automations-notice'),kind=$('#auto-kind').value,text=$('#auto-text').value.trim(),trigger=$('#auto-trigger').value;
- const body={name:$('#auto-name').value.trim(),trigger:trigger==='schedule'?{kind:trigger,cron:$('#auto-cron').value.trim()}:{kind:trigger},maxRunsPerDay:Number($('#auto-max').value),
+ const body={name:$('#auto-name').value.trim(),trigger:trigger==='schedule'?{kind:trigger,cron:$('#auto-cron').value.trim()}:trigger==='github'?{kind:trigger,events:[...$('#auto-github-events').selectedOptions].map(o=>o.value),branches:$('#auto-branches').value.split(',').map(b=>b.trim()).filter(Boolean)}:trigger==='file'?{kind:trigger,path:$('#auto-path').value.trim()}:{kind:trigger},maxRunsPerDay:Number($('#auto-max').value),
   action:kind==='team'?{kind,goal:text}:{kind,repository:$('#auto-repository').value.trim(),model:$('#auto-model').value,tasks:text.split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean)}};
  try{const r=await sendJson('/v1/automations','POST',body);notice.textContent='Created.';$('#automation-new-panel').open=false;$('#automation-form').reset();
-  const secret=$('#automation-secret');if(r.webhookPath){secret.hidden=false;secret.innerHTML='<h4>Webhook address</h4><p><code>'+esc(location.origin+r.webhookPath)+'</code></p><p class="hint">'+esc(r.note)+' Send a POST to it; an Idempotency-Key header makes retries safe.</p>'}else secret.hidden=true}
+  const secret=$('#automation-secret');if(r.webhookPath){secret.hidden=false;secret.innerHTML='<h4>Webhook address</h4><p><code>'+esc(location.origin+r.webhookPath)+'</code></p>'+(r.githubSigningSecret?'<h4>GitHub signing secret</h4><p><code>'+esc(r.githubSigningSecret)+'</code></p>':'')+'<p class="hint">'+esc(r.note)+(r.githubSigningSecret?' GitHub must be able to reach this computer (Settings → Reach Atlas).':' Send a POST to it; an Idempotency-Key header makes retries safe.')+'</p>'}else secret.hidden=true}
  catch(error){notice.textContent=error.message}
  loadAutomations().catch(()=>{})};
 $('#automations-refresh').onclick=()=>loadAutomations();

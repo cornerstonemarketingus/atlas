@@ -28,6 +28,7 @@ const DONE_LIMIT = 20;
 export function buildCommandCenter({ missions = [], genesisProjects = [], tasks = [], selfImprove = null, automations = [], now = Date.now() } = {}) {
   const items = [
     ...automations.filter((automation) => !automation.enabled && automation.consecutiveFailures > 0).map(automationItem),
+    ...suggestionItems(missions, automations),
     ...missions.map(missionItem),
     ...genesisProjects.map(genesisItem),
     ...tasks.map(taskItem),
@@ -105,6 +106,43 @@ function laneOf(mission, child, team) {
     updatedAt: child.completedAt ?? child.startedAt ?? null,
     actions,
   };
+}
+
+const SUGGEST_AFTER = 3;
+
+/**
+ * "Automate this?": the same coding tasks on the same repository finished
+ * by hand three or more times, with no automation for them yet. Versions,
+ * team missions and runs an automation started are not counted.
+ */
+function suggestionItems(missions, automations) {
+  const groups = new Map();
+  for (const mission of missions) {
+    const children = mission.children ?? [];
+    if (mission.status !== "completed" || !children.length || String(mission.title ?? "").endsWith("(automation)")) continue;
+    if (children.some((child) => child.metadata?.kind === "agent_step" || child.metadata?.variant)) continue;
+    const repository = children[0].metadata?.repository;
+    if (!repository) continue;
+    const tasks = children.map((child) => child.objective).sort();
+    const key = JSON.stringify([repository, tasks]);
+    const group = groups.get(key) ?? { repository, tasks, missions: [] };
+    group.missions.push(mission);
+    groups.set(key, group);
+  }
+  const automated = new Set(automations.filter((a) => a.action?.kind === "mission").map((a) => JSON.stringify([a.action.repository, [...a.action.tasks].sort()])));
+  const items = [];
+  for (const [key, group] of groups) {
+    if (group.missions.length < SUGGEST_AFTER || automated.has(key)) continue;
+    const latest = group.missions.map((m) => m).sort((a, b) => String(b.completedAt ?? "").localeCompare(String(a.completedAt ?? "")))[0];
+    items.push({
+      kind: "suggestion", id: `suggest-${latest.id}`,
+      title: `Automate this? "${group.tasks[0].slice(0, 80)}"${group.tasks.length > 1 ? ` and ${group.tasks.length - 1} more` : ""}`,
+      state: "suggested", bucket: "waiting", updatedAt: latest.completedAt ?? null, link: `#/automations/new/${latest.id}`,
+      detail: `You have run this by hand ${group.missions.length} times on ${group.repository}. An automation can run it on a schedule, a webhook or a GitHub event.`,
+      progress: null, lanes: [], actions: [],
+    });
+  }
+  return items;
 }
 
 /** Only automations that paused themselves need the owner here; their runs show as missions. */

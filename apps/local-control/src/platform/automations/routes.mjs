@@ -34,6 +34,7 @@ export function createAutomationRoutes({ automations, parseBody, send }) {
         return send(response, 201, {
           ...created,
           ...(created.webhookSecret ? { webhookPath: `/v1/hooks/${created.automation.id}/${created.webhookSecret}`, note: "Copy the webhook address now; Atlas stores only a hash of its secret." } : {}),
+          ...(created.githubSigningSecret ? { note: "Copy both now. In GitHub: Settings → Webhooks → Add webhook; Payload URL is the address, Content type application/json, Secret is the signing secret." } : {}),
         });
       }
       const match = new RegExp(`^/v1/automations/(${ID})(?:/(run|pause|resume))?$`, "u").exec(url.pathname);
@@ -72,11 +73,12 @@ export function createWebhookRoute({ automations, readRaw, send, limiter = null 
     if (body === null) return true;
     const key = request.headers["idempotency-key"] ?? request.headers["x-github-delivery"] ?? request.headers["x-request-id"] ?? null;
     try {
-      const run = await automations.deliver(match[1], match[2], { idempotencyKey: typeof key === "string" ? key : null, body });
+      const run = await automations.deliver(match[1], match[2], { idempotencyKey: typeof key === "string" ? key : null, body, headers: request.headers });
       // Accepted whether it ran, was skipped or was a duplicate: the sender did nothing wrong.
       return send(response, 202, { status: run.status, runId: run.id ?? null, message: run.message ?? null });
     } catch (error) {
       if (error instanceof AutomationError && error.code === "UNAUTHORIZED") return send(response, 404, { message: "Unknown webhook." });
+      if (error instanceof AutomationError && error.code === "INVALID_PAYLOAD") return send(response, 400, { message: error.message });
       return send(response, 500, { message: "The delivery could not be recorded." });
     }
   };
