@@ -29,6 +29,22 @@ export function createMissionRoutes({ missionService, keepaliveMs = SSE_KEEPALIV
       }
     }
 
+    const lane = new RegExp(`^/v1/missions/(${MISSION_ID})/lanes/([a-z0-9][a-z0-9._-]{0,63})/control$`, "u").exec(path);
+    if (lane && request.method === "POST") {
+      if (identity.role !== "admin") return send(response, 403, { message: "Only the local owner can control missions." });
+      const body = await readJson(request, response);
+      if (body === null) return true;
+      const action = typeof body.action === "string" ? body.action.trim() : "";
+      if (!["pause", "resume", "cancel", "retry"].includes(action)) {
+        return send(response, 400, { message: "action must be pause, resume, cancel, or retry." });
+      }
+      try {
+        return send(response, 200, { mission: await missionService.controlLane(lane[1], lane[2], action) });
+      } catch (error) {
+        return sendError(response, error);
+      }
+    }
+
     const match = new RegExp(`^/v1/missions/(${MISSION_ID})(?:/(control|events))?$`, "u").exec(path);
     if (!match) return false;
     const [, missionId, suffix] = match;
@@ -127,6 +143,7 @@ async function readJson(request, response) {
 function sendError(response, error) {
   const status = error?.statusCode ?? ({
     UNKNOWN_MISSION: 404,
+    UNKNOWN_LANE: 404,
     MISSION_NOT_FOUND: 404,
     MISSION_EXISTS: 409,
     INVALID_STATE: 409,

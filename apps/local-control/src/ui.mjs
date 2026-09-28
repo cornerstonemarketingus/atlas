@@ -17,6 +17,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
  <a class="brand" href="#/home"><span class="mark" aria-hidden="true">A</span><span><strong>Atlas</strong><small>on this computer</small></span></a>
  <nav class="nav" aria-label="Sections">
   <a href="#/home" data-nav="home"><span class="ico" aria-hidden="true">⌂</span>Home</a>
+  <a href="#/command" data-nav="command"><span class="ico" aria-hidden="true">▦</span>Command center</a>
   <a href="#/build" data-nav="build"><span class="ico" aria-hidden="true">✚</span>Build</a>
   <a href="#/missions" data-nav="missions"><span class="ico" aria-hidden="true">◎</span>Missions</a>
   <a href="#/improve" data-nav="improve"><span class="ico" aria-hidden="true">↻</span>Improve Atlas<span class="badge" id="improve-badge" hidden></span></a>
@@ -73,6 +74,14 @@ export const LOCAL_UI_HTML = `<!doctype html>
     <div class="panel"><h3>This computer</h3><p class="hint" id="home-owner"></p><div id="home-machine" class="list"><p class="empty">Unlock to see what is available.</p></div></div>
    </div>
   </div>
+ </section>
+
+ <section class="view" data-view="command" hidden aria-labelledby="command-heading">
+  <div class="section-title"><div><p class="eyebrow">EVERYTHING ATLAS IS DOING</p><h2 id="command-heading">Command center</h2></div><button type="button" class="secondary" id="command-refresh">Refresh</button></div>
+  <p class="hint">Missions and their lanes, team missions, Genesis builds, coding tasks and Improve Atlas runs in one place. Pause, resume, cancel or retry a single lane without stopping the others. Updates every few seconds while open.</p>
+  <div class="chips" id="command-counts" aria-live="polite"></div>
+  <p id="command-notice" class="hint" role="status" aria-live="polite"></p>
+  <div id="command-items" class="list"><p class="empty">Unlock this tab to see what Atlas is doing.</p></div>
  </section>
 
  <section class="view" data-view="build" hidden aria-labelledby="build-heading">
@@ -266,7 +275,7 @@ main{padding:16px 16px calc(96px + env(safe-area-inset-bottom))}.toast:not(:empt
 input,textarea,select{font-size:16px}
 .transcript{max-height:46vh}
 }
-@media (prefers-reduced-motion:reduce){*{transition:none!important}}.steps-list{list-style:none;padding:0;margin:12px 0}.steps-list .step{padding:4px 0;color:var(--muted)}.steps-list .step.done{color:var(--text)}.steps-list .step.running{color:var(--accent);font-weight:600}.steps-list .step.failed{color:var(--danger,#b42318)}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}button.chip{cursor:pointer;background:none}.row{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.row .grow{flex:1 1 240px}.pair-form{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.check{display:flex;gap:8px;align-items:center;margin:10px 0}.check input{width:auto}.log{max-height:360px;overflow:auto;margin:8px 0 0;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}.lanes{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:6px}.lane{padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}.lane .actions{margin-top:6px}.lane .actions:empty{display:none}.command-bucket{margin:18px 0 6px;font-size:.85rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.steps-list{list-style:none;padding:0;margin:12px 0}.steps-list .step{padding:4px 0;color:var(--muted)}.steps-list .step.done{color:var(--text)}.steps-list .step.running{color:var(--accent);font-weight:600}.steps-list .step.failed{color:var(--danger,#b42318)}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}button.chip{cursor:pointer;background:none}.row{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.row .grow{flex:1 1 240px}.pair-form{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.check{display:flex;gap:8px;align-items:center;margin:10px 0}.check input{width:auto}.log{max-height:360px;overflow:auto;margin:8px 0 0;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
 `;
 
 export const LOCAL_UI_JS = `/* Signed in by open-atlas: the owner token arrives in the URL fragment (never sent to a server) and is kept for this tab only. */{const m=/[#&]signin=([A-Za-z0-9_-]{32,128})/.exec(location.hash);if(m){sessionStorage.setItem('atlas-token',m[1]);history.replaceState(null,'',location.pathname+'#/home')}}/* A paired device keeps its own revocable token on this device. */try{const d=localStorage.getItem('atlas-device-token');if(d&&!sessionStorage.getItem('atlas-token'))sessionStorage.setItem('atlas-token',d)}catch{}const pairFromLink=(/[#&]pair=([0-9]{6})/.exec(location.hash)||[])[1]||'';if(pairFromLink)history.replaceState(null,'',location.pathname+'#/home');const q=s=>document.querySelector(s),tokenInput=q('#token'),tasks=q('#tasks'),notice=q('#notice');let knownApprovals=new Set;tokenInput.value=sessionStorage.getItem('atlas-token')||'';const headers=()=>({authorization:'Bearer '+sessionStorage.getItem('atlas-token')}),api=(url,options={})=>fetch(url,{...options,headers:{...headers(),...(options.headers||{})}});function esc(v){const d=document.createElement('div');d.textContent=v??'';return d.innerHTML}async function load(){const [tr,ar,pr,lr,dr]=await Promise.all(['/v1/tasks','/v1/approvals','/v1/policies','/v1/audit','/v1/devices'].map(u=>api(u)));if(tr.status===401){tasks.innerHTML='<p class="empty">Unlock this tab to load tasks.</p>';return}const list=(await tr.json()).tasks;tasks.innerHTML=list.length?list.map(t=>'<article class="task"><div class="task-top"><h3>'+esc(t.objective)+'</h3><span class="status '+t.status+'">'+t.status+'</span></div><p>'+esc(t.repository)+' · '+esc(t.model)+'</p>'+(t.message?'<p>'+esc(t.message)+'</p>':'')+'<time>'+new Date(t.createdAt).toLocaleString()+'</time></article>').join(''):'<p class="empty">No local tasks yet.</p>';const approvals=(await ar.json()).approvals,pending=approvals.filter(a=>a.status==='pending');if('Notification'in window&&Notification.permission==='granted')pending.filter(a=>!knownApprovals.has(a.id)).forEach(a=>new Notification('Atlas approval required',{body:a.capability+': '+a.summary,tag:a.id}));knownApprovals=new Set(pending.map(a=>a.id));q('#approvals').innerHTML=pending.map(a=>'<article class="task"><h3>'+esc(a.capability)+'</h3><p>'+esc(a.summary)+'</p><div class="actions"><button data-decision="approved" data-id="'+a.id+'">Approve</button><button class="secondary" data-decision="denied" data-id="'+a.id+'">Deny</button></div></article>').join('')||'<p class="empty">No pending approvals.</p>';q('#approvals').querySelectorAll('button').forEach(b=>b.onclick=()=>decide(b.dataset.id,b.dataset.decision));const policies=(await pr.json()).policies;q('#policies').innerHTML=policies.map(p=>'<div class="policy"><span>'+esc(p.capability)+'</span><select data-capability="'+esc(p.capability)+'"><option'+(p.decision==='allow'?' selected':'')+'>allow</option><option'+(p.decision==='ask'?' selected':'')+'>ask</option><option'+(p.decision==='deny'?' selected':'')+'>deny</option></select></div>').join('');q('#policies').querySelectorAll('select').forEach(s=>s.onchange=()=>api('/v1/policies',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({capability:s.dataset.capability,decision:s.value})}).then(load));const events=(await lr.json()).events;q('#audit').innerHTML=events.slice(0,50).map(e=>'<article class="task"><div class="task-top"><h3>'+esc(e.category)+'</h3><time>'+new Date(e.createdAt).toLocaleString()+'</time></div><p>'+esc(e.summary)+'</p></article>').join('')||'<p class="empty">No audit events.</p>';const devices=(await dr.json()).devices;q('#devices').innerHTML=devices.filter(d=>!d.revokedAt).map(d=>'<article class="task"><div class="task-top"><h3>'+esc(d.name)+'</h3><button class="secondary" data-device="'+d.id+'">Revoke</button></div><time>'+new Date(d.createdAt).toLocaleString()+'</time></article>').join('')||'<p class="empty">No paired devices.</p>';q('#devices').querySelectorAll('button').forEach(b=>b.onclick=()=>api('/v1/devices/'+b.dataset.device,{method:'DELETE'}).then(load))}async function decide(id,decision){await api('/v1/approvals/'+id+'/decision',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({decision})});load()}async function models(){const r=await api('/v1/models');if(!r.ok)return;const v=await r.json();if(v.models.length)q('#model').innerHTML=v.models.map(m=>'<option>'+esc(m)+'</option>').join('')}q('#save-token').onclick=()=>{sessionStorage.setItem('atlas-token',tokenInput.value);load();models();loadSessions();if(sessionId)selectSession(sessionId)};q('#refresh').onclick=load;q('#notify').onclick=async()=>{if(!('Notification'in window))return notice.textContent='Notifications are unavailable in this browser.';const result=await Notification.requestPermission();notice.textContent=result==='granted'?'Approval notifications enabled.':'Notification permission was not granted.'};q('#task-form').onsubmit=async e=>{e.preventDefault();notice.textContent='Queueing…';const r=await api('/v1/tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repository:q('#repository').value,objective:q('#objective').value,model:q('#model').value})});const data=await r.json();notice.textContent=r.ok?(data.approval?'Waiting for approval.':'Task queued in an isolated worktree.'):data.message;load()};q('#pair').onclick=async()=>{const r=await api('/v1/pair',{method:'POST'}),v=await r.json();q('#pair-code').textContent=r.ok?'Pairing code '+v.code+' expires '+new Date(v.expiresAt).toLocaleTimeString():v.message};q('#export').onclick=async()=>{const r=await api('/v1/export',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:q('#passphrase').value})}),v=await r.json();q('#backup').value=r.ok?JSON.stringify(v.backup):v.message};q('#import').onclick=async()=>{let backup;try{backup=JSON.parse(q('#backup').value)}catch{return notice.textContent='Backup JSON is invalid.'}const r=await api('/v1/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:q('#passphrase').value,backup})});notice.textContent=r.ok?'Backup imported.':'Import failed.';load()};fetch('/health').then(r=>r.json()).then(v=>q('#health').textContent=v.status==='ok'?'Atlas is running':'Atlas is not responding').catch(()=>q('#health').textContent='Unavailable');if(tokenInput.value){load();models()}setInterval(()=>{if(sessionStorage.getItem('atlas-token'))load()},5000);
@@ -476,7 +485,7 @@ if(sessionStorage.getItem('atlas-token')){loadMissions();loadMissionModels()}
 setInterval(()=>{if(sessionStorage.getItem('atlas-token'))loadMissions()},5000);
 
 /* ---- Shell: sections, theme, lock state, and the views built on the platform APIs. ---- */
-const VIEWS={home:'Home',build:'Build',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
+const VIEWS={home:'Home',command:'Command center',build:'Build',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
 const $=q,$$=s=>[...document.querySelectorAll(s)];
 const isUnlocked=()=>Boolean(sessionStorage.getItem('atlas-token'));
 let currentView='home',openMissionId=null,shownMission='';
@@ -679,10 +688,45 @@ $('#build-refresh').onclick=()=>loadBuild();
 
 function refreshView(){
  if(!isUnlocked())return;
- const run={home:loadHome,missions:loadTeam,improve:loadImprove,models:loadModels,build:loadBuild,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections,settings:loadRemote}[currentView];
+ const run={home:loadHome,command:loadCommand,missions:loadTeam,improve:loadImprove,models:loadModels,build:loadBuild,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections,settings:loadRemote}[currentView];
  if(run)run().catch(()=>{});
  loadBadge().catch(()=>{});
 }
+
+/* ---- Command center: every running thing, with per-lane control. ---- */
+const COMMAND_KINDS={mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
+const COMMAND_BUCKETS={attention:'Needs you',running:'Running',waiting:'Waiting',done:'Recently finished'};
+function commandButtons(actions,key){return (actions||[]).map((a,i)=>'<button type="button" class="'+(a.name==='cancel'?'ghost':'secondary')+'" data-command="'+esc(key)+'" data-index="'+i+'">'+esc(a.label)+'</button>').join('')}
+async function loadCommand(){
+ const list=$('#command-items');
+ if(list.contains(document.activeElement)&&document.activeElement.matches('button'))return;
+ let view;
+ try{view=await getJson('/v1/command-center')}catch(error){list.innerHTML=problem(error);return}
+ const c=view.counts;
+ $('#command-counts').innerHTML=['attention','running','waiting'].map(b=>'<span class="chip">'+esc(COMMAND_BUCKETS[b])+' · '+c[b]+'</span>').join('')+'<span class="chip">Lanes running · '+c.lanesRunning+'</span>';
+ const registry=new Map();
+ let bucket='';
+ list.innerHTML=view.items.length?view.items.map((item,n)=>{
+  const key='i'+n;registry.set(key,item.actions||[]);
+  const heading=item.bucket!==bucket?'<h3 class="command-bucket">'+esc(COMMAND_BUCKETS[item.bucket])+'</h3>':'';bucket=item.bucket;
+  const lanes=(item.lanes||[]).map((lane,m)=>{const laneKey=key+'l'+m;registry.set(laneKey,lane.actions||[]);
+   return '<li class="lane"><div class="task-top"><span>'+esc(lane.title)+(lane.agent?' <span class="hint">· '+esc(lane.agent)+'</span>':'')+'</span>'+pill(lane.held?'paused':lane.state)+'</div>'+(lane.message&&lane.state!=='completed'?'<p class="hint">'+esc(lane.message)+'</p>':'')+'<div class="actions">'+commandButtons(lane.actions,laneKey)+'</div></li>'}).join('');
+  return heading+'<article class="card"><div class="task-top"><h4><a href="'+esc(item.link)+'">'+esc(item.title)+'</a></h4>'+pill(item.state)+'</div>'
+   +'<div class="meta"><span>'+esc(COMMAND_KINDS[item.kind]||item.kind)+'</span>'+(item.progress?'<span>'+item.progress.done+' of '+item.progress.total+' done</span>':'')+'<time>'+when(item.updatedAt)+'</time></div>'
+   +(item.progress&&item.progress.total?'<progress max="'+item.progress.total+'" value="'+item.progress.done+'"></progress>':'')
+   +(item.detail?'<p class="hint">'+esc(item.detail)+'</p>':'')
+   +(lanes?'<ul class="lanes">'+lanes+'</ul>':'')
+   +'<div class="actions">'+commandButtons(item.actions,key)+'</div></article>'}).join(''):'<p class="empty">Atlas is not doing anything right now. Start something from Home, Build or Missions.</p>';
+ list.querySelectorAll('[data-command]').forEach(b=>b.onclick=async()=>{
+  const act=(registry.get(b.dataset.command)||[])[Number(b.dataset.index)];if(!act)return;
+  if(act.name==='cancel'&&!confirm('Cancel this? Work already finished is kept.'))return;
+  const notice=$('#command-notice');b.disabled=true;notice.textContent='Asking Atlas to '+act.label.toLowerCase()+'…';
+  try{await sendJson(act.path,act.method,act.body);notice.textContent=''}catch(error){notice.textContent=error.message}
+  b.blur();loadCommand().catch(()=>{});
+ });
+}
+$('#command-refresh').onclick=()=>loadCommand();
+setInterval(()=>{if(currentView==='command'&&isUnlocked()&&!document.hidden)loadCommand().catch(()=>{})},4000);
 
 /* ---- Home ---- */
 async function loadBadge(){

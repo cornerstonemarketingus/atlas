@@ -134,6 +134,8 @@ export class MissionScheduler {
   #throttledUntil = null;
   #throttleTimer = null;
   #consecutiveLimits = 0;
+  /** Why a running lane was aborted by controlChild, keyed by lane id. */
+  #childStops = new Map();
 
   constructor({ plan, execute, maxConcurrency = 2, maxRateLimitRetries = 6, onStateChange = () => {}, clock = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.#plan = normalizeMissionPlan(plan);
@@ -209,7 +211,7 @@ export class MissionScheduler {
     }
     if (TERMINAL_MISSION_STATES.has(this.#status)) return Promise.resolve(this.snapshot());
     for (const child of this.#children.values()) {
-      if (child.state === "interrupted") child.state = "pending";
+      if (child.state === "interrupted" && !heldByOperator(child)) child.state = "pending";
     }
     this.#status = "running";
     this.#reason = null;
@@ -226,7 +228,7 @@ export class MissionScheduler {
     this.#resumePromise = Promise.allSettled([...this.#running.values()]).then(() => {
       if (this.#status !== "interrupted") return this.#drainPromise ?? this.snapshot();
       for (const child of this.#children.values()) {
-        if (child.state === "interrupted") child.state = "pending";
+        if (child.state === "interrupted" && !heldByOperator(child)) child.state = "pending";
       }
       this.#status = "running";
       this.#reason = null;
@@ -273,6 +275,82 @@ export class MissionScheduler {
     this.#changed();
     this.#pump();
     return this.snapshot();
+  }
+
+  /**
+   * Controls one lane without touching the others.
+   *
+   * - pause:  a running lane is interrupted, a pending one parked; either is
+   *           held (code CHILD_PAUSED) until resumed, surviving a restart and
+   *           a mission-wide resume. Usage is kept, as with a mission pause.
+   * - resume: a held lane is queued again.
+   * - cancel: the lane ends cancelled; lanes depending on it become blocked.
+   * - retry:  a failed, cancelled or blocked lane (and the lanes it blocked)
+   *           is queued again with its usage so far, never a fresh budget; a
+   *           mission that had ended failed or cancelled runs again for it.
+   */
+  controlChild(id, action, reason = null) {
+    const child = this.#children.get(id);
+    if (!child) throw new MissionPlanError("UNKNOWN_CHILD", `Mission has no lane '${id}'.`);
+    const now = () => new Date(this.#clock()).toISOString();
+    if (action === "pause") {
+      const message = reason ?? "Lane paused by the operator.";
+      if (child.state === "running") {
+        this.#childStops.set(id, { kind: "pause", message });
+        this.#controllers.get(id)?.abort(new ChildPausedError(message));
+      } else if (child.state === "pending" || child.state === "interrupted") {
+        child.state = "interrupted";
+        child.error = { code: "CHILD_PAUSED", message };
+      } else {
+        throw new MissionPlanError("INVALID_STATE", `Lane '${id}' is ${child.state}; only a pending or running lane can be paused.`);
+      }
+    } else if (action === "resume") {
+      if (!(child.state === "interrupted" && heldByOperator(child))) {
+        throw new MissionPlanError("INVALID_STATE", `Lane '${id}' is not paused.`);
+      }
+      child.state = this.#status === "running" ? "pending" : "interrupted";
+      child.error = null;
+    } else if (action === "cancel") {
+      const message = reason ?? "Lane cancelled by the operator.";
+      if (child.state === "running") {
+        this.#childStops.set(id, { kind: "cancel", message });
+        this.#controllers.get(id)?.abort(new ChildCancelledError(message));
+      } else if (child.state === "pending" || child.state === "interrupted") {
+        child.state = "cancelled";
+        child.error = { code: "CHILD_CANCELLED", message };
+        child.completedAt = now();
+      } else {
+        throw new MissionPlanError("INVALID_STATE", `Lane '${id}' has already ended (${child.state}).`);
+      }
+    } else if (action === "retry") {
+      if (!["failed", "cancelled", "blocked"].includes(child.state)) {
+        throw new MissionPlanError("INVALID_STATE", `Lane '${id}' is ${child.state}; only a failed, cancelled or blocked lane can be retried.`);
+      }
+      if (this.#status === "cancelled" && child.error?.code === "MISSION_CANCELLED") {
+        throw new MissionPlanError("INVALID_STATE", "The whole mission was cancelled; start a new one.");
+      }
+      const requeue = (lane) => { lane.state = "pending"; lane.error = null; lane.completedAt = null; lane.rateLimits = 0; };
+      requeue(child);
+      // Lanes this one blocked get another chance too; still-failing
+      // dependencies block them again on the next pump.
+      for (const lane of this.#children.values()) {
+        if (lane.state === "blocked" && lane.error?.code === "DEPENDENCY_FAILED") requeue(lane);
+      }
+      if (this.#status === "failed" || this.#status === "cancelled" || this.#status === "completed") {
+        this.#status = "running";
+        this.#reason = null;
+        this.#completedAt = null;
+        this.#drainPromise = new Promise((resolve) => { this.#resolveDrain = resolve; });
+      } else if (this.#status !== "running") {
+        child.state = "interrupted";
+        child.error = { code: "INTERRUPTED", message: "Queued; resume the mission to run it." };
+      }
+    } else {
+      throw new MissionPlanError("INVALID_ACTION", "Lane action must be pause, resume, cancel, or retry.");
+    }
+    this.#changed();
+    this.#pump();
+    return this.child(id);
   }
 
   snapshot() {
@@ -401,7 +479,12 @@ export class MissionScheduler {
         this.#batch.succeeded();
       }
     } catch (error) {
-      if (this.#status === "interrupted" && controller.signal.aborted && !timedOut) {
+      const stop = this.#childStops.get(child.id);
+      this.#childStops.delete(child.id);
+      if (stop && controller.signal.aborted && !timedOut && this.#status !== "cancelled") {
+        child.state = stop.kind === "pause" ? "interrupted" : "cancelled";
+        child.error = { code: stop.kind === "pause" ? "CHILD_PAUSED" : "CHILD_CANCELLED", message: stop.message };
+      } else if (this.#status === "interrupted" && controller.signal.aborted && !timedOut) {
         child.state = "interrupted";
         child.error = { code: "MISSION_PAUSED", message: this.#reason ?? "Mission paused." };
       } else if (this.#status === "cancelled" || (controller.signal.aborted && !timedOut)) {
@@ -501,6 +584,19 @@ export class MissionScheduler {
 
 class MissionCancelledError extends Error {
   constructor(message) { super(message); this.name = "MissionCancelledError"; this.code = "MISSION_CANCELLED"; }
+}
+
+class ChildPausedError extends Error {
+  constructor(message) { super(message); this.name = "ChildPausedError"; this.code = "CHILD_PAUSED"; }
+}
+
+class ChildCancelledError extends Error {
+  constructor(message) { super(message); this.name = "ChildCancelledError"; this.code = "CHILD_CANCELLED"; }
+}
+
+/** A lane the operator paused stays parked until they resume it. */
+function heldByOperator(child) {
+  return child.state === "interrupted" && child.error?.code === "CHILD_PAUSED";
 }
 
 class MissionPausedError extends Error {
