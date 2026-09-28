@@ -16,6 +16,8 @@ test("selection and fallback are server-owned, optional, and never expose creden
   assert.equal(resolveChatProvider({}, "openai").configured, false);
   assert.equal(resolveChatProvider({ OPENAI_API_KEY: "key" }).provider, "openai");
   assert.equal(resolveChatProvider({ ...env, ATLAS_CHAT_BASE_URL: "http://remote.test" }).configured, false);
+  assert.equal(resolveChatProvider({ ...env, ATLAS_CHAT_BASE_URL: "https://custom.test/v1", ATLAS_MODEL_API_KEY: "" }, "configured").apiKey, null);
+  assert.equal(resolveChatProvider({ ...env, ATLAS_CHAT_BASE_URL: "https://api.openai.com/v1", ATLAS_MODEL_API_KEY: "" }, "configured").apiKey, "openai-secret");
   const choices = JSON.stringify(chatProviderChoices(env));
   assert.doesNotMatch(choices, /secret|apiKey|baseUrl/u);
 });

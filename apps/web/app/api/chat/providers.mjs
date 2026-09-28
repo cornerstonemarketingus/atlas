@@ -11,6 +11,7 @@ export function openAIModel(environment = process.env) {
 export function resolveChatProvider(environment = process.env, selection = "auto") {
   const openai = openAIModel(environment);
   const primary = resolveChatModel(environment);
+  if (primary.configured && new URL(primary.baseUrl).origin === "https://api.openai.com" && openai && !primary.apiKey) primary.apiKey = openai.apiKey;
   if (selection === "openai") return openai ?? { configured: false, reason: "OpenAI is not configured. Add OPENAI_API_KEY to the Atlas Worker." };
   if (!["auto", "configured"].includes(selection)) return { configured: false, reason: "Unknown model provider." };
   if (selection === "configured") return primary;
