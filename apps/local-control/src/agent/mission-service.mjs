@@ -95,6 +95,27 @@ export class MissionService {
     return publicMission(scheduler.snapshot());
   }
 
+  /** Pause, resume, cancel or retry one lane of a mission (see MissionScheduler.controlChild). */
+  controlLane(id, laneId, action) {
+    let scheduler = this.#schedulers.get(id);
+    if (!scheduler) {
+      const row = this.#store.mission(id);
+      if (!row) throw new MissionServiceError("UNKNOWN_MISSION", "Mission not found.");
+      scheduler = this.#restore(row.snapshot);
+    }
+    if (!["pause", "resume", "cancel", "retry"].includes(action)) {
+      throw new MissionServiceError("INVALID_ACTION", "Lane action must be pause, resume, cancel, or retry.");
+    }
+    try {
+      scheduler.controlChild(laneId, action);
+    } catch (error) {
+      if (error?.code === "UNKNOWN_CHILD") throw new MissionServiceError("UNKNOWN_LANE", error.message);
+      if (error?.code === "INVALID_STATE") throw new MissionServiceError("INVALID_STATE", error.message);
+      throw error;
+    }
+    return publicMission(scheduler.snapshot());
+  }
+
   events(id, { after = 0, limit = 500 } = {}) {
     if (!this.get(id)) throw new MissionServiceError("UNKNOWN_MISSION", "Mission not found.");
     return this.#store.missionEvents(id, { after, limit }).map(publicEvent);

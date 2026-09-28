@@ -16,6 +16,7 @@ import { createSelfImproveRoutes } from "./platform/self-improve/service.mjs";
 import { createModelHostingRoutes } from "./agent/models/hosting.mjs";
 import { createRemoteRoutes, isRemoteRequest } from "./remote/access.mjs";
 import { createGenesisRoutes } from "./platform/genesis/routes.mjs";
+import { createCommandCenterRoutes } from "./platform/command-center.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -33,6 +34,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const modelHostingRoutes = modelHosting ? createModelHostingRoutes({ ...modelHosting, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const remoteRoutes = remoteAccess ? createRemoteRoutes({ remote: remoteAccess, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const genesisRoutes = genesis ? createGenesisRoutes({ genesis, previews: genesisPreviews, publisher: genesisPublisher, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, send: (response, status, value) => { send(response, status, value); return true; } });
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
 
   async function startTask(taskId) {
@@ -77,6 +79,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (identity.role === "admin" && isRemoteRequest(request) && !remoteAccess?.ownerAllowedRemotely()) {
       return send(response, 403, { message: "The owner token only works on this computer.", unblock: "Pair this device from Settings on the computer running Atlas, or allow owner access remotely there." });
     }
+    if (commandCenterRoutes(request, response)) return;
     if ((request.url ?? "").startsWith("/v1/genesis")) {
       if (!genesisRoutes) return send(response, 503, { message: "Project Genesis is not running in this process." });
       if (await genesisRoutes(request, response, identity)) return;
