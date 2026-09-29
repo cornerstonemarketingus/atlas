@@ -23,10 +23,16 @@ async function withApp(run) {
   const server = createApp({ dataFile: ":memory:" });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
+  let cookie = "";
   const call = async (path, options = {}) => {
-    const response = await fetch(`${base}${path}`, { ...options, headers: { "content-type": "application/json" } });
+    const response = await fetch(`${base}${path}`, { ...options, headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) } });
     return { status: response.status, headers: response.headers, body: response.headers.get("content-type")?.includes("json") ? await response.json() : await response.text() };
   };
+  // With sign-in switched on, the tests act as the owner.
+  if (config.auth?.required) {
+    const response = await fetch(`${base}/api/auth/signup`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@example.com", password: "owner password" }) });
+    cookie = response.headers.get("set-cookie").split(";")[0];
+  }
   try { await run(call); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
 

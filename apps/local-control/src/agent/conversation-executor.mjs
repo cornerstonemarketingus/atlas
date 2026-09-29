@@ -13,6 +13,7 @@ import { loadAttachment, normalizeAttachment, toModelContent } from "./attachmen
 import { ModelRequestError } from "./model-client.mjs";
 import { ReasoningAccumulator, publicErrorMessage, stripInlineReasoning } from "./reasoning.mjs";
 import { wrapUntrusted } from "./untrusted.mjs";
+import { recordToolCall } from "./kernel/observations.mjs";
 
 const FLUSH_CHARACTERS = 120;
 const FLUSH_INTERVAL_MS = 250;
@@ -46,6 +47,8 @@ export function createConversationExecutor({
   summarizeReasoning = null,
   attachmentRoot = null,
   now = () => Date.now(),
+  // Atlas's world state: every tool call a conversation makes is recorded there too.
+  world = null,
 }) {
   return {
     id: "conversation",
@@ -153,6 +156,18 @@ export function createConversationExecutor({
             context: { repository: session.repository, sessionId: session.id },
           });
           const durationMs = now() - startedAtMs;
+          let observedInput = {};
+          try { observedInput = JSON.parse(call.arguments || "{}") ?? {}; } catch { /* observed without inputs */ }
+          recordToolCall(world, {
+            runId: `chat:${session.id}`,
+            runAttrs: { kind: "conversation", status: "running", environment: "local" },
+            seq: String(call.id ?? startedAtMs),
+            call,
+            input: typeof observedInput === "object" ? observedInput : {},
+            status: result.status === "completed" ? "succeeded" : result.status === "approval-required" ? "awaiting_approval" : "failed",
+            code: result.code ?? null,
+            environment: { kind: "local", repository: session.repository ?? null },
+          });
 
           if (result.status === "approval-required") {
             // Recorded before the event is emitted, so the approval exists to

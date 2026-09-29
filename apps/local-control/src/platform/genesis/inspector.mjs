@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
@@ -60,11 +61,50 @@ function projectConfig(project) {
 }
 
 async function api(base, path, options = {}) {
-  const response = await fetch(`${base}${path}`, { ...options, headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(10_000) });
+  const response = await fetch(`${base}${path}`, { ...options, headers: { "content-type": "application/json", ...(options.headers ?? {}) }, signal: AbortSignal.timeout(10_000) });
   const text = await response.text();
   let body = null;
   try { body = JSON.parse(text); } catch { body = text; }
   return { status: response.status, body, headers: response.headers };
+}
+
+/**
+ * Sign-in for an app with `auth.required`. First proves a signed-out caller
+ * is refused, then, while sign-up is still open (no owner yet), signs up a
+ * temporary inspector account that `end()` deletes again, so the owner's
+ * first sign-up is unaffected. Once an owner exists Atlas does not know a
+ * password, so signed-in workflow checks are skipped and say so.
+ */
+async function inspectorSession(base, config, note, findings) {
+  if (!config.auth?.required) return { headers: {}, cookie: null, signedIn: true, end: async () => {} };
+  const privateEntity = config.entities.find((entity) => !config.booking || entity.slug !== config.booking.entity);
+  if (privateEntity) {
+    const refused = await api(base, `/api/${privateEntity.slug}`).catch(() => ({ status: 0 }));
+    note("signed out: private data is refused", refused.status === 401);
+    if (refused.status !== 401) findings.push(finding("auth-required", `/api/${privateEntity.slug}`, "401 when signed out", `status ${refused.status}`));
+  }
+  const status = await api(base, "/api/auth/me").catch(() => ({ status: 0, body: {} }));
+  if (!status.body?.signupOpen) {
+    note("signed-in workflows skipped: the owner account exists and Atlas does not know its password", true);
+    return { headers: {}, cookie: null, signedIn: false, end: async () => {} };
+  }
+  const credentials = { email: `atlas-inspector-${randomBytes(6).toString("hex")}@example.invalid`, password: randomBytes(18).toString("base64url") };
+  const signup = await api(base, "/api/auth/signup", { method: "POST", body: JSON.stringify(credentials) });
+  const cookie = signup.headers?.get("set-cookie")?.split(";")[0] ?? null;
+  note("sign up and sign in", signup.status === 201 && Boolean(cookie));
+  if (signup.status !== 201 || !cookie) {
+    findings.push(finding("auth-signup", "/api/auth/signup", "201 with a session cookie", `${signup.status} ${JSON.stringify(signup.body).slice(0, 200)}`));
+    return { headers: {}, cookie: null, signedIn: false, end: async () => {} };
+  }
+  const headers = { cookie };
+  return {
+    headers, cookie, credentials, signedIn: true,
+    async end() {
+      const removed = await api(base, "/api/auth/me", { method: "DELETE", headers }).catch(() => ({ status: 0 }));
+      note("temporary inspector account removed", removed.status === 200);
+      if (removed.status !== 200) findings.push(finding("auth-cleanup", "/api/auth/me", "the inspector account is deleted", `status ${removed.status}`));
+    },
+  };
 }
 
 /** HTTP-level inspection: complete for APIs, a limited fallback for interfaces. */
@@ -95,23 +135,26 @@ export async function inspectOverHttp(project, preview) {
         if (response.status !== 200) findings.push(finding("asset-loads", path, "200", `status ${response.status}`));
       }
     }
-    for (const entity of config.entities) {
+    const session = await inspectorSession(base, config, note, findings);
+    const headers = session.headers;
+    for (const entity of session.signedIn ? config.entities : []) {
       const marker = Math.random().toString(36).slice(2, 8);
       const record = Object.fromEntries(entity.fields.map((field) => [field.key, sampleValue(field, marker)]));
-      const created = await api(base, `/api/${entity.slug}`, { method: "POST", body: JSON.stringify(record) });
+      const created = await api(base, `/api/${entity.slug}`, { method: "POST", body: JSON.stringify(record), headers });
       note(`${entity.slug} create`, created.status === 201);
       if (created.status !== 201) { findings.push(finding("workflow-create", `/api/${entity.slug}`, "201 Created", `${created.status} ${JSON.stringify(created.body).slice(0, 200)}`)); continue; }
       const id = created.body.record.id;
-      const search = await api(base, `/api/${entity.slug}?q=${marker}`);
+      const search = await api(base, `/api/${entity.slug}?q=${marker}`, { headers });
       const found = search.status === 200 && search.body.records?.some((r) => r.id === id);
       note(`${entity.slug} search`, found);
       if (!found) findings.push(finding("workflow-search", `/api/${entity.slug}?q=`, "the new record is found by search", `status ${search.status}`));
-      const invalid = entity.fields.find((f) => f.required) ? await api(base, `/api/${entity.slug}`, { method: "POST", body: JSON.stringify({}) }) : { status: 400 };
+      const invalid = entity.fields.find((f) => f.required) ? await api(base, `/api/${entity.slug}`, { method: "POST", body: JSON.stringify({}), headers }) : { status: 400 };
       note(`${entity.slug} validation`, invalid.status === 400);
       if (invalid.status !== 400) findings.push(finding("validation", `/api/${entity.slug}`, "400 for a record missing required fields", `status ${invalid.status}`));
-      const removed = await api(base, `/api/${entity.slug}/${id}`, { method: "DELETE" });
+      const removed = await api(base, `/api/${entity.slug}/${id}`, { method: "DELETE", headers });
       note(`${entity.slug} delete`, removed.status === 200);
     }
+    await session.end();
   }
   return { ok: findings.length === 0, findings, limited: project.plan.template !== "api-service", evidence: { mode: "http", checks } };
 }
@@ -164,21 +207,40 @@ export async function inspectInBrowser(project, preview, { artifactsDir = null, 
     }
   }
 
+  let session = { headers: {}, cookie: null, signedIn: true, end: async () => {} };
+  const signedIn = (context) => (session.cookie
+    ? context.addCookies([{ name: session.cookie.split("=")[0], value: session.cookie.slice(session.cookie.indexOf("=") + 1), url: base }])
+    : Promise.resolve());
   try {
+    if (project.plan.template !== "static-site" && config.auth?.required) {
+      // A signed-out visitor sees the sign-in screen, not the app.
+      const { context, page, errors } = await openPage(1280);
+      await visit(page, errors, "/#/dashboard", null, 1280);
+      const heading = (await page.locator("h1").first().textContent({ timeout: 2_000 }).catch(() => "")) ?? "";
+      const gated = /sign in|set up your account/iu.test(heading);
+      note("signed out: the sign-in screen is shown", gated);
+      if (!gated) findings.push(finding("auth-required", "/#/dashboard", "the sign-in screen when signed out", `heading "${heading.trim()}"`));
+      await context.close();
+      session = await inspectorSession(base, config, note, findings);
+    }
     const pages = project.plan.template === "static-site"
       ? config.pages.map((page) => ({ path: page.id === "home" ? "/" : `/${page.id}.html`, heading: page.headline }))
       : [
         ...(config.booking ? [{ path: "/#/book", heading: config.booking.title }] : []),
         { path: "/#/dashboard", heading: "Dashboard" },
         ...config.entities.map((entity) => ({ path: `/#/${entity.slug}`, heading: entity.plural })),
+        ...(config.files && config.files.enabled !== false ? [{ path: "/#/files", heading: "Files" }] : []),
       ];
     for (const width of [1280, 375]) {
+      if (!session.signedIn) break;
       const { context, page, errors } = await openPage(width);
+      await signedIn(context);
       for (const target of pages) await visit(page, errors, target.path, target.heading, width);
       await context.close();
     }
 
     const { context, page, errors } = await openPage(1280);
+    await signedIn(context);
     if (project.plan.template === "static-site") {
       const before = errors.length;
       await page.goto(`${base}/contact.html`, { waitUntil: "load" });
@@ -195,7 +257,7 @@ export async function inspectInBrowser(project, preview, { artifactsDir = null, 
       if (!done) findings.push(finding("workflow-enquiry", "/contact.html", "a confirmation after sending", "no confirmation"));
       for (const error of errors.slice(before)) findings.push(finding("runtime-error", "/contact.html", "no console errors", error));
     } else {
-      for (const entity of config.entities) {
+      for (const entity of session.signedIn ? config.entities : []) {
         const marker = Math.random().toString(36).slice(2, 8);
         const before = errors.length;
         await page.goto(`${base}/#/${entity.slug}/new`, { waitUntil: "load" });
@@ -217,7 +279,7 @@ export async function inspectInBrowser(project, preview, { artifactsDir = null, 
         note(`find ${entity.name.toLowerCase()} by search`, listed && rows === 1);
         if (!listed || rows !== 1) findings.push(finding("workflow-search", `/#/${entity.slug}`, "search shows only the matching record", `${rows} row(s) shown`));
         for (const error of errors.slice(before)) findings.push(finding("runtime-error", `/#/${entity.slug}`, "no console errors", error));
-        await fetch(`${base}/api/${entity.slug}/${id}`, { method: "DELETE" }).catch(() => {});
+        await fetch(`${base}/api/${entity.slug}/${id}`, { method: "DELETE", headers: session.headers }).catch(() => {});
       }
       if (config.booking) {
         const entity = config.entities.find((candidate) => candidate.slug === config.booking.entity);
@@ -233,12 +295,13 @@ export async function inspectInBrowser(project, preview, { artifactsDir = null, 
         const thanked = await page.getByText("Thank you").first().waitFor({ timeout: 6_000 }).then(() => true).catch(() => false);
         note("book an appointment", thanked);
         if (!thanked) findings.push(finding("workflow-booking", "/#/book", "a confirmation after booking", "no confirmation"));
-        const booked = await api(base, `/api/${entity.slug}?q=${marker}`);
-        for (const record of booked.body?.records ?? []) await fetch(`${base}/api/${entity.slug}/${record.id}`, { method: "DELETE" }).catch(() => {});
+        const booked = await api(base, `/api/${entity.slug}?q=${marker}`, { headers: session.headers });
+        for (const record of booked.body?.records ?? []) await fetch(`${base}/api/${entity.slug}/${record.id}`, { method: "DELETE", headers: session.headers }).catch(() => {});
       }
     }
     await context.close();
   } finally {
+    await session.end().catch(() => {});
     await browser.close().catch(() => {});
   }
   const blocking = findings.filter((f) => f.severity === "error");
