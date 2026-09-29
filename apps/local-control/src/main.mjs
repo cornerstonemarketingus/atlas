@@ -34,6 +34,7 @@ import { createRoutedClient } from "./agent/models/routed-client.mjs";
 import { createTeamService } from "./agent/team/team-service.mjs";
 import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform/self-improve/index.mjs";
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
+import { WorldState } from "./agent/kernel/world-state.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { ScopedMemoryStore } from "./platform/memory/memory-store.mjs";
 import { connectMcpServers, parseMcpServers } from "./platform/mcp/daemon-bridge.mjs";
@@ -135,6 +136,8 @@ try {
   mcpReport = [{ id: "*", status: "failed", message: error.message }];
   console.error(error.message);
 }
+// Atlas's world state: every kernel run and every tool call updates it.
+const world = new WorldState(join(dataDirectory, "world.sqlite"));
 const runtime = new AgentRuntime({
   sessions,
   executors: buildExecutors(),
@@ -153,6 +156,7 @@ const laneApplier = createLaneApplier({ missionService, store, dataDirectory });
 // Agent missions: goal → plan over the agent organization → steps run by the
 // assigned agents on the same mission scheduler as coder missions.
 const teamStep = createAgentStepExecutor({
+  world,
   family: innovation.registry,
   delegation: innovation.pipeline.delegation,
   toolRegistry,
@@ -246,6 +250,7 @@ const server = createLocalControlServer({
   },
   laneApplier,
   automations,
+  world,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -290,6 +295,7 @@ function shutdown() {
     clearInterval(automationTimer);
     automations.stopWatchers();
     automationStore.close();
+    world.close();
     platformStore.close();
     store.close();
     process.exit(0);
@@ -310,6 +316,7 @@ function buildExecutors() {
       client: modelClient,
       registry: toolRegistry,
       approvals: toolApprovals,
+      world,
     }),
   };
   const token = process.env.ATLAS_GITHUB_TOKEN;
