@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
@@ -35,6 +35,7 @@ import { createTeamService } from "./agent/team/team-service.mjs";
 import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform/self-improve/index.mjs";
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { WorldState } from "./agent/kernel/world-state.mjs";
+import { createKernel } from "./agent/kernel/kernel.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { ScopedMemoryStore } from "./platform/memory/memory-store.mjs";
 import { connectMcpServers, parseMcpServers } from "./platform/mcp/daemon-bridge.mjs";
@@ -138,6 +139,8 @@ try {
 }
 // Atlas's world state: every kernel run and every tool call updates it.
 const world = new WorldState(join(dataDirectory, "world.sqlite"));
+// One kernel for every agent run: team steps, coder lanes (as a harness), and later chat.
+const kernel = createKernel({ toolRegistry, world });
 const runtime = new AgentRuntime({
   sessions,
   executors: buildExecutors(),
@@ -157,6 +160,7 @@ const laneApplier = createLaneApplier({ missionService, store, dataDirectory });
 // assigned agents on the same mission scheduler as coder missions.
 const teamStep = createAgentStepExecutor({
   world,
+  kernel,
   family: innovation.registry,
   delegation: innovation.pipeline.delegation,
   toolRegistry,
@@ -270,15 +274,31 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
   const repository = child.metadata?.repository;
   const model = child.metadata?.model;
   if (!repository || !model) return { status: "failed", code: "INVALID_CHILD", summary: "The mission child is missing its repository or model." };
-  const result = await runIsolatedLocalCoder(
-    { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: child.objective, model },
-    { dataDirectory, signal },
-  );
+  // A coder lane is a kernel run whose act phase is the atlas-cli coder harness.
+  let result = null;
+  const { runId, verdict } = await kernel.runHarness({
+    // Child ids repeat across missions, so the run gets its own id; the lane's evidence links to it.
+    runId: `coder-${child.id}-${randomBytes(6).toString("hex")}`,
+    goal: { title: child.objective, doneWhen: "a patch from an isolated worktree is ready to review" },
+    capabilities: ["code"],
+    harness: "atlas-cli",
+    environment: { kind: "local", repository },
+  }, async () => {
+    result = await runIsolatedLocalCoder(
+      { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: child.objective, model },
+      { dataDirectory, signal },
+    );
+    return {
+      ok: result.ok, cancelled: result.cancelled, summary: result.message,
+      artifacts: result.patch ? [{ kind: "patch", key: basename(result.patch), attrs: { bytes: result.patchBytes ?? null } }] : [],
+    };
+  });
   await checkpoint();
+  if (!result) return { status: "failed", code: "CODER_FAILED", summary: verdict.reason, evidence: [{ kind: "kernel_run", run: runId }] };
   return {
     status: result.ok ? "completed" : result.cancelled ? "cancelled" : "failed",
     summary: result.message ?? (result.ok ? "Child completed." : "Child failed."),
-    evidence: result.patch ? [{ kind: "patch", path: result.patch, bytes: result.patchBytes ?? null }] : [],
+    evidence: [...(result.patch ? [{ kind: "patch", path: result.patch, bytes: result.patchBytes ?? null }] : []), { kind: "kernel_run", run: runId }],
     handoff: { worktree: result.worktree ?? null, patch: result.patch ?? null },
   };
 }

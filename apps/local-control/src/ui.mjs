@@ -285,7 +285,7 @@ progress{width:100%;height:6px;accent-color:var(--accent);margin-top:10px}
 .composer-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}.composer-bar .actions{margin:0}
 .attach{display:inline-flex;align-items:center;gap:8px;margin:0;font-size:.85rem}.attach input{width:auto;padding:6px;border:0;background:none}
 details.more{margin-top:10px}details.more>summary{cursor:pointer;color:var(--muted);font-size:.88rem;padding:6px 0}
-.evidence summary{cursor:pointer;color:var(--muted)}.lane{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
+.evidence summary{cursor:pointer;color:var(--muted)}.lane{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.trace summary{cursor:pointer;color:var(--muted)}.trace-steps{margin:6px 0 0;padding-left:20px;font-size:.9em}.trace-steps li{margin:2px 0}
 .toast{margin:0;padding:0 28px}.toast:not(:empty){padding:10px 28px;background:var(--accent-soft);color:var(--text);font-size:.9rem}
 .unlock{margin:24px 28px 0;max-width:560px}
 .error{border:1px solid var(--bad);color:var(--bad);border-radius:12px;padding:12px 14px}.error p{color:var(--text);margin:6px 0 0}
@@ -727,6 +727,23 @@ function refreshView(){
 const COMMAND_KINDS={suggestion:'Suggestion',automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
 const COMMAND_BUCKETS={attention:'Needs you',running:'Running',waiting:'Waiting',done:'Recently finished'};
 function commandButtons(actions,key){return (actions||[]).map((a,i)=>'<button type="button" class="'+(a.name==='cancel'?'ghost':'secondary')+'" data-command="'+esc(key)+'" data-index="'+i+'">'+esc(a.label)+'</button>').join('')}
+/* A lane's kernel run, step by step: what it set out to do, the capabilities it had, each action, and the check. */
+const openTraces=new Set();
+const TRACE_PHASES={goal:'Goal',mount:'Capabilities',perceive:'Looked at what Atlas knows',retrieve:'Recalled',plan:'Attempt',act:'Action',observe:'Observed',verify:'Check',decide:'Next',finish:'Finished'};
+function traceDetail(e){const d=e.data||{};
+ if(e.phase==='goal')return d.title||'';
+ if(e.phase==='mount')return (d.capabilities||[]).map(c=>c.name).join(', ')+((d.gaps||[]).length?' · missing: '+d.gaps.join(', '):'');
+ if(e.phase==='perceive')return (d.entities||0)+' related things';
+ if(e.phase==='retrieve')return (d.memories||0)+' memories'+(d.upstream?', earlier steps':'');
+ if(e.phase==='plan')return 'attempt '+(d.attempt||1);
+ if(e.phase==='act')return (d.tool||d.harness||'')+(d.status?' · '+d.status:'');
+ if(e.phase==='observe')return d.ok?'succeeded'+((d.artifacts||[]).length?' · '+d.artifacts.join(', '):''):(d.cancelled?'cancelled':'failed');
+ if(e.phase==='verify')return (d.passed?'passed':'not yet')+(d.reason?' · '+d.reason:'');
+ if(e.phase==='decide')return (d.next||'')+(d.reason?' · '+d.reason:'');
+ if(e.phase==='finish')return d.passed?'verified':'not verified';
+ return ''}
+async function loadTrace(d){const r=await getJson(d.dataset.trace);
+ d.querySelector('ol').innerHTML=(r.trace||[]).length?r.trace.map(e=>'<li><strong>'+esc(TRACE_PHASES[e.phase]||e.phase)+'</strong> <span class="hint">'+esc(traceDetail(e))+'</span></li>').join(''):'<li class="hint">No steps recorded.</li>'}
 async function loadCommand(){
  const list=$('#command-items');
  if(list.contains(document.activeElement)&&document.activeElement.matches('button'))return;
@@ -740,13 +757,18 @@ async function loadCommand(){
   const key='i'+n;registry.set(key,item.actions||[]);
   const heading=item.bucket!==bucket?'<h3 class="command-bucket">'+esc(COMMAND_BUCKETS[item.bucket])+'</h3>':'';bucket=item.bucket;
   const lanes=(item.lanes||[]).map((lane,m)=>{const laneKey=key+'l'+m;registry.set(laneKey,lane.actions||[]);
-   return '<li class="lane"><div class="task-top"><span>'+esc(lane.title)+(lane.agent?' <span class="hint">· '+esc(lane.agent)+'</span>':'')+'</span>'+pill(lane.held?'paused':lane.state)+'</div>'+(lane.message&&lane.state!=='completed'?'<p class="hint">'+esc(lane.message)+'</p>':'')+(lane.result?'<details><summary>Result</summary>'+(lane.result.summary?'<pre class="log">'+esc(lane.result.summary)+'</pre>':'')+(lane.result.patch?'<p class="hint">Patch: <code>'+esc(lane.result.patch)+'</code></p>':'<p class="hint">No changes were produced.</p>')+'</details>':'')+'<div class="actions">'+commandButtons(lane.actions,laneKey)+'</div></li>'}).join('');
+   return '<li class="lane"><div class="task-top"><span>'+esc(lane.title)+(lane.agent?' <span class="hint">· '+esc(lane.agent)+'</span>':'')+'</span>'+pill(lane.held?'paused':lane.state)+'</div>'+(lane.message&&lane.state!=='completed'?'<p class="hint">'+esc(lane.message)+'</p>':'')+(lane.result?'<details><summary>Result</summary>'+(lane.result.summary?'<pre class="log">'+esc(lane.result.summary)+'</pre>':'')+(lane.result.patch?'<p class="hint">Patch: <code>'+esc(lane.result.patch)+'</code></p>':'<p class="hint">No changes were produced.</p>')+'</details>':'')+(lane.trace?'<details class="trace" data-trace="'+esc(lane.trace)+'"'+(openTraces.has(lane.trace)?' open':'')+'><summary>How it ran</summary><ol class="trace-steps"><li class="hint">Loading…</li></ol></details>':'')+'<div class="actions">'+commandButtons(lane.actions,laneKey)+'</div></li>'}).join('');
   return heading+'<article class="card"><div class="task-top"><h4><a href="'+esc(item.link)+'">'+esc(item.title)+'</a></h4>'+pill(item.state)+'</div>'
    +'<div class="meta"><span>'+esc(COMMAND_KINDS[item.kind]||item.kind)+'</span>'+(item.progress?'<span>'+item.progress.done+' of '+item.progress.total+' done</span>':'')+'<time>'+when(item.updatedAt)+'</time></div>'
    +(item.progress&&item.progress.total?'<progress max="'+item.progress.total+'" value="'+item.progress.done+'"></progress>':'')
    +(item.detail?'<p class="hint">'+esc(item.detail)+'</p>':'')
    +(lanes?'<ul class="lanes">'+lanes+'</ul>':'')
    +'<div class="actions">'+commandButtons(item.actions,key)+'</div></article>'}).join(''):'<p class="empty">Atlas is not doing anything right now. Start something from Home, Build or Missions.</p>';
+ list.querySelectorAll('details.trace').forEach(d=>{
+  const show=()=>loadTrace(d).catch(e=>{d.querySelector('ol').innerHTML='<li class="hint">'+esc(e.message)+'</li>'});
+  d.addEventListener('toggle',()=>{if(d.open){openTraces.add(d.dataset.trace);show()}else openTraces.delete(d.dataset.trace)});
+  if(d.open)show();
+ });
  list.querySelectorAll('[data-command]').forEach(b=>b.onclick=async()=>{
   const act=(registry.get(b.dataset.command)||[])[Number(b.dataset.index)];if(!act)return;
   if(act.name==='cancel'&&!confirm('Cancel this? Work already finished is kept.'))return;
