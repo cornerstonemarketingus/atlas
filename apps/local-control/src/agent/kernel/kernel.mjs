@@ -138,5 +138,59 @@ export function createKernel({ toolRegistry, world = null }) {
     }
   }
 
-  return { run };
+  /**
+   * A run whose act phase is an external harness (the atlas-cli coder today;
+   * a Claude/Codex/browser harness tomorrow) with its own inner loop. The
+   * kernel still owns the goal, the trace, the world state and the verdict:
+   * the harness is one capability, not a separate kind of agent.
+   *
+   * `harness()` returns { ok, cancelled?, summary, artifacts?: [{ kind, key, attrs }] }.
+   * The run is verified only when the harness reports success AND `verify`
+   * (default: at least one artifact) agrees.
+   */
+  async function runHarness(spec, harness, { verify = (result) => ({ passed: Boolean(result.artifacts?.length), reason: result.artifacts?.length ? "The harness produced its artifact." : "The harness produced nothing to review." }) } = {}) {
+    const runId = spec.runId ?? `run-${randomUUID()}`;
+    const { goal, identity = null, environment = { kind: "local" } } = spec;
+    const taskRef = spec.task ?? { type: "task", key: runId };
+    const repository = environment.repository ? { type: "repository", key: environment.repository, attrs: { name: environment.repository } } : null;
+    observe({
+      source: `run:${runId}`,
+      entities: [
+        { type: "run", key: runId, attrs: { goal: goal.title, status: "running", capabilities: spec.capabilities, harness: spec.harness, environment: environment.kind } },
+        { type: "task", key: taskRef.key, attrs: { title: goal.title, doneWhen: goal.doneWhen ?? null } },
+        ...(repository ? [repository] : []),
+      ],
+      relations: [
+        { from: { type: "run", key: runId }, relation: "part_of", to: { type: "task", key: taskRef.key } },
+        ...(repository ? [{ from: { type: "run", key: runId }, relation: "uses", to: repository }] : []),
+      ],
+    });
+    trace(runId, "goal", { title: goal.title, doneWhen: goal.doneWhen ?? null, agent: identity?.name ?? null });
+    trace(runId, "mount", { capabilities: (spec.capabilities ?? []).map((name) => ({ name, harness: spec.harness })), gaps: [] });
+    trace(runId, "act", { harness: spec.harness });
+    let result;
+    try {
+      result = await harness();
+    } catch (error) {
+      result = { ok: false, summary: error instanceof Error ? error.message : String(error) };
+    }
+    const artifacts = result.artifacts ?? [];
+    observe({
+      source: `run:${runId}`,
+      entities: artifacts.map((artifact) => ({ type: "artifact", key: artifact.key, attrs: { kind: artifact.kind, ...artifact.attrs } })),
+      relations: [
+        ...artifacts.map((artifact) => ({ from: { type: "run", key: runId }, relation: "produced", to: { type: "artifact", key: artifact.key } })),
+        ...(repository ? artifacts.map((artifact) => ({ from: { type: "artifact", key: artifact.key }, relation: "part_of", to: repository })) : []),
+      ],
+    });
+    trace(runId, "observe", { ok: Boolean(result.ok), cancelled: Boolean(result.cancelled), artifacts: artifacts.map((a) => a.kind) });
+    const verdict = result.ok ? verify(result) : { passed: false, reason: result.cancelled ? "Cancelled." : String(result.summary ?? "The harness failed.").slice(0, 500) };
+    trace(runId, "verify", { passed: verdict.passed, reason: verdict.reason, checker: "harness" });
+    const status = verdict.passed ? "verified" : result.cancelled ? "cancelled" : "unverified";
+    observe({ source: `run:${runId}`, entities: [{ type: "run", key: runId, attrs: { status, reason: verdict.passed ? null : verdict.reason } }] });
+    trace(runId, "finish", { passed: verdict.passed });
+    return { runId, result, verdict };
+  }
+
+  return { run, runHarness };
 }

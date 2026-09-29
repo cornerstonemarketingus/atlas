@@ -181,6 +181,28 @@ test("a failed run is recorded as unverified; a pending approval is part of the 
   assert.equal(state.traceOf("run-2").filter((entry) => entry.phase === "decide").at(-1).data.next, "escalate");
 });
 
+test("an external harness (the coder) runs inside the kernel: traced, its artifact in the world, verified only with output", async (t) => {
+  const state = world(t);
+  const kernel = createKernel({ toolRegistry: registry([]), world: state });
+  const done = await kernel.runHarness({ runId: "coder-1", goal: { title: "Fix the login redirect" }, capabilities: ["code"], harness: "atlas-cli", environment: { kind: "local", repository: "/work/app" } },
+    async () => ({ ok: true, summary: "Fixed.", artifacts: [{ kind: "patch", key: "lane-1.patch", attrs: { bytes: 120 } }] }));
+  assert.equal(done.verdict.passed, true);
+  assert.deepEqual(state.traceOf("coder-1").map((e) => e.phase), ["goal", "mount", "act", "observe", "verify", "finish"]);
+  assert.equal(state.get("run:coder-1").attrs.status, "verified");
+  assert.ok(state.relations("artifact:lane-1.patch").some((e) => e.relation === "produced" && e.from === "run:coder-1"));
+  assert.ok(state.relations("artifact:lane-1.patch").some((e) => e.relation === "part_of" && e.to === "repository:/work/app"));
+
+  const empty = await kernel.runHarness({ runId: "coder-2", goal: { title: "Nothing to do" }, capabilities: ["code"], harness: "atlas-cli" }, async () => ({ ok: true, artifacts: [] }));
+  assert.equal(empty.verdict.passed, false, "success without output is not verified");
+  const crashed = await kernel.runHarness({ runId: "coder-3", goal: { title: "Crash" }, capabilities: ["code"], harness: "atlas-cli" }, async () => { throw new Error("worktree missing"); });
+  assert.equal(crashed.verdict.passed, false);
+  assert.match(crashed.verdict.reason, /worktree missing/u);
+  assert.equal(state.get("run:coder-3").attrs.status, "unverified");
+  const cancelled = await kernel.runHarness({ runId: "coder-4", goal: { title: "Stop" }, capabilities: ["code"], harness: "atlas-cli" }, async () => ({ ok: false, cancelled: true }));
+  assert.equal(state.get("run:coder-4").attrs.status, "cancelled");
+  assert.equal(cancelled.verdict.passed, false);
+});
+
 test("tool calls made outside a run (chat) are recorded too, and never break the caller", (t) => {
   const state = world(t);
   recordToolCall(state, { runId: "chat:s1", runAttrs: { kind: "conversation" }, seq: "c1", call: { name: "filesystem.read" }, input: { path: "/tmp/a.txt" }, status: "succeeded" });
