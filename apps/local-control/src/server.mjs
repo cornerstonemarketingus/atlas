@@ -51,7 +51,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
 
   return createServer(async (request, response) => {
     response.setHeader("cache-control", "no-store");
-    response.setHeader("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");
+    response.setHeader("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src http://127.0.0.1:*; base-uri 'none'; frame-ancestors 'none'");
     if (request.method === "GET" && request.url === "/") return sendText(response, 200, "text/html; charset=utf-8", LOCAL_UI_HTML);
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
     if (request.method === "GET" && (request.url === "/icon.svg" || request.url === "/favicon.ico")) return sendText(response, 200, "image/svg+xml", LOCAL_UI_ICON);

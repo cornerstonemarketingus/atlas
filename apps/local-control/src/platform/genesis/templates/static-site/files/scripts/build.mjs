@@ -63,7 +63,7 @@ function render(page) {
 <a class="skip" href="#main">Skip to content</a>
 <header class="topbar"><a class="brand" href="/">${escape(site.name)}</a><nav aria-label="Main">${nav}</nav></header>
 <main id="main">
-<section class="hero"><h1>${escape(page.headline)}</h1><p class="lead">${escape(page.intro)}</p>${page.id !== "contact" ? `<a class="button" href="/contact.html">${escape(site.cta)}</a>` : ""}</section>
+<section class="hero"><h1 data-atlas-source="${escape(page.id)}:headline">${escape(page.headline)}</h1><p class="lead" data-atlas-source="${escape(page.id)}:intro">${escape(page.intro)}</p>${page.id !== "contact" ? `<a class="button" href="/contact.html">${escape(site.cta)}</a>` : ""}</section>
 ${page.sections.map(section).join("\n")}
 </main>
 <footer class="footer"><p>© ${new Date().getFullYear()} ${escape(site.name)}${site.contact.area ? ` · ${escape(site.contact.area)}` : ""}</p></footer>

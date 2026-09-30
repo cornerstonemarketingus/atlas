@@ -20,7 +20,8 @@ test("the build renders every page with a title, description, heading and naviga
     const html = readFileSync(file, "utf8");
     assert.match(html, /<title>[^<]+<\/title>/u);
     assert.match(html, /<meta name="description" content="[^"]+">/u);
-    assert.ok(html.includes(`<h1>`), `${page.id} has a heading`);
+    const escape = (value) => String(value).replace(/[&<>"']/gu, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    assert.ok(html.includes(`<h1 data-atlas-source="${escape(page.id)}:headline">${escape(page.headline)}</h1>`), `${page.id} has its configured heading and source identity`);
     for (const other of site.pages) assert.ok(html.includes(other.id === "home" ? 'href="/"' : `href="/${other.id}.html"`), `${page.id} links to ${other.id}`);
   }
   const sitemap = readFileSync(join(root, "dist", "sitemap.xml"), "utf8");

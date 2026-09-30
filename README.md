@@ -1,18 +1,21 @@
 # Atlas
 
-Atlas is an AI-native software engineering platform under incremental
-development. The current release is a safe, local-first TypeScript CLI that can
-inspect another Git repository and produce a deterministic structured summary.
+Atlas is a local-first AI software and computer agent under incremental
+development. Its local dashboard runs chat, coding missions, parallel agents,
+automations and Genesis application builds; its CLI provides repository tools
+and a verified coding loop. The hosted control plane connects these workflows
+to authenticated GitHub tasks and model providers.
 
 ## Current release
 
-The canonical implementation lives in [`packages/atlas-cli`](packages/atlas-cli).
+The CLI lives in [`packages/atlas-cli`](packages/atlas-cli); the local Agent Kernel,
+World State, dashboard and Genesis runtime live in [`apps/local-control`](apps/local-control).
 The hosted control plane lives in [`apps/web`](apps/web) and provides a private,
 authenticated task-intake surface for approval-gated autonomous changes.
 
 Requirements:
 
-- Node.js 20 or newer
+- Node.js 22.13 or newer for the local runtime
 - Git on `PATH` for repository metadata and ignore-rule support
 - PowerShell 7 or Windows PowerShell 5.1
 
@@ -37,7 +40,9 @@ node .\dist\src\cli.js chat C:\path\to\repository "Explain the architecture" `
 
 See the [CLI documentation](packages/atlas-cli/README.md) for its output schema,
 safety boundaries, and local linking instructions. Development status and
-ordered next assignments are tracked in [`TODO.md`](TODO.md).
+current evidence are tracked in [`docs/PROGRESS.md`](docs/PROGRESS.md), with the
+product sequence in [`docs/ROADMAP.md`](docs/ROADMAP.md). `TODO.md` is a historical
+long-range backlog; an unchecked item is not evidence that runtime support is absent.
 
 ### Implemented
 
@@ -68,13 +73,25 @@ ordered next assignments are tracked in [`TODO.md`](TODO.md).
 - Fixture coverage for Git, non-Git, unborn, detached-HEAD, ignored, malformed,
   mixed-language, and unreadable-path cases
 
-### Not implemented yet
+### Product workflows and current limits
 
-- Model-provider integration
-- Public repository editing and validation workflows (internal approval-bound primitives exist)
-- Branch, commit, pull-request, browser, or multi-agent workflows
-- Public agent-driven code editing, validation execution, and repair workflows
-- Production agent-runner dispatch and hosted GitHub write credentials
+Atlas supports model-backed chat (including selectable OpenAI), bounded provider
+recovery, repository edits with validation/repair, GitHub runner dispatch,
+parallel coder lanes, a live Command Center, durable automations, and Genesis
+build → test → preview → inspect → publish workflows. Availability depends on
+configured credentials, models, tools and permissions; local foundations do not
+imply a persistent hosted computer or a completed commercial onboarding flow.
+
+In the local dashboard, a newly generated static-site project exposes **Edit
+visually** once ready. Click its home-page headline or introduction, edit the
+text and choose **Apply and verify**. Source identity maps to `site.json` via a
+JSON pointer; the normal Genesis build/tests/inspection run again. This first
+slice is deterministic text editing, not a general component editor. Existing
+sites without renderer metadata, web-app components, restyling, natural-language
+visual requests and parallel visual alternatives remain follow-ups. The design
+view disables application scripts/forms; use **Open the application** for normal
+interaction. Chromium inspection requires the browser-worker dependency and its
+installed browser; without it, verification explicitly reports HTTP-only coverage.
 
 ## Hosted control plane
 

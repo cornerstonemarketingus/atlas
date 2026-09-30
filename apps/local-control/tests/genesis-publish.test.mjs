@@ -233,7 +233,7 @@ test("a static site deploys to Vercel only after approval, only with the approve
   assert.equal(result.status, "deployed", JSON.stringify(result));
   assert.equal(result.deployment.url, "https://roofing-company-abc.vercel.app");
   const sent = vercel.deployments[0];
-  assert.ok(sent.files.some((file) => file.file === "index.html" && Buffer.from(file.data, "base64").toString().includes("<h1>")), "the built pages were uploaded");
+  assert.ok(sent.files.some((file) => file.file === "index.html" && Buffer.from(file.data, "base64").toString().includes('<h1 data-atlas-source="home:headline">')), "the built pages with source metadata were uploaded");
   assert.equal(genesis.view(project.id).state, "published");
 
   // A rebuilt site no longer matches the approved plan.

@@ -124,3 +124,144 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 | 2026-09-29 | [#177](https://github.com/cornerstonemarketingus/atlas/pull/177) | track B1 | Coder lanes are kernel runs: `kernel.runHarness` wraps an external harness (atlas-cli today) with the kernel's goal, trace, world state and verdict (verified only when the harness succeeds and produced an artifact; crashes and cancellations recorded); the patch becomes an artifact entity linked to its run and repository; lane evidence carries the run id. Command Center lanes link to their run (`run`, `trace`) and show "How it ran": goal, capabilities (and gaps), each action, the check and the outcome | local-control 634 tests, 632 pass, 0 fail (2 skipped); console script parses; daemon boots and serves the command center | Chat turns still observed, not kernel runs | B1: chat turns as kernel runs; branching as a kernel decision |
 | 2026-09-30 | [#179](https://github.com/cornerstonemarketingus/atlas/pull/179) | track B1 | Every chat turn is a kernel run: `kernel.begin` gives a caller-driven run (the chat's streaming loop is its act phase) with goal, capabilities, perception, each tool call and an outcome (answered / waiting / unverified / cancelled; "answered" is not claimed as verified). A turn perceives what earlier turns of the conversation touched (two hops: conversation → earlier runs → files, pages, people; per-call events left to the trace) as data. Runs link directly to what they touched | local-control 637 tests, 635 pass, 0 fail (2 skipped); e2e journey passes; daemon boots; 5 guard mutations, all caught | — | B1: branching (parallel strategies) as a kernel decision |
 | 2026-09-30 | [#180](https://github.com/cornerstonemarketingus/atlas/pull/180) | track B1 | Branching as a kernel decision (`agent/kernel/branching.mjs`): `POST /v1/missions` with `strategy: "auto"` lets the kernel choose one lane or 3 competing versions, with reasons stored on the lanes (open-ended work, or this objective already failed on this repository per the world state → branch; mechanical work → one lane). When no version is still working, the Command Center ranks the finished versions (completed with a patch, verified first, smallest change) and recommends one; the owner still chooses and approves. Console: "Let Atlas decide" launch mode, the decision's reasons, a Recommended badge. Coder runs for versions record the shared request as their goal | local-control 640 tests, 638 pass, 0 fail (2 skipped); e2e passes; console script parses; daemon boots; 7 guard mutations, all caught | Ranking uses change size and verification only; comparing by tests and review comes with stage 9 | Track B1 complete; next per ROADMAP: stage 4 (Visual Genesis editor) |
+
+## 2026-09-30 — reconciliation of main d957cfb and Stage 4 first slice
+
+Runtime/code and current CI take precedence over historical TODO counts. Main CI
+run 36660910214 passed at d957cfb. B1 is complete at the documented scope: team,
+coder and chat entry points use the kernel, typed World State and traces;
+in-run dynamic branching and stronger comparative judging remain future work.
+Command Center lanes/controls/version selection, durable automation triggers,
+Genesis build/check/preview/inspection/publishing, and local backend primitives
+are present in runtime and boundary tests. OpenAI selection/fallback merged in
+#174; explicit per-provider hosted smoke verification remains in #178.
+
+### Open PR reconciliation (recommendations, not automatic merge/closure)
+
+| PR | Disposition | Retained value / required action |
+|---|---|---|
+| #178 | MERGE after protected owner review | Provider smoke gate; green CI at audit; workflow ownership applies. |
+| #172 | REBASE/REPAIR | Salvage durable queue/lease/idempotence behavior; remove #175/#174 overlap. |
+| #160 | REBASE/REPAIR | Model pool must preserve new OpenAI selection, provider fallback and endpoint validation. |
+| #159 | REBASE/REPAIR | Useful invalid-tool-input recovery; conflicts with current CLI/policy. |
+| #158 | REBASE/REPAIR | Governor wiring must retain current chat/finalization contracts and deploy bindings. |
+| #157 | REBASE/REPAIR | Unknown Actions-budget protection is useful; main still fails open; protected workflow review. |
+| #156 | SUPERSEDED as standalone direction | Fold retry coverage into the reconciled inference stack before closing. |
+| #133 | KEEP ACTIVE | Prompt fingerprints; integration evidence still needed. |
+| #132 | KEEP ACTIVE | Target registry; not the canonical production router yet. |
+| #131 | KEEP ACTIVE | Circuit breakers depend on the quota ledger. |
+| #130 | REBASE/REPAIR | Durable ledger/governor needs current deployment integration. |
+| #129 | REBASE/REPAIR | Base of the inference stack; refresh CI/base and prove consumers. |
+| #105 | REBASE/REPAIR | Browser snapshot/download draft has a method inserted inside another method; do not merge as-is. |
+| #101 | REBASE/REPAIR | Preserve hosted repository creation; reconcile newer Genesis and entry paths. |
+| #98 | REBASE/REPAIR | Hosted CI/PR tools absent from main instant-tool list; scope/log-redaction tests needed. |
+| #97 | REBASE/REPAIR | Hosted memory is distinct from local memory; resolve migration numbering/isolation. |
+| #77 | REBASE/REPAIR | Report-only CSP is not strict enforcement; prove renderer compatibility. |
+| #69 | REBASE/REPAIR | Hosted rate limiting useful; refresh migrations, identity and failure policy. |
+| #61 | KEEP ACTIVE, deferred | Retain mobile companion work without delaying the next product milestone. |
+
+No open PR was automatically merged or closed. Stack order is
+#129 → #130 → #131 → #132 → #133 → #158 → #160, with a reconciliation against
+current main required before production rollout. Labels alone do not establish
+current ownership; examine branch commits and claim comments before takeover.
+
+### Actual blockers and documentation differences
+
+Inference stack integration and protected review remain release work. Main CI
+being green does not prove clean-machine onboarding, persistent cloud execution,
+or production routing through every inference component. Historical local test
+counts are not a fresh run. The September 25 CURRENT-STATE and branch-era BACKLOG
+are historical snapshots. README incorrectly called model integration, browser,
+editing/repair and multi-agent workflows absent; its capability summary is
+corrected here after recording the stale documentation-only takeover on #101.
+ROADMAP Stage 1 wording lagged the runtime; Stage 4 remains the next major stage.
+TODO-MAP counts are explicitly dated; unchecked tasks are not capability evidence.
+
+### Recommended dependency order
+
+1. Review/ship explicit provider smoke release gate (#178).
+2. Reconcile the inference stack with current OpenAI and finalization behavior.
+3. Prove capacity exhaustion, provider recovery and saved-work resume boundaries.
+4. Keep capability documentation aligned with runtime evidence.
+5. Static-site selection → source → deterministic edit → verified rebuilt preview (this slice).
+6. Scoped natural-language visual requests through the existing coder.
+7. Web-app/component source mapping and existing-project template migration.
+8. Deterministic color/spacing/font editing.
+9. Parallel visual alternatives using existing mission lanes and patch approval.
+10. Browser QA through publish/deploy acceptance journey.
+11. One coherent goal-entry experience with advanced controls retained.
+12. Clean-machine onboarding and first-run diagnostics.
+13. Persistent isolated execution and resumable checkpoints.
+14. Automations executing in that persistent environment.
+15. Live observation, human takeover, re-observation and safe resume.
+16. Approved, verified skill installation/capability loop.
+17. Independent review and cost-per-verified-outcome evidence.
+18. Usage/billing/support diagnostics for external customers.
+
+Safe parallel tracks: inference reconciliation, visual editor, onboarding
+verification and documentation audit, with non-overlapping file ownership.
+Keep inference stack layers sequential; selection precedes scoped visual changes
+and alternatives; sandbox persistence precedes migration/always-on automation;
+observation precedes takeover/resume. Avoid speculative councils/economics work.
+
+### Stage 4 vertical slice — issue #74, codex/visual-genesis
+
+Claimed #74 after checking no label/comments or competing visual PR. The local
+Build screen now opens a separate loopback design view for new static sites.
+Renderer metadata identifies home hero headline/intro fields in site.json by
+JSON pointer (no DOM-text guessing). Edit → Apply and verify changes only the
+selected field and retains unrelated manual configuration. It reuses Genesis
+planning approval, durable transitions, executor, generated checks/tests/build,
+preview manager and browser inspector. No model call is made for this edit.
+Digest/version checks reject stale input, including changes while awaiting plan
+approval. Unsupported templates/older renderer metadata are explicitly reported.
+
+Boundary files: platform/genesis/{visual,preview,routes,service,executor}.mjs,
+static-site renderer/generated test, local server CSP and Build UI.
+Tests: genesis-visual.test.mjs exercises authenticated HTTP and actual Chromium
+UI selection → source mapping → code/config change → rebuild → browser inspection.
+The existing Genesis CI glob includes this test with GENESIS_REQUIRE_FULL=1.
+
+Security: design view has no bearer token, no APIs/proxy target, contained bounded
+artifact reads, exact Host checking, nonce-only picker script and no forms or
+connections. Parent accepts messages only from the current iframe/origin/session.
+Local dashboard CSP permits loopback preview frames; this security-boundary change
+needs owner review under PROGRAM §3, so no auto-merge is requested.
+
+Limits: first slice edits home headline/intro text in newly generated static sites.
+General components, natural-language changes, restyling, move/delete/duplicate and
+parallel alternatives remain incomplete. Design view intentionally disables app
+scripts/forms; use the normal preview for interaction. HTTP-only verification is
+reported when Chromium is unavailable. This does not complete all of Stage 4.
+
+Validation for this slice: initial Genesis baseline 26/26; affected Genesis suite
+with GENESIS_REQUIRE_FULL=1, CLI dependencies and Chromium: 41/41 passing, no skips.
+Both new HTTP/browser boundary tests pass. The generated publishing suite passes
+8/8 after updating its exact heading assertion for renderer metadata. Removing
+the digest/version rejection makes the HTTP test fail (409 expected, 200 actual);
+restoring it passes. UI script syntax and git diff whitespace checks pass.
+
+The broad local Windows run recorded 620 passes, 3 failures, 19 skips before
+installing CLI dependencies and repairing the heading assertion. Two failures
+(symlink privilege and terminal timeout exit-code expectation) reproduced from
+an unchanged archive of origin/main; the third was this slice's publishing
+assertion and is fixed. No security assertion was weakened. CI remains the
+cross-platform release gate; owner review is required before merge.
+
+CI follow-up: the first Linux/Windows jobs exposed an HTTP-only inspector that
+required a bare h1 tag. It now verifies the exact escaped heading while allowing
+source attributes, and the new test explicitly exercises HTTP inspection even
+when Chromium is installed. Both real boundary tests pass after the repair.
+
+Owner's next-cycle priorities (2026-09-30): verify Command Center wiring, production
+setup, durable closed-loop self-improvement, independent validation, approved
+skills, persistent sandbox, wait/wake agents and adaptive autonomy. The current
+Command Center/lane-control/self-improvement service baseline passes 18/18. Current
+main d957cfb deployed successfully in run 36778384097; live streaming/non-streaming
+chat passed in run 36778576442. Coder gate 36778579833 failed before dispatch:
+fine-grained ATLAS_GITHUB_TOKEN cannot run workflows. Owner must enable repository
+access plus Actions write; Contents/PR write still require successful live proof.
+No credential was substituted and no security gate was bypassed. Next concrete
+self-improvement gap: service-level exceptions currently remain only in memory,
+and rejected loop worktrees are discarded; retained checkpoints and safe retry
+need a dedicated reviewed slice before claiming closed-loop resumption.

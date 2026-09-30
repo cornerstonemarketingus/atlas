@@ -3,6 +3,7 @@ import { applyChangeRequest, inferSpecification } from "./requirements.mjs";
 import { executionOrder, planProject } from "./planner.mjs";
 import { isPlanShape, isSpecShape, resolveIntelligence } from "./intelligence.mjs";
 import { GenesisStoreError } from "./store.mjs";
+import { visualEdit } from "./visual.mjs";
 
 /**
  * Project Genesis orchestration: the owner's idea becomes a durable project
@@ -112,7 +113,7 @@ export class GenesisService {
         evidence: { kind: "questions", questions: spec.questions },
       }).id);
     }
-    const { plan, refinedBy } = await this.#plan(spec);
+    const { plan, refinedBy } = spec.visualOnly ? { plan: planProject(spec), refinedBy: "deterministic" } : await this.#plan(spec);
     this.store.replaceTasks(this.tenantId, project.id, plan.tasks);
     const planned = this.#move(project.id, "planned", {
       reason: `Planned ${plan.summary}.`,
@@ -164,12 +165,26 @@ export class GenesisService {
       throw new GenesisError("BUSY", `Atlas is ${STATE_LABELS[project.state].toLowerCase()}; pause it or wait before changing the plan.`);
     }
     const { spec, changes } = applyChangeRequest(project.spec, request);
+    delete spec.visualOnly;
+    delete spec.visualPending;
     const moved = this.#move(id, "requirements", {
       reason: `Change requested: ${changes.map((c) => c.summary).join("; ")}.`,
       evidence: { kind: "change", request: String(request).slice(0, 1000), changes },
       patch: { spec },
       actor,
     });
+    return this.#afterRequirements(moved);
+  }
+
+  async editVisual(id, input) {
+    const project = this.store.get(this.tenantId, id);
+    if (!["ready", "published"].includes(project.state)) throw new GenesisError("BUSY", "Wait for the current build to finish before editing.");
+    const { selection, edit } = visualEdit(project, input);
+    const spec = { ...project.spec, visualOnly: true, visualPending: { ...edit, digest: selection.digest }, version: (project.spec.version ?? 1) + 1,
+      visualEdits: [...(project.spec.visualEdits ?? []).filter((item) => item.key !== edit.key), edit] };
+    const moved = this.#move(id, "requirements", { reason: `Visual edit: ${selection.component} ${selection.field}.`,
+      evidence: { kind: "visual-edit", source: selection.file, pointer: selection.pointer, digest: selection.digest },
+      patch: { spec }, expectedVersion: project.version, actor: "owner" });
     return this.#afterRequirements(moved);
   }
 
