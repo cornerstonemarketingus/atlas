@@ -206,16 +206,28 @@ export class WorldState {
    * related to, and the most recent entities of the given types — as compact
    * lines for a prompt.
    */
-  snapshot({ focus = [], types = [], limit = 20 } = {}) {
+  snapshot({ focus = [], types = [], limit = 20, depth = 1 } = {}) {
     const seen = new Map();
-    const add = (entity) => { if (entity && !seen.has(entity.id) && seen.size < limit) seen.set(entity.id, entity); };
+    const add = (entity) => { if (entity && !seen.has(entity.id) && seen.size < limit) { seen.set(entity.id, entity); return true; } return false; };
     const edges = [];
-    for (const id of focus) {
-      add(this.get(id));
-      for (const edge of this.relations(id)) {
-        edges.push(edge);
-        add(this.get(edge.from === id ? edge.to : edge.from));
+    const edgeKeys = new Set();
+    // Breadth-first from the focus, `depth` hops out. Per-call events are
+    // left out: they are the trace's business, and they would crowd out the
+    // files, pages and people the work actually touched.
+    let frontier = [];
+    for (const id of focus) if (add(this.get(id))) frontier.push(id);
+    for (let hop = 0; hop < depth && frontier.length; hop += 1) {
+      const next = [];
+      for (const id of frontier) {
+        for (const edge of this.relations(id)) {
+          const other = edge.from === id ? edge.to : edge.from;
+          if (other.startsWith("event:")) continue;
+          const key = `${edge.from}\0${edge.relation}\0${edge.to}`;
+          if (!edgeKeys.has(key)) { edgeKeys.add(key); edges.push(edge); }
+          if (add(this.get(other))) next.push(other);
+        }
       }
+      frontier = next;
     }
     for (const type of types) for (const entity of this.find({ type, limit: 5 })) add(entity);
     const entities = [...seen.values()];

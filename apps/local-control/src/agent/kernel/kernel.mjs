@@ -68,7 +68,7 @@ export function createKernel({ toolRegistry, world = null }) {
     }
 
     // Perceive: the world as it stands around this task, as data.
-    const perceived = world ? world.snapshot({ focus: [`task:${taskRef.key}`, ...(context.focus ?? [])], limit: 20 }) : { text: "", entities: [] };
+    const perceived = world ? world.snapshot({ focus: [`task:${taskRef.key}`, ...(context.focus ?? [])], limit: 20, depth: 2 }) : { text: "", entities: [] };
     trace(runId, "perceive", { entities: perceived.entities.length });
 
     // Retrieve context: memory the agent may read, and upstream results.
@@ -192,5 +192,56 @@ export function createKernel({ toolRegistry, world = null }) {
     return { runId, result, verdict };
   }
 
-  return { run, runHarness };
+  /**
+   * A run whose act loop belongs to the caller (the streaming chat loop):
+   * the kernel records the goal, capabilities, perception, every action and
+   * the outcome, exactly as for `run`, while the caller keeps its own model
+   * loop. Returns a handle; `finish` is idempotent.
+   */
+  function begin(spec) {
+    const runId = spec.runId ?? `run-${randomUUID()}`;
+    const { goal, identity = null, environment = { kind: "local" } } = spec;
+    const taskRef = spec.task ?? { type: "task", key: runId };
+    observe({
+      source: `run:${runId}`,
+      entities: [
+        { type: "run", key: runId, attrs: { goal: goal.title, status: "running", capabilities: spec.capabilities, harness: spec.harness ?? null, environment: environment.kind } },
+        { type: "task", key: taskRef.key, attrs: { title: spec.taskTitle ?? goal.title } },
+        ...(identity?.agentId ? [{ type: "agent", key: identity.agentId, attrs: { name: identity.name } }] : []),
+      ],
+      relations: [
+        { from: { type: "run", key: runId }, relation: "part_of", to: { type: "task", key: taskRef.key } },
+        ...(identity?.agentId ? [{ from: { type: "run", key: runId }, relation: "created_by", to: { type: "agent", key: identity.agentId } }] : []),
+      ],
+    });
+    trace(runId, "goal", { title: goal.title, doneWhen: goal.doneWhen ?? null, agent: identity?.name ?? null });
+    trace(runId, "mount", { capabilities: (spec.capabilities ?? []).map((name) => ({ name })), gaps: [] });
+    let seq = 0;
+    let finished = false;
+    return {
+      runId,
+      /** What Atlas already knows around this task (earlier turns, what they touched), as text; "" when nothing. */
+      perceive({ focus = [], limit = 15 } = {}) {
+        const perceived = world ? world.snapshot({ focus: [`task:${taskRef.key}`, ...focus], limit, depth: 2 }) : { text: "", entities: [] };
+        // The run itself is always there; perceiving only it is perceiving nothing.
+        const others = perceived.entities.filter((entity) => entity.id !== `run:${runId}` && entity.id !== `task:${taskRef.key}`);
+        trace(runId, "perceive", { entities: others.length });
+        return others.length ? perceived.text : "";
+      },
+      act({ call, input = {}, status, code = null }) {
+        seq += 1;
+        trace(runId, "act", { tool: call.name, status, code });
+        observe(observationFor({ runId, seq, call, input: input && typeof input === "object" ? input : {}, status, code, environment }));
+      },
+      finish({ passed, reason = null, status = null }) {
+        if (finished) return;
+        finished = true;
+        trace(runId, "verify", { passed: Boolean(passed), reason, checker: spec.checker ?? "caller" });
+        observe({ source: `run:${runId}`, entities: [{ type: "run", key: runId, attrs: { status: status ?? (passed ? "verified" : "unverified"), reason: passed ? null : reason } }] });
+        trace(runId, "finish", { passed: Boolean(passed), toolCalls: seq });
+      },
+    };
+  }
+
+  return { run, runHarness, begin };
 }

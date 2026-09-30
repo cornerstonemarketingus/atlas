@@ -336,7 +336,7 @@ function buildExecutors() {
       client: modelClient,
       registry: toolRegistry,
       approvals: toolApprovals,
-      world,
+      kernel,
     }),
   };
   const token = process.env.ATLAS_GITHUB_TOKEN;
