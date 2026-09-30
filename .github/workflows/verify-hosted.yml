@@ -8,6 +8,12 @@ on:
         default: inspect
         type: choice
         options: [inspect, coder, chat]
+      provider:
+        description: Chat provider to verify (OpenAI incurs API charges)
+        required: false
+        default: auto
+        type: choice
+        options: [auto, configured, openai]
       message:
         description: Chat only. The conversation to verify (for the release gate, the one that failed in production). Runs streaming and non-streaming.
         required: false
@@ -33,6 +39,7 @@ jobs:
           ATLAS_SMOKE_MODE: ${{ inputs.mode }}
           # Passed through the environment, never interpolated into the script.
           ATLAS_SMOKE_CHAT_MESSAGE: ${{ inputs.message }}
+          ATLAS_SMOKE_CHAT_PROVIDER: ${{ inputs.provider }}
         run: node scripts/runner/smoke-hosted.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
