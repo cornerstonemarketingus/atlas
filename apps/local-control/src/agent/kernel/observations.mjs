@@ -11,9 +11,12 @@ export function observationFor({ runId, seq, call, input = {}, status, code = nu
   const event = { type: "event", key: `${runId}:${seq}`, attrs: { kind: "tool_call", tool, status, code } };
   const entities = [event];
   const relations = [{ from: event, relation: "part_of", to: { type: "run", key: runId } }];
+  const run = { type: "run", key: runId };
   const touched = (entity) => {
     entities.push(entity);
     relations.push({ from: event, relation: "touched", to: entity });
+    // The run too, so "what did this work touch?" is one hop from the run.
+    relations.push({ from: run, relation: "touched", to: entity });
   };
 
   if (typeof input.url === "string") {

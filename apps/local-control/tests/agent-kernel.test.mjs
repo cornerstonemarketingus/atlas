@@ -3,6 +3,7 @@ import test from "node:test";
 import { ToolRegistry } from "../src/agent/tool-registry.mjs";
 import { CAPABILITIES, capabilitiesCovering, mountCapabilities } from "../src/agent/kernel/capabilities.mjs";
 import { createKernel } from "../src/agent/kernel/kernel.mjs";
+import { decideStrategy } from "../src/agent/kernel/branching.mjs";
 import { observationFor, recordToolCall } from "../src/agent/kernel/observations.mjs";
 import { createWorldRoutes } from "../src/agent/kernel/routes.mjs";
 import { WorldState, cleanAttributes } from "../src/agent/kernel/world-state.mjs";
@@ -201,6 +202,50 @@ test("an external harness (the coder) runs inside the kernel: traced, its artifa
   const cancelled = await kernel.runHarness({ runId: "coder-4", goal: { title: "Stop" }, capabilities: ["code"], harness: "atlas-cli" }, async () => ({ ok: false, cancelled: true }));
   assert.equal(state.get("run:coder-4").attrs.status, "cancelled");
   assert.equal(cancelled.verdict.passed, false);
+});
+
+test("a caller-driven run (chat): perception reaches what earlier runs touched, skips per-call events, and finishes once", (t) => {
+  const state = world(t);
+  const kernel = createKernel({ toolRegistry: registry([]), world: state });
+  const first = kernel.begin({ runId: "chat-1", task: { type: "task", key: "chat:s" }, goal: { title: "Read a.txt" }, capabilities: ["code"] });
+  assert.equal(first.perceive(), "", "nothing known yet");
+  first.act({ call: { name: "repository.read" }, input: { path: "a.txt" }, status: "succeeded" });
+  first.finish({ passed: true, status: "answered" });
+  first.finish({ passed: false, status: "unverified", reason: "late" });
+  assert.equal(state.get("run:chat-1").attrs.status, "answered", "finish is idempotent");
+  assert.equal(state.traceOf("chat-1").filter((e) => e.phase === "finish").length, 1);
+
+  const second = kernel.begin({ runId: "chat-2", task: { type: "task", key: "chat:s" }, goal: { title: "And now?" }, capabilities: ["code"] });
+  const known = second.perceive();
+  assert.match(known, /file:a.txt/u, "two hops: task → earlier run → the file it touched");
+  assert.doesNotMatch(known, /event:/u, "per-call events stay in the trace, not in perception");
+});
+
+test("branching: open-ended or previously failed work branches, mechanical work does not, with reasons", (t) => {
+  assert.deepEqual(decideStrategy({ objective: "Refactor the billing module" }).variants, 3);
+  assert.equal(decideStrategy({ objective: "Fix the typo in the README" }).branch, false);
+  assert.equal(decideStrategy({ objective: "Add a logout button" }).branch, false);
+  assert.match(decideStrategy({ objective: "Add a logout button" }).reasons[0], /focused task/u);
+  assert.equal(decideStrategy({ objective: "Improve the README formatting" }).branch, false, "open-ended wording on mechanical work stays one lane");
+
+  const state = world(t);
+  state.apply({
+    entities: [{ type: "run", key: "ok1", attrs: { goal: "Add a logout button", status: "verified" } }, { type: "repository", key: "/work/app" }],
+    relations: [{ from: "run:ok1", relation: "uses", to: "repository:/work/app" }],
+  });
+  assert.equal(decideStrategy({ objective: "Add a logout button", repository: "/work/app", world: state }).branch, false, "an earlier success is not a failure");
+  const failed = (key, repository) => state.apply({
+    entities: [{ type: "run", key, attrs: { goal: "Add a logout button", status: "unverified" } }, { type: "repository", key: repository }],
+    relations: [{ from: `run:${key}`, relation: "uses", to: `repository:${repository}` }],
+  });
+  failed("r1", "/work/other");
+  assert.equal(decideStrategy({ objective: "Add a logout button", repository: "/work/app", world: state }).branch, false, "a failure elsewhere does not count");
+  failed("r2", "/work/app");
+  const decision = decideStrategy({ objective: "Add a logout button", repository: "/work/app", world: state });
+  assert.equal(decision.branch, true);
+  assert.match(decision.reasons.join(" "), /already failed once here/u);
+  failed("r3", "/work/app");
+  assert.equal(decideStrategy({ objective: "Fix the typo in the README", repository: "/work/app", world: state }).branch, false, "only this objective's failures count");
 });
 
 test("tool calls made outside a run (chat) are recorded too, and never break the caller", (t) => {

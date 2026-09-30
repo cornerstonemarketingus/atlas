@@ -13,7 +13,7 @@ import { loadAttachment, normalizeAttachment, toModelContent } from "./attachmen
 import { ModelRequestError } from "./model-client.mjs";
 import { ReasoningAccumulator, publicErrorMessage, stripInlineReasoning } from "./reasoning.mjs";
 import { wrapUntrusted } from "./untrusted.mjs";
-import { recordToolCall } from "./kernel/observations.mjs";
+import { capabilitiesCovering } from "./kernel/capabilities.mjs";
 
 const FLUSH_CHARACTERS = 120;
 const FLUSH_INTERVAL_MS = 250;
@@ -47,16 +47,48 @@ export function createConversationExecutor({
   summarizeReasoning = null,
   attachmentRoot = null,
   now = () => Date.now(),
-  // Atlas's world state: every tool call a conversation makes is recorded there too.
-  world = null,
+  // The agent kernel: each turn is a kernel run (trace, world state, outcome).
+  kernel = null,
 }) {
   return {
     id: "conversation",
     description: "Streams a multi-turn conversation with local tools.",
 
-    async run({ session, turn, history, emit, budget, signal, checkpoint }) {
+    /**
+     * A chat turn is a kernel run whose act loop is this streaming loop: the
+     * kernel records the goal (the turn), the capabilities the tools cover,
+     * what Atlas already knows about the conversation, every tool call and
+     * the outcome. "answered" means the turn completed, not that a checker
+     * verified the answer.
+     */
+    async run(input) {
+      const { session, turn, signal } = input;
+      const handle = kernel?.begin({
+        runId: `chat-${session.id}-${turn.id ?? now()}`,
+        task: { type: "task", key: `chat:${session.id}` },
+        taskTitle: session.title || "Conversation",
+        goal: { title: String(turn.text ?? "").replace(/\s+/gu, " ").trim().slice(0, 160) || "(attachment)" },
+        capabilities: capabilitiesCovering(registry.list().map((tool) => tool.capability)),
+        harness: "conversation",
+        checker: "conversation",
+        environment: { kind: "local", repository: session.repository ?? null },
+      }) ?? null;
+      try {
+        const result = await converse({ ...input, handle });
+        const status = result.status === "completed" ? "answered" : result.status === "awaiting_approval" ? "waiting" : "unverified";
+        handle?.finish({ passed: result.status === "completed", status, reason: result.status === "completed" ? null : result.summary });
+        return result;
+      } catch (error) {
+        handle?.finish({ passed: false, status: signal?.aborted ? "cancelled" : "unverified", reason: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+    },
+  };
+
+  // The streaming model loop: the act phase of a chat turn's kernel run.
+  async function converse({ session, turn, history, emit, budget, signal, checkpoint, handle }) {
       await checkpoint();
-      const messages = await buildMessages({ session, history, turn, attachmentRoot, emit });
+      const messages = await buildMessages({ session, history, turn, attachmentRoot, emit, known: handle?.perceive() ?? "" });
       const tools = registry.toModelTools();
       // The tool schemas ride along on every request and are not part of the
       // message array, so they have to come out of the same budget.
@@ -158,15 +190,11 @@ export function createConversationExecutor({
           const durationMs = now() - startedAtMs;
           let observedInput = {};
           try { observedInput = JSON.parse(call.arguments || "{}") ?? {}; } catch { /* observed without inputs */ }
-          recordToolCall(world, {
-            runId: `chat:${session.id}`,
-            runAttrs: { kind: "conversation", status: "running", environment: "local" },
-            seq: String(call.id ?? startedAtMs),
+          handle?.act({
             call,
             input: typeof observedInput === "object" ? observedInput : {},
             status: result.status === "completed" ? "succeeded" : result.status === "approval-required" ? "awaiting_approval" : "failed",
             code: result.code ?? null,
-            environment: { kind: "local", repository: session.repository ?? null },
           });
 
           if (result.status === "approval-required") {
@@ -202,14 +230,17 @@ export function createConversationExecutor({
       const summary = `Stopped after ${maxIterations} tool rounds without a final answer.`;
       emit(errorEvent({ code: "ITERATION_LIMIT", summary, recoverable: true }));
       return { status: "failed", summary };
-    },
-  };
+  }
 }
 
-async function buildMessages({ session, history, turn, attachmentRoot, emit }) {
+async function buildMessages({ session, history, turn, attachmentRoot, emit, known = "" }) {
   const messages = [{ role: "system", content: SYSTEM_PROMPT, pinned: true }];
   if (session.repository) {
     messages.push({ role: "system", pinned: true, content: `The working repository for this session is ${session.repository}.` });
+  }
+  if (known) {
+    // Atlas's world state around this conversation (earlier turns, what they touched): data, never instructions.
+    messages.push({ role: "system", content: `What Atlas already knows about this conversation's work:\n${wrapUntrusted("world state", known.slice(0, 4000)).text}` });
   }
   for (const past of history) {
     if (past.id === turn.id) continue;

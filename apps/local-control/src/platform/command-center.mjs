@@ -1,3 +1,5 @@
+import { rankVersions } from "../agent/kernel/branching.mjs";
+
 /**
  * Command Center: everything Atlas is doing, in one list.
  *
@@ -51,6 +53,19 @@ export function buildCommandCenter({ missions = [], genesisProjects = [], tasks 
 function missionItem(mission) {
   const team = mission.children?.[0]?.metadata?.kind === "agent_step";
   const lanes = (mission.children ?? []).map((child) => laneOf(mission, child, team));
+  // Versions of one objective: once none is still working, recommend one (the owner still decides and approves).
+  const versions = !team && mission.children?.[0]?.metadata?.variant;
+  let recommendation = null;
+  if (versions && lanes.every((lane) => !["pending", "running"].includes(lane.state))) {
+    const { ranked, recommended } = rankVersions(lanes.map((lane) => ({ ...lane, result: lane.result && { patch: lane.result.patch, bytes: lane.patchBytes } })));
+    for (const lane of lanes) {
+      const entry = ranked.find((r) => r.id === lane.id);
+      lane.rank = entry?.rank ?? null;
+      lane.recommended = lane.id === recommended;
+      if (lane.recommended) recommendation = `Atlas recommends ${lane.title}: ${entry.reason}.`;
+    }
+  }
+  const strategy = mission.children?.[0]?.metadata?.strategy ?? null;
   const held = lanes.some((lane) => lane.held);
   const failedLane = lanes.some((lane) => lane.state === "failed" || lane.state === "blocked");
   const bucket = mission.status === "failed" || mission.status === "interrupted" || held || (failedLane && !MISSION_DONE.has(mission.status))
@@ -69,7 +84,9 @@ function missionItem(mission) {
     bucket,
     updatedAt: mission.completedAt ?? latest(lanes.map((lane) => lane.updatedAt)) ?? mission.startedAt ?? null,
     link: team ? `#/missions/${mission.id}` : "#/missions",
-    detail: mission.reason ?? null,
+    detail: recommendation ?? mission.reason ?? null,
+    // Why Atlas chose one lane or several versions, when the kernel decided.
+    strategy: strategy ? { branch: Boolean(strategy.branch), versions: lanes.length, reasons: strategy.reasons ?? [] } : null,
     progress: { done: lanes.filter((lane) => lane.state === "completed").length, total: lanes.length },
     lanes,
     actions,
@@ -103,6 +120,7 @@ function laneOf(mission, child, team) {
     attempts: child.attempts,
     usage: child.usage ?? null,
     message: child.error?.message ?? null,
+    patchBytes: (child.result?.evidence ?? []).find((entry) => entry?.kind === "patch")?.bytes ?? null,
     // What a finished coder lane produced: its report and the patch from its isolated worktree.
     result: child.state === "completed" && child.result
       ? { summary: typeof child.result.summary === "string" ? child.result.summary.slice(0, 600) : null, patch: child.result.handoff?.patch ?? null, worktree: child.result.handoff?.worktree ?? null }
