@@ -89,8 +89,12 @@ function laneOf(mission, child, team) {
   if (child.state === "completed" && !team && child.result?.handoff?.patch) {
     actions.push({ name: "apply", label: child.metadata?.variant ? "Use this version" : "Apply to repository", method: "POST", path: base.replace(/\/control$/u, "/apply"), body: {} });
   }
+  // The kernel run behind this lane (team step or coder harness), for its step-by-step trace.
+  const run = (child.result?.evidence ?? []).find((entry) => typeof entry?.run === "string")?.run ?? null;
   return {
     id: child.id,
+    run,
+    trace: run ? `/v1/world/runs/${encodeURIComponent(run)}/trace` : null,
     title: team ? (child.metadata?.stepTitle ?? child.objective)
       : child.metadata?.variant ? `Version ${child.metadata.variant} of ${child.metadata.variants}` : child.objective || child.id,
     agent: team ? child.metadata?.agentName ?? null : null,

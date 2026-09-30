@@ -57,6 +57,17 @@ test("items are grouped by what they need: attention, running, waiting, done", (
   assert.deepEqual(byId.get("m2").actions, [], "a finished mission offers nothing to press");
 });
 
+test("a finished lane links to its kernel run's trace", () => {
+  const view = buildCommandCenter({ missions: [{ id: "m9", title: "Fix", status: "completed", completedAt: "2026-09-29T10:00:00Z", children: [
+    { id: "a", objective: "Fix login", state: "completed", attempts: 1, result: { summary: "ok", evidence: [{ kind: "patch", path: "/p" }, { kind: "kernel_run", run: "coder-a-1f2e" }], handoff: { patch: "/p" } } },
+    { id: "b", objective: "Fix search", state: "failed", attempts: 1, result: { evidence: [] } },
+  ] }] });
+  const [coder, none] = view.items[0].lanes;
+  assert.equal(coder.run, "coder-a-1f2e");
+  assert.equal(coder.trace, "/v1/world/runs/coder-a-1f2e/trace");
+  assert.equal(none.trace, null);
+});
+
 test("finished work is capped so the view stays about what is happening now", () => {
   const tasks = Array.from({ length: 30 }, (_, index) => ({ id: `t${index}`, objective: "done", status: "completed", completedAt: new Date(2026, 8, 1, 0, index).toISOString() }));
   const view = buildCommandCenter({ tasks });
