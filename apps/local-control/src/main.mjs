@@ -36,6 +36,7 @@ import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { WorldState } from "./agent/kernel/world-state.mjs";
 import { createKernel } from "./agent/kernel/kernel.mjs";
+import { decideStrategy } from "./agent/kernel/branching.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { ScopedMemoryStore } from "./platform/memory/memory-store.mjs";
 import { connectMcpServers, parseMcpServers } from "./platform/mcp/daemon-bridge.mjs";
@@ -153,7 +154,8 @@ const runtime = new AgentRuntime({
 const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
-const missionService = new MissionService({ store, execute: runMissionChild });
+// strategy "auto": the kernel decides between one lane and competing versions, using the world state's history.
+const missionService = new MissionService({ store, execute: runMissionChild, decide: (input) => decideStrategy({ ...input, world }) });
 // Applying a finished lane's patch to the owner's repository goes through code.write approvals.
 const laneApplier = createLaneApplier({ missionService, store, dataDirectory });
 // Agent missions: goal → plan over the agent organization → steps run by the
@@ -279,7 +281,8 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
   const { runId, verdict } = await kernel.runHarness({
     // Child ids repeat across missions, so the run gets its own id; the lane's evidence links to it.
     runId: `coder-${child.id}-${randomBytes(6).toString("hex")}`,
-    goal: { title: child.objective, doneWhen: "a patch from an isolated worktree is ready to review" },
+    // A version's goal is the request it competes on, so history and branching see one objective.
+    goal: { title: child.metadata?.request ?? child.objective, doneWhen: "a patch from an isolated worktree is ready to review" },
     capabilities: ["code"],
     harness: "atlas-cli",
     environment: { kind: "local", repository },

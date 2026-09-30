@@ -83,8 +83,8 @@ export const LOCAL_UI_HTML = `<!doctype html>
   <details class="panel" id="command-launch-panel"><summary>Launch agents in parallel</summary>
    <form id="command-launch"><label>Repository folder<input id="launch-repository" required placeholder="C:\\path\\to\\project"></label>
     <label>Model<select id="launch-model"><option>qwen2.5-coder:7b</option></select></label>
-    <label>How<select id="launch-mode"><option value="tasks">Separate tasks, one per line</option><option value="variants">Several versions of one task, to compare</option></select></label>
-    <label>What to do<textarea id="launch-text" required maxlength="10000" rows="4" placeholder="Fix the login redirect&#10;Add a CSV export to the reports page&#10;Update the README"></textarea></label>
+    <label>How<select id="launch-mode"><option value="auto">One task: let Atlas decide how many versions to try</option><option value="tasks">Separate tasks, one per line</option><option value="variants">Several versions of one task, to compare</option></select></label>
+    <label>What to do<textarea id="launch-text" required maxlength="10000" rows="4" placeholder="Refactor the billing module so invoices can be retried"></textarea></label>
     <label id="launch-count-label" hidden>How many versions<input id="launch-count" type="number" min="2" max="5" value="3"></label>
     <div class="actions"><button>Start</button></div>
     <p class="hint">Each agent works in its own copy of the repository and hands back a patch; nothing changes in your folder until you apply one.</p></form></details>
@@ -285,7 +285,7 @@ progress{width:100%;height:6px;accent-color:var(--accent);margin-top:10px}
 .composer-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}.composer-bar .actions{margin:0}
 .attach{display:inline-flex;align-items:center;gap:8px;margin:0;font-size:.85rem}.attach input{width:auto;padding:6px;border:0;background:none}
 details.more{margin-top:10px}details.more>summary{cursor:pointer;color:var(--muted);font-size:.88rem;padding:6px 0}
-.evidence summary{cursor:pointer;color:var(--muted)}.lane{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.trace summary{cursor:pointer;color:var(--muted)}.trace-steps{margin:6px 0 0;padding-left:20px;font-size:.9em}.trace-steps li{margin:2px 0}
+.evidence summary{cursor:pointer;color:var(--muted)}.lane{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.lane.recommended{border-top-color:var(--accent)}.trace summary{cursor:pointer;color:var(--muted)}.trace-steps{margin:6px 0 0;padding-left:20px;font-size:.9em}.trace-steps li{margin:2px 0}
 .toast{margin:0;padding:0 28px}.toast:not(:empty){padding:10px 28px;background:var(--accent-soft);color:var(--text);font-size:.9rem}
 .unlock{margin:24px 28px 0;max-width:560px}
 .error{border:1px solid var(--bad);color:var(--bad);border-radius:12px;padding:12px 14px}.error p{color:var(--text);margin:6px 0 0}
@@ -757,11 +757,12 @@ async function loadCommand(){
   const key='i'+n;registry.set(key,item.actions||[]);
   const heading=item.bucket!==bucket?'<h3 class="command-bucket">'+esc(COMMAND_BUCKETS[item.bucket])+'</h3>':'';bucket=item.bucket;
   const lanes=(item.lanes||[]).map((lane,m)=>{const laneKey=key+'l'+m;registry.set(laneKey,lane.actions||[]);
-   return '<li class="lane"><div class="task-top"><span>'+esc(lane.title)+(lane.agent?' <span class="hint">· '+esc(lane.agent)+'</span>':'')+'</span>'+pill(lane.held?'paused':lane.state)+'</div>'+(lane.message&&lane.state!=='completed'?'<p class="hint">'+esc(lane.message)+'</p>':'')+(lane.result?'<details><summary>Result</summary>'+(lane.result.summary?'<pre class="log">'+esc(lane.result.summary)+'</pre>':'')+(lane.result.patch?'<p class="hint">Patch: <code>'+esc(lane.result.patch)+'</code></p>':'<p class="hint">No changes were produced.</p>')+'</details>':'')+(lane.trace?'<details class="trace" data-trace="'+esc(lane.trace)+'"'+(openTraces.has(lane.trace)?' open':'')+'><summary>How it ran</summary><ol class="trace-steps"><li class="hint">Loading…</li></ol></details>':'')+'<div class="actions">'+commandButtons(lane.actions,laneKey)+'</div></li>'}).join('');
+   return '<li class="lane'+(lane.recommended?' recommended':'')+'"><div class="task-top"><span>'+esc(lane.title)+(lane.agent?' <span class="hint">· '+esc(lane.agent)+'</span>':'')+(lane.recommended?' <span class="chip">Recommended</span>':'')+'</span>'+pill(lane.held?'paused':lane.state)+'</div>'+(lane.message&&lane.state!=='completed'?'<p class="hint">'+esc(lane.message)+'</p>':'')+(lane.result?'<details><summary>Result</summary>'+(lane.result.summary?'<pre class="log">'+esc(lane.result.summary)+'</pre>':'')+(lane.result.patch?'<p class="hint">Patch: <code>'+esc(lane.result.patch)+'</code></p>':'<p class="hint">No changes were produced.</p>')+'</details>':'')+(lane.trace?'<details class="trace" data-trace="'+esc(lane.trace)+'"'+(openTraces.has(lane.trace)?' open':'')+'><summary>How it ran</summary><ol class="trace-steps"><li class="hint">Loading…</li></ol></details>':'')+'<div class="actions">'+commandButtons(lane.actions,laneKey)+'</div></li>'}).join('');
   return heading+'<article class="card"><div class="task-top"><h4><a href="'+esc(item.link)+'">'+esc(item.title)+'</a></h4>'+pill(item.state)+'</div>'
    +'<div class="meta"><span>'+esc(COMMAND_KINDS[item.kind]||item.kind)+'</span>'+(item.progress?'<span>'+item.progress.done+' of '+item.progress.total+' done</span>':'')+'<time>'+when(item.updatedAt)+'</time></div>'
    +(item.progress&&item.progress.total?'<progress max="'+item.progress.total+'" value="'+item.progress.done+'"></progress>':'')
    +(item.detail?'<p class="hint">'+esc(item.detail)+'</p>':'')
+   +(item.strategy?'<p class="hint">Atlas chose '+(item.strategy.branch?item.strategy.versions+' competing versions':'one attempt')+': '+esc(item.strategy.reasons.join('; '))+'.</p>':'')
    +(lanes?'<ul class="lanes">'+lanes+'</ul>':'')
    +'<div class="actions">'+commandButtons(item.actions,key)+'</div></article>'}).join(''):'<p class="empty">Atlas is not doing anything right now. Start something from Home, Build or Missions.</p>';
  list.querySelectorAll('details.trace').forEach(d=>{
@@ -778,11 +779,11 @@ async function loadCommand(){
  });
 }
 $('#command-refresh').onclick=()=>loadCommand();
-$('#launch-mode').onchange=()=>{const v=$('#launch-mode').value==='variants';$('#launch-count-label').hidden=!v;$('#launch-text').placeholder=v?'Redesign the pricing page to make the Pro plan stand out':'Fix the login redirect'};
+$('#launch-mode').onchange=()=>{const mode=$('#launch-mode').value,v=mode==='variants';$('#launch-count-label').hidden=!v;$('#launch-text').placeholder=v?'Redesign the pricing page to make the Pro plan stand out':mode==='auto'?'Refactor the billing module so invoices can be retried':['Fix the login redirect','Add a CSV export to the reports page','Update the README'].join(String.fromCharCode(10))};
 $('#command-launch-panel').addEventListener('toggle',async()=>{if(!$('#command-launch-panel').open)return;const r=await api('/v1/models');if(!r.ok)return;const m=(await r.json()).models||[];if(m.length)$('#launch-model').innerHTML=m.map(x=>'<option>'+esc(x)+'</option>').join('')});
 $('#command-launch').onsubmit=async e=>{e.preventDefault();const notice=$('#command-notice'),text=$('#launch-text').value.trim(),variants=$('#launch-mode').value==='variants';
  const body={repository:$('#launch-repository').value.trim(),model:$('#launch-model').value};
- if(variants){body.objective=text;body.variants=Number($('#launch-count').value)}else{body.tasks=text.split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean)}
+ if($('#launch-mode').value==='auto'){body.objective=text;body.strategy='auto'}else if(variants){body.objective=text;body.variants=Number($('#launch-count').value)}else{body.tasks=text.split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean)}
  notice.textContent='Starting…';
  try{await sendJson('/v1/missions','POST',body);notice.textContent='Started.';$('#launch-text').value='';$('#command-launch-panel').open=false}catch(error){notice.textContent=error.message}
  loadCommand().catch(()=>{})};

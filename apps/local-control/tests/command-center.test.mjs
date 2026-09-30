@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { MissionService } from "../src/agent/mission-service.mjs";
+import { decideStrategy } from "../src/agent/kernel/branching.mjs";
 import { buildCommandCenter } from "../src/platform/command-center.mjs";
 import { createLocalControlServer } from "../src/server.mjs";
 import { LocalTaskStore } from "../src/store.mjs";
@@ -151,6 +152,48 @@ test("one request launches separate tasks or several versions of one task as par
   for (const bad of [{ tasks: [] }, { tasks: Array(9).fill("x") }, { objective: "x", variants: 1 }, { objective: "x", variants: 6 }, { objective: "", variants: 2 }, {}]) {
     assert.throws(() => expandLaunch(bad), { code: "INVALID_MISSION" }, JSON.stringify(bad));
   }
+});
+
+test("strategy auto: the kernel decides between one lane and competing versions, and says why", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-command-auto-"));
+  const store = new LocalTaskStore(join(directory, "atlas.sqlite"));
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  const decisions = [];
+  const service = new MissionService({
+    store,
+    // Only the plan the decision produced matters here; every lane finishes at once.
+    execute: async () => ({ status: "completed", summary: "done" }),
+    decide: (input) => { decisions.push(input); return decideStrategy(input); },
+  });
+  const branched = service.create({ repository: "/work/app", model: "m", objective: "Redesign the pricing page", strategy: "auto" });
+  assert.deepEqual(branched.children.map((c) => c.id), ["version-1", "version-2", "version-3"]);
+  assert.equal(branched.children[0].metadata.strategy.branch, true);
+  assert.match(branched.children[0].metadata.strategy.reasons.join(" "), /open-ended/u);
+  const single = service.create({ repository: "/work/app", model: "m", objective: "Fix the typo in the footer", strategy: "auto" });
+  assert.deepEqual(single.children.map((c) => c.id), ["lane-1"]);
+  assert.equal(single.children[0].metadata.strategy.branch, false);
+  assert.deepEqual(decisions[0], { objective: "Redesign the pricing page", repository: "/work/app" });
+  assert.throws(() => service.create({ repository: "/work/app", model: "m", objective: "x", strategy: "yolo" }), { code: "INVALID_MISSION" });
+  assert.throws(() => service.create({ repository: "/work/app", model: "m", strategy: "auto" }), { code: "INVALID_MISSION" });
+
+  const view = buildCommandCenter({ missions: [service.get(branched.id)] });
+  assert.equal(view.items[0].strategy.branch, true);
+  assert.equal(view.items[0].strategy.versions, 3);
+  // Let both missions settle before the store closes.
+  for (let i = 0; i < 100 && [branched.id, single.id].some((id) => service.get(id).status !== "completed"); i += 1) await tick();
+});
+
+test("finished versions: Atlas recommends the smallest verified change, and only once none is still working", () => {
+  const version = (n, state, bytes, extra = {}) => ({ id: `version-${n}`, objective: "Redesign", state, attempts: 1, metadata: { variant: n, variants: 3, request: "Redesign" },
+    result: state === "completed" ? { summary: "done", evidence: bytes ? [{ kind: "patch", path: `/p/${n}`, bytes }] : [], handoff: { patch: bytes ? `/p/${n}` : null } } : null, ...extra });
+  const mission = (children, status = "completed") => ({ id: "m", title: "3 versions: Redesign", status, completedAt: "2026-09-30T10:00:00Z", children });
+  const done = buildCommandCenter({ missions: [mission([version(1, "completed", 900), version(2, "completed", 300), version(3, "failed", 0)])] }).items[0];
+  assert.deepEqual(done.lanes.map((l) => [l.id, l.recommended, l.rank]), [["version-1", false, 2], ["version-2", true, 1], ["version-3", false, null]]);
+  assert.match(done.detail, /Atlas recommends Version 2 of 3: smallest change among 2 finished versions \(300 bytes\)/u);
+  const running = buildCommandCenter({ missions: [mission([version(1, "completed", 900), version(2, "running", 0)], "running")] }).items[0];
+  assert.ok(running.lanes.every((l) => !l.recommended), "no recommendation while a version is still working");
+  const none = buildCommandCenter({ missions: [mission([version(1, "completed", 0), version(2, "failed", 0)])] }).items[0];
+  assert.ok(none.lanes.every((l) => !l.recommended), "nothing to recommend without a change");
 });
 
 test("over HTTP: three versions run in parallel and each one's result shows in the command center", async (t) => {
