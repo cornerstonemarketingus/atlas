@@ -5,6 +5,7 @@ import { evaluateChange } from "../self-improve/policy.mjs";
 import { executionOrder } from "./planner.mjs";
 import { getTemplate } from "./templates/index.mjs";
 import { commitWorkspace, createWorkspace, projectFolderName } from "./workspace.mjs";
+import { applyVisualEdits, pendingVisualContent, visualSourcePath } from "./visual.mjs";
 
 /**
  * Carries an approved Genesis project to a verified, running application,
@@ -149,8 +150,11 @@ export class GenesisExecutor {
     if (folder) {
       // A change request: rewrite the template configuration from the updated spec and commit it.
       const template = getTemplate(project.plan.template);
-      for (const [relativePath, content] of Object.entries(template.configure(project.spec))) {
-        if (relativePath === "README.md" || relativePath.endsWith(".json")) writeFileSync(join(folder, relativePath), content);
+      const configuration = project.spec.visualOnly
+        ? { "site.json": pendingVisualContent(project) }
+        : template.configure(project.spec);
+      for (const [relativePath, content] of Object.entries(configuration)) {
+        if (relativePath === "README.md" || relativePath.endsWith(".json")) writeFileSync(project.spec.visualOnly ? visualSourcePath(project) : join(folder, relativePath), relativePath === "site.json" ? applyVisualEdits(content, project.spec.visualOnly ? [project.spec.visualPending] : project.spec.visualEdits) : content);
       }
       const commit = await commitWorkspace(folder, `Update configuration for spec v${project.spec.version ?? 1}`);
       evidence = { kind: "workspace", folder, reused: true, commit };
@@ -178,6 +182,10 @@ export class GenesisExecutor {
     for (const taskId of executionOrder(tasks)) {
       const task = byId.get(taskId);
       if (task.status === "passed" || task.status === "skipped") continue;
+      if (project.spec.visualOnly && task.executor === "coder") {
+        this.#task(project.id, task.id, { status: "skipped", evidence: { kind: "visual-edit", note: "Deterministic text edit; no model work requested." } });
+        continue;
+      }
       if (task.executor === "template" && task.kind !== "scaffold") {
         this.#task(project.id, task.id, { status: "running", evidence: { kind: "template", note: `Provided by the ${project.plan.template} template configuration; confirmed by the checks.` } });
         continue;

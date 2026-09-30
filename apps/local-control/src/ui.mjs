@@ -219,6 +219,7 @@ export const LOCAL_UI_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0
 export const LOCAL_UI_CSS = `:root{--bg:#0c110e;--bg-2:#111814;--surface:#151d18;--surface-2:#1b251f;--line:#2b3a31;--line-2:#3a4c41;--text:#eef4ef;--muted:#9db0a2;--faint:#76897b;--accent:#d8ff8f;--accent-ink:#14200f;--accent-soft:#2c3d1c;--good:#9be39b;--warn:#ffd27a;--bad:#ffab9f;--focus:#b9e86a;--radius:14px;--shadow:0 18px 60px #0005;color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 :root[data-theme=light]{--bg:#f5f7f2;--bg-2:#eef1ea;--surface:#ffffff;--surface-2:#f3f6ef;--line:#dfe5da;--line-2:#cbd4c5;--text:#17211b;--muted:#56665b;--faint:#7a887e;--accent:#2f5d12;--accent-ink:#ffffff;--accent-soft:#e7f2d8;--good:#2f7a36;--warn:#8a5a00;--bad:#b3261e;--focus:#2f5d12;--shadow:0 10px 30px #1b2a1e14;color-scheme:light}
 @media (prefers-color-scheme:light){:root:not([data-theme=dark]){--bg:#f5f7f2;--bg-2:#eef1ea;--surface:#ffffff;--surface-2:#f3f6ef;--line:#dfe5da;--line-2:#cbd4c5;--text:#17211b;--muted:#56665b;--faint:#7a887e;--accent:#2f5d12;--accent-ink:#ffffff;--accent-soft:#e7f2d8;--good:#2f7a36;--warn:#8a5a00;--bad:#b3261e;--focus:#2f5d12;--shadow:0 10px 30px #1b2a1e14;color-scheme:light}}
+.visual-preview{width:100%;height:460px;border:1px solid var(--line)}
 *{box-sizing:border-box}html,body{margin:0}body{background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5;-webkit-text-size-adjust:100%}
 a{color:var(--accent)}:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:6px}
 .skip{position:absolute;left:-9999px}.skip:focus{left:12px;top:12px;z-index:50;background:var(--surface);padding:8px 12px}
@@ -649,10 +650,36 @@ $('#remote-pair').onclick=async()=>{const out=$('#remote-pair-code');try{const [
 
 /* Build (Project Genesis): one sentence in, a working local application out. */
 const GEN_ACTIVE=['scaffolding','building','verifying','previewing','repairing','reviewing','publishing'];
+let visualEditor=null;
+window.addEventListener('message',async event=>{
+ const v=visualEditor;
+ if(!v||event.source!==v.frame.contentWindow||event.origin!==v.origin||event.data?.type!=='atlas:visual-selection'||event.data.session!==v.session||typeof event.data.key!=='string')return;
+ try{
+  const {selection}=await sendJson('/v1/genesis/'+encodeURIComponent(v.id)+'/visual','POST',{action:'select',key:event.data.key});
+  if(visualEditor!==v)return;
+  v.selection=selection;$('#visual-source').textContent=selection.component+' · '+selection.file+' '+selection.pointer;
+  $('#visual-text').value=selection.text;$('#visual-save').disabled=false;
+ }catch(error){$('#build-notice').textContent=error.message}
+});
+async function openVisual(id){
+ try{
+  const {design}=await sendJson('/v1/genesis/'+encodeURIComponent(id)+'/visual','POST',{action:'open',parentOrigin:location.origin});
+  const panel=$('#visual-panel');panel.hidden=false;
+  const frame=$('#visual-frame');visualEditor={id,frame,origin:new URL(design.url).origin,session:design.session};frame.src=design.url;
+  $('#visual-close').onclick=()=>{visualEditor=null;panel.hidden=true;frame.src='about:blank';loadBuild()};
+  $('#visual-form').onsubmit=async e=>{e.preventDefault();const v=visualEditor;if(!v?.selection)return;
+   $('#visual-save').disabled=true;
+   try{await sendJson('/v1/genesis/'+encodeURIComponent(id)+'/visual','POST',{action:'edit',...v.selection,text:$('#visual-text').value});visualEditor=null;panel.hidden=true;frame.src='about:blank';$('#build-notice').textContent='Change queued. Atlas will rebuild, test and inspect the preview.';loadBuild()}
+   catch(error){$('#build-notice').textContent=error.message;$('#visual-save').disabled=false}
+  };
+ }catch(error){$('#build-notice').textContent=error.message}
+}
 function genIcon(step){return step.done?'✓':step.status==='running'?'●':step.status==='failed'?'✗':step.status==='blocked'?'!':step.status==='skipped'?'–':'○'}
 async function loadBuild(){
  const list=$('#build-projects'),detail=$('#build-detail');
  const id=location.hash.split('/')[2]||'';
+ if(visualEditor?.id===id&&visualEditor.frame.isConnected)return;
+ visualEditor=null;
  /* Do not redraw under someone typing an answer or a change. */
  if(detail.contains(document.activeElement)&&document.activeElement.matches('input,textarea'))return;
  try{
@@ -660,7 +687,7 @@ async function loadBuild(){
   list.innerHTML=projects.length?projects.map(p=>'<a class="card" href="#/build/'+esc(p.id)+'"><div class="task-top"><h4>'+esc(p.name)+'</h4>'+pill(p.label)+'</div><time>'+when(p.updatedAt)+'</time></a>').join(''):'<p class="empty">Nothing built yet. Describe an app above.</p>';
   if(!id){detail.hidden=true;return}
   const {project:v}=await getJson('/v1/genesis/'+encodeURIComponent(id));
-  const ready=v.transitions.findLast(t=>t.to==='ready')?.evidence?.summary;
+  const ready=['ready','published'].includes(v.state)?v.transitions.findLast(t=>t.to==='ready')?.evidence?.summary:null;
   const last=v.transitions.at(-1);
   const online=v.transitions.findLast(t=>t.evidence?.kind==='deployed')?.evidence?.deployment?.url;
   const publishedTo=v.transitions.findLast(t=>t.evidence?.kind==='published')?.evidence;
@@ -677,6 +704,7 @@ async function loadBuild(){
    +(ready?'<div class="card success"><h4>Ready</h4><p><a class="button" href="'+esc(ready.preview)+'" target="_blank" rel="noopener">Open the application</a></p><p>'+esc(ready.features.join(' · '))+'</p><p class="hint">Verified: '+esc(ready.verification.map(x=>x.step+(x.ok?' ✓':' ✗')+(x.tests?' ('+x.tests.pass+' tests)':'')).join(', '))+'; interface checked '+(ready.inspection.limited?'over HTTP only':'in a browser')+(ready.repairs?'; '+ready.repairs+' repair(s)':'')+'.</p>'+(ready.limitations.length?'<ul class="hint">'+ready.limitations.map(l=>'<li>'+esc(l)+'</li>').join('')+'</ul>':'')+'<p class="hint">Files: <code>'+esc(ready.folder)+'</code></p>'+where+'</div>':'')
    +(!ready||v.state!=='ready'?'<p>'+esc(last?.reason||'')+'</p>':'')
    +(questions.length?'<form id="gen-answers" class="card"><h4>Atlas needs to know</h4>'+questions.map(q=>'<label>'+esc(q.question)+'<input name="'+esc(q.id)+'" placeholder="'+esc(q.default||'')+'"></label>').join('')+'<button>Answer</button></form>':'')
+   +(v.plan?.template==='static-site'&&['ready','published'].includes(v.state)?'<button id="visual-open" type="button">Edit visually</button><section id="visual-panel" hidden><p>Click the home page headline or introduction to edit its text. Application scripts and forms are disabled in this design view.</p><button id="visual-close" type="button" class="secondary">Close editor</button><iframe id="visual-frame" title="Select an element in the site preview" sandbox="allow-scripts allow-same-origin" class="visual-preview"></iframe><form id="visual-form"><p id="visual-source">Select an element</p><label>Replacement text<textarea id="visual-text" maxlength="2000" required></textarea></label><button id="visual-save" disabled>Apply and verify</button></form></section>':'')
    +'<ol class="steps-list">'+v.progress.steps.map(s=>'<li class="step '+(s.done?'done':s.status||'')+'"><span aria-hidden="true">'+genIcon(s)+'</span> '+esc(s.label)+(s.attempts>1?' <span class="hint">('+s.attempts+' attempts)</span>':'')+'</li>').join('')+'</ol>'
    +'<div class="actions">'+actions.join('')+'</div>'
    +(['ready','published'].includes(v.state)?'<details class="card"><summary>Publish or put it online</summary>'
@@ -700,6 +728,7 @@ async function loadBuild(){
   if(publish)publish.onsubmit=async e=>{e.preventDefault();const remote=$('#gen-publish-remote').value.trim();if(!remote)return;const notice=$('#build-notice');
    try{const r=await sendJson('/v1/genesis/'+encodeURIComponent(v.id)+'/publish','POST',{remote});notice.textContent=r.publish.status==='awaiting-approval'?'Waiting for your approval under Approvals.':r.publish.status==='published'?'Published.':'Publishing failed: '+(r.publish.message||'')}catch(error){notice.textContent=error.message}loadBuild();loadBadge().catch(()=>{})};
   const change=detail.querySelector('#gen-change');
+  const visual=detail.querySelector('#visual-open');if(visual)visual.onclick=()=>openVisual(v.id);
   if(change)change.onsubmit=e=>{e.preventDefault();const request=$('#gen-change-text').value.trim();if(request)genAction(v.id,'changes',{request})};
  }catch(error){(id?detail:list).innerHTML=problem(error);if(id)detail.hidden=false}
 }

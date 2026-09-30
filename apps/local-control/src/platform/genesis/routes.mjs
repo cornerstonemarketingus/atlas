@@ -3,6 +3,7 @@ import { GenesisError } from "./service.mjs";
 import { GenesisStoreError } from "./store.mjs";
 import { TEMPLATES } from "./templates/index.mjs";
 import { PublishError } from "./publish.mjs";
+import { VisualError, visualSelection } from "./visual.mjs";
 
 /**
  * /v1/genesis — any authenticated caller can read; creating and steering
@@ -36,7 +37,7 @@ export function createGenesisRoutes({ genesis, previews = null, publisher = null
       if (request.method === "GET" && url.pathname === "/v1/genesis/templates") {
         return send(response, 200, { templates: Object.values(TEMPLATES).map(({ id, version, title, description, archetypes, commands, preview, structure }) => ({ id, version, title, description, archetypes, commands, preview, structure })) });
       }
-      const match = /^\/v1\/genesis\/(gen_[0-9a-f-]{36})(?:\/(answers|approve|changes|pause|resume|cancel|retry|preview|publish|repository|deploy))?$/u.exec(url.pathname);
+      const match = /^\/v1\/genesis\/(gen_[0-9a-f-]{36})(?:\/(answers|approve|changes|pause|resume|cancel|retry|preview|publish|repository|deploy|visual))?$/u.exec(url.pathname);
       if (match?.[2] === "preview") {
         if (!previews) return send(response, 503, { message: "Previews are not available in this Atlas." });
         const project = genesis.store.get(genesis.tenantId, match[1]);
@@ -55,6 +56,17 @@ export function createGenesisRoutes({ genesis, previews = null, publisher = null
       const body = await parseBody(request, response); if (!body) return true;
       if (url.pathname === "/v1/genesis") return send(response, 201, { project: await genesis.create(body.prompt) });
       if (!match || !match[2]) return send(response, 404, { message: "Route not found." });
+      if (match[2] === "visual") {
+        const project = genesis.store.get(genesis.tenantId, match[1]);
+        if (!["ready", "published"].includes(project.state)) return send(response, 409, { message: "Wait for the build to finish before editing." });
+        if (body.action === "open") {
+          if (!previews) return send(response, 503, { message: "Previews are unavailable." });
+          return send(response, 200, { design: await previews.design(project, body.parentOrigin) });
+        }
+        if (body.action === "select") return send(response, 200, { selection: visualSelection(project, body.key) });
+        if (body.action === "edit") return send(response, 200, { project: await genesis.editVisual(project.id, body) });
+        return send(response, 400, { message: "Unknown visual action." });
+      }
       if (["publish", "repository", "deploy"].includes(match[2])) {
         if (!publisher) return send(response, 503, { message: "Publishing is not available in this Atlas." });
         const result = match[2] === "publish" ? await publisher.request(match[1], { remote: body.remote })
@@ -72,6 +84,7 @@ export function createGenesisRoutes({ genesis, previews = null, publisher = null
                 : genesis.view(genesis.cancel(id).id);
       return send(response, 200, { project: result });
     } catch (error) {
+      if (error instanceof VisualError) return send(response, 409, { message: error.message });
       if (error instanceof PublishError) return send(response, error.code === "DENIED_BY_POLICY" ? 403 : ["NOT_READY", "NEEDS_SERVER", "EXISTS", "NO_CREDENTIAL"].includes(error.code) ? 409 : 400, { code: error.code, message: error.message });
       if (error instanceof GenesisError || error instanceof GenesisStoreError || error instanceof GenesisTransitionError) {
         return send(response, STATUS[error.code] ?? 400, { code: error.code, message: error.message });

@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { safeEnvironment } from "../../agent/tools/process.mjs";
 import { resolveCheck } from "../self-improve/runtime.mjs";
 import { getTemplate } from "./templates/index.mjs";
+import { startDesignPreview } from "./visual.mjs";
 
 /**
  * Runs Genesis projects so they can be seen and inspected.
@@ -59,6 +60,7 @@ export class PreviewManager {
     this.log = log;
     this.pollMs = pollMs;
     this.previews = new Map();
+    this.designs = new Map();
   }
 
   #readRegistry() {
@@ -101,6 +103,23 @@ export class PreviewManager {
   }
 
   list() { return [...this.previews.keys()].map((id) => this.status(id)); }
+
+  async design(project, parentOrigin) {
+    const previous = this.designs.get(project.id);
+    const pending = (async () => {
+      const old = await previous?.catch(() => null);
+      await old?.close();
+      return startDesignPreview(project, parentOrigin);
+    })();
+    this.designs.set(project.id, pending);
+    try {
+      const view = await pending;
+      return { url: view.url, session: view.session };
+    } catch (error) {
+      if (this.designs.get(project.id) === pending) this.designs.delete(project.id);
+      throw error;
+    }
+  }
 
   /** Starts (or restarts) the project's preview; resolves once its health URL answers, or with the failure and logs. */
   async start(project, { timeoutMs = null } = {}) {
@@ -145,6 +164,9 @@ export class PreviewManager {
   }
 
   async stop(projectId) {
+    const design = await this.designs.get(projectId)?.catch(() => null);
+    await design?.close();
+    this.designs.delete(projectId);
     const preview = this.previews.get(projectId);
     if (!preview) return false;
     const wasRunning = preview.state === "running" || preview.state === "starting";
@@ -161,6 +183,7 @@ export class PreviewManager {
   }
 
   async stopAll() {
+    for (const id of [...this.designs.keys()]) await this.stop(id);
     for (const id of [...this.previews.keys()]) await this.stop(id);
   }
 }

@@ -6,7 +6,7 @@ done (merge policy, protected paths, testing rules, the never-list);
 this file governs *what comes next*. Each stage ships as vertical slices:
 wired, reachable from the UI or API, tested at its real boundary.
 
-Status is from the audit of 2026-09-28 (code read, not claims in TODO.md).
+Status reconciled against main d957cfb on 2026-09-30; visual editing below describes this branch. Runtime evidence outranks checkbox counts.
 "Built, not wired" means tested modules the daemon never imports; wiring
 them is the cheapest progress available.
 
@@ -14,10 +14,10 @@ them is the cheapest progress available.
 
 | # | Stage | Exists today | First slice |
 |---|---|---|---|
-| 1 | **Parallel Agent Command Center** | Missions run parallel coder lanes with a live event stream and mission-level pause/resume/cancel (`agent/mission-*`, Missions view); team missions (`agent/team`). Built, not wired: `ChildAgentRegistry`, orchestrator `TaskDag`/`AgentLoop`. | One view of all running work (missions and their lanes, team missions, Genesis builds, local tasks, self-improve runs) with per-item state, and pause/cancel of a single lane. |
+| 1 | **Parallel Agent Command Center** | Command Center, parallel coder lanes, competing versions, lane controls and approved patch application are wired (#167–169). Team/coder/chat execution uses Agent Kernel traces and World State (#176–180). | One view of all running work (missions and their lanes, team missions, Genesis builds, local tasks, self-improve runs) with per-item state, and pause/cancel of a single lane. |
 | 2 | **Automate runtime** | Done (#169, #171): schedule, webhook, GitHub-event, file-change and run-now triggers starting normal missions; run history, overlap/daily guards, auto-pause, catch-up, "Automate this?". | Durable trigger store (cron, webhook, manual) that starts a normal mission; run history, pause/resume, idempotency, dead-letter; "Automate this?" after a repeated success. |
 | 3 | **Atlas backend primitives** | Done (local): sign-in, file storage, per-app secrets and scheduled jobs are template modules every generated web app and API gets (`templates/shared/src/{auth,files,secrets,jobs,backend}.mjs`); password sign-in needs no model. Hosted variants come with stage 5. | Auth (email/password, sessions), file storage, per-app secrets and scheduled functions as template modules Genesis apps use by default, local first, hosted later. |
-| 4 | **Visual Genesis editor** | Previews, Playwright inspection at phone and desktop widths, vision review. No picker. | Design proxy that injects an element picker into the preview (separate origin, postMessage only); DOM element → source file/line mapping; Edit, Ask Atlas, Delete, Move, Restyle routed into Genesis change requests; deterministic restyle for font, spacing and colour; "three versions" as parallel variants (uses stage 1). |
+| 4 | **Visual Genesis editor** | Previews, Playwright inspection and vision review. First bounded slice: separate-origin static-site picker → site.json JSON pointer → deterministic headline/intro edit → existing build/test/inspection. General component editing remains open. | Design proxy that injects an element picker into the preview (separate origin, postMessage only); DOM element → source file/line mapping; Edit, Ask Atlas, Delete, Move, Restyle routed into Genesis change requests; deterministic restyle for font, spacing and colour; "three versions" as parallel variants (uses stage 1). |
 | 5 | **Cloud sandbox** | GitHub Actions coder runs; local container/namespace terminal sandboxes. | Modes Local / Cloud / Hybrid; an isolated Atlas machine with repo, dependencies and scoped secrets that keeps Genesis builds and automations running while the laptop sleeps. |
 | 6 | **Take Control** | Companion stops with `HUMAN_REQUIRED` on login/CAPTCHA walls; approvals bound to exact actions. | Watch (live view) → Take control (user drives) → Return to Atlas (agent re-reads state and continues), for the browser worker first, then the desktop. |
 | 7 | **Connector/Skill marketplace** | MCP client via `ATLAS_MCP_SERVERS` (wired); skills packaging with signed manifests (built, not wired); MCP gateway and Atlas MCP server (built, not wired). | Wire the skill registry and MCP gateway; a Connections catalogue with one-click install and per-connector policy; publishing an Atlas Skill. |
@@ -130,7 +130,7 @@ architecture).
 
 ### How the tracks interleave
 
-Stage 3 (backend primitives) finishes first because it is in progress.
+Stage 3 local backend primitives and B1 are complete. Stage 4 now proceeds in bounded vertical slices.
 Then B1 (kernel + world state) comes before stage 4: later stages mount on
 the kernel instead of adding runtimes. After that the order alternates,
 product stage then the Track B item it depends on (stage 5 with B6, stage 6
