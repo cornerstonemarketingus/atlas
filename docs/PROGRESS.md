@@ -247,3 +247,21 @@ installing CLI dependencies and repairing the heading assertion. Two failures
 an unchanged archive of origin/main; the third was this slice's publishing
 assertion and is fixed. No security assertion was weakened. CI remains the
 cross-platform release gate; owner review is required before merge.
+
+CI follow-up: the first Linux/Windows jobs exposed an HTTP-only inspector that
+required a bare h1 tag. It now verifies the exact escaped heading while allowing
+source attributes, and the new test explicitly exercises HTTP inspection even
+when Chromium is installed. Both real boundary tests pass after the repair.
+
+Owner's next-cycle priorities (2026-09-30): verify Command Center wiring, production
+setup, durable closed-loop self-improvement, independent validation, approved
+skills, persistent sandbox, wait/wake agents and adaptive autonomy. The current
+Command Center/lane-control/self-improvement service baseline passes 18/18. Current
+main d957cfb deployed successfully in run 36778384097; live streaming/non-streaming
+chat passed in run 36778576442. Coder gate 36778579833 failed before dispatch:
+fine-grained ATLAS_GITHUB_TOKEN cannot run workflows. Owner must enable repository
+access plus Actions write; Contents/PR write still require successful live proof.
+No credential was substituted and no security gate was bypassed. Next concrete
+self-improvement gap: service-level exceptions currently remain only in memory,
+and rejected loop worktrees are discarded; retained checkpoints and safe retry
+need a dedicated reviewed slice before claiming closed-loop resumption.

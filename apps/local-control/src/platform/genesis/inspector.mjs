@@ -120,7 +120,9 @@ export async function inspectOverHttp(project, preview) {
       const path = page.id === "home" ? "/" : `/${page.id}.html`;
       const response = await fetch(`${base}${path}`).catch((error) => ({ status: 0, text: async () => error.message }));
       const html = await response.text();
-      const ok = response.status === 200 && html.includes(`<h1>`) && html.includes(page.headline.replace(/&/gu, "&amp;"));
+      const escapedHeadline = page.headline.replace(/[&<>"']/gu, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      const heading = /<h1\b[^>]*>([\s\S]*?)<\/h1>/iu.exec(html)?.[1];
+      const ok = response.status === 200 && heading === escapedHeadline;
       note(`page ${path}`, ok);
       if (!ok) findings.push(finding("page-loads", path, `200 with heading "${page.headline}"`, `status ${response.status}`));
     }

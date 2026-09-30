@@ -7,7 +7,7 @@ import test from "node:test";
 import { GenesisService, GenesisStore } from "../src/platform/genesis/index.mjs";
 import { GenesisExecutor } from "../src/platform/genesis/executor.mjs";
 import { PreviewManager } from "../src/platform/genesis/preview.mjs";
-import { createInspector, loadPlaywright } from "../src/platform/genesis/inspector.mjs";
+import { createInspector, inspectOverHttp, loadPlaywright } from "../src/platform/genesis/inspector.mjs";
 import { runCheck } from "../src/platform/self-improve/runtime.mjs";
 import { LocalTaskStore } from "../src/store.mjs";
 import { createLocalControlServer } from "../src/server.mjs";
@@ -69,6 +69,7 @@ test("visual HTTP boundary: source selection, scoped edit, rebuild, validation a
   assert.equal(JSON.parse(readFileSync(file)).pages[0].headline, text);
   assert.equal(JSON.parse(readFileSync(file)).tagline, site.tagline);
   assert.match(await (await fetch(done.preview.url)).text(), /Reliable roofing &lt;with care&gt;/u);
+  assert.equal((await inspectOverHttp(done, done.preview)).ok, true, "HTTP-only verification also accepts source attributes and escaped text");
   const evidence = done.transitions.findLast((t) => t.to === "previewing").evidence;
   assert.deepEqual(evidence.results.map((r) => [r.name, r.exitCode]), [["check", 0], ["test", 0], ["build", 0]]);
   assert.equal((await request({ action: "edit", ...selection, text: "stale" })).status, 409);
