@@ -25,8 +25,11 @@ export class MissionService {
   #defaultConcurrency;
   #schedulers = new Map();
   #listeners = new Map();
+  #decide;
 
-  constructor({ store, execute, defaultConcurrency = DEFAULT_BATCH_SIZE }) {
+  /** `decide({ objective, repository })` → { branch, variants, reasons } for strategy "auto" (the kernel's branching). */
+  constructor({ store, execute, defaultConcurrency = DEFAULT_BATCH_SIZE, decide = null }) {
+    this.#decide = decide;
     if (!store || typeof store.saveMission !== "function") throw new Error("A durable mission store is required.");
     if (typeof execute !== "function") throw new Error("A mission child executor is required.");
     if (!Number.isInteger(defaultConcurrency) || defaultConcurrency < 1 || defaultConcurrency > 8) {
@@ -56,8 +59,19 @@ export class MissionService {
     return snapshot ? publicMission(snapshot) : null;
   }
 
-  create({ id = randomUUID(), title = "", repository, model, children, tasks, objective, variants, maxConcurrency = this.#defaultConcurrency }) {
+  create({ id = randomUUID(), title = "", repository, model, children, tasks, objective, variants, strategy, maxConcurrency = this.#defaultConcurrency }) {
+    // "auto": the kernel decides whether this objective runs as one lane or as competing versions.
+    let decision = null;
+    if (strategy === "auto" && children === undefined && tasks === undefined && variants === undefined) {
+      if (typeof objective !== "string" || !objective.trim()) throw new MissionServiceError("INVALID_MISSION", "Describe what to do.");
+      decision = this.#decide ? this.#decide({ objective: objective.trim(), repository: typeof repository === "string" ? repository.trim() : null }) : { branch: false, variants: 1, reasons: ["no strategy engine configured"] };
+      if (decision.branch) variants = decision.variants;
+      else tasks = [objective];
+    } else if (strategy !== undefined && strategy !== "auto") {
+      throw new MissionServiceError("INVALID_MISSION", 'strategy must be "auto" when given.');
+    }
     if (children === undefined) ({ children, title } = expandLaunch({ tasks, objective, variants, title }));
+    if (decision) children = children.map((child) => ({ ...child, metadata: { ...(child.metadata ?? {}), strategy: { decidedBy: "kernel", branch: decision.branch, reasons: decision.reasons } } }));
     if (this.get(id)) throw new MissionServiceError("MISSION_EXISTS", `Mission '${id}' already exists.`);
     if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 8) {
       throw new MissionServiceError("INVALID_CONCURRENCY", "maxConcurrency must be an integer from 1 to 8.");
