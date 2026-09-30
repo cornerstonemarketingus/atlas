@@ -1,4 +1,6 @@
 import fs from "node:fs";
+const provider = process.env.ATLAS_SMOKE_CHAT_PROVIDER || "auto";
+if (!["auto", "configured", "openai"].includes(provider)) throw new Error("Unknown chat provider for smoke verification.");
 // Overridable only to exercise this script against a local stand-in; the workflow never sets it.
 const base = process.env.ATLAS_SMOKE_BASE_URL || "https://atlas-web.cornerstonemarketingus.workers.dev";
 const headers = { authorization: `Bearer ${process.env.ATLAS_OPERATOR_TOKEN}`, "content-type": "application/json" };
@@ -21,7 +23,7 @@ async function api(route, body) {
  * person. Anything else (thinking, deltas, tool and agent steps) is progress.
  */
 async function streamChat(message) {
-  const response = await fetch(`${base}/api/chat`, { method: "POST", headers, body: JSON.stringify({ message, stream: true }), signal: AbortSignal.timeout(190000) });
+  const response = await fetch(`${base}/api/chat`, { method: "POST", headers, body: JSON.stringify({ message, stream: true, provider }), signal: AbortSignal.timeout(190000) });
   if (!response.ok || !response.body) throw new Error(`/api/chat (stream): HTTP ${response.status}`);
   const decoder = new TextDecoder();
   let buffer = "";
@@ -54,7 +56,9 @@ if (mode === "chat") {
   // "Stopped early" note, or an error event fails the gate.
   const message = (process.env.ATLAS_SMOKE_CHAT_MESSAGE || "").trim()
     || "Read https://example.com and tell me in two sentences what the page is for, then name one thing it does not say.";
-  const evidence = { mode: "chat", messageChars: message.length };
+  const readiness = await api("/api/chat");
+  if (!readiness.providers?.some((entry) => entry.id === provider && entry.available)) throw new Error("Selected chat provider is not available on the deployed Worker.");
+  const evidence = { mode: "chat", provider, messageChars: message.length };
   const judge = (label, outcome) => {
     const content = outcome.reply?.content ?? "";
     const problems = [];
@@ -72,7 +76,7 @@ if (mode === "chat") {
     console.log(`${label}: ${verdict} (${content.length} chars, ${evidence[label].steps.length} tool steps)`);
   };
 
-  judge("nonStreaming", await api("/api/chat", { message }));
+  judge("nonStreaming", await api("/api/chat", { message, provider }));
   judge("streaming", await streamChat(message));
   fs.writeFileSync("smoke-result.json", JSON.stringify(evidence, null, 2));
   const failed = ["nonStreaming", "streaming"].filter((label) => !evidence[label].passed);
