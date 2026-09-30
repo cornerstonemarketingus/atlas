@@ -66,7 +66,8 @@ export function ChatSection() {
   const [repository, setRepository] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(PROJECT_STORAGE_KEY) ?? "");
   const [branch, setBranch] = useState("main");
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [ready, setReady] = useState<{ configured: boolean; reason: string | null } | null>(null);
+  const [ready, setReady] = useState<{ configured: boolean; reason: string | null; providers?: { id: string; label: string; available: boolean; paid?: boolean }[] } | null>(null);
+  const [provider, setProvider] = useState("auto");
   const [version, setVersion] = useState(0);
   const { threads, close } = useThreads(version);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
@@ -228,7 +229,7 @@ export function ChatSection() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text, stream: true }),
+        body: JSON.stringify({ conversationId, message: text, stream: true, provider }),
         signal: controller.signal,
       });
       if (!response.ok || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
@@ -409,7 +410,10 @@ export function ChatSection() {
       <textarea aria-label="Message Atlas" value={draft} rows={3} onKeyDown={keyDown}
         onChange={(event) => setDraft(event.target.value)}
       placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything…"} />
-      <div className="composer-actions">
+        <div className="composer-actions">
+          <label>Model <select aria-label="Model provider" value={provider} onChange={(event) => setProvider(event.target.value)} disabled={streaming !== null}>
+            {(ready?.providers ?? [{ id: "auto", label: "Automatic", available: true }]).map((option) => <option key={option.id} value={option.id} disabled={!option.available}>{option.label}{option.paid ? " (paid API)" : ""}{!option.available ? " — not configured" : ""}</option>)}
+          </select></label>
         <div><span className="composer-hint">Enter sends · Shift+Enter for a new line</span></div>
         {streaming !== null
           ? <button type="button" className="send" onClick={stop} aria-label="Stop the reply">■</button>

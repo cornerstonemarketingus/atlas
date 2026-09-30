@@ -82,6 +82,7 @@ jobs:
           ATLAS_CHAT_MODEL: ${{ secrets.ATLAS_CHAT_MODEL }}
           ATLAS_MODEL_API_KEY: ${{ secrets.ATLAS_MODEL_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # A second model on the same endpoint, tried when the first is
           # rate-limited ("none" turns it off). The runtime has read this since
           # the fallback was added, but it was never uploaded, so production
@@ -122,6 +123,7 @@ jobs:
             ATLAS_CHAT_MODEL \
             ATLAS_MODEL_API_KEY \
             ATLAS_CHAT_FALLBACK_MODEL \
+            OPENAI_API_KEY \
             ATLAS_TAVILY_API_KEY \
             ATLAS_ALLOWED_REPOSITORIES \
             ATLAS_STRIPE_SECRET_KEY \
