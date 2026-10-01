@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MAX_TOOL_STEPS, converse, durationMs, retryAfterMs } from "../app/api/chat/agent-loop.mjs";
+import { MAX_TOOL_STEPS, converse, durationMs, retryAfterMs, isBillingExhausted } from "../app/api/chat/agent-loop.mjs";
 
 const endpoint = { baseUrl: "https://model.test/v1", apiKey: "k", model: "m" };
 const sse = (events) => new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
@@ -200,6 +200,47 @@ test("when no model can answer at all, the work is still the reply, never an emp
   assert.match(outcome.reply, /Example/u);
   assert.match(outcome.reply, /rate limit/u);
   assert.match(outcome.reply, /Ask me to continue/u);
+});
+
+test("recognises billing exhaustion distinctly from a transient rate limit", () => {
+  const openaiQuota = JSON.stringify({ error: { message: "You exceeded your current quota, please check your plan and billing details.", type: "insufficient_quota", code: "insufficient_quota" } });
+  assert.equal(isBillingExhausted(openaiQuota), true);
+  assert.equal(isBillingExhausted(JSON.stringify({ error: { message: "billing_hard_limit_reached" } })), true);
+  const groqRateLimit = JSON.stringify({ error: { message: "Rate limit reached on tokens per day (TPD). Please try again in 7m12.5s." } });
+  assert.equal(isBillingExhausted(groqRateLimit), false);
+  assert.equal(isBillingExhausted(""), false);
+});
+
+test("billing exhaustion is not retried and gets its own actionable message", async () => {
+  const quotaExhausted = () => new Response(JSON.stringify({ error: { message: "You exceeded your current quota, please check your plan and billing details.", type: "insufficient_quota", code: "insufficient_quota" } }), { status: 429 });
+  const waits = [];
+  const { fetcher, requests } = scripted([quotaExhausted]);
+  const failed = await run(fetcher, { sleep: async (ms) => { waits.push(ms); } }).promise;
+  assert.equal(failed.status, 429);
+  assert.match(failed.error, /billing is unavailable/u);
+  assert.match(failed.error, /will not keep retrying/u);
+  // No wait-and-retry was spent on an account that cannot recover by waiting.
+  assert.equal(requests.length, 1);
+  assert.deepEqual(waits, []);
+});
+
+test("billing exhaustion still falls back to a configured fallback model", async () => {
+  const quotaExhausted = () => new Response(JSON.stringify({ error: { code: "insufficient_quota", message: "exceeded your current quota" } }), { status: 429 });
+  const { fetcher, requests } = scripted([quotaExhausted, [say("From the fallback.")]]);
+  const outcome = await run(fetcher, { endpoint: { ...endpoint, fallbackModel: "small" }, sleep: async () => { throw new Error("should not wait on billing exhaustion"); } }).promise;
+  assert.equal(outcome.reply, "From the fallback.");
+  assert.deepEqual(requests.map((request) => request.model), ["m", "small"]);
+});
+
+test("billing exhaustion after partial work stops synthesis without retrying", async () => {
+  const quotaExhausted = () => new Response(JSON.stringify({ error: { code: "insufficient_quota" } }), { status: 429 });
+  const { fetcher } = scripted([
+    [say("Checking the page."), callTool("t1", "read_web_page", { url: "https://example.com/" })],
+    quotaExhausted, // the round after the tool: refused
+    quotaExhausted, // synthesis, first try: refused, and must not be retried
+  ]);
+  const outcome = await run(fetcher, { sleep: async () => { throw new Error("should not wait on billing exhaustion"); } }).promise;
+  assert.match(outcome.reply, /billing is unavailable/u);
 });
 
 test("older tool results are shortened before later rounds", async () => {

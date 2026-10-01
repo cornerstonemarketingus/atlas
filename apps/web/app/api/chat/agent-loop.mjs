@@ -43,6 +43,23 @@ const TRANSIENT_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]
 
 /** Which model actually answered a response, when the fallback was used. */
 const answeredBy = new WeakMap();
+/** Set on a 429 response whose body says billing/quota exhaustion, not transient load (see isBillingExhausted). */
+const billingFlag = new WeakMap();
+
+/**
+ * OpenAI (and OpenAI-compatible) servers answer billing exhaustion with the
+ * same HTTP 429 a transient rate limit uses, but it carries `insufficient_quota`
+ * or `billing_hard_limit_reached` in the error code/type and a "check your plan
+ * and billing" message. Retrying that on any schedule cannot succeed until the
+ * account is funded or a budget raised, so it must be told apart from a 429
+ * that really will clear on its own: retrying it wastes the wait budget and
+ * tells the person "wait a minute" about something that will not change in a
+ * minute, an hour, or a day.
+ */
+const BILLING_EXHAUSTED = /\binsufficient_quota\b|\bbilling_hard_limit_reached\b|exceeded your current quota|check your plan and billing/iu;
+export function isBillingExhausted(body) {
+  return BILLING_EXHAUSTED.test(String(body ?? ""));
+}
 
 function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, reasoningEffort }) {
   return fetcher(completionsUrl(endpoint.baseUrl), {
@@ -122,21 +139,30 @@ export function retryAfterMs(headers, body = "") {
  * Sends a model request, riding out rate limits: on 429, wait what the
  * provider asks (when that is short) and retry once, then try the fallback
  * model on the same endpoint. Other statuses are returned as they are.
+ *
+ * A 429 that is billing exhaustion rather than a transient limit skips the
+ * wait-and-retry entirely — asking again on the same account cannot succeed —
+ * and goes straight to the fallback model, if one is configured.
  */
 async function callConfiguredModel(endpoint, turns, options) {
   let response = await sendModel(endpoint, turns, options);
   if (response.status !== 429) return response;
-  const wait = retryAfterMs(response.headers, await response.clone().text().catch(() => ""));
-  if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
-    await (options.sleep ?? sleep)(wait);
-    response = await sendModel(endpoint, turns, options);
-    if (response.status !== 429) return response;
+  const body = await response.clone().text().catch(() => "");
+  const billing = isBillingExhausted(body);
+  if (!billing) {
+    const wait = retryAfterMs(response.headers, body);
+    if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
+      await (options.sleep ?? sleep)(wait);
+      response = await sendModel(endpoint, turns, options);
+      if (response.status !== 429) return response;
+    }
   }
   if (endpoint.fallbackModel) {
     const fallback = await sendModel({ ...endpoint, model: endpoint.fallbackModel }, turns, options);
     answeredBy.set(fallback, endpoint.fallbackModel);
     return fallback;
   }
+  if (billing) billingFlag.set(response, true);
   return response;
 }
 
@@ -206,7 +232,7 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
   }
   const model = answeredBy.get(response) ?? endpoint.model;
   const fallbackUsed = model !== endpoint.model;
-  if (!response.ok) return { ok: false, status: response.status, retryAfterMs: retryAfterMs(response.headers), model, fallbackUsed };
+  if (!response.ok) return { ok: false, status: response.status, retryAfterMs: retryAfterMs(response.headers), model, fallbackUsed, billing: billingFlag.get(response) === true };
   if (!stream || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
     // Not streaming, or a server that ignored stream:true: the whole reply at once.
     let payload;
@@ -403,12 +429,17 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     }
     // The status is the actionable part; the body can contain the prompt echoed back.
     if (!result.ok) {
-      const message = result.status === 429
-        ? "The model provider's rate limit was reached (429). Wait a minute and ask again, or set a higher-limit model or ATLAS_CHAT_FALLBACK_MODEL."
-        : `The model endpoint answered ${result.status}.`;
-      inferenceDiagnostic(result.status === 429 ? "inference.rate_limited" : "inference.failed", describe(result, round));
+      const message = result.billing
+        ? "This model provider's billing is unavailable (insufficient quota). Atlas will not keep retrying this account; add credits or configure a different provider."
+        : result.status === 429
+          ? "The model provider's rate limit was reached (429). Wait a minute and ask again, or set a higher-limit model or ATLAS_CHAT_FALLBACK_MODEL."
+          : `The model endpoint answered ${result.status}.`;
+      inferenceDiagnostic(result.billing ? "inference.billing_exhausted" : result.status === 429 ? "inference.rate_limited" : "inference.failed", describe(result, round));
       const wait = Math.max(1_000, result.retryAfterMs ?? 2_000);
-      if (round === 0 && TRANSIENT_STATUSES.has(result.status) && wait <= waitBudget && firstCallRetries < FIRST_CALL_RETRIES) {
+      // Billing exhaustion cannot clear with a wait; retrying it is certain
+      // to repeat the same answer, so it skips straight to the final error
+      // (round 0) or to synthesis from whatever work already exists.
+      if (!result.billing && round === 0 && TRANSIENT_STATUSES.has(result.status) && wait <= waitBudget && firstCallRetries < FIRST_CALL_RETRIES) {
         firstCallRetries += 1;
         // Nothing done yet and nothing to synthesize from: wait out the
         // provider's stated reset and ask again, rather than refusing the request.
@@ -422,7 +453,8 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       if (round === 0) return { error: message, status: result.status === 429 ? 429 : 502 };
       // Work is already done. A transient refusal goes to final synthesis,
       // which waits and retries; a configuration error would only fail again.
-      if (TRANSIENT_STATUSES.has(result.status)) failure = result.status === 429 ? "the model provider's rate limit was reached." : `the model endpoint answered ${result.status}.`;
+      if (result.billing) failure = "the model provider's billing is unavailable (insufficient quota).";
+      else if (TRANSIENT_STATUSES.has(result.status)) failure = result.status === 429 ? "the model provider's rate limit was reached." : `the model endpoint answered ${result.status}.`;
       else fatal = message;
       break;
     }
@@ -536,6 +568,12 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         continue;
       }
       if (!TRANSIENT_STATUSES.has(result.status)) { reason = `the model endpoint answered ${result.status}.`; break; }
+      if (result.billing) {
+        // Retrying billing exhaustion cannot succeed: say so and stop
+        // spending the wait budget on an account that will not change.
+        reason = "the model provider's billing is unavailable (insufficient quota).";
+        break;
+      }
       reason = result.status === 429 ? "the model provider's rate limit was reached." : `the model endpoint answered ${result.status}.`;
       const wait = Math.max(1_000, result.retryAfterMs ?? 2_000);
       if (attempt === SYNTHESIS_ATTEMPTS - 1 || wait > waitBudget) break;
