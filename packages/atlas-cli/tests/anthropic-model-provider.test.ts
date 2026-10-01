@@ -164,6 +164,23 @@ test("classifies http statuses into the provider error taxonomy", async () => {
   }
 });
 
+test("classifies a credit-balance 400 as billing exhaustion, not a generic invalid request", async () => {
+  const provider = new AnthropicModelProvider({
+    apiKey: "key",
+    models: [model],
+    fetchImplementation: fakeFetch(() => new Response(
+      JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Claude API. Please go to Plans & Billing to upgrade or purchase credits." } }),
+      { status: 400 },
+    )),
+  });
+  await assert.rejects(provider.complete(request), (error: unknown) => {
+    assert.ok(error instanceof ModelProviderError);
+    assert.equal(error.code, "billing-exhausted");
+    assert.equal(error.retryable, false);
+    return true;
+  });
+});
+
 test("rejects malformed JSON and oversized responses", async () => {
   const malformed = new AnthropicModelProvider({
     apiKey: "key",

@@ -10,6 +10,8 @@ export interface ChatOutput {
   readonly toolCalls: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /** Which provider/model actually answered the last turn, when one did. */
+  readonly answeredBy?: string;
 }
 
 export function toChatOutput(sessionId: string, result: ReadOnlyToolAgentResult): ChatOutput {
@@ -26,7 +28,12 @@ export function toChatOutput(sessionId: string, result: ReadOnlyToolAgentResult)
     toolCalls: result.trace.toolCalls,
     inputTokens: result.trace.usage.inputTokens,
     outputTokens: result.trace.usage.outputTokens,
+    ...(result.trace.lastProviderId === undefined ? {} : { answeredBy: formatAnsweredBy(result.trace.lastProviderId, result.trace.lastModel) }),
   };
+}
+
+function formatAnsweredBy(providerId: string, model: string | undefined): string {
+  return model === undefined ? providerId : `${providerId} (${model})`;
 }
 
 export function renderChatJson(output: ChatOutput): string {
@@ -43,6 +50,7 @@ export function renderChatText(output: ChatOutput): string {
     `Turns: ${output.turns}`,
     `Tool calls: ${output.toolCalls}`,
     `Tokens: ${output.inputTokens} input / ${output.outputTokens} output`,
+    ...(output.answeredBy === undefined ? [] : [`Answered by: ${output.answeredBy}`]),
     ...(output.pendingTool === undefined ? [] : [`Pending tool: ${output.pendingTool}`]),
   ].join("\n");
 }

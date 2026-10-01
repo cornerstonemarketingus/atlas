@@ -3,6 +3,7 @@ import { ModelProviderError } from "../model/model-provider.js";
 import { validateModelRequest, validateModelResponse } from "../model/model-contract-validation.js";
 import { buildOpenAiChatPayload, parseOpenAiChatResponse } from "./openai-compatible-chat-format.js";
 import { parseDurationMs, retryAfterHeaderMs, suggestedWaitFromMessage } from "./rate-limit-timing.js";
+import { isBillingExhausted } from "./billing-exhaustion.js";
 
 const DEFAULT_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -119,19 +120,25 @@ export class GroqModelProvider implements ModelProvider {
       if (recovered !== undefined) return recovered;
 
       const authFailure = response.status === 401 || response.status === 403;
+      // A 429 is ambiguous: Groq's free/shared tiers answer both a transient
+      // tokens-per-minute limit and an exhausted paid-tier balance with the
+      // same status, and only the body says which. Billing exhaustion cannot
+      // clear with a wait, so it is classified and reported separately from
+      // a limit that really will reset.
+      const billingExhausted = response.status === 429 && isBillingExhausted(text);
       // Groq's error responses (rate limits, oversized requests, invalid
       // models) carry the actual reason in the body; without it every
       // failure looks identical and has to be guessed at from the status
       // code alone.
       const detail = text.trim().slice(0, 500);
-      const retryAfterMs = response.status === 429 || response.status >= 500
+      const retryAfterMs = !billingExhausted && (response.status === 429 || response.status >= 500)
         ? retryAfterHeaderMs(response.headers) ?? suggestedWaitFromMessage(text)
         : undefined;
       throw new ModelProviderError({
         message: `Groq endpoint returned HTTP ${response.status}${detail.length > 0 ? `: ${detail}` : ""}`,
-        code: authFailure ? "authentication" : response.status === 429 ? "rate-limit" : "provider-failure",
+        code: billingExhausted ? "billing-exhausted" : authFailure ? "authentication" : response.status === 429 ? "rate-limit" : "provider-failure",
         providerId: this.metadata.id,
-        retryable: !authFailure && (response.status === 429 || response.status >= 500),
+        retryable: !billingExhausted && !authFailure && (response.status === 429 || response.status >= 500),
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
       });
     }

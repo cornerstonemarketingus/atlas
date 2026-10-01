@@ -184,3 +184,149 @@ test("the code command rejects a bad --context-window instead of ignoring it", a
     console.error = original;
   }
 });
+
+// --- --provider local ------------------------------------------------------
+// Making the local provider "first-class" is worthless if cli.ts does not
+// actually default its endpoint or skip the key requirement; these exercise
+// that wiring, each failing fast rather than making a real network call.
+
+test("--provider local defaults the endpoint to Ollama's loopback address without --base-url", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => { errors.push(parts.join(" ")); };
+  try {
+    // No --base-url and no key env: this only gets past provider selection,
+    // endpoint resolution and the key-requirement check if the default
+    // endpoint kicked in and the key check was skipped for `local`. It fails
+    // later (no server listening), which still proves the earlier wiring
+    // worked — an endpoint or key-env rejection would fail at a different,
+    // identifiable message, which this asserts did not happen.
+    const code = await main([
+      "code", ".", "objective", "--model", "llama3.1", "--provider", "local",
+      "--retry-attempts", "1", "--verify-timeout-ms", "1000",
+    ]);
+    assert.notEqual(code, 2, `expected to get past flag validation, got: ${errors.join(" | ")}`);
+    assert.ok(
+      !errors.some((line) => /is not set \(required for provider/u.test(line)),
+      `local must not require an API key: ${errors.join(" | ")}`,
+    );
+  } finally {
+    console.error = original;
+  }
+});
+
+test("--provider local still refuses a remote http --base-url", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => { errors.push(parts.join(" ")); };
+  try {
+    const code = await main([
+      "code", ".", "objective", "--model", "llama3.1", "--provider", "local",
+      "--base-url", "http://llm.example.com/v1",
+    ]);
+    assert.equal(code, 2);
+    assert.ok(errors.some((line) => /https/u.test(line)), `expected an https complaint, got: ${errors.join(" | ")}`);
+  } finally {
+    console.error = original;
+  }
+});
+
+// --- --fallback / --escalate with a local route ---------------------------
+// The primary route here is --provider local too, so these only ever touch
+// loopback (which fails fast with nothing listening) rather than a real
+// vendor: no API key is spent proving --fallback/--escalate parsing works.
+
+test("--fallback accepts the 2-part provider:model form for a local route", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => { errors.push(parts.join(" ")); };
+  try {
+    await main([
+      "code", ".", "objective", "--model", "llama3.1", "--provider", "local",
+      "--fallback", "local:llama3.1",
+      "--retry-attempts", "1", "--verify-timeout-ms", "1000",
+    ]);
+    assert.ok(
+      !errors.some((line) => /--fallback/u.test(line)),
+      `2-part local fallback should parse, got: ${errors.join(" | ")}`,
+    );
+  } finally {
+    console.error = original;
+  }
+});
+
+test("--fallback rejects a 2-part form for a vendor that requires a key", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => { errors.push(parts.join(" ")); };
+  try {
+    const code = await main([
+      "code", ".", "objective", "--model", "llama3.1", "--provider", "local",
+      "--fallback", "groq:llama-3.3-70b-versatile",
+    ]);
+    assert.equal(code, 2);
+    assert.ok(
+      errors.some((line) => /requires provider:model:API_KEY_ENV/u.test(line)),
+      `expected a missing-credential complaint, got: ${errors.join(" | ")}`,
+    );
+  } finally {
+    console.error = original;
+  }
+});
+
+test("--fallback rejects a 3-part form for a local route", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => { errors.push(parts.join(" ")); };
+  try {
+    const code = await main([
+      "code", ".", "objective", "--model", "llama3.1", "--provider", "local",
+      "--fallback", "local:llama3.1:SOME_ENV",
+    ]);
+    assert.equal(code, 2);
+    assert.ok(
+      errors.some((line) => /does not take an API_KEY_ENV/u.test(line)),
+      `expected an unexpected-credential complaint, got: ${errors.join(" | ")}`,
+    );
+  } finally {
+    console.error = original;
+  }
+});
+
+test("--escalate accepts the 2-part provider:model form for a local route", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => { errors.push(parts.join(" ")); };
+  try {
+    await main([
+      "code", ".", "objective", "--model", "llama3.1", "--provider", "local",
+      "--escalate", "local:llama3.1",
+      "--retry-attempts", "1", "--verify-timeout-ms", "1000",
+    ]);
+    assert.ok(
+      !errors.some((line) => /--escalate/u.test(line)),
+      `2-part local escalate should parse, got: ${errors.join(" | ")}`,
+    );
+  } finally {
+    console.error = original;
+  }
+});
+
+test("--escalate rejects a 3-part form for a local route", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => { errors.push(parts.join(" ")); };
+  try {
+    const code = await main([
+      "code", ".", "objective", "--model", "llama3.1", "--provider", "local",
+      "--escalate", "local:llama3.1:SOME_ENV",
+    ]);
+    assert.equal(code, 2);
+    assert.ok(
+      errors.some((line) => /does not take an API_KEY_ENV/u.test(line)),
+      `expected an unexpected-credential complaint, got: ${errors.join(" | ")}`,
+    );
+  } finally {
+    console.error = original;
+  }
+});

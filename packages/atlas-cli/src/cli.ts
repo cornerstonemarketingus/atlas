@@ -31,9 +31,11 @@ import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provide
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
 import { FallbackModelProvider } from "./infrastructure/fallback-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
-import { OUTPUT_TOKENS_PER_TURN_RANGE, selectCoderProvider } from "./model/coder-provider-selection.js";
+import { OUTPUT_TOKENS_PER_TURN_RANGE, selectCoderProvider, isCoderProviderId, CODER_PROVIDER_IDS, type CoderProviderSelection } from "./model/coder-provider-selection.js";
 import { compactRepositorySummary } from "./model/compact-repository-summary.js";
-import { resolveCoderEndpoint, resolveSelfHostedLimits } from "./model/coder-endpoint.js";
+import { resolveCoderEndpoint, resolveSelfHostedLimits, validateOpenAiCompatibleBaseUrl } from "./model/coder-endpoint.js";
+import { checkProviderStatus } from "./infrastructure/provider-health-check.js";
+import { renderProviderStatusJson, renderProviderStatusText } from "./presentation/provider-status-renderers.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
 import { RedactingModelProvider } from "./infrastructure/redacting-model-provider.js";
 import { redactRenderedOutput } from "./presentation/redacted-output.js";
@@ -78,11 +80,13 @@ const USAGE = `Usage:
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
-  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
-       [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
+  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|local] [--api-key-env <ENV_VAR>]
+       [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model[:API_KEY_ENV]>] [--escalate <provider:model[:API_KEY_ENV]>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]
+       (--provider local talks to an unauthenticated OpenAI-compatible server, defaulting to Ollama at 127.0.0.1:11434; omit --api-key-env and the API_KEY_ENV field entirely)
+  atlas provider-status [--provider anthropic|groq|local] [--endpoint <url>] [--timeout-ms N] [--format text|json]   (checks whether a provider is reachable before a run)
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
 
 export async function main(args: readonly string[]): Promise<number> {
@@ -103,6 +107,15 @@ export async function main(args: readonly string[]): Promise<number> {
       write: (text) => process.stdout.write(text),
       writeError: (text) => process.stderr.write(text),
     });
+  }
+  if (args[0] === "provider-status") {
+    const formatIndex = args.indexOf("--format");
+    const format = formatIndex < 0 ? "text" : args[formatIndex + 1];
+    if (format !== "text" && format !== "json") {
+      console.error("Format must be 'text' or 'json'.");
+      return 2;
+    }
+    return await runProviderStatus(args, format);
   }
   if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "ci" && args[0] !== "map" && args[0] !== "surfaces" && args[0] !== "schemas" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code" && args[0] !== "undo") || args[1] === undefined) {
     console.error(USAGE);
@@ -504,6 +517,105 @@ export function groqRequestByteLimit(outputTokensPerTurn: number | undefined): n
   return outputTokensPerTurn === undefined ? 18_000 : 160_000;
 }
 
+/** Ollama's default listen address; the one value that makes `--provider local` work with nothing else configured. */
+const DEFAULT_LOCAL_CODER_BASE_URL = "http://127.0.0.1:11434/v1";
+
+function defaultLocalCoderEndpoint(): URL {
+  const resolved = resolveCoderEndpoint(DEFAULT_LOCAL_CODER_BASE_URL);
+  // DEFAULT_LOCAL_CODER_BASE_URL is a fixed, valid loopback URL; this can
+  // only fail if that constant is edited into something invalid.
+  if (!resolved.ok || resolved.endpoint === undefined) throw new Error("Default local coder endpoint failed to resolve.");
+  return resolved.endpoint;
+}
+
+/**
+ * `atlas provider-status`: confirms a provider is usable before a run spends
+ * its turn budget discovering it isn't. Defaults to `local`, the provider
+ * most likely to be unreachable for a reason worth catching early (the
+ * server isn't started yet) rather than misconfigured (a missing key, which
+ * surfaces at run start anyway).
+ */
+async function runProviderStatus(args: readonly string[], format: "json" | "text"): Promise<number> {
+  const providerOption = args.includes("--provider") ? readRequiredOption(args, "--provider") : "local";
+  if (providerOption === null) return 2;
+  if (!isCoderProviderId(providerOption)) {
+    console.error(`Unknown --provider '${providerOption}'. Expected one of: ${CODER_PROVIDER_IDS.join(", ")}.`);
+    return 2;
+  }
+  const apiKeyEnvOption = args.includes("--api-key-env") ? readRequiredOption(args, "--api-key-env") : undefined;
+  if (apiKeyEnvOption === null) return 2;
+  const baseUrlOption = args.includes("--endpoint")
+    ? readRequiredOption(args, "--endpoint")
+    : args.includes("--base-url")
+      ? readRequiredOption(args, "--base-url")
+      : process.env["ATLAS_CODER_BASE_URL"];
+  if (baseUrlOption === null) return 2;
+  const timeoutOption = readOptionalInteger(args, "--timeout-ms", 100, 60_000);
+  if (timeoutOption === null) return 2;
+
+  const selection = selectCoderProvider({
+    provider: providerOption,
+    model: "provider-status-check",
+    apiKeyEnvironmentVariable: apiKeyEnvOption,
+    tokenBudget: 1,
+  });
+  if (!selection.ok) {
+    console.error(selection.message);
+    return 2;
+  }
+
+  let endpoint: URL | undefined;
+  if (selection.selection.profile.providerId === "local") {
+    const effectiveBaseUrl = baseUrlOption === undefined || baseUrlOption.trim().length === 0
+      ? DEFAULT_LOCAL_CODER_BASE_URL
+      : baseUrlOption;
+    const validated = validateOpenAiCompatibleBaseUrl(effectiveBaseUrl);
+    if (!validated.ok) {
+      console.error(validated.message);
+      return 2;
+    }
+    endpoint = validated.url;
+  }
+
+  const result = await checkProviderStatus({
+    providerId: selection.selection.profile.providerId,
+    apiKeyEnvironmentVariable: selection.selection.apiKeyEnvironmentVariable,
+    environment: process.env,
+    ...(endpoint === undefined ? {} : { endpoint }),
+    ...(timeoutOption === undefined ? {} : { timeoutMs: timeoutOption }),
+  });
+  console.log(format === "json" ? renderProviderStatusJson(result) : renderProviderStatusText(result));
+  return result.ready ? 0 : 1;
+}
+
+/**
+ * Resolves the API key for a `--fallback`/`--escalate` route, or reports
+ * exactly why it can't: a vendor route missing its API_KEY_ENV field, a
+ * local route that was given one it does not use, or an unset environment
+ * variable. Shared so both flags report the same message shape.
+ */
+function resolveRouteCredential(
+  flag: "--fallback" | "--escalate",
+  providerLabel: string,
+  routeSelection: CoderProviderSelection,
+  hasExplicitKeyEnv: boolean,
+): { readonly ok: true; readonly apiKey: string } | { readonly ok: false; readonly message: string } {
+  if (!routeSelection.profile.requiresApiKey) {
+    if (hasExplicitKeyEnv) {
+      return { ok: false, message: `${flag} for provider '${providerLabel}' does not take an API_KEY_ENV; use provider:model.` };
+    }
+    return { ok: true, apiKey: "" };
+  }
+  if (!hasExplicitKeyEnv) {
+    return { ok: false, message: `${flag} for provider '${providerLabel}' requires provider:model:API_KEY_ENV.` };
+  }
+  const value = process.env[routeSelection.apiKeyEnvironmentVariable];
+  if (value === undefined || value.trim().length === 0) {
+    return { ok: false, message: `Environment variable ${routeSelection.apiKeyEnvironmentVariable} is not set (required for provider '${providerLabel}').` };
+  }
+  return { ok: true, apiKey: value };
+}
+
 async function runCode(args: readonly string[], format: "json" | "text"): Promise<number> {
   const objective = args[2];
   const dryRun = args.includes("--dry-run");
@@ -550,7 +662,15 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     console.error(selection.message);
     return 2;
   }
-  const resolvedEndpoint = resolveCoderEndpoint(baseUrlOption);
+  // A local provider is useless without a server to talk to, and requiring
+  // --base-url just to say "the default Ollama port" would undercut the
+  // point of making it first-class. Every other provider keeps requiring an
+  // explicit --base-url before anything is sent anywhere.
+  const effectiveBaseUrl = (baseUrlOption === undefined || baseUrlOption.trim().length === 0)
+    && selection.selection.profile.providerId === "local"
+    ? DEFAULT_LOCAL_CODER_BASE_URL
+    : baseUrlOption;
+  const resolvedEndpoint = resolveCoderEndpoint(effectiveBaseUrl);
   if (!resolvedEndpoint.ok) {
     console.error(resolvedEndpoint.message);
     return 2;
@@ -575,12 +695,19 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     return 2;
   }
   const { profile, apiKeyEnvironmentVariable, maxOutputTokensPerTurn } = selection.selection;
-  const apiKey = process.env[apiKeyEnvironmentVariable];
-  if (apiKey === undefined || apiKey.trim().length === 0) {
-    console.error(
-      `Environment variable ${apiKeyEnvironmentVariable} is not set (required for provider '${profile.providerId}').`,
-    );
-    return 2;
+  // Local servers are unauthenticated; requiring a key for them would be a
+  // check that exists for the vendors' sake, applied to a setup it has
+  // nothing to say about.
+  let apiKey = "";
+  if (profile.requiresApiKey) {
+    const value = process.env[apiKeyEnvironmentVariable];
+    if (value === undefined || value.trim().length === 0) {
+      console.error(
+        `Environment variable ${apiKeyEnvironmentVariable} is not set (required for provider '${profile.providerId}').`,
+      );
+      return 2;
+    }
+    apiKey = value;
   }
   const maximumTurns = maximumTurnsOption ?? 12;
   const maxRepairAttempts = repairAttemptsOption ?? 2;
@@ -678,7 +805,9 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     }];
     const upstream = routeSelection.profile.providerId === "anthropic"
       ? new AnthropicModelProvider({ apiKey: routeApiKey, models: routeCapabilities, defaultMaxOutputTokens: routeSelection.maxOutputTokensPerTurn })
-      : new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
+      : routeSelection.profile.providerId === "local"
+        ? new LocalOpenAiCompatibleModelProvider({ endpoint: routeEndpoint ?? defaultLocalCoderEndpoint(), models: routeCapabilities })
+        : new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
     return new RetryingModelProvider(new RedactingModelProvider(upstream, new PatternSecretRedactor()), retryOptions);
   };
   const routes = [{ provider: makeRoute(model, selection.selection, apiKey, endpoint), model }];
@@ -686,19 +815,20 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     if (args[index] !== "--fallback") continue;
     const specification = args[index + 1];
     const parts = specification?.split(":") ?? [];
-    if (parts.length !== 3 || parts.some((part) => part.trim().length === 0)) {
-      console.error("--fallback must use provider:model:API_KEY_ENV.");
+    // A local route needs no key, so its specification omits the third
+    // field: provider:model rather than provider:model:API_KEY_ENV.
+    if (parts.length < 2 || parts.length > 3 || parts.some((part) => part.trim().length === 0)) {
+      console.error("--fallback must use provider:model or provider:model:API_KEY_ENV.");
       return 2;
     }
-    const [fallbackProvider, fallbackModel, fallbackKeyEnvironment] = parts as [string, string, string];
+    const fallbackProvider = parts[0]!;
+    const fallbackModel = parts[1]!;
+    const fallbackKeyEnvironment = parts[2];
     const fallbackSelection = selectCoderProvider({ provider: fallbackProvider, model: fallbackModel, apiKeyEnvironmentVariable: fallbackKeyEnvironment, tokenBudget, outputTokensPerTurn });
     if (!fallbackSelection.ok) { console.error(fallbackSelection.message); return 2; }
-    const fallbackKey = process.env[fallbackSelection.selection.apiKeyEnvironmentVariable];
-    if (!fallbackKey?.trim()) {
-      console.error(`Environment variable ${fallbackSelection.selection.apiKeyEnvironmentVariable} is not set (required for fallback provider '${fallbackProvider}').`);
-      return 2;
-    }
-    routes.push({ provider: makeRoute(fallbackModel, fallbackSelection.selection, fallbackKey), model: fallbackModel });
+    const credential = resolveRouteCredential("--fallback", fallbackProvider, fallbackSelection.selection, fallbackKeyEnvironment !== undefined);
+    if (!credential.ok) { console.error(credential.message); return 2; }
+    routes.push({ provider: makeRoute(fallbackModel, fallbackSelection.selection, credential.apiKey), model: fallbackModel });
   }
   const routedProvider = routes.length === 1 ? routes[0]!.provider : new FallbackModelProvider(routes);
   // Retries, fallbacks and escalation share one outer budget ledger, so
@@ -714,19 +844,18 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     const specification = readRequiredOption(args, "--escalate");
     if (specification === null) return 2;
     const parts = specification.split(":");
-    if (parts.length !== 3 || parts.some((part) => part.trim().length === 0)) {
-      console.error("--escalate must use provider:model:API_KEY_ENV.");
+    if (parts.length < 2 || parts.length > 3 || parts.some((part) => part.trim().length === 0)) {
+      console.error("--escalate must use provider:model or provider:model:API_KEY_ENV.");
       return 2;
     }
-    const [escalationProvider, escalationModel, escalationKeyEnvironment] = parts as [string, string, string];
+    const escalationProvider = parts[0]!;
+    const escalationModel = parts[1]!;
+    const escalationKeyEnvironment = parts[2];
     const escalationSelection = selectCoderProvider({ provider: escalationProvider, model: escalationModel, apiKeyEnvironmentVariable: escalationKeyEnvironment, tokenBudget, outputTokensPerTurn });
     if (!escalationSelection.ok) { console.error(escalationSelection.message); return 2; }
-    const escalationKey = process.env[escalationSelection.selection.apiKeyEnvironmentVariable];
-    if (!escalationKey?.trim()) {
-      console.error(`Environment variable ${escalationSelection.selection.apiKeyEnvironmentVariable} is not set (required for escalation provider '${escalationProvider}').`);
-      return 2;
-    }
-    escalationRoute = { provider: new BudgetedModelProvider(makeRoute(escalationModel, escalationSelection.selection, escalationKey), budgetLedger), model: escalationModel };
+    const credential = resolveRouteCredential("--escalate", escalationProvider, escalationSelection.selection, escalationKeyEnvironment !== undefined);
+    if (!credential.ok) { console.error(credential.message); return 2; }
+    escalationRoute = { provider: new BudgetedModelProvider(makeRoute(escalationModel, escalationSelection.selection, credential.apiKey), budgetLedger), model: escalationModel };
   }
   const escalationAttemptsOption = readOptionalInteger(args, "--escalation-attempts", 1, 5);
   if (escalationAttemptsOption === null) return 2;
@@ -789,6 +918,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const agent = makeAgent(provider, model);
 
   let usage = { turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0 };
+  let answeredBy: string | undefined;
   const runAgentWith = (passAgent: typeof agent) => async (evidence: readonly { label: string; content: string }[]) => {
     // Each pass appends to the shared `edits` array; the delta is what this
     // pass changed. The token ledger is deliberately shared across passes,
@@ -807,6 +937,14 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       inputTokens: usage.inputTokens + pass.trace.usage.inputTokens,
       outputTokens: usage.outputTokens + pass.trace.usage.outputTokens,
     };
+    // Overwritten rather than accumulated: a repair or escalation pass can
+    // switch models mid-run, and the operator wants to know who answered
+    // last, not a history of every route that ever ran.
+    if (pass.trace.lastProviderId !== undefined) {
+      answeredBy = pass.trace.lastModel === undefined
+        ? pass.trace.lastProviderId
+        : `${pass.trace.lastProviderId} (${pass.trace.lastModel})`;
+    }
     return {
       status: pass.status,
       response: pass.status === "completed" ? pass.response : "",
@@ -855,7 +993,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     }
   }
 
-  const output = toVerifiedCodeOutput(sessionId, result, usage);
+  const output = toVerifiedCodeOutput(sessionId, result, { ...usage, ...(answeredBy === undefined ? {} : { answeredBy }) });
   // What this prints becomes result.json, then the pull request body and
   // the Actions log — both readable by people with no access to the
   // repository the agent worked in. Validation diagnostics carry real
