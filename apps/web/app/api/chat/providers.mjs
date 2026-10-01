@@ -12,12 +12,17 @@ export function resolveChatProvider(environment = process.env, selection = "auto
   const openai = openAIModel(environment);
   const primary = resolveChatModel(environment);
   if (primary.configured && new URL(primary.baseUrl).origin === "https://api.openai.com" && openai && !primary.apiKey) primary.apiKey = openai.apiKey;
-  if (selection === "openai") return openai ?? { configured: false, reason: "OpenAI is not configured. Add OPENAI_API_KEY to the Atlas Worker." };
+  const fallbackDisabled = (environment.ATLAS_CHAT_FALLBACK_MODEL || "").trim().toLowerCase() === "none";
+  if (selection === "openai") {
+    if (!openai) return { configured: false, reason: "OpenAI is not configured. Add OPENAI_API_KEY to the Atlas Worker." };
+    // Selection establishes the preferred provider; a temporary refusal must not
+    // discard the already configured recovery route. Never cycle to OpenAI again.
+    return { ...openai, ...(!fallbackDisabled && primary.configured && new URL(primary.baseUrl).origin !== "https://api.openai.com" ? { providerFallback: primary } : {}) };
+  }
   if (!["auto", "configured"].includes(selection)) return { configured: false, reason: "Unknown model provider." };
   if (selection === "configured") return primary;
   // Invalid explicit endpoints remain errors; missing primary configuration can use OpenAI alone.
   if (!primary.configured) return !environment.ATLAS_CHAT_BASE_URL && !environment.ATLAS_CHAT_MODEL && openai ? openai : primary;
-  const fallbackDisabled = (environment.ATLAS_CHAT_FALLBACK_MODEL || "").trim().toLowerCase() === "none";
   return { ...primary, ...(!fallbackDisabled && openai && new URL(primary.baseUrl).origin !== "https://api.openai.com" ? { providerFallback: openai } : {}) };
 }
 
