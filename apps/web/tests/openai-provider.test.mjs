@@ -105,3 +105,22 @@ test("selected OpenAI 429 recovers to a streamed answer through the production c
   assert.equal(calls.length, 2);
   assert.ok(emitted.some(e => e.type === "delta"));
 });
+
+test("nested provider fallback diagnostics preserve the actual answering model", async t => {
+  const records = [];
+  t.mock.method(console, "warn", line => records.push(JSON.parse(line)));
+  let fallbackCalls = 0;
+  const outcome = await converse({ endpoint: resolveChatProvider(env, "openai"), turns,
+    toolContext: { environment: {}, allowlist: new Set(), githubToken: async () => undefined },
+    userMessage: "hello", stream: false, emit: () => {}, startTasks: async () => [],
+    fetcher: async (_url, init) => {
+      const model = JSON.parse(init.body).model;
+      if (model !== "openai/gpt-oss-20b") return new Response("", { status: 429, headers: { "retry-after": "3600" } });
+      return Response.json({ choices: [{ message: { content: ++fallbackCalls === 1 ? "" : "Recovered" } }] });
+    },
+  });
+  assert.equal(outcome.reply, "Recovered");
+  const empty = records.find(r => r.event === "inference.empty_response");
+  assert.equal(empty.model, "openai/gpt-oss-20b");
+  assert.equal(empty.fallbackUsed, true);
+});

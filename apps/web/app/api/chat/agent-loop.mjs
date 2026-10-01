@@ -150,7 +150,7 @@ export async function callModel(endpoint, turns, options) {
   if (!endpoint.providerFallback || (response && !TRANSIENT_STATUSES.has(response.status))) return response;
   await response?.body?.cancel().catch(() => {});
   const fallback = await callConfiguredModel(endpoint.providerFallback, turns, options);
-  answeredBy.set(fallback, endpoint.providerFallback.model);
+  if (!answeredBy.has(fallback)) answeredBy.set(fallback, endpoint.providerFallback.model);
   return fallback;
 }
 
