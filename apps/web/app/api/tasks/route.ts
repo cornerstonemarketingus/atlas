@@ -22,6 +22,7 @@ import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun, visib
 import { selfModificationDecision } from "./self-protection.mjs";
 import { repositoryAccessDecision } from "./repository-access.mjs";
 import { platformGitHubToken } from "./github-token.mjs";
+import { taskDiagnostic } from "./task-diagnostics.mjs";
 
 export async function POST(request: Request) {
   // A caller-supplied x-atlas-correlation-id is honoured only when it is
@@ -183,6 +184,13 @@ async function recordDispatchedTask(
     });
     return true;
   } catch {
+    // GitHub has already accepted the dispatch and the caller's plan usage is
+    // already charged (see the comment above): this run is genuinely
+    // happening, but with no row in `tasks` it will never appear in the
+    // caller's task list and its run id can never be heuristically matched
+    // later. Logged so an operator can find and manually reconcile it —
+    // never the objective text, which can contain anything the caller wrote.
+    taskDiagnostic("task.history_not_saved", { taskId, correlationId, repository: task.repository, mode: task.mode, executionProvider });
     return false;
   }
 }

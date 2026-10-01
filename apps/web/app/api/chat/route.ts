@@ -181,16 +181,16 @@ async function startRequestedTasks(request: Request, { requests, errors }: TaskR
       continue;
     }
     const taskBranch = task.repository === context.repository.toLowerCase() && context.branch ? context.branch : "main";
-    let outcome: { ok: boolean; message: string; taskId?: string; mergePolicy?: string };
+    let outcome: { ok: boolean; message: string; taskId?: string; mergePolicy?: string; recorded?: boolean };
     try {
       const result = await startTask(new Request(new URL("/api/tasks", request.url), {
         method: "POST",
         headers: forwarded,
         body: JSON.stringify({ repository: task.repository, branch: taskBranch, mode: task.mode, objective: task.objective, conversationId: context.conversationId }),
       }));
-      const body = await result.json().catch(() => ({})) as { message?: string; taskId?: string; mergePolicy?: string };
+      const body = await result.json().catch(() => ({})) as { message?: string; taskId?: string; mergePolicy?: string; recorded?: boolean };
       outcome = result.ok
-        ? { ok: true, message: "started", taskId: body.taskId, mergePolicy: body.mergePolicy }
+        ? { ok: true, message: "started", taskId: body.taskId, mergePolicy: body.mergePolicy, recorded: body.recorded }
         : { ok: false, message: body.message ?? `the task service answered ${result.status}` };
     } catch {
       outcome = { ok: false, message: "the task service could not be reached" };
