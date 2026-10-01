@@ -21,7 +21,8 @@ export const INSTANT_TOOL_NAMES = Object.freeze(["read_web_page", "web_search", 
 
 const MAX_PAGE_BYTES = 600_000;
 const MAX_TOOL_CHARS = 7_000;
-const MAX_FILE_CHARS = 12_000;
+const MAX_FILE_CHARS = 4_000;
+const DEFAULT_FILE_CHARS = 3_000;
 const TOOL_TIMEOUT_MS = 12_000;
 const REPOSITORY_PATTERN = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/u;
 
@@ -44,11 +45,14 @@ const WEB_SEARCH = definition(
 );
 const READ_REPOSITORY_FILE = definition(
   "read_repository_file",
-  "Read a file, or list a directory, in a GitHub repository connected to this workspace (including your own, cornerstonemarketingus/atlas). Use it to answer questions about code accurately instead of guessing. Read-only.",
+  "Read a file, or list a directory, in a GitHub repository connected to this workspace (including your own, cornerstonemarketingus/atlas). Returns a small page; follow nextOffset with fileSha to read omitted sections before making claims about them. Read-only.",
   {
     repository: { type: "string", description: "owner/name" },
     path: { type: "string", description: "Path inside the repository; empty or \"/\" for the root directory." },
     ref: { type: "string", description: "Branch, tag or commit. Defaults to the default branch." },
+    offset: { type: "integer", minimum: 0, description: "Character offset from nextOffset in the previous page. Defaults to 0." },
+    maxChars: { type: "integer", minimum: 256, maximum: MAX_FILE_CHARS, description: "Page size; defaults to 3000 characters." },
+    fileSha: { type: "string", description: "File SHA from the previous page; required when offset is not 0, so changed files cannot be mixed." },
   },
   ["repository", "path"],
 );
@@ -247,6 +251,11 @@ function encodePath(path) {
 }
 
 async function readRepositoryFile(args, fetcher, context) {
+  const offset = args.offset ?? 0;
+  const maxChars = args.maxChars ?? DEFAULT_FILE_CHARS;
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(maxChars) || maxChars < 256 || maxChars > MAX_FILE_CHARS || (args.fileSha !== undefined && !/^[a-f0-9]{40,64}$/u.test(args.fileSha)) || (offset > 0 && !args.fileSha)) {
+    return { ok: false, label: "Invalid file page", content: "Use a nonnegative integer offset, maxChars between 256 and 4000, and the previous page's fileSha when continuing." };
+  }
   const access = await repositoryAccess(args, context);
   if (access.error) return access.error;
   const path = typeof args.path === "string" ? args.path.trim().replace(/^\/+/u, "").slice(0, 400) : "";
@@ -268,10 +277,20 @@ async function readRepositoryFile(args, fetcher, context) {
   const bytes = Uint8Array.from(atob(body.content.replace(/\s+/gu, "")), (character) => character.charCodeAt(0));
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   if (text.includes("\u0000")) return { ok: false, label: `Skipped ${shown}`, content: "The file is binary." };
-  const fileText = clip(text, MAX_FILE_CHARS);
+  if (args.fileSha && args.fileSha !== body.sha) return { ok: false, label: `File changed: ${shown}`, content: "The file changed since the previous page. Read again from offset 0; do not combine these versions." };
+  if (offset > text.length) return { ok: false, label: "File offset out of range", content: `This file contains ${text.length} characters. Read again from offset 0.` };
+  let end = Math.min(text.length, offset + maxChars);
+  // Do not split a UTF-16 surrogate pair at a generated continuation boundary.
+  if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1])) end -= 1;
+  const fileText = text.slice(offset, end);
+  const fileSha = typeof body.sha === "string" && /^[a-f0-9]{40,64}$/u.test(body.sha) ? body.sha : null;
+  const nextOffset = end < text.length ? end : null;
+  const page = { offset, end, totalChars: text.length, nextOffset, fileSha };
+  const paging = `File page: ${JSON.stringify(page)}\n${nextOffset === null ? "End of file." : "More content omitted. Call read_repository_file with nextOffset as offset and fileSha to continue. Do not assume omitted code."}\n\n`;
   return {
-    ok: true, label: `Read ${shown}`, content: asData(`repository ${access.repository} file ${path}`, fileText),
-    preview: { kind: "file", title: path, repository: access.repository, path, content: fileText },
+    ok: true, label: `Read ${shown}`, content: asData(`repository ${access.repository} file ${path}`, paging + fileText),
+    page,
+    preview: { kind: "file", title: path, repository: access.repository, path, content: fileText, page },
   };
 }
 
