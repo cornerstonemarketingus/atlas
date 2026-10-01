@@ -26,6 +26,12 @@ test("delivery retries server errors with the same body and fails visibly on rej
   await assert.rejects(deliverResult({ endpoint: "https://example.test", token: "test", payload: {} }, async () => new Response(null, { status: 403 })), /403/);
 });
 
+test('an absent hosted task is not reported as successful result delivery', async () => {
+  const request = { endpoint: 'https://example.test/result', token: 'test', payload: {} };
+  assert.deepEqual(await deliverResult(request, async () => new Response(null, { status: 404 })), { delivered: false, reason: 'task-not-found' });
+  assert.deepEqual(await deliverResult(request, async () => new Response(null, { status: 200 })), { delivered: true });
+});
+
 test("result payload carries a valid correlation id and omits a missing or forged one", async () => {
   const id = `cor_${"0f".repeat(16)}`;
   assert.deepEqual(buildResultPayload({ taskId: "one", summary: "result", correlationId: id }), { taskId: "one", summary: "result", correlationId: id });

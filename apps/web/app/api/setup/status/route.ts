@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
-import { getDb } from "../../../../db";
+import { getDb, getD1 } from "../../../../db";
+import { taskStorageReadiness } from "../../tasks/storage-readiness.mjs";
 import { githubOAuthConfiguration } from "../../auth/github-oauth.mjs";
 import { stripeConfiguration } from "../../billing/stripe.mjs";
 import { chatReadiness } from "../../chat/model-endpoint.mjs";
@@ -23,10 +24,11 @@ async function databaseReadiness() {
     await db.run(sql`SELECT id FROM conversations LIMIT 1`);
     await db.run(sql`SELECT id FROM conversation_messages LIMIT 1`);
     await db.run(sql`SELECT id FROM run_events LIMIT 1`);
-    return { binding: true, migrations: true };
+    const storage = await taskStorageReadiness(getD1());
+    return { binding: true, migrations: storage.ready, detail: storage.ready ? undefined : storage.message };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Database readiness check failed.";
-    return { binding: !message.includes("binding `DB` is unavailable"), migrations: false };
+    return { binding: !message.includes("binding `DB` is unavailable"), migrations: false, detail: undefined };
   }
 }
 
@@ -65,7 +67,7 @@ export async function GET(request: Request) {
     step("github-actions", "GitHub Actions access", dispatch.ok, dispatch.ok ? "Atlas's GitHub credential can reach its task workflow." : `${dispatch.message} ${dispatch.unblock ?? ""}`.trim(), "Connect GitHub", githubDispatchConfigured && !dispatch.ok),
     step("d1-permission", "Cloudflare D1 access", database.binding, database.binding ? "The Worker can reach its D1 binding." : "The DB binding is unavailable to the live Worker.", "Configure D1 binding", !database.binding),
     step("d1-database", "D1 database selected", database.binding, database.binding ? "A database is connected as DB." : "Select or create a D1 database.", "Select database"),
-    step("migrations", "Database migrations", database.migrations, database.migrations ? "Required application tables are readable." : "Apply the pending database migrations.", "Run migrations", database.binding && !database.migrations),
+    step("migrations", "Database migrations", database.migrations, database.migrations ? "Required application tables and task history columns are readable." : database.detail ?? "Apply the pending database migrations.", "Run migrations", database.binding && !database.migrations),
     step("github-oauth", "GitHub sign-in", githubOAuth.configured, githubOAuth.configured ? "GitHub OAuth credentials are active." : "Create or connect the GitHub application.", "Configure GitHub sign-in"),
     step("worker-secrets", "Runtime secrets", workerSecretsConfigured, workerSecretsConfigured ? "Required runtime credentials are configured." : "One or more required runtime credentials are missing.", "Upload runtime secrets"),
     step("deployment", "Live deployment", database.binding && workerSecretsConfigured, database.binding && workerSecretsConfigured ? "The deployed Worker has its required runtime configuration." : "Redeploy after database and secrets are ready.", "Deploy Atlas"),
