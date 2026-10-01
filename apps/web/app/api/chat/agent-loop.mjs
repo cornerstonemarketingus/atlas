@@ -111,6 +111,7 @@ export function durationMs(text) {
 export function retryAfterMs(headers, body = "") {
   const after = headers.get("retry-after")?.trim() ?? "";
   if (/^\d+(?:\.\d+)?$/u.test(after)) return Math.ceil(Number(after) * 1000);
+  if (after) { const date = Date.parse(after); if (Number.isFinite(date)) return Math.max(0, date - Date.now()); }
   const suggested = /try again in ((?:\d+(?:\.\d+)?(?:ms|us|µs|ns|h|m|s))+)/iu.exec(body);
   const fromBody = suggested ? durationMs(suggested[1]) : null;
   if (fromBody !== null) return fromBody;
@@ -123,21 +124,62 @@ export function retryAfterMs(headers, body = "") {
  * provider asks (when that is short) and retry once, then try the fallback
  * model on the same endpoint. Other statuses are returned as they are.
  */
-async function callConfiguredModel(endpoint, turns, options) {
-  let response = await sendModel(endpoint, turns, options);
+const BILLING_CODES = new Set(["insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_usage_limit_exceeded"]);
+/** Fixed categories only: never expose provider text, which can echo prompts. */
+export function rateLimitDetails(body) {
+  let error;
+  try { error = JSON.parse(body)?.error; } catch { /* non-JSON */ }
+  const billing = BILLING_CODES.has(error?.code) || BILLING_CODES.has(error?.type);
+  const oversized = /request too large/iu.test(body) && /tokens per minute|\bTPM\b/iu.test(body);
+  return { category: billing ? "billing" : oversized ? "input_too_large" : "rate_limit" };
+}
+
+/** Shorter evidence, not new instructions; preserve tool IDs and data boundaries. */
+export function compactOversizedTools(turns) {
+  return turns.map(turn => {
+    if (turn.role !== "tool" || typeof turn.content !== "string" || turn.content.length < 800) return turn;
+    return { ...turn, content: turn.content.slice(0, Math.max(400, Math.floor(turn.content.length / 4))) + "\n… (token allowance exceeded; excerpt shortened, do not assume omitted code)" + (turn.content.endsWith("</data>") ? "\n</data>" : "") };
+  });
+}
+
+async function sendWithRateLimitRetry(endpoint, turns, options) {
+  if (options.billingBlocked?.has(endpoint.baseUrl)) return Response.json({ error: { code: "insufficient_quota" } }, { status: 429 });
+  const send = async messages => {
+    const response = await sendModel(endpoint, messages, options);
+    if (response.status === 429 && rateLimitDetails(await response.clone().text().catch(() => "")).category === "billing") options.billingBlocked?.add(endpoint.baseUrl);
+    return response;
+  };
+  let response = await send(turns);
   if (response.status !== 429) return response;
-  const wait = retryAfterMs(response.headers, await response.clone().text().catch(() => ""));
-  if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
-    await (options.sleep ?? sleep)(wait);
-    response = await sendModel(endpoint, turns, options);
-    if (response.status !== 429) return response;
+  const body = await response.clone().text().catch(() => "");
+  const detail = rateLimitDetails(body);
+  if (detail.category === "billing") { options.billingBlocked?.add(endpoint.baseUrl); return response; }
+  const wait = retryAfterMs(response.headers, body);
+  if (detail.category === "input_too_large") {
+    const compacted = compactOversizedTools(turns);
+    if (compacted.some((turn, index) => turn !== turns[index]) && (!response.headers.has("retry-after") || wait <= MAX_RATE_LIMIT_WAIT_MS)) {
+      if (response.headers.has("retry-after")) await (options.sleep ?? sleep)(wait);
+      await response.body?.cancel().catch(() => {});
+      return send(compacted);
+    }
+    return response;
   }
-  if (endpoint.fallbackModel) {
-    const fallback = await sendModel({ ...endpoint, model: endpoint.fallbackModel }, turns, options);
-    answeredBy.set(fallback, endpoint.fallbackModel);
-    return fallback;
+  if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
+    await response.body?.cancel().catch(() => {});
+    await (options.sleep ?? sleep)(wait);
+    response = await send(turns);
   }
   return response;
+}
+
+async function callConfiguredModel(endpoint, turns, options) {
+  const response = await sendWithRateLimitRetry(endpoint, turns, options);
+  if (response.status !== 429 || !endpoint.fallbackModel || endpoint.fallbackModel === endpoint.model) return response;
+  if (rateLimitDetails(await response.clone().text().catch(() => "")).category === "billing") return response;
+  await response.body?.cancel().catch(() => {});
+  const fallback = await sendWithRateLimitRetry({ ...endpoint, model: endpoint.fallbackModel }, turns, options);
+  answeredBy.set(fallback, endpoint.fallbackModel);
+  return fallback;
 }
 
 /** Preserve existing same-provider recovery before crossing to a configured provider. */
@@ -148,8 +190,13 @@ export async function callModel(endpoint, turns, options) {
     if (!endpoint.providerFallback) throw error;
   }
   if (!endpoint.providerFallback || (response && !TRANSIENT_STATUSES.has(response.status))) return response;
-  await response?.body?.cancel().catch(() => {});
   const fallback = await callConfiguredModel(endpoint.providerFallback, turns, options);
+  // A paid fallback without credits must not hide the free provider's reset.
+  if (response?.status === 429 && fallback.status === 429 && rateLimitDetails(await fallback.clone().text().catch(() => "")).category === "billing") {
+    await fallback.body?.cancel().catch(() => {});
+    return response;
+  }
+  await response?.body?.cancel().catch(() => {});
   if (!answeredBy.has(fallback)) answeredBy.set(fallback, endpoint.providerFallback.model);
   return fallback;
 }
@@ -192,8 +239,8 @@ function sleep(ms) {
  * reason, which model answered, and whether an HTTP 200 carried anything at
  * all (EMPTY_MODEL_RESPONSE is not a successful inference).
  */
-async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort }) {
-  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort });
+async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked }) {
+  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked });
   let toolsDropped = false;
   if (tools && (response.status === 400 || response.status === 422)) {
     const body = await response.clone().text().catch(() => "");
@@ -201,12 +248,15 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
     // One malformed tool call is not a server without tools: keep the tools
     // and let the loop ask for a corrected call.
     if (rejected) return { ok: false, status: 400, rejectedTool: rejected, model: answeredBy.get(response) ?? endpoint.model, fallbackUsed: answeredBy.has(response) };
-    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, reasoningEffort });
+    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked });
     toolsDropped = true;
   }
   const model = answeredBy.get(response) ?? endpoint.model;
   const fallbackUsed = model !== endpoint.model;
-  if (!response.ok) return { ok: false, status: response.status, retryAfterMs: retryAfterMs(response.headers), model, fallbackUsed };
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    return { ok: false, status: response.status, retryAfterMs: retryAfterMs(response.headers, body), limitCategory: response.status === 429 ? rateLimitDetails(body).category : null, model, fallbackUsed };
+  }
   if (!stream || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
     // Not streaming, or a server that ignored stream:true: the whole reply at once.
     let payload;
@@ -329,6 +379,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   const runnable = (name) => offered.has(name) && (isInstantTool(name) || name in handlers);
   const tag = agentId ? { agentId } : {};
   const working = [...turns];
+  const billingBlocked = new Set();
   const taskCalls = [];
   const steps = [];
   const toolResults = [];
@@ -363,7 +414,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     };
   };
   const describe = (result, round) => ({
-    ...diagnostics, round, model: result.model ?? endpoint.model, status: result.status ?? null,
+    ...diagnostics, round, model: result.model ?? endpoint.model, status: result.status ?? null, limitCategory: result.limitCategory ?? null,
     finishReason: result.finishReason ?? null, contentLength: result.text?.length ?? 0,
     toolCallCount: result.calls?.length ?? 0, fallbackUsed: Boolean(result.fallbackUsed),
     hadReasoning: Boolean(result.hadReasoning), usage: result.usage ?? null,
@@ -377,7 +428,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     let result;
     try {
       // The last round keeps the tool definitions (earlier rounds' results refer to them) but must answer in words.
-      result = await modelStep({ endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sinkFor(), toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause });
+      result = await modelStep({ billingBlocked, endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sinkFor(), toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause });
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "TimeoutError";
       const message = timedOut ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.";
@@ -403,12 +454,12 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     }
     // The status is the actionable part; the body can contain the prompt echoed back.
     if (!result.ok) {
-      const message = result.status === 429
+      const message = result.limitCategory === "billing" ? "The provider has no available API credits or has reached a billing limit. Use a configured free/local provider; waiting will not restore credit." : result.status === 429
         ? "The model provider's rate limit was reached (429). Wait a minute and ask again, or set a higher-limit model or ATLAS_CHAT_FALLBACK_MODEL."
         : `The model endpoint answered ${result.status}.`;
       inferenceDiagnostic(result.status === 429 ? "inference.rate_limited" : "inference.failed", describe(result, round));
       const wait = Math.max(1_000, result.retryAfterMs ?? 2_000);
-      if (round === 0 && TRANSIENT_STATUSES.has(result.status) && wait <= waitBudget && firstCallRetries < FIRST_CALL_RETRIES) {
+      if (round === 0 && result.limitCategory !== "billing" && result.limitCategory !== "input_too_large" && TRANSIENT_STATUSES.has(result.status) && wait <= waitBudget && firstCallRetries < FIRST_CALL_RETRIES) {
         firstCallRetries += 1;
         // Nothing done yet and nothing to synthesize from: wait out the
         // provider's stated reset and ask again, rather than refusing the request.
@@ -510,7 +561,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       let result;
       try {
         // No tools: the model cannot start another tool cycle, only answer.
-        result = await modelStep({ endpoint: target, turns: [...turns, message], tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause, reasoningEffort });
+        result = await modelStep({ billingBlocked, endpoint: target, turns: [...turns, message], tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause, reasoningEffort });
       } catch (error) {
         result = { ok: false, status: error instanceof Error && error.name === "TimeoutError" ? 504 : 503, retryAfterMs: 2_000 };
       }
@@ -535,6 +586,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         reasoningEffort = undefined;
         continue;
       }
+      if (result.limitCategory === "billing") { reason = "the provider has no available API credits or has reached a billing limit; use a configured free/local provider."; break; }
       if (!TRANSIENT_STATUSES.has(result.status)) { reason = `the model endpoint answered ${result.status}.`; break; }
       reason = result.status === 429 ? "the model provider's rate limit was reached." : `the model endpoint answered ${result.status}.`;
       const wait = Math.max(1_000, result.retryAfterMs ?? 2_000);
