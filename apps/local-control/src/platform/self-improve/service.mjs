@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { git } from "../engineering/git.mjs";
 import { assertAgentBranch, isProtectedBranch } from "../engineering/worktrees.mjs";
+import { RecoveryError } from "./recovery.mjs";
 
 /**
  * "Atlas, improve yourself" as a service of the local daemon, so it can be
@@ -85,6 +86,7 @@ export class SelfImprovementService {
       streak: this.loop.streak(history),
       log: this.lines.slice(-200),
       pending: this.pending(),
+      recoverable: this.loop.recoveries?.() ?? [],
       recent: history.slice(-20).reverse(),
       decisions: this.decisions().slice(-20).reverse(),
     };
@@ -113,6 +115,28 @@ export class SelfImprovementService {
     if (!entry) throw new SelfImprovementError("UNKNOWN_CHANGE", "No accepted change with that id is waiting for a decision.");
     assertAgentBranch(entry.branch);
     return entry;
+  }
+
+  retryReview(id) {
+    if (this.current) throw new SelfImprovementError("BUSY", "Wait for the running self-improvement to finish.");
+    if (!this.loop.recoveries?.().some(entry => entry.id === id)) throw new SelfImprovementError("UNKNOWN_CHANGE", "No recoverable candidate with that id.");
+    const run = { startedAt: this.now().toISOString(), iterations: 1 };
+    this.current = run;
+    run.promise = Promise.resolve().then(() => this.loop.retryReview(id))
+      .then(result => { this.#log(`Recovery ${id}: ${result.outcome}.`); return result; })
+      .catch(error => { this.#log(`Recovery stopped: ${error.message}`); return null; })
+      .finally(() => { if (this.current === run) this.current = null; });
+    return { ...this.status(), promise: run.promise };
+  }
+
+  async discardRecovery(id) {
+    if (this.current) throw new SelfImprovementError("BUSY", "Wait for the running self-improvement to finish.");
+    // Set the busy flag before awaiting filesystem work, like start/retry.
+    const run = { startedAt: this.now().toISOString(), iterations: 0 };
+    this.current = run;
+    try { await this.loop.discardRecovery(id); }
+    finally { if (this.current === run) this.current = null; }
+    return this.status();
   }
 
   /** Merges an accepted change into the operator's checkout (clean tree, normal branch, no conflicts). */
@@ -148,7 +172,7 @@ export function createSelfImproveRoutes({ service, parseBody, send }) {
   return async function handle(request, response, identity) {
     const url = new URL(request.url ?? "/", "http://local.atlas");
     if (!url.pathname.startsWith("/v1/self-improve")) return false;
-    const fail = (error) => send(response, error instanceof SelfImprovementError
+    const fail = (error) => send(response, error instanceof RecoveryError ? 409 : error instanceof SelfImprovementError
       ? ({ ALREADY_RUNNING: 409, BUSY: 409, UNKNOWN_CHANGE: 404, DIRTY_CHECKOUT: 409, DETACHED_HEAD: 409, AGENT_BRANCH: 409, MERGE_CONFLICT: 409 }[error.code] ?? 400)
       : 500, { code: error.code ?? "ERROR", message: error.message ?? "The request failed." });
     try {
@@ -158,6 +182,13 @@ export function createSelfImproveRoutes({ service, parseBody, send }) {
       const body = await parseBody(request, response); if (!body) return true;
       if (url.pathname === "/v1/self-improve/runs") {
         const { promise, ...status } = service.start({ iterations: body.iterations });
+        promise.catch(() => {});
+        return send(response, 202, status);
+      }
+      const recovery = /^\/v1\/self-improve\/recoveries\/([A-Za-z0-9._-]{1,80})\/(retry|discard)$/u.exec(url.pathname);
+      if (recovery) {
+        if (recovery[2] === "discard") return send(response, 200, await service.discardRecovery(recovery[1]));
+        const { promise, ...status } = service.retryReview(recovery[1]);
         promise.catch(() => {});
         return send(response, 202, status);
       }

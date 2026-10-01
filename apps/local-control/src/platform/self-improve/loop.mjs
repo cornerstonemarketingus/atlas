@@ -2,7 +2,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFil
 import { dirname, join } from "node:path";
 import { addedLines, diffStats, git, resolveCommit } from "../engineering/git.mjs";
 import { detectRepositoryCommands, judgeCheck } from "../engineering/pipeline.mjs";
-import { WorktreeManager } from "../engineering/worktrees.mjs";
+import { ReviewRecovery, RecoveryError } from "./recovery.mjs";
+import { WorktreeManager, realOrResolved } from "../engineering/worktrees.mjs";
 import { evaluateChange } from "./policy.mjs";
 import { backlogCandidates, failingCheckCandidates, selectTask, todoCommentCandidates } from "./selector.mjs";
 
@@ -19,7 +20,7 @@ import { backlogCandidates, failingCheckCandidates, selectTask, todoCommentCandi
  * - Nothing merges. An accepted change is a commit on its branch plus a
  *   portable patch under `patchesDirectory`, waiting for a person (or the
  *   publishing adapters) to take it further. A rejected one is removed,
- *   worktree and branch, so failed attempts leave nothing behind.
+ *   worktree and branch. Verified candidates survive unavailable review.
  * - Acceptance needs all three: every check passes after the change, the
  *   policy (policy.mjs) allows it, and the reviewer (a separate model call)
  *   approves it. The builder's own report is recorded but never consulted.
@@ -54,6 +55,7 @@ export class SelfImprovementLoop {
   constructor(options) {
     this.options = { verifyDirectory: ".", prepare: [], limits: {}, now: () => new Date(), log: () => {}, ...options };
     this.worktrees = new WorktreeManager({ repository: options.repository, rootDirectory: options.worktreeRoot });
+    this.recovery = new ReviewRecovery(join(dirname(options.ledgerPath), "review-recovery"));
   }
 
   history() {
@@ -123,6 +125,8 @@ export class SelfImprovementLoop {
     const base = handle.baseCommit;
     const cleanup = async () => { await this.worktrees.remove({ path: handle.path, deleteBranch: true }).catch(() => {}); };
     const started = now().toISOString();
+    let release = null;
+    let retained = false;
     try {
       log(`[${id}] baseline checks on ${base.slice(0, 10)}…`);
       const baseline = await this.#checks(handle.path);
@@ -167,25 +171,90 @@ export class SelfImprovementLoop {
       }
 
       log(`[${id}] checks and policy pass; asking the independent reviewer…`);
-      const diff = (await git(handle.path, ["diff", "--no-color", base, head])).stdout;
-      const verdict = await this.options.reviewer({ objective: task.objective, diff, checks: after.checks });
-      if (!verdict.approve) {
-        await cleanup();
-        log(`[${id}] reviewer did not approve: ${verdict.summary}`);
-        return this.#record({ ...base_, head, outcome: "rejected", stats: summary, checks, review: verdict, violations: [{ rule: "review", detail: verdict.summary || "not approved" }] });
-      }
+      release = this.recovery.lock(id);
+      const checkpoint = { id, at: started, base, head, branch: handle.branch, record: { ...base_, builder: { ok: built.ok } }, baselineTests: count(baseline.checks), stats: summary, checks };
+      await this.#validateRecovery(checkpoint);
+      this.recovery.write(checkpoint);
+      retained = true;
+      return await this.#review(checkpoint, after.checks);
 
-      mkdirSync(this.options.patchesDirectory, { recursive: true });
-      const patchPath = join(this.options.patchesDirectory, `${id}.patch`);
-      writeFileSync(patchPath, (await git(handle.path, ["format-patch", "--stdout", `${base}..${head}`])).stdout, { mode: 0o600 });
-      // The branch stays for approval/publishing; the worktree directory does not need to.
-      await this.worktrees.remove({ path: handle.path, deleteBranch: false }).catch(() => {});
-      log(`[${id}] accepted: ${handle.branch} (${summary.files} files, +${summary.added}/−${summary.deleted}); patch ${patchPath}`);
-      return this.#record({ ...base_, head, outcome: "accepted", branch: handle.branch, patch: patchPath, stats: summary, checks, review: verdict });
     } catch (error) {
+      if (retained) return this.#waiting(this.recovery.read(id));
       await cleanup();
       return this.#record({ id, at: started, base, outcome: "error", reason: error instanceof Error ? error.message.slice(0, 500) : "unknown error" });
+    } finally { release?.(); }
+  }
+
+  recoveries() {
+    const finished = new Set(this.history().filter(entry => ["accepted", "rejected", "discarded"].includes(entry.outcome)).map(entry => entry.id));
+    return this.recovery.list().filter(entry => !finished.has(entry.id)).map(entry => ({ id: entry.id, at: entry.at, objective: entry.record.objective, branch: entry.branch, state: "awaiting_review", reason: "Verified work retained. Retry checks and independent review when the blocker is resolved." }));
+  }
+
+  #waiting(checkpoint) {
+    return this.#record({ ...checkpoint.record, head: checkpoint.head, branch: checkpoint.branch, outcome: "awaiting_review", reason: "Independent review or verification could not finish. The candidate is retained for retry." });
+  }
+
+  async #validateRecovery(checkpoint) {
+    if (!/^[0-9a-f]{40}$/u.test(checkpoint.base) || !/^[0-9a-f]{40}$/u.test(checkpoint.head) || checkpoint.branch !== `atlas/${checkpoint.id}/builder`) throw new RecoveryError("Invalid recovery identity.");
+    const path = realOrResolved(join(this.options.worktreeRoot, checkpoint.id, "builder"));
+    const entry = (await this.worktrees.list({ taskId: checkpoint.id })).find(item => item.branch === checkpoint.branch && realOrResolved(item.path) === path);
+    if (!entry || entry.prunable || await resolveCommit(path, "HEAD") !== checkpoint.head) throw new RecoveryError("The retained worktree is missing or changed. No recovery was started.");
+    if ((await git(path, ["status", "--porcelain"])).stdout.trim()) throw new RecoveryError("The retained worktree has changed files. No recovery was started.");
+    const ancestor = await git(path, ["merge-base", "--is-ancestor", checkpoint.base, checkpoint.head], { okCodes: [0, 1] });
+    if (ancestor.code !== 0) throw new RecoveryError("The retained candidate no longer matches its base.");
+    return { ...entry, path, baseCommit: checkpoint.base };
+  }
+
+  async #review(checkpoint, checks) {
+    const handle = await this.#validateRecovery(checkpoint);
+    const diff = (await git(handle.path, ["diff", "--no-color", checkpoint.base, checkpoint.head])).stdout;
+    const verdict = await this.options.reviewer({ objective: checkpoint.record.objective, diff, checks });
+    await this.#validateRecovery(checkpoint);
+    if (!verdict.approve) {
+      const result = this.#record({ ...checkpoint.record, head: checkpoint.head, outcome: "rejected", stats: checkpoint.stats, checks: checkpoint.checks, review: verdict, violations: [{ rule: "review", detail: verdict.summary || "not approved" }] });
+      this.recovery.remove(checkpoint.id);
+      await this.worktrees.remove({ path: handle.path, deleteBranch: true }).catch(() => {});
+      return result;
     }
+    mkdirSync(this.options.patchesDirectory, { recursive: true });
+    const patchPath = join(this.options.patchesDirectory, `${checkpoint.id}.patch`);
+    writeFileSync(patchPath, (await git(handle.path, ["format-patch", "--stdout", `${checkpoint.base}..${checkpoint.head}`])).stdout, { mode: 0o600 });
+    const result = this.#record({ ...checkpoint.record, head: checkpoint.head, outcome: "accepted", branch: checkpoint.branch, patch: patchPath, stats: checkpoint.stats, checks: checkpoint.checks, review: verdict });
+    this.recovery.remove(checkpoint.id);
+    await this.worktrees.remove({ path: handle.path, deleteBranch: false }).catch(() => {});
+    this.options.log(`[${checkpoint.id}] accepted: ${checkpoint.branch}; patch ${patchPath}`);
+    return result;
+  }
+
+  async retryReview(id) {
+    const release = this.recovery.lock(id);
+    try {
+      if (!this.recoveries().some(entry => entry.id === id)) throw new RecoveryError("No recoverable candidate with that id.");
+      const checkpoint = this.recovery.read(id);
+      const handle = await this.#validateRecovery(checkpoint);
+      const after = await this.#checks(handle.path);
+      const stats = await diffStats(handle.path, checkpoint.base, checkpoint.head);
+      const deletedFiles = (await git(handle.path, ["diff", "--name-only", "--diff-filter=D", checkpoint.base, checkpoint.head])).stdout.split("\n").filter(Boolean);
+      const count = after.checks.filter(check => check.testCounts).reduce((sum, check) => sum + check.testCounts.tests, 0) || null;
+      const policy = evaluateChange({ stats, added: await addedLines(handle.path, checkpoint.base, checkpoint.head), deletedFiles, testsBefore: checkpoint.baselineTests, testsAfter: count, limits: this.options.limits });
+      if (after.error || after.checks.some(check => !check.passed) || !policy.allowed) return this.#waiting(checkpoint);
+      checkpoint.checks = after.checks.map(({ kind, passed, reasons, testCounts }) => ({ kind, passed, reasons, testCounts }));
+      this.recovery.write(checkpoint);
+      try { return await this.#review(checkpoint, after.checks); }
+      catch { return this.#waiting(checkpoint); }
+    } finally { release(); }
+  }
+
+  async discardRecovery(id) {
+    const release = this.recovery.lock(id);
+    try {
+      if (!this.recoveries().some(entry => entry.id === id)) throw new RecoveryError("No recoverable candidate with that id.");
+      const checkpoint = this.recovery.read(id);
+      const handle = await this.#validateRecovery(checkpoint);
+      await this.worktrees.remove({ path: handle.path, deleteBranch: true });
+      this.#record({ ...checkpoint.record, outcome: "discarded", reason: "Discarded by the owner." });
+      this.recovery.remove(id);
+    } finally { release(); }
   }
 
   /** Up to `iterations` attempts; stops early when there is nothing left to do. */
@@ -194,7 +263,7 @@ export class SelfImprovementLoop {
     for (let index = 0; index < iterations; index += 1) {
       const record = await this.runIteration();
       results.push(record);
-      if (record.outcome === "idle") break;
+      if (["idle", "awaiting_review"].includes(record.outcome)) break;
     }
     return { results, streak: this.streak() };
   }

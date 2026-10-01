@@ -224,6 +224,13 @@ function taskItem(task) {
 function selfImproveItems(status) {
   if (!status) return [];
   const items = [];
+  for (const entry of status.recoverable ?? []) {
+    items.push({
+      kind: "improve", id: `recovery-${entry.id}`, title: entry.objective ?? "Retained improvement", state: "awaiting_review", bucket: "attention",
+      updatedAt: entry.at, link: "#/improve", detail: entry.reason, progress: null, lanes: [],
+      actions: status.running ? [] : [action("retry", "Retry checks and review", `/v1/self-improve/recoveries/${encodeURIComponent(entry.id)}/retry`)],
+    });
+  }
   if (status.running) {
     items.push({
       kind: "improve", id: "improve-run", title: "Improving Atlas", state: "running", bucket: "running",

@@ -571,12 +571,16 @@ async function loadImprove(){
  const log=$('#improve-log'),pendingBox=$('#improve-pending'),recentBox=$('#improve-recent');
  try{
   const s=await getJson('/v1/self-improve');
-  $('#improve-state').innerHTML=pill(s.running?'running':'idle')+' <span class="chip">streak '+esc(String(s.streak))+'</span>';
+  const recoveries=s.recoverable||[];
+  $('#improve-state').innerHTML=pill(s.running?'running':recoveries.length?'blocked':'idle')+' <span class="chip">streak '+esc(String(s.streak))+'</span>';
   $('#improve-start').disabled=s.running;
   log.textContent=s.log.length?s.log.join('\\n'):'No run yet. Press "Improve yourself" to start one.';
   log.scrollTop=log.scrollHeight;
-  const badge=$('#improve-badge');badge.hidden=!s.pending.length;badge.textContent=String(s.pending.length);
+  const badge=$('#improve-badge');badge.hidden=!(s.pending.length+recoveries.length);badge.textContent=String(s.pending.length+recoveries.length);
   pendingBox.innerHTML=s.pending.length?s.pending.map(c=>'<article class="task"><div class="task-top"><h4>'+esc(c.kind||'change')+'</h4>'+pill('accepted')+'</div><p>'+esc(c.objective||'')+'</p><p class="hint">Why: '+esc(c.reason||'')+'</p><div class="meta"><span><code>'+esc(c.branch)+'</code></span><span>'+esc(String(c.stats?.files??0))+' files, +'+esc(String(c.stats?.added??0))+'/−'+esc(String(c.stats?.deleted??0))+'</span>'+(c.review?.summary?'<span>Reviewer: '+esc(c.review.summary)+'</span>':'')+'</div><div class="actions"><button data-improve="approve" data-id="'+esc(c.id)+'">Merge into my branch</button><button class="secondary" data-improve="reject" data-id="'+esc(c.id)+'">Reject</button></div></article>').join(''):'<p class="empty">Nothing waiting.</p>';
+  if(recoveries.length&&!s.pending.length)pendingBox.innerHTML='';
+  if(recoveries.length)pendingBox.insertAdjacentHTML('afterbegin',recoveries.map(r=>'<article class="task"><h4>Work retained — review pending</h4><p>'+esc(r.objective||'')+'</p><p class="hint">'+esc(r.reason)+'</p><button data-recovery="retry" data-id="'+esc(r.id)+'"'+(s.running?' disabled':'')+'>Retry checks and review</button> <button class="secondary" data-recovery="discard" data-id="'+esc(r.id)+'"'+(s.running?' disabled':'')+'>Discard retained work</button></article>').join(''));
+  pendingBox.querySelectorAll('[data-recovery]').forEach(b=>b.onclick=async()=>{if(b.dataset.recovery==='discard'&&!confirm('Discard this retained candidate and its branch?'))return;try{await sendJson('/v1/self-improve/recoveries/'+encodeURIComponent(b.dataset.id)+'/'+b.dataset.recovery,'POST',{});$('#improve-notice').textContent=b.dataset.recovery==='retry'?'Rechecking and requesting independent review.':'Retained work discarded.'}catch(error){$('#improve-notice').textContent=error.message}loadImprove()});
   pendingBox.querySelectorAll('[data-improve]').forEach(b=>b.onclick=()=>decideImprove(b.dataset.id,b.dataset.improve));
   recentBox.innerHTML=s.recent.length?s.recent.map(r=>'<article class="task"><div class="task-top"><h4>'+esc(r.kind||r.outcome)+'</h4>'+pill(r.outcome)+'</div>'+(r.objective?'<p>'+esc(r.objective)+'</p>':'')+((r.violations||[]).length?'<p class="hint">'+esc(r.violations.map(v=>v.detail).join(' · '))+'</p>':(r.reason&&!r.objective?'<p class="hint">'+esc(r.reason)+'</p>':''))+'<time>'+when(r.at)+'</time></article>').join(''):'<p class="empty">No attempts yet.</p>';
  }catch(error){log.textContent='';pendingBox.innerHTML=problem(error)}
