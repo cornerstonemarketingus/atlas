@@ -144,7 +144,12 @@ export function compactOversizedTools(turns) {
 
 async function sendWithRateLimitRetry(endpoint, turns, options) {
   if (options.billingBlocked?.has(endpoint.baseUrl)) return Response.json({ error: { code: "insufficient_quota" } }, { status: 429 });
-  let response = await sendModel(endpoint, turns, options);
+  const send = async messages => {
+    const response = await sendModel(endpoint, messages, options);
+    if (response.status === 429 && rateLimitDetails(await response.clone().text().catch(() => "")).category === "billing") options.billingBlocked?.add(endpoint.baseUrl);
+    return response;
+  };
+  let response = await send(turns);
   if (response.status !== 429) return response;
   const body = await response.clone().text().catch(() => "");
   const detail = rateLimitDetails(body);
@@ -155,14 +160,14 @@ async function sendWithRateLimitRetry(endpoint, turns, options) {
     if (compacted.some((turn, index) => turn !== turns[index]) && (!response.headers.has("retry-after") || wait <= MAX_RATE_LIMIT_WAIT_MS)) {
       if (response.headers.has("retry-after")) await (options.sleep ?? sleep)(wait);
       await response.body?.cancel().catch(() => {});
-      return sendModel(endpoint, compacted, options);
+      return send(compacted);
     }
     return response;
   }
   if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
     await response.body?.cancel().catch(() => {});
     await (options.sleep ?? sleep)(wait);
-    response = await sendModel(endpoint, turns, options);
+    response = await send(turns);
   }
   return response;
 }

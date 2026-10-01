@@ -94,3 +94,15 @@ test('both free models stop after one short retry each and never loop', async ()
   assert.deepEqual(models, ['large', 'large', 'small', 'small']);
   assert.deepEqual(waits, [1000, 1000]);
 });
+
+for (const oversized of [false, true]) test(`billing encountered on a retry is excluded on the next call (oversized=${oversized})`, async () => {
+  let calls = 0;
+  const options = { billingBlocked: new Set(), sleep: async () => {}, fetcher: async () => {
+    calls++;
+    if (calls === 1) return oversized ? rate('Request too large on tokens per minute (TPM)') : rate('', { 'retry-after': '1' });
+    return rate('{"error":{"code":"insufficient_quota"}}');
+  } };
+  const turns = [{ role: 'tool', content: 'evidence '.repeat(1000) }];
+  for (let i = 0; i < 2; i++) assert.equal((await callModel(endpoint.providerFallback, turns, options)).status, 429);
+  assert.equal(calls, 2);
+});
