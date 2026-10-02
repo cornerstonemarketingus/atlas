@@ -52,11 +52,15 @@ export class ProviderReadOnlyToolAgent {
     let toolCalls = 0;
     let recoveredEmptyResponse = false;
     let usage = EMPTY_USAGE;
+    let lastProviderId: string | undefined;
+    let lastModel: string | undefined;
     const trace = (): ReadOnlyToolAgentTrace => ({
       turns,
       toolCalls,
       usage,
       messages: structuredClone(messages),
+      ...(lastProviderId === undefined ? {} : { lastProviderId }),
+      ...(lastModel === undefined ? {} : { lastModel }),
     });
     this.options.audit.append("session.started", {
       sessionId: request.sessionId,
@@ -92,6 +96,8 @@ export class ProviderReadOnlyToolAgent {
         const response = validateModelResponse(await this.options.provider.complete(modelRequest, request.signal === undefined ? {} : { signal: request.signal }));
         turns += 1;
         usage = addUsage(usage, response.usage);
+        lastProviderId = response.providerId;
+        lastModel = response.model;
         messages.push(response.message);
         const calls = response.message.content.filter((item) => item.type === "tool-call");
         this.options.audit.append("model.responded", {
