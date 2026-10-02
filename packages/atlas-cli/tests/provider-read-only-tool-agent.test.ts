@@ -203,6 +203,58 @@ test("recovers from an invented tool name by naming the real tools", async () =>
   );
 });
 
+test("recovers from an unknown tool input field by telling the model which one", async () => {
+  // Self-improvement run 33 (2026-10-02) died fourteen seconds in with
+  // "Unknown tool input field: path": the model sent `path` to a tool that
+  // takes no arguments. validateInput ran outside the registry's recoverable
+  // try, so the throw reached the session-level catch and the whole run was
+  // lost — the same way an invented tool name used to lose one.
+  const strict = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
+  let executions = 0;
+  strict.register({
+    name: tool.name, description: "Inspect.", risk: "low",
+    validateInput: (input) => {
+      const keys = Object.keys(input as Record<string, unknown>);
+      if (keys.length > 0) throw new Error(`Unknown tool input field: ${keys[0]}`);
+      return input;
+    },
+    execute: async () => {
+      executions += 1;
+      return { repositoryName: "atlas" };
+    },
+  });
+
+  const provider = new MockModelProvider({ metadata, responses: [
+    response("one", [{ type: "tool-call", id: "call-1", name: tool.name, arguments: { path: "." } }], "tool-calls"),
+    response("two", [{ type: "tool-call", id: "call-2", name: tool.name, arguments: {} }], "tool-calls"),
+    response("three", [{ type: "text", text: "Atlas is a TypeScript repository." }], "stop"),
+  ] });
+  const audit = new InMemorySessionAuditLog();
+  const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: strict, tools: [tool], audit });
+
+  const result = await agent.run({
+    sessionId: "session", objective: "Explain Atlas", evidence: [],
+    scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" },
+  });
+
+  assert.equal(result.status, "completed", "a rejected input field must not end the session");
+  assert.equal(executions, 1, "the rejected call must not reach the tool body");
+
+  // The correction has to name the offending field, or the model cannot tell
+  // which of its arguments was refused.
+  const correction = provider.requests[1]?.messages.at(-1);
+  assert.equal(correction?.role, "tool");
+  assert.equal(correction?.isError, true);
+  const payload = JSON.parse(correction?.content[0]?.type === "text" ? correction.content[0].text : "{}") as { error?: string };
+  assert.match(payload.error ?? "", /Unknown tool input field: path/u);
+
+  const completions = audit.snapshot().filter((event) => event.type === "tool.completed");
+  assert.ok(
+    completions.some((event) => (event.payload as { outcome?: string }).outcome === "failed"),
+    "the rejected call should still be audited, not silently swallowed",
+  );
+});
+
 test("still ends the session when policy denies a tool", async () => {
   // TOOL_NOT_FOUND is recoverable because it is the model's mistake. A policy
   // denial is a security decision, and "try again with something else" is the

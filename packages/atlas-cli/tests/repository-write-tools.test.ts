@@ -19,7 +19,6 @@ import type {
   RepositoryFileEditRequest,
   RepositoryFileEditor,
 } from "../src/domain/repository-file-edit.js";
-import { RepositoryToolInputError } from "../src/infrastructure/repository-read-only-tools.js";
 
 async function fixture(): Promise<string> {
   return mkdtemp(join(tmpdir(), "atlas-write-tools-"));
@@ -200,7 +199,12 @@ async function malformedChangeSet(
   registry: PolicyEnforcedReadOnlyToolRegistry,
   edits: readonly unknown[],
 ): Promise<void> {
-  await assert.rejects(runChangeSet(registry, edits), (error: unknown) => error instanceof RepositoryToolInputError);
+  // A schema violation is refused and handed back to the model as a failed
+  // tool result rather than thrown: the model can correct the call, and the
+  // editor still never runs. Asserting the refusal, not the mechanism.
+  const result = await runChangeSet(registry, edits);
+  assert.equal(result.status, "failed", JSON.stringify(edits));
+  assert.ok(result.status === "failed" && result.message.length > 0, JSON.stringify(edits));
 }
 
 test("applies a multi-file create, update, delete, and rename atomically", async (t) => {

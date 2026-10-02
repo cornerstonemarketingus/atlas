@@ -75,17 +75,23 @@ export class PolicyEnforcedReadOnlyToolRegistry implements ReadOnlyToolRegistry 
         ? request.context.signal.reason
         : new Error("Tool execution was cancelled.");
     }
-    const validatedInput = definition.validateInput(request.input);
-
     let output: unknown;
     try {
+      // Validation is inside this try, not before it. A model that passes a
+      // field a tool does not accept has made the same recoverable mistake as
+      // one that invents a tool name: it should be told and allowed to correct
+      // itself. Thrown from out here instead, it escaped as an uncaught error
+      // and ended the session — an unattended self-improvement run died on its
+      // first turn because the model sent `path` to a tool that takes no
+      // arguments, which it would have fixed had anyone told it.
+      const validatedInput = definition.validateInput(request.input);
       output = await definition.execute(validatedInput, request.context);
     } catch (error: unknown) {
-      // A tool that passed policy and then threw during its own execution
-      // is an ordinary domain failure (missing file, path outside the
-      // repository) that the model should see and adapt to — not the same
-      // class of problem as a policy or lookup error above, which still
-      // ends the session.
+      // A tool that passed policy and then threw while validating its input or
+      // during its own execution is an ordinary domain failure (unknown field,
+      // missing file, path outside the repository) that the model should see
+      // and adapt to — not the same class of problem as a policy or lookup
+      // error above, which still ends the session.
       //
       // The message is redacted like any other output, because a failure
       // string routinely quotes the very content that caused it ("could not

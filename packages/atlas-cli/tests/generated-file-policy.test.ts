@@ -143,5 +143,7 @@ test("a rename into a vendored directory is refused, and a symlinked file is nev
 
 test("allowGenerated must be a boolean", async (t) => {
   const root = await repository(t, {});
-  await assert.rejects(run(tools(root), "repository.propose_file_edit", { path: "a.ts", content: "", allowGenerated: "yes" }), /allowGenerated must be a boolean/);
+  const result = await run(tools(root), "repository.propose_file_edit", { path: "a.ts", content: "", allowGenerated: "yes" });
+  assert.equal(result.status, "failed");
+  assert.match(result.status === "failed" ? result.message : "", /allowGenerated must be a boolean/u);
 });
