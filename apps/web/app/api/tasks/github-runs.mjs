@@ -126,8 +126,10 @@ export async function fetchGitHubJson(request, fetcher = fetch, timeoutMs = 8_00
     response = await fetcher(request.url, { ...request.init, signal: controller.signal });
     outcome = "http_failure";
     if (!response.ok) return null;
+    outcome = "network_failure";
+    const body = await response.text();
     outcome = "invalid_response";
-    const value = await response.json();
+    const value = JSON.parse(body);
     outcome = "success";
     return value;
   } catch {

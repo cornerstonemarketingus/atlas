@@ -61,6 +61,17 @@ test("network failures are observed without recording exception text", async () 
   assert.doesNotMatch(JSON.stringify(events), /PRIVATE_SENTINEL/);
 });
 
+for (const brokenStream of [false, true]) test(`HTTP 200 distinguishes body transfer failure from invalid JSON (brokenStream=${brokenStream})`, async () => {
+  const events = [];
+  const body = brokenStream ? new ReadableStream({ start(controller) { controller.error(new Error("PRIVATE_SENTINEL")); } }) : "PRIVATE_SENTINEL";
+  const result = await fetchGitHubJson(request, async () => new Response(body, { status: 200 }), 8000, { observe: event => events.push(event) });
+  assert.equal(result, null);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].status, 200);
+  assert.equal(events[0].outcome, brokenStream ? "network_failure" : "invalid_response");
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE_SENTINEL/);
+});
+
 test("HTTP-date retry guidance and timeout are recorded at the actual request boundary", async () => {
   const events = [];
   const now = Date.parse("2026-10-02T20:00:00Z");
