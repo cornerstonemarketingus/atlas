@@ -594,9 +594,11 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         if (!toolFreeCorrection) {
           synthesisTurns.push({ role: "user", content: "Write the final answer as plain text using the results already provided. Tools are unavailable. Do not emit a tool call or tool-call markup." });
           toolFreeCorrection = true;
-        } else if (target === endpoint && endpoint.fallbackModel) {
-          target = { ...endpoint, model: endpoint.fallbackModel, fallbackModel: null };
-          inferenceDiagnostic("inference.target_changed", { ...diagnostics, round: "synthesis", from: endpoint.model, to: endpoint.fallbackModel, cause: "invalid_tool_call" });
+        } else if (target === endpoint && (endpoint.fallbackModel || endpoint.providerFallback)) {
+          target = endpoint.fallbackModel
+            ? { ...endpoint, model: endpoint.fallbackModel, fallbackModel: null }
+            : endpoint.providerFallback;
+          inferenceDiagnostic("inference.target_changed", { ...diagnostics, round: "synthesis", from: endpoint.model, to: target.model, cause: "invalid_tool_call" });
         }
         continue;
       }
