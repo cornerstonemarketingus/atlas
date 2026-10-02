@@ -124,7 +124,7 @@ export function retryAfterMs(headers, body = "") {
  * provider asks (when that is short) and retry once, then try the fallback
  * model on the same endpoint. Other statuses are returned as they are.
  */
-const BILLING_CODES = new Set(["insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_usage_limit_exceeded"]);
+const BILLING_CODES = new Set(["insufficient_quota", "billing_hard_limit_reached", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_usage_limit_exceeded"]);
 /** Fixed categories only: never expose provider text, which can echo prompts. */
 export function rateLimitDetails(body) {
   let error;
@@ -242,14 +242,16 @@ function sleep(ms) {
 async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked }) {
   let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked });
   let toolsDropped = false;
-  if (tools && (response.status === 400 || response.status === 422)) {
+  if (response.status === 400 || (tools && response.status === 422)) {
     const body = await response.clone().text().catch(() => "");
     const rejected = response.status === 400 ? rejectedToolCall(body) : null;
     // One malformed tool call is not a server without tools: keep the tools
     // and let the loop ask for a corrected call.
     if (rejected) return { ok: false, status: 400, rejectedTool: rejected, model: answeredBy.get(response) ?? endpoint.model, fallbackUsed: answeredBy.has(response) };
-    response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked });
-    toolsDropped = true;
+    if (tools) {
+      response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked });
+      toolsDropped = true;
+    }
   }
   const model = answeredBy.get(response) ?? endpoint.model;
   const fallbackUsed = model !== endpoint.model;
@@ -417,6 +419,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     ...diagnostics, round, model: result.model ?? endpoint.model, status: result.status ?? null, limitCategory: result.limitCategory ?? null,
     finishReason: result.finishReason ?? null, contentLength: result.text?.length ?? 0,
     toolCallCount: result.calls?.length ?? 0, fallbackUsed: Boolean(result.fallbackUsed),
+    rejectedToolCall: Boolean(result.rejectedTool),
     hadReasoning: Boolean(result.hadReasoning), usage: result.usage ?? null,
   });
 
@@ -541,6 +544,8 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     let tokens = Math.max(maxTokens, MAX_REPLY_TOKENS);
     let reasoningEffort;
     let target = endpoint;
+    const synthesisTurns = [...turns, message];
+    let toolFreeCorrection = false;
     // A reasoning model that spent its whole budget thinking and wrote nothing
     // needs room for what it actually spent plus an answer, not the same
     // request again. Lower reasoning effort only when the work is already done
@@ -561,7 +566,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       let result;
       try {
         // No tools: the model cannot start another tool cycle, only answer.
-        result = await modelStep({ billingBlocked, endpoint: target, turns: [...turns, message], tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause, reasoningEffort });
+        result = await modelStep({ billingBlocked, endpoint: target, turns: synthesisTurns, tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause, reasoningEffort });
       } catch (error) {
         result = { ok: false, status: error instanceof Error && error.name === "TimeoutError" ? 504 : 503, retryAfterMs: 2_000 };
       }
@@ -579,6 +584,20 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
           inferenceDiagnostic("inference.target_changed", { ...diagnostics, round: "synthesis", from: endpoint.model, to: endpoint.fallbackModel, cause: "empty_response" });
         }
         reason = "the model returned an empty reply.";
+        continue;
+      }
+      if (result.rejectedTool) {
+        // Providers can reject an attempted tool call even when tools are absent.
+        // Never execute or copy failed_generation: retain the trusted evidence,
+        // correct once, then let an already configured fallback write the answer.
+        reason = "the model rejected a tool call while writing the final answer.";
+        if (!toolFreeCorrection) {
+          synthesisTurns.push({ role: "user", content: "Write the final answer as plain text using the results already provided. Tools are unavailable. Do not emit a tool call or tool-call markup." });
+          toolFreeCorrection = true;
+        } else if (target === endpoint && endpoint.fallbackModel) {
+          target = { ...endpoint, model: endpoint.fallbackModel, fallbackModel: null };
+          inferenceDiagnostic("inference.target_changed", { ...diagnostics, round: "synthesis", from: endpoint.model, to: endpoint.fallbackModel, cause: "invalid_tool_call" });
+        }
         continue;
       }
       if (result.status === 400 && reasoningEffort) {
