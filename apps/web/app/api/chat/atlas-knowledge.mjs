@@ -180,5 +180,13 @@ export function describeStartedTask(request, outcome) {
         ? " It will open a pull request and merge it immediately."
         : " It will open a pull request for your review."
     : "";
-  return `Started ${what} on ${request.repository}: "${request.objective}".${merge} Progress appears in this conversation${outcome.taskId ? ` (task ${outcome.taskId})` : ""}.`;
+  // GitHub has already accepted the dispatch by the time `recorded` is false
+  // (see recordDispatchedTask in app/api/tasks/route.ts) — the run itself is
+  // not at risk, but it won't appear in the task list, so the person must be
+  // told plainly rather than shown a confident "appears in this conversation"
+  // that will not come true.
+  const notSaved = outcome.recorded === false
+    ? " I could not save this to your task history, so it will not appear in your task list — it is still running on GitHub."
+    : "";
+  return `Started ${what} on ${request.repository}: "${request.objective}".${merge}${notSaved} Progress appears in this conversation${outcome.taskId ? ` (task ${outcome.taskId})` : ""}.`;
 }

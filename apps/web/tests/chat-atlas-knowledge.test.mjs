@@ -62,6 +62,16 @@ test("started-task lines are honest about what will happen", () => {
   assert.doesNotMatch(describeStartedTask({ ...request, mode: "inspect" }, { ok: true }), /merge/u);
 });
 
+test("GitHub accepting a dispatch Atlas could not save to history is reported plainly", () => {
+  const request = { mode: "coder", objective: "Fix the login redirect.", repository: SELF_REPOSITORY };
+  const line = describeStartedTask(request, { ok: true, taskId: "t1", mergePolicy: "manual", recorded: false });
+  assert.match(line, /could not save this to your task history/u);
+  assert.match(line, /will not appear in your task list/u);
+  assert.match(line, /still running on GitHub/u);
+  assert.doesNotMatch(describeStartedTask(request, { ok: true, taskId: "t1", mergePolicy: "manual", recorded: true }), /could not save/u);
+  assert.doesNotMatch(describeStartedTask(request, { ok: true, taskId: "t1", mergePolicy: "manual" }), /could not save/u);
+});
+
 test("streamed tool calls are assembled from pieces and become task requests", async () => {
   const { createDeltaParser } = await import("../app/api/chat/stream.mjs");
   const { taskRequestsFromCalls } = await import("../app/api/chat/atlas-knowledge.mjs");

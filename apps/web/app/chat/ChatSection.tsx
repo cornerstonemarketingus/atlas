@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { classifyIntent } from "./intent.mjs";
 import { MessageBody } from "./MessageBody.js";
 import { TaskActivity } from "./TaskActivity.js";
-import { AgentTree, ToolSteps, WorkPanel, itemFromPreview, type Preview, type AgentNode, type LogLine, type ToolStep, type WorkItem } from "./Workspace.js";
+import { AgentTree, ToolSteps, WorkPanel, type AgentNode, type LogLine, type ToolStep, type WorkItem } from "./Workspace.js";
 import { createEventParser } from "../api/chat/stream.mjs";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
@@ -36,10 +36,17 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
 
 type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
+type Preview = { kind: "file" | "page"; title: string; content: string; url?: string; repository?: string; path?: string };
 const PANEL_KEY = "atlas.workPanel";
 
 function readPanelPreference() {
   try { return typeof window !== "undefined" && window.localStorage.getItem(PANEL_KEY) === "open"; } catch { return false; }
+}
+
+/** Files and pages Atlas read become panel items; the same file read twice is one item, refreshed. */
+function itemFromPreview(preview: Preview): WorkItem {
+  if (preview.kind === "page") return { id: `page:${preview.url}`, kind: "page", title: preview.title, url: preview.url ?? "", content: preview.content };
+  return { id: `file:${preview.repository}/${preview.path}`, kind: "file", title: preview.path ?? preview.title, path: preview.path ?? preview.title, repository: preview.repository, content: preview.content };
 }
 
 function upsert<T extends { id: string }>(list: T[], item: T) {
@@ -301,9 +308,15 @@ export function ChatSection() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ repository, branch, mode: item.mode ?? "coder", objective: item.text, conversationId }),
       });
-      const result = await response.json() as { conversationId?: string; message?: string };
+      const result = await response.json() as { conversationId?: string; message?: string; recorded?: boolean };
       if (!response.ok) { setNotice(result.message ?? "Atlas could not start that task."); return; }
       if (result.conversationId) { setConversationId(result.conversationId); await openThread(result.conversationId); }
+      // GitHub has already accepted the dispatch at this point; `recorded`
+      // only reports whether Atlas also saved it to D1. When it did not, the
+      // run is genuinely happening but will not appear in the task list
+      // below, so the person needs to be told rather than left wondering
+      // where it went.
+      if (result.recorded === false) setNotice("Started, but Atlas could not save it to your task history — it is still running, but will not appear in your task list.");
       setVersion((value) => value + 1);
     } catch {
       setNotice("Atlas could not reach the task service. Nothing was started.");
