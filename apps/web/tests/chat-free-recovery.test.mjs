@@ -54,10 +54,10 @@ test('oversized context honors explicit long retry-after and never immediately r
   assert.equal(calls, 1);
 });
 
-test('conversation reports exhausted credits without prompt leakage or pointless waits', async t => {
+for (const code of ['credit_balance_exhausted', 'billing_hard_limit_reached']) test(`conversation reports ${code} without prompt leakage or pointless waits`, async t => {
   const logs = []; t.mock.method(console, 'warn', line => logs.push(line));
   let calls = 0;
-  const result = await converse({ endpoint: endpoint.providerFallback, turns: [{ role: 'user', content: 'hello' }], stream: false, emit: () => {}, sleep: async () => assert.fail('billing must not wait'), fetcher: async () => { calls++; return rate('{"error":{"code":"credit_balance_exhausted","message":"PRIVATE_SENTINEL"}}'); } });
+  const result = await converse({ endpoint: endpoint.providerFallback, turns: [{ role: 'user', content: 'hello' }], stream: false, emit: () => {}, sleep: async () => assert.fail('billing must not wait'), fetcher: async () => { calls++; return rate(JSON.stringify({ error: { code, message: 'PRIVATE_SENTINEL' } })); } });
   assert.equal(calls, 1);
   assert.match(result.error, /API credits/);
   assert.doesNotMatch(JSON.stringify({ result, logs }), /PRIVATE_SENTINEL/);

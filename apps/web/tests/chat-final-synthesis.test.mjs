@@ -51,6 +51,55 @@ function run(fetcher, overrides = {}) {
   return { promise, events };
 }
 
+for (const stream of [false, true]) for (const crossProvider of [false, true]) {
+  test(`tool-free synthesis repairs a rejected tool call, then uses the permitted fallback (stream=${stream}, crossProvider=${crossProvider})`, async () => {
+    const rejected = () => new Response(JSON.stringify({ error: { code: "tool_use_failed", failed_generation: "private rejected content" } }), { status: 400 });
+    const read = { choices: [{ message: { tool_calls: [{ id: "read1", type: "function", function: { name: "read_web_page", arguments: JSON.stringify({ url: "https://example.com" }) } }] } }] };
+    const { fetcher, requests } = scripted([
+      json(read), json({ choices: [] }), rejected, rejected,
+      json({ choices: [{ message: { content: "Verified: Example body." } }] }),
+    ]);
+    const fallback = crossProvider
+      ? { providerFallback: { baseUrl: "https://model.test/alternate/v1", apiKey: "alternate-key", model: "small" } }
+      : { fallbackModel: "small" };
+    const locations = [];
+    const observedFetcher = async (url, init) => {
+      if (String(url).startsWith("https://model.test")) locations.push({ url: String(url), authorization: init.headers.authorization });
+      return fetcher(url, init);
+    };
+    const outcome = await run(observedFetcher, { stream, endpoint: { ...endpoint, ...fallback } }).promise;
+    assert.equal(outcome.reply, "Verified: Example body.");
+    assert.equal(outcome.steps.length, 1);
+    assert.equal(requests.length, 5);
+    assert.deepEqual(requests.slice(2).map((request) => request.model), ["m", "m", "small"]);
+    for (const request of requests.slice(2)) {
+      assert.equal(request.tools, undefined);
+      assert.match(JSON.stringify(request.messages), /Example body/);
+      assert.doesNotMatch(JSON.stringify(request.messages), /private rejected content/);
+    }
+    assert.match(requests[3].messages.at(-1).content, /plain text/i);
+    assert.equal(locations.at(-1).url.includes("/alternate/"), crossProvider);
+    assert.equal(locations.at(-1).authorization, crossProvider ? "Bearer alternate-key" : "Bearer k");
+  });
+}
+
+test("tool-free synthesis rejection stays bounded without a fallback and retains completed work", async () => {
+  const rejected = () => new Response(JSON.stringify({ error: { code: "tool_use_failed" } }), { status: 400 });
+  const { fetcher, requests } = scripted([json({ choices: [] }), rejected, rejected, rejected]);
+  const outcome = await run(fetcher, { stream: false }).promise;
+  assert.equal(requests.length, 4);
+  assert.equal(outcome.finalization.status, "incomplete");
+  assert.match(outcome.finalization.reason, /rejected a tool call/);
+  assert.ok(outcome.reply.trim());
+});
+
+test("unknown HTTP 400 during synthesis is not retried as a rejected tool call", async () => {
+  const { fetcher, requests } = scripted([json({ choices: [] }), () => new Response(JSON.stringify({ error: { code: "invalid_request" } }), { status: 400 })]);
+  const outcome = await run(fetcher, { stream: false }).promise;
+  assert.equal(requests.length, 2);
+  assert.match(outcome.finalization.reason, /400/);
+});
+
 for (const [name, empty] of [
   ["no choices", json({ choices: [] })],
   ["null content", json({ choices: [{ message: { content: null }, finish_reason: "stop" }] })],
