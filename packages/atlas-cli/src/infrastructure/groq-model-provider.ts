@@ -124,14 +124,26 @@ export class GroqModelProvider implements ModelProvider {
       // failure looks identical and has to be guessed at from the status
       // code alone.
       const detail = text.trim().slice(0, 500);
-      const retryAfterMs = response.status === 429 || response.status >= 500
+      // Groq answers a tokens-per-minute limit with HTTP 413, not 429, and uses
+      // that same status for a single request too large to ever fit. The two
+      // need opposite handling and the status cannot tell them apart — only the
+      // body can, via its machine-readable error code.
+      const rateLimited = response.status === 429 || errorCodeOf(text) === "rate_limit_exceeded";
+      const retryAfterMs = rateLimited || response.status >= 500
         ? retryAfterHeaderMs(response.headers) ?? suggestedWaitFromMessage(text)
         : undefined;
+      // A limit that will free up names the wait ("Please try again in 6.36s").
+      // A request larger than the whole per-minute allowance names none, because
+      // waiting cannot shrink it — retrying that just burns attempts on a
+      // certainty. Treating both as fatal killed self-improvement runs that
+      // would have succeeded seconds later.
+      const clearsOnItsOwn = rateLimited && retryAfterMs !== undefined;
       throw new ModelProviderError({
         message: `Groq endpoint returned HTTP ${response.status}${detail.length > 0 ? `: ${detail}` : ""}`,
-        code: authFailure ? "authentication" : response.status === 429 ? "rate-limit" : "provider-failure",
+        code: authFailure ? "authentication" : rateLimited ? "rate-limit" : "provider-failure",
         providerId: this.metadata.id,
-        retryable: !authFailure && (response.status === 429 || response.status >= 500),
+        // Additive: every status that retried before still retries.
+        retryable: !authFailure && (response.status === 429 || response.status >= 500 || clearsOnItsOwn),
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
       });
     }
@@ -254,4 +266,21 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+/**
+ * The machine-readable `error.code` from a Groq error body, when there is one.
+ *
+ * Kept separate from the human-readable message on purpose: the message wording
+ * is Groq's to change, but the code is part of its API.
+ */
+function errorCodeOf(body: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  const code = asRecord(asRecord(parsed)?.["error"])?.["code"];
+  return typeof code === "string" ? code : undefined;
 }

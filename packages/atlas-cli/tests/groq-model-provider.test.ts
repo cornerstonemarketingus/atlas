@@ -65,6 +65,57 @@ test("classifies rate limits and server errors as retryable", async () => {
     error instanceof ModelProviderError && error.retryable);
 });
 
+// Groq reports a tokens-per-minute limit as HTTP 413, and uses the same status
+// for a request that is simply too big. The bodies below are the real ones: the
+// second is what stopped self-improvement runs 23 and 24.
+test("retries a token-per-minute limit that names a wait, though it arrives as 413", async () => {
+  const body = JSON.stringify({
+    error: {
+      message: "Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM): Limit 8000, Used 7800, Requested 900. Please try again in 6.36s.",
+      type: "tokens",
+      code: "rate_limit_exceeded",
+    },
+  });
+  const provider = new GroqModelProvider({
+    apiKey: "key",
+    models: [model],
+    fetchImplementation: fakeFetch(() => new Response(body, { status: 413 })),
+  });
+  await assert.rejects(provider.complete(request), (error: unknown) =>
+    error instanceof ModelProviderError
+    && error.code === "rate-limit"
+    && error.retryable
+    && error.retryAfterMs === 6_360);
+});
+
+test("does not retry a request larger than the whole per-minute allowance", async () => {
+  // No wait is offered because none would help: one request exceeds the limit.
+  const body = JSON.stringify({
+    error: {
+      message: "Request too large for model `openai/gpt-oss-20b` in organization `org_x` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 9997, please reduce your message size and try again.",
+      type: "tokens",
+      code: "rate_limit_exceeded",
+    },
+  });
+  const provider = new GroqModelProvider({
+    apiKey: "key",
+    models: [model],
+    fetchImplementation: fakeFetch(() => new Response(body, { status: 413 })),
+  });
+  await assert.rejects(provider.complete(request), (error: unknown) =>
+    error instanceof ModelProviderError && error.code === "rate-limit" && !error.retryable);
+});
+
+test("a 413 that is not a rate limit stays a plain, non-retryable failure", async () => {
+  const provider = new GroqModelProvider({
+    apiKey: "key",
+    models: [model],
+    fetchImplementation: fakeFetch(() => new Response("payload too large", { status: 413 })),
+  });
+  await assert.rejects(provider.complete(request), (error: unknown) =>
+    error instanceof ModelProviderError && error.code === "provider-failure" && !error.retryable);
+});
+
 test("rejects malformed JSON and oversized responses", async () => {
   const malformed = new GroqModelProvider({
     apiKey: "key",
