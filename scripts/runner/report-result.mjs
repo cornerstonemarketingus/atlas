@@ -55,6 +55,10 @@ export async function deliverResult({ endpoint, token, payload }, fetcher = fetc
   }
 }
 
+export function deliveryMessage(delivery, taskId, correlationId) {
+  return delivery.delivered ? `Delivered result for task ${taskId}.${correlationLogSuffix(correlationId)}` : `Result was not delivered: no hosted task exists for ${taskId}.${correlationLogSuffix(correlationId)}`;
+}
+
 async function main() {
   const taskId = process.env.ATLAS_TASK_ID;
   if (!/^[0-9a-f-]{36}$/i.test(taskId ?? "")) { console.log("This run is not a hosted task; callback skipped."); return; }
@@ -79,7 +83,7 @@ async function main() {
   if (new URL(endpoint).protocol !== "https:") throw new Error("Result endpoint must use HTTPS");
   const correlationId = correlationIdFromEnv();
   const delivery = await deliverResult({ endpoint, token, payload: buildResultPayload({ taskId, summary, correlationId }) });
-  console.log(delivery.delivered ? `Delivered result for task ${taskId}.${correlationLogSuffix(correlationId)}` : `Result was not delivered: no hosted task exists for ${taskId}.${correlationLogSuffix(correlationId)}`);
+  console.log(deliveryMessage(delivery, taskId, correlationId));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

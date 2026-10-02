@@ -1,7 +1,7 @@
 // Schema metadata only: never query task objectives, messages or credential values.
 const REQUIRED = {
-  tasks: ['task_id', 'tenant_id', 'user_id', 'requested_by', 'repository', 'branch', 'mode', 'objective', 'merge_policy', 'conversation_id', 'execution_provider', 'correlation_id', 'created_at'],
-  conversations: ['id', 'tenant_id', 'requested_by', 'title', 'repository', 'branch', 'created_at', 'updated_at'],
+  tasks: ['id', 'task_id', 'tenant_id', 'user_id', 'requested_by', 'repository', 'branch', 'mode', 'objective', 'merge_policy', 'github_run_id', 'conversation_id', 'execution_provider', 'correlation_id', 'created_at'],
+  conversations: ['id', 'tenant_id', 'requested_by', 'title', 'repository', 'branch', 'created_at', 'updated_at', 'archived_at'],
   conversation_messages: ['id', 'conversation_id', 'requested_by', 'role', 'content', 'attachments_json', 'created_at'],
   run_events: ['id', 'conversation_id', 'task_id', 'requested_by', 'kind', 'label', 'detail', 'created_at'],
 };
