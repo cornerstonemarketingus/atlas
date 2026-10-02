@@ -21,6 +21,8 @@
  * dispatch.mjs.
  */
 
+import { githubRequestObservation, logGitHubObservation } from "./github-observability.mjs";
+
 const GITHUB_API = "https://api.github.com";
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const WORKFLOW_PATTERN = /^(?:[A-Za-z0-9_.-]{1,128}|[1-9][0-9]{0,18})$/u;
@@ -114,16 +116,26 @@ export function normalizePullRequest(value) {
  * transient GitHub error must degrade the task list to "status unknown", never
  * fail it.
  */
-export async function fetchGitHubJson(request, fetcher = fetch, timeoutMs = 8_000) {
+export async function fetchGitHubJson(request, fetcher = fetch, timeoutMs = 8_000, { observe = logGitHubObservation, clock = Date.now } = {}) {
+  const startedAt = clock();
+  let response;
+  let outcome = "network_failure";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetcher(request.url, { ...request.init, signal: controller.signal });
+    response = await fetcher(request.url, { ...request.init, signal: controller.signal });
+    outcome = "http_failure";
     if (!response.ok) return null;
-    return await response.json();
+    outcome = "invalid_response";
+    const value = await response.json();
+    outcome = "success";
+    return value;
   } catch {
+    if (controller.signal.aborted) outcome = "timeout";
     return null;
   } finally {
     clearTimeout(timeout);
+    // Observability must not break the dashboard's existing failure handling.
+    try { observe(githubRequestObservation({ url: request.url, response, outcome, startedAt, endedAt: clock() })); } catch { /* best effort */ }
   }
 }
