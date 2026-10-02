@@ -231,6 +231,25 @@ test("--provider local still refuses a remote http --base-url", async () => {
   }
 });
 
+test("--local-timeout-ms rejects an out-of-range value instead of ignoring it", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => { errors.push(parts.join(" ")); };
+  try {
+    const code = await main([
+      "code", ".", "objective", "--model", "llama3.1", "--provider", "local",
+      "--local-timeout-ms", "0",
+    ]);
+    assert.equal(code, 2);
+    assert.ok(
+      errors.some((line) => /--local-timeout-ms must be an integer between/u.test(line)),
+      `got: ${errors.join(" | ")}`,
+    );
+  } finally {
+    console.error = original;
+  }
+});
+
 // --- --fallback / --escalate with a local route ---------------------------
 // The primary route here is --provider local too, so these only ever touch
 // loopback (which fails fast with nothing listening) rather than a real

@@ -26,6 +26,7 @@ import { JsonLinesSessionAuditStore } from "./infrastructure/json-lines-session-
 import { persistSessionAudit } from "./infrastructure/persist-session-audit.js";
 import { InMemoryUsageBudgetLedger } from "./infrastructure/in-memory-usage-budget-ledger.js";
 import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-openai-compatible-model-provider.js";
+import { BoundedJsonHttpTransport } from "./infrastructure/bounded-json-http-transport.js";
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
 import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provider.js";
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
@@ -79,13 +80,13 @@ const USAGE = `Usage:
   atlas github repo <owner>/<repository> [--format text|json]
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
-  atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
+  atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--request-timeout-ms N] [--format text|json]
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|local] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model[:API_KEY_ENV]>] [--escalate <provider:model[:API_KEY_ENV]>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
-       [--retry-attempts N] [--retry-max-delay-ms N]
+       [--retry-attempts N] [--retry-max-delay-ms N] [--local-timeout-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]
-       (--provider local talks to an unauthenticated OpenAI-compatible server, defaulting to Ollama at 127.0.0.1:11434; omit --api-key-env and the API_KEY_ENV field entirely)
+       (--provider local talks to an unauthenticated OpenAI-compatible server, defaulting to Ollama at 127.0.0.1:11434; omit --api-key-env and the API_KEY_ENV field entirely; --local-timeout-ms raises its request timeout beyond the default, since local inference on modest hardware is routinely slower than a hosted API)
   atlas provider-status [--provider anthropic|groq|local] [--endpoint <url>] [--timeout-ms N] [--format text|json]   (checks whether a provider is reachable before a run)
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
 
@@ -414,9 +415,16 @@ async function runChat(args: readonly string[], format: "json" | "text"): Promis
   }
   const tokenBudgetOption = readOptionalInteger(args, "--token-budget", 1, 1_000_000);
   const maximumTurnsOption = readOptionalInteger(args, "--max-turns", 1, 32);
-  if (tokenBudgetOption === null || maximumTurnsOption === null) return 2;
+  const requestTimeoutOption = readOptionalInteger(args, "--request-timeout-ms", 1_000, 600_000);
+  if (tokenBudgetOption === null || maximumTurnsOption === null || requestTimeoutOption === null) return 2;
   const tokenBudget = tokenBudgetOption ?? 8_192;
   const maximumTurns = maximumTurnsOption ?? 8;
+  // atlas chat always targets a self-hosted loopback endpoint (never a
+  // hosted vendor), and CPU-only local inference routinely takes well over
+  // the generic transport's 30s default to answer, especially on first load
+  // of a model into memory. Defaulting higher here keeps a real local run
+  // from failing before the model has even finished responding.
+  const requestTimeoutMs = requestTimeoutOption ?? 120_000;
 
   const inspector = new FilesystemRepositoryInspector();
   const summary = await inspector.inspect(args[1] ?? "");
@@ -468,6 +476,7 @@ async function runChat(args: readonly string[], format: "json" | "text"): Promis
       supportsJson: true,
       supportsStreaming: false,
     }],
+    transport: new BoundedJsonHttpTransport({ timeoutMs: requestTimeoutMs }),
   });
   // Redaction wraps the transport directly, so it sees the final request after
   // every other decorator has shaped it — the last point before bytes leave
@@ -648,8 +657,14 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const verifyTimeoutOption = readOptionalInteger(args, "--verify-timeout-ms", 1_000, 1_800_000);
   const retryAttemptsOption = readOptionalInteger(args, "--retry-attempts", 1, 5);
   const retryMaxDelayOption = readOptionalInteger(args, "--retry-max-delay-ms", 0, 120_000);
+  // Local CPU inference is routinely much slower than a hosted vendor API,
+  // especially the first request after the server loads a model into memory;
+  // the generic transport's 30s default is tuned for a hosted round trip and
+  // fails a real local run before it has had a chance to answer.
+  const localTimeoutOption = readOptionalInteger(args, "--local-timeout-ms", 1_000, 600_000);
   const outputTokensPerTurn = readOptionalInteger(args, "--output-tokens-per-turn", OUTPUT_TOKENS_PER_TURN_RANGE.minimum, OUTPUT_TOKENS_PER_TURN_RANGE.maximum);
-  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null || retryAttemptsOption === null || retryMaxDelayOption === null || outputTokensPerTurn === null) return 2;
+  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null || retryAttemptsOption === null || retryMaxDelayOption === null || localTimeoutOption === null || outputTokensPerTurn === null) return 2;
+  const localTimeoutMs = localTimeoutOption ?? 120_000;
   const tokenBudget = tokenBudgetOption ?? 16_384;
   const selection = selectCoderProvider({
     provider: providerOption,
@@ -806,7 +821,11 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     const upstream = routeSelection.profile.providerId === "anthropic"
       ? new AnthropicModelProvider({ apiKey: routeApiKey, models: routeCapabilities, defaultMaxOutputTokens: routeSelection.maxOutputTokensPerTurn })
       : routeSelection.profile.providerId === "local"
-        ? new LocalOpenAiCompatibleModelProvider({ endpoint: routeEndpoint ?? defaultLocalCoderEndpoint(), models: routeCapabilities })
+        ? new LocalOpenAiCompatibleModelProvider({
+            endpoint: routeEndpoint ?? defaultLocalCoderEndpoint(),
+            models: routeCapabilities,
+            transport: new BoundedJsonHttpTransport({ timeoutMs: localTimeoutMs }),
+          })
         : new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
     return new RetryingModelProvider(new RedactingModelProvider(upstream, new PatternSecretRedactor()), retryOptions);
   };
