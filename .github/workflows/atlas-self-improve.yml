@@ -118,7 +118,15 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          python3 .github/atlas/build-dispatch.py > payload.json
+          # The script names the assigned TODO.md item on stderr. Put it in the
+          # run summary too, so which item a run took is visible without
+          # opening the log or the payload.
+          python3 .github/atlas/build-dispatch.py > payload.json 2> assignment.txt || {
+            cat assignment.txt >&2
+            exit 1
+          }
+          cat assignment.txt
+          cat assignment.txt >> "$GITHUB_STEP_SUMMARY"
           # --fail-with-body, not --fail: a bare "curl: (22)" says a request
           # failed and nothing about why, which is how four consecutive
           # scheduled runs died without ever naming the missing permission.

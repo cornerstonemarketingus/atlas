@@ -353,3 +353,11 @@ jobs:
       # before pushing, and the workflow only calls it.
       - name: Check every workflow
         run: python3 .github/atlas/check-workflows.py
+
+      # The self-improvement loop picks its own work, and what it may pick is a
+      # safety property: repository settings it cannot change, items already in
+      # progress on another branch, and deliberately postponed decisions all
+      # look like ordinary unchecked items. The selector is tested here rather
+      # than trusted to prose in the objective.
+      - name: Check the self-improvement item selector
+        run: python3 .github/atlas/check-todo-selection.py

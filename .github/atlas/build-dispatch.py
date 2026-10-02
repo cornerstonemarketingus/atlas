@@ -3,6 +3,11 @@
 A script rather than inline shell because the objective is multi-line prose:
 interpolating that into JSON by hand is exactly the kind of quoting that breaks
 on the first apostrophe or newline someone adds to it.
+
+The objective template carries {item}, {section} and {line} placeholders, filled
+here from todo_selection.select_item, so the agent is handed one assignment
+rather than the whole backlog. See todo_selection.py for why the choice is made
+here instead of in the model's prompt.
 """
 
 import json
@@ -10,7 +15,13 @@ import os
 import pathlib
 import sys
 
-OBJECTIVE_FILE = pathlib.Path(__file__).with_name("self-improve-objective.md")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from todo_selection import select_item  # noqa: E402
+
+HERE = pathlib.Path(__file__).resolve().parent
+OBJECTIVE_FILE = HERE / "self-improve-objective.md"
+TODO_FILE = HERE.parents[1] / "TODO.md"
 
 # The owner chose autopilot: self-improvement merges its own change once every
 # CI check on the pull request passes. "none" (merge without checks) is refused
@@ -29,6 +40,37 @@ def merge_policy() -> str:
     return value
 
 
+def build_objective():
+    """The committed objective with this run's assignment substituted in.
+
+    Returns (objective, note) — note is a line for the run log naming what was
+    assigned, so a run's choice is visible without opening the payload.
+    """
+    template = OBJECTIVE_FILE.read_text(encoding="utf-8").strip()
+    if not template:
+        raise ValueError("The objective file is empty.")
+
+    if "{item}" not in template:
+        # An objective that names no item needs no selection; honour it as
+        # written rather than silently ignoring half the template.
+        return template, "Objective: the committed objective, which selects no TODO.md item."
+
+    item = select_item(TODO_FILE.read_text(encoding="utf-8"))
+    if item is None:
+        raise ValueError(
+            f"No unchecked work item remains in {TODO_FILE.name}. "
+            "Nothing to assign: add an item or stop the loop."
+        )
+
+    # Explicit replacement rather than str.format: the template is prose that
+    # people edit, and one literal brace in it would otherwise turn a routine
+    # wording change into a failed dispatch.
+    objective = template
+    for placeholder, value in (("{item}", item.text), ("{section}", item.section), ("{line}", str(item.line))):
+        objective = objective.replace(placeholder, value)
+    return objective, f"Assigned: {item.text} (TODO.md:{item.line}, under '{item.section}')"
+
+
 def main() -> int:
     try:
         policy = merge_policy()
@@ -36,10 +78,18 @@ def main() -> int:
         print(error, file=sys.stderr)
         return 1
     override = os.environ.get("OBJECTIVE_OVERRIDE", "").strip()
-    objective = override or OBJECTIVE_FILE.read_text(encoding="utf-8").strip()
-    if not objective:
-        print("No objective: the override was blank and the objective file is empty.", file=sys.stderr)
-        return 1
+    if override:
+        objective = override
+        note = "Objective: the dispatch override, not the committed objective."
+    else:
+        try:
+            objective, note = build_objective()
+        except (OSError, ValueError, KeyError) as error:
+            print(f"Could not build the objective: {error}", file=sys.stderr)
+            return 1
+
+    # stderr, because stdout is the payload the caller pipes into curl.
+    print(note, file=sys.stderr)
 
     payload = {
         "ref": "main",
