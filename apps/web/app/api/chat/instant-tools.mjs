@@ -1,3 +1,6 @@
+import { observedGitHubFetch } from "../tasks/github-observability.mjs";
+import { repositoryContentCache } from "./repository-content-cache.mjs";
+
 /**
  * Tools Atlas uses inside a chat reply, before it answers.
  *
@@ -250,6 +253,64 @@ function encodePath(path) {
   return path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
 }
 
+/** Branch/tag/HEAD to the commit it points at right now. `{ commit: null }` means "could not pin": the caller reads uncached. */
+async function resolveCommit(cache, upstream, repository, ref) {
+  if (/^[a-f0-9]{40,64}$/u.test(ref)) return { commit: ref };
+  return cache.resolveRef(`${repository}#${ref || "HEAD"}`, async () => {
+    const wait = cache.blockedForMs();
+    if (wait > 0) { cache.noteBlocked("commits"); return { value: { commit: null, failure: { rateLimited: wait } }, cache: false }; }
+    const { response, observation } = await upstream(`https://api.github.com/repos/${repository}/commits/${ref ? encodePath(ref) : "HEAD"}`, { accept: "application/vnd.github.sha" });
+    holdOffAfterLimit(cache, observation);
+    if (!response.ok) return { value: { commit: null, failure: { status: response.status, observation } }, cache: false };
+    const commit = (await response.text()).trim();
+    return /^[a-f0-9]{40,64}$/u.test(commit) ? { value: { commit }, cache: true } : { value: { commit: null }, cache: false };
+  });
+}
+
+/** Fetch one path at one commit (or the default branch when `commit` is null) and shape it for caching. */
+async function loadRepositoryEntry({ cache, upstream, repository, path, commit }) {
+  const wait = cache.blockedForMs();
+  if (wait > 0) { cache.noteBlocked("contents"); return { value: { failure: { rateLimited: wait } }, cache: false }; }
+  const { response, observation } = await upstream(`https://api.github.com/repos/${repository}/contents/${encodePath(path)}${commit ? `?ref=${encodeURIComponent(commit)}` : ""}`);
+  holdOffAfterLimit(cache, observation);
+  if (!response.ok) return { value: { failure: { status: response.status, observation } }, cache: false };
+  const body = await response.json();
+  if (Array.isArray(body)) {
+    const entries = body.slice(0, 300).map((entry) => `${entry?.type === "dir" ? "dir " : "file"} ${entry?.path ?? ""}`);
+    return { value: { kind: "dir", entries, total: body.length }, cache: true, bytes: entries.join("\n").length * 2 + 64 };
+  }
+  if (body?.type !== "file") return { value: { skip: { label: "Skipped", content: `That path is a ${body?.type ?? "non-file"}.` } }, cache: false };
+  if (typeof body.content !== "string" || body.encoding !== "base64") return { value: { skip: { label: "Skipped", content: "The file is too large to read through the contents API." } }, cache: false };
+  const bytes = Uint8Array.from(atob(body.content.replace(/\s+/gu, "")), (character) => character.charCodeAt(0));
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  if (text.includes("\u0000")) return { value: { skip: { label: "Skipped", content: "The file is binary." } }, cache: false };
+  return { value: { kind: "file", text, sha: body.sha }, cache: true, bytes: text.length * 2 + 64 };
+}
+
+/** A GitHub rate limit pauses uncached reads for a bounded time instead of letting the model hammer a refusing API. */
+function holdOffAfterLimit(cache, observation) {
+  const { outcome, rateLimit } = observation;
+  if (outcome === "primary_rate_limit") cache.block(rateLimit.resetEpochSeconds === null ? 30_000 : rateLimit.resetEpochSeconds * 1000 - Date.now());
+  else if (outcome === "secondary_rate_limit") cache.block(rateLimit.retryAfterMs ?? 30_000);
+  else if (outcome === "rate_limit_unknown") cache.block(10_000);
+}
+
+/** Say which kind of refusal it was: they have different remedies, and only a rate limit passes with time. */
+function githubReadFailure(shown, failure, { missing }) {
+  if (failure.rateLimited) {
+    return { ok: false, label: `GitHub rate limit: ${shown}`, content: `GitHub's rate limit for Atlas's credential is exhausted. Do not retry in a loop; try again in about ${Math.max(1, Math.ceil(failure.rateLimited / 1000))} seconds. Files already read in this session are still available.` };
+  }
+  const { status, observation } = failure;
+  const outcome = observation?.outcome;
+  if (status === 404) return { ok: false, label: `No ${shown}`, content: missing.startsWith("That path") ? missing : `${missing} does not exist.` };
+  if (outcome === "primary_rate_limit" || outcome === "secondary_rate_limit" || outcome === "rate_limit_unknown") {
+    return { ok: false, label: `GitHub rate limit: ${shown}`, content: `GitHub answered ${status}: the rate limit for Atlas's credential is exhausted. Do not retry in a loop; wait before reading more files.` };
+  }
+  if (status === 401) return { ok: false, label: `Could not read ${shown}`, content: "GitHub answered 401: Atlas's credential was rejected. This is not a rate limit; retrying will not help." };
+  if (status === 403) return { ok: false, label: `Could not read ${shown}`, content: "GitHub answered 403: Atlas's credential lacks access to this repository. This is a permission problem, not a rate limit; retrying will not help." };
+  return { ok: false, label: `Could not read ${shown}`, content: `GitHub answered ${status}.` };
+}
+
 async function readRepositoryFile(args, fetcher, context) {
   const offset = args.offset ?? 0;
   const maxChars = args.maxChars ?? DEFAULT_FILE_CHARS;
@@ -260,23 +321,21 @@ async function readRepositoryFile(args, fetcher, context) {
   if (access.error) return access.error;
   const path = typeof args.path === "string" ? args.path.trim().replace(/^\/+/u, "").slice(0, 400) : "";
   if (path.split("/").includes("..")) return { ok: false, label: "Invalid path", content: "Paths cannot contain '..'." };
-  const ref = typeof args.ref === "string" && /^[\w./-]{1,200}$/u.test(args.ref) ? `?ref=${encodeURIComponent(args.ref)}` : "";
-  const response = await fetcher(`https://api.github.com/repos/${access.repository}/contents/${encodePath(path)}${ref}`, {
-    signal: AbortSignal.timeout(TOOL_TIMEOUT_MS), headers: githubHeaders(access.token),
-  });
+  const ref = typeof args.ref === "string" && /^[\w./-]{1,200}$/u.test(args.ref) ? args.ref : "";
   const shown = `${access.repository}/${path}`.replace(/\/$/u, "");
-  if (response.status === 404) return { ok: false, label: `No ${shown}`, content: "That path does not exist on that ref." };
-  if (!response.ok) return { ok: false, label: `Could not read ${shown}`, content: `GitHub answered ${response.status}.` };
-  const body = await response.json();
-  if (Array.isArray(body)) {
-    const entries = body.slice(0, 300).map((entry) => `${entry?.type === "dir" ? "dir " : "file"} ${entry?.path ?? ""}`);
-    return { ok: true, label: `Listed ${shown || access.repository} (${body.length} entries)`, content: asData(`repository ${access.repository} directory ${path || "/"}`, entries.join("\n")) };
-  }
-  if (body?.type !== "file") return { ok: false, label: `Skipped ${shown}`, content: `That path is a ${body?.type ?? "non-file"}.` };
-  if (typeof body.content !== "string" || body.encoding !== "base64") return { ok: false, label: `Skipped ${shown}`, content: "The file is too large to read through the contents API." };
-  const bytes = Uint8Array.from(atob(body.content.replace(/\s+/gu, "")), (character) => character.charCodeAt(0));
-  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  if (text.includes("\u0000")) return { ok: false, label: `Skipped ${shown}`, content: "The file is binary." };
+  // Authorization (allowlist + credential, above) has passed. Only now may cached content be returned.
+  const cache = context.repositoryCache ?? repositoryContentCache;
+  const upstream = (url, extraHeaders = {}) => observedGitHubFetch(fetcher, url, { signal: AbortSignal.timeout(TOOL_TIMEOUT_MS), headers: { ...githubHeaders(access.token), ...extraHeaders } }, { source: "chat_repository_read", observe: context.observe });
+  const resolved = await resolveCommit(cache, upstream, access.repository, ref);
+  if (resolved.failure) return githubReadFailure(shown, resolved.failure, { missing: `${ref || "default branch"} on ${access.repository}` });
+  // With a pinned commit the file is fetched once and every page is cut from it. Without one (resolution gave no usable commit) read straight through, uncached.
+  const fetchEntry = () => loadRepositoryEntry({ cache, upstream, repository: access.repository, path, commit: resolved.commit });
+  const loaded = resolved.commit ? await cache.getOrLoad(`${access.repository}@${resolved.commit}:${path}`, fetchEntry) : (await fetchEntry()).value;
+  if (loaded.failure) return githubReadFailure(shown, loaded.failure, { missing: "That path does not exist on that ref." });
+  if (loaded.skip) return { ok: false, label: `${loaded.skip.label} ${shown}`, content: loaded.skip.content };
+  if (loaded.kind === "dir") return { ok: true, label: `Listed ${shown || access.repository} (${loaded.total} entries)`, content: asData(`repository ${access.repository} directory ${path || "/"}`, loaded.entries.join("\n")) };
+  const body = { sha: loaded.sha };
+  const text = loaded.text;
   if (args.fileSha && args.fileSha !== body.sha) return { ok: false, label: `File changed: ${shown}`, content: "The file changed since the previous page. Read again from offset 0; do not combine these versions." };
   if (offset > text.length) return { ok: false, label: "File offset out of range", content: `This file contains ${text.length} characters. Read again from offset 0.` };
   let end = Math.min(text.length, offset + maxChars);
@@ -299,9 +358,9 @@ async function searchRepositoryCode(args, fetcher, context) {
   if (access.error) return access.error;
   const query = typeof args.query === "string" ? args.query.replace(/\b(repo|org|user):\S+/giu, "").trim().slice(0, 200) : "";
   if (!query) return { ok: false, label: "Empty search", content: "The search query was empty." };
-  const response = await fetcher(`https://api.github.com/search/code?per_page=15&q=${encodeURIComponent(`${query} repo:${access.repository}`)}`, {
+  const { response } = await observedGitHubFetch(fetcher, `https://api.github.com/search/code?per_page=15&q=${encodeURIComponent(`${query} repo:${access.repository}`)}`, {
     signal: AbortSignal.timeout(TOOL_TIMEOUT_MS), headers: githubHeaders(access.token),
-  });
+  }, { source: "chat_repository_search", observe: context.observe });
   if (!response.ok) return { ok: false, label: `Code search failed in ${access.repository}`, content: `GitHub answered ${response.status}.` };
   const body = await response.json();
   const items = Array.isArray(body?.items) ? body.items : [];

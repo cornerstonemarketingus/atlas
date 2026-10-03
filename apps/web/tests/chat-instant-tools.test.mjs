@@ -66,8 +66,11 @@ test("repository tools only read allowlisted repositories", async () => {
   const read = await runInstantTool(call("read_repository_file", { repository: "Owner/Repo", path: "/src/a.ts" }), context);
   assert.equal(read.ok, true);
   assert.match(read.content, /export const a = 1/u);
-  assert.equal(seen[0].url, "https://api.github.com/repos/owner/repo/contents/src/a.ts");
-  assert.equal(seen[0].auth, "Bearer tkn");
+  // The first request resolves the branch to a commit; this fixture answers it with
+  // non-SHA JSON, so the read falls back to the unpinned Contents request.
+  const contents = seen.find((request) => request.url.includes("/contents/"));
+  assert.equal(contents.url, "https://api.github.com/repos/owner/repo/contents/src/a.ts");
+  assert.equal(contents.auth, "Bearer tkn");
 
   const traversal = await runInstantTool(call("read_repository_file", { repository: "owner/repo", path: "../x" }), context);
   assert.equal(traversal.ok, false);
