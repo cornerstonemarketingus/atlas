@@ -17,11 +17,14 @@
  * can change anything anywhere.
  */
 
+import { readRepositoryContent } from "./repository-content.mjs";
+
 export const INSTANT_TOOL_NAMES = Object.freeze(["read_web_page", "web_search", "read_repository_file", "search_repository_code"]);
 
 const MAX_PAGE_BYTES = 600_000;
 const MAX_TOOL_CHARS = 7_000;
-const MAX_FILE_CHARS = 12_000;
+const MAX_FILE_CHARS = 4_000;
+const DEFAULT_FILE_CHARS = 3_000;
 const TOOL_TIMEOUT_MS = 12_000;
 const REPOSITORY_PATTERN = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/u;
 
@@ -44,11 +47,14 @@ const WEB_SEARCH = definition(
 );
 const READ_REPOSITORY_FILE = definition(
   "read_repository_file",
-  "Read a file, or list a directory, in a GitHub repository connected to this workspace (including your own, cornerstonemarketingus/atlas). Use it to answer questions about code accurately instead of guessing. Read-only.",
+  "Read a file, or list a directory, in a GitHub repository connected to this workspace (including your own, cornerstonemarketingus/atlas). Returns a small page; follow nextOffset with fileSha to read omitted sections before making claims about them. Read-only.",
   {
     repository: { type: "string", description: "owner/name" },
     path: { type: "string", description: "Path inside the repository; empty or \"/\" for the root directory." },
     ref: { type: "string", description: "Branch, tag or commit. Defaults to the default branch." },
+    offset: { type: "integer", minimum: 0, description: "Character offset from nextOffset in the previous page. Defaults to 0." },
+    maxChars: { type: "integer", minimum: 256, maximum: MAX_FILE_CHARS, description: "Page size; defaults to 3000 characters." },
+    fileSha: { type: "string", description: "File SHA from the previous page; required when offset is not 0. Pins observed file content within this turn, also for rereading offset 0. Omit it at offset 0 to refresh a branch." },
   },
   ["repository", "path"],
 );
@@ -168,7 +174,7 @@ function parseArguments(call) {
  * message the model can read and recover from.
  *
  * @param {{ function?: { name?: string, arguments?: unknown } }} call
- * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined> }} context
+ * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined>, observeGitHub?: (observation: object) => void }} context
  * @returns {Promise<{ ok: boolean, label: string, content: string, preview?: { kind: "file" | "page", title: string, content: string, url?: string, repository?: string, path?: string } }>}
  */
 export async function runInstantTool(call, context = {}) {
@@ -242,23 +248,22 @@ function githubHeaders(token) {
   return { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "atlas-chat", "x-github-api-version": "2022-11-28" };
 }
 
-function encodePath(path) {
-  return path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
-}
-
 async function readRepositoryFile(args, fetcher, context) {
+  const offset = args.offset ?? 0;
+  const maxChars = args.maxChars ?? DEFAULT_FILE_CHARS;
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(maxChars) || maxChars < 256 || maxChars > MAX_FILE_CHARS || (args.fileSha !== undefined && !/^[a-f0-9]{40,64}$/u.test(args.fileSha)) || (offset > 0 && !args.fileSha)) {
+    return { ok: false, label: "Invalid file page", content: "Use a nonnegative integer offset, maxChars between 256 and 4000, and the previous page's fileSha when continuing." };
+  }
   const access = await repositoryAccess(args, context);
   if (access.error) return access.error;
   const path = typeof args.path === "string" ? args.path.trim().replace(/^\/+/u, "").slice(0, 400) : "";
   if (path.split("/").includes("..")) return { ok: false, label: "Invalid path", content: "Paths cannot contain '..'." };
-  const ref = typeof args.ref === "string" && /^[\w./-]{1,200}$/u.test(args.ref) ? `?ref=${encodeURIComponent(args.ref)}` : "";
-  const response = await fetcher(`https://api.github.com/repos/${access.repository}/contents/${encodePath(path)}${ref}`, {
-    signal: AbortSignal.timeout(TOOL_TIMEOUT_MS), headers: githubHeaders(access.token),
-  });
+  const ref = typeof args.ref === "string" && /^[\w./-]{1,200}$/u.test(args.ref) ? args.ref : "";
+  const response = await readRepositoryContent({ context, repository: access.repository, token: access.token, path, ref, fileSha: args.fileSha, fetcher, headers: githubHeaders(access.token), timeoutMs: TOOL_TIMEOUT_MS });
   const shown = `${access.repository}/${path}`.replace(/\/$/u, "");
   if (response.status === 404) return { ok: false, label: `No ${shown}`, content: "That path does not exist on that ref." };
-  if (!response.ok) return { ok: false, label: `Could not read ${shown}`, content: `GitHub answered ${response.status}.` };
-  const body = await response.json();
+  if (!response.ok) return { ok: false, label: `Could not read ${shown}`, content: `GitHub answered ${response.status}.${response.retryAfterMs ? ` Retry after ${Math.ceil(response.retryAfterMs / 1000)} seconds.` : ""}` };
+  const body = response.body;
   if (Array.isArray(body)) {
     const entries = body.slice(0, 300).map((entry) => `${entry?.type === "dir" ? "dir " : "file"} ${entry?.path ?? ""}`);
     return { ok: true, label: `Listed ${shown || access.repository} (${body.length} entries)`, content: asData(`repository ${access.repository} directory ${path || "/"}`, entries.join("\n")) };
@@ -268,10 +273,20 @@ async function readRepositoryFile(args, fetcher, context) {
   const bytes = Uint8Array.from(atob(body.content.replace(/\s+/gu, "")), (character) => character.charCodeAt(0));
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   if (text.includes("\u0000")) return { ok: false, label: `Skipped ${shown}`, content: "The file is binary." };
-  const fileText = clip(text, MAX_FILE_CHARS);
+  if (args.fileSha && args.fileSha !== body.sha) return { ok: false, label: `File changed: ${shown}`, content: "The file changed since the previous page. Read again from offset 0; do not combine these versions." };
+  if (offset > text.length) return { ok: false, label: "File offset out of range", content: `This file contains ${text.length} characters. Read again from offset 0.` };
+  let end = Math.min(text.length, offset + maxChars);
+  // Do not split a UTF-16 surrogate pair at a generated continuation boundary.
+  if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1])) end -= 1;
+  const fileText = text.slice(offset, end);
+  const fileSha = typeof body.sha === "string" && /^[a-f0-9]{40,64}$/u.test(body.sha) ? body.sha : null;
+  const nextOffset = end < text.length ? end : null;
+  const page = { offset, end, totalChars: text.length, nextOffset, fileSha };
+  const paging = `File page: ${JSON.stringify(page)}\n${nextOffset === null ? "End of file." : "More content omitted. Call read_repository_file with nextOffset as offset and fileSha to continue. Do not assume omitted code."}\n\n`;
   return {
-    ok: true, label: `Read ${shown}`, content: asData(`repository ${access.repository} file ${path}`, fileText),
-    preview: { kind: "file", title: path, repository: access.repository, path, content: fileText },
+    ok: true, label: `Read ${shown}`, content: asData(`repository ${access.repository} file ${path}`, paging + fileText),
+    page,
+    preview: { kind: "file", title: path, repository: access.repository, path, content: fileText, page },
   };
 }
 

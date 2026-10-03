@@ -14,7 +14,8 @@ import { GET as listDevices } from "../computer/devices/route";
 import { POST as startComputerTask } from "../computer/tasks/route";
 import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom } from "./atlas-knowledge.mjs";
 import { chatTurns } from "./turns.mjs";
-import { resolveChatModel, threadTitle } from "./model-endpoint.mjs";
+import { threadTitle } from "./model-endpoint.mjs";
+import { resolveChatProvider, chatProviderChoices } from "./providers.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
 import { createAgentTeam } from "./agent-team.mjs";
@@ -28,7 +29,7 @@ export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
 
-  let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown; stream?: unknown };
+  let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown; stream?: unknown; provider?: unknown };
   try { body = await request.json() as typeof body; } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
 
   const message = typeof body.message === "string" ? body.message.trim().slice(0, MAX_MESSAGE) : "";
@@ -40,7 +41,9 @@ export async function POST(request: Request) {
 
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
-  const endpoint = resolveChatModel(process.env);
+  const selection = body.provider ?? "auto";
+  if (typeof selection !== "string" || !["auto", "configured", "openai"].includes(selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
+  const endpoint = resolveChatProvider(process.env, selection);
   if (!endpoint.configured) {
     return Response.json({ message: endpoint.reason, needsModelEndpoint: true }, { status: 503 });
   }
@@ -124,7 +127,7 @@ function memoizedGitHubToken() {
   };
 }
 
-type Endpoint = ReturnType<typeof resolveChatModel>;
+type Endpoint = ReturnType<typeof resolveChatProvider>;
 
 /**
  * Starts computer work through the same routes the Computer page uses, so
@@ -251,6 +254,6 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-  const endpoint = resolveChatModel(process.env);
-  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null }, { headers: { "cache-control": "no-store" } });
+  const endpoint = resolveChatProvider(process.env);
+  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null, providers: chatProviderChoices(process.env) }, { headers: { "cache-control": "no-store" } });
 }

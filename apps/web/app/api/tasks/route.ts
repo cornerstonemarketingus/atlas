@@ -22,6 +22,7 @@ import { assignRunsToTasks, coderBranchForTask, runUrl, taskStatusFromRun, visib
 import { selfModificationDecision } from "./self-protection.mjs";
 import { repositoryAccessDecision } from "./repository-access.mjs";
 import { platformGitHubToken } from "./github-token.mjs";
+import { taskStorageReadiness } from "./storage-readiness.mjs";
 
 export async function POST(request: Request) {
   // A caller-supplied x-atlas-correlation-id is honoured only when it is
@@ -55,6 +56,8 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   const task = validated.task;
   const selfModification = selfModificationDecision(account, task);
   if (!selfModification.allowed) return Response.json({ message: selfModification.reason }, { status: selfModification.status });
+  const storage = await taskStorageReadiness(getD1());
+  if (!storage.ready) return Response.json({ ...storage, message: `${storage.message} Nothing was started.` }, { status: 503 });
   const requestedConversationId = typeof (body as { conversationId?: unknown }).conversationId === "string" ? (body as { conversationId: string }).conversationId : "";
   let conversationId = /^[0-9a-f-]{36}$/u.test(requestedConversationId) ? requestedConversationId : randomUUID();
   // Never append to a conversation owned by another tenant or principal.

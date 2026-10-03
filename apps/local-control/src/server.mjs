@@ -16,15 +16,18 @@ import { createSelfImproveRoutes } from "./platform/self-improve/service.mjs";
 import { createModelHostingRoutes } from "./agent/models/hosting.mjs";
 import { createRemoteRoutes, isRemoteRequest } from "./remote/access.mjs";
 import { createGenesisRoutes } from "./platform/genesis/routes.mjs";
+import { createCommandCenterRoutes } from "./platform/command-center.mjs";
+import { createWorldRoutes } from "./agent/kernel/routes.mjs";
+import { createAutomationRoutes, createWebhookRoute } from "./platform/automations/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, onApprovalDecided = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
-  const missionRoutes = missionService ? createMissionRoutes({ missionService }) : null;
+  const missionRoutes = missionService ? createMissionRoutes({ missionService, laneApplier }) : null;
   const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore, stream: platformStream }) : null;
   const teamRoutes = team ? createTeamRoutes({ team, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const knowledgeRoutes = createKnowledgeRoutes({ memory, connections, send: (response, status, value) => { send(response, status, value); return true; } });
@@ -33,6 +36,11 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const modelHostingRoutes = modelHosting ? createModelHostingRoutes({ ...modelHosting, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const remoteRoutes = remoteAccess ? createRemoteRoutes({ remote: remoteAccess, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const genesisRoutes = genesis ? createGenesisRoutes({ genesis, previews: genesisPreviews, publisher: genesisPublisher, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const automationRoutes = automations ? createAutomationRoutes({ automations, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const webhookRoute = automations ? createWebhookRoute({ automations, limiter, send: (response, status, value) => { send(response, status, value); return true; },
+    readRaw: async (request, response) => { try { return await readBody(request); } catch (error) { send(response, error?.code === "BODY_TOO_LARGE" ? 413 : 400, { message: error.message }); return null; } } }) : null;
+  const worldRoutes = world ? createWorldRoutes({ world, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, automations, send: (response, status, value) => { send(response, status, value); return true; } });
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
 
   async function startTask(taskId) {
@@ -71,12 +79,17 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
       const device = store.addDevice(String(body.name ?? "Phone").slice(0, 80), digest(deviceToken));
       return send(response, 201, { device, deviceToken });
     }
+    // Webhook triggers authenticate with the secret in their own path, not a bearer token.
+    if (webhookRoute && (request.url ?? "").startsWith("/v1/hooks/")) { if (await webhookRoute(request, response)) return; }
     const identity = authenticate(request.headers.authorization, expected, store);
     if (!identity) return send(response, 401, { message: "A valid local Atlas or paired-device token is required." });
     // Off this machine, phones and laptops use their own paired, revocable token, not the owner's.
     if (identity.role === "admin" && isRemoteRequest(request) && !remoteAccess?.ownerAllowedRemotely()) {
       return send(response, 403, { message: "The owner token only works on this computer.", unblock: "Pair this device from Settings on the computer running Atlas, or allow owner access remotely there." });
     }
+    if (commandCenterRoutes(request, response)) return;
+    if (worldRoutes && worldRoutes(request, response, identity)) return;
+    if (automationRoutes && (request.url ?? "").startsWith("/v1/automations")) { if (await automationRoutes(request, response, identity)) return; }
     if ((request.url ?? "").startsWith("/v1/genesis")) {
       if (!genesisRoutes) return send(response, 503, { message: "Project Genesis is not running in this process." });
       if (await genesisRoutes(request, response, identity)) return;
