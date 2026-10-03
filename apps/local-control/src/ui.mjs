@@ -770,6 +770,7 @@ async function loadCommand(){
    +'<div class="meta"><span>'+esc(COMMAND_KINDS[item.kind]||item.kind)+'</span>'+(item.progress?'<span>'+item.progress.done+' of '+item.progress.total+' done</span>':'')+'<time>'+when(item.updatedAt)+'</time></div>'
    +(item.progress&&item.progress.total?'<progress max="'+item.progress.total+'" value="'+item.progress.done+'"></progress>':'')
    +(item.detail?'<p class="hint">'+esc(item.detail)+'</p>':'')
+   +(item.modelChoice?'<p class="hint">Atlas chose the model '+esc(item.modelChoice.model)+': '+esc(item.modelChoice.reasons.join('; '))+'.</p>':'')
    +(item.strategy?'<p class="hint">Atlas chose '+(item.strategy.branch?item.strategy.versions+' competing versions':'one attempt')+': '+esc(item.strategy.reasons.join('; '))+'.</p>':'')
    +(lanes?'<ul class="lanes">'+lanes+'</ul>':'')
    +'<div class="actions">'+commandButtons(item.actions,key)+'</div></article>'}).join(''):'<p class="empty">Atlas is not doing anything right now. Start something from Home, Build or Missions.</p>';
@@ -788,7 +789,7 @@ async function loadCommand(){
 }
 $('#command-refresh').onclick=()=>loadCommand();
 $('#launch-mode').onchange=()=>{const mode=$('#launch-mode').value,v=mode==='variants';$('#launch-count-label').hidden=!v;$('#launch-text').placeholder=v?'Redesign the pricing page to make the Pro plan stand out':mode==='auto'?'Refactor the billing module so invoices can be retried':['Fix the login redirect','Add a CSV export to the reports page','Update the README'].join(String.fromCharCode(10))};
-$('#command-launch-panel').addEventListener('toggle',async()=>{if(!$('#command-launch-panel').open)return;const r=await api('/v1/models');if(!r.ok)return;const m=(await r.json()).models||[];if(m.length)$('#launch-model').innerHTML=m.map(x=>'<option>'+esc(x)+'</option>').join('')});
+$('#command-launch-panel').addEventListener('toggle',async()=>{if(!$('#command-launch-panel').open)return;const r=await api('/v1/models');if(!r.ok)return;const m=(await r.json()).models||[];if(m.length)$('#launch-model').innerHTML='<option value="auto">Let Atlas choose (from past results)</option>'+m.map(x=>'<option>'+esc(x)+'</option>').join('')});
 $('#command-launch').onsubmit=async e=>{e.preventDefault();const notice=$('#command-notice'),text=$('#launch-text').value.trim(),variants=$('#launch-mode').value==='variants';
  const body={repository:$('#launch-repository').value.trim(),model:$('#launch-model').value};
  if($('#launch-mode').value==='auto'){body.objective=text;body.strategy='auto'}else if(variants){body.objective=text;body.variants=Number($('#launch-count').value)}else{body.tasks=text.split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean)}

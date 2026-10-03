@@ -59,7 +59,7 @@ export class MissionService {
     return snapshot ? publicMission(snapshot) : null;
   }
 
-  create({ id = randomUUID(), title = "", repository, model, children, tasks, objective, variants, strategy, maxConcurrency = this.#defaultConcurrency }) {
+  create({ id = randomUUID(), title = "", repository, model, children, tasks, objective, variants, strategy, modelChoice = null, maxConcurrency = this.#defaultConcurrency }) {
     // "auto": the kernel decides whether this objective runs as one lane or as competing versions.
     let decision = null;
     if (strategy === "auto" && children === undefined && tasks === undefined && variants === undefined) {
@@ -72,6 +72,8 @@ export class MissionService {
     }
     if (children === undefined) ({ children, title } = expandLaunch({ tasks, objective, variants, title }));
     if (decision) children = children.map((child) => ({ ...child, metadata: { ...(child.metadata ?? {}), strategy: { decidedBy: "kernel", branch: decision.branch, reasons: decision.reasons } } }));
+    // Why this model, when the kernel chose it (capability economics).
+    if (modelChoice && Array.isArray(children)) children = children.map((child) => ({ ...child, metadata: { ...(child.metadata ?? {}), modelChoice: { decidedBy: "kernel", model: String(modelChoice.model), reasons: (modelChoice.reasons ?? []).map(String).slice(0, 4) } } }));
     if (this.get(id)) throw new MissionServiceError("MISSION_EXISTS", `Mission '${id}' already exists.`);
     if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 8) {
       throw new MissionServiceError("INVALID_CONCURRENCY", "maxConcurrency must be an integer from 1 to 8.");

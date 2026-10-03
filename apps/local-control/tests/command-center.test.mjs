@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { MissionService } from "../src/agent/mission-service.mjs";
 import { decideStrategy } from "../src/agent/kernel/branching.mjs";
+import { WorldState } from "../src/agent/kernel/world-state.mjs";
 import { buildCommandCenter } from "../src/platform/command-center.mjs";
 import { createLocalControlServer } from "../src/server.mjs";
 import { LocalTaskStore } from "../src/store.mjs";
@@ -194,6 +195,40 @@ test("finished versions: Atlas recommends the smallest verified change, and only
   assert.ok(running.lanes.every((l) => !l.recommended), "no recommendation while a version is still working");
   const none = buildCommandCenter({ missions: [mission([version(1, "completed", 0), version(2, "failed", 0)])] }).items[0];
   assert.ok(none.lanes.every((l) => !l.recommended), "nothing to recommend without a change");
+});
+
+test("over HTTP: model \"auto\" picks the installed model with the best verified record, and says why", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-command-model-"));
+  const store = new LocalTaskStore(join(directory, "atlas.sqlite"));
+  const world = new WorldState();
+  for (let i = 0; i < 3; i += 1) world.upsert({ type: "run", key: `good-${i}`, attrs: { harness: "atlas-cli", model: "good-model", status: "verified" } });
+  for (let i = 0; i < 3; i += 1) world.upsert({ type: "run", key: `poor-${i}`, attrs: { harness: "atlas-cli", model: "poor-model", status: "unverified" } });
+  const used = [];
+  const missionService = new MissionService({ store, execute: async ({ child }) => { used.push(child.metadata.model); return { summary: "done" }; } });
+  let installed = ["poor-model", "good-model"];
+  const server = createLocalControlServer({ store, token: TOKEN, runTask: async () => ({ ok: true }), missionService, world, discoverModels: async () => ({ endpoint: "http://127.0.0.1:11434", models: installed }) });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    store.close();
+    world.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const admin = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+  const created = await fetch(`${origin}/v1/missions`, { method: "POST", headers: admin, body: JSON.stringify({ repository: directory, model: "auto", tasks: ["Fix the login redirect"] }) });
+  assert.equal(created.status, 201, await created.clone().text());
+  const mission = (await created.json()).mission;
+  await tick();
+  assert.deepEqual(used, ["good-model"]);
+  const item = (await (await fetch(`${origin}/v1/command-center`, { headers: admin })).json()).items.find((entry) => entry.id === mission.id);
+  assert.equal(item.modelChoice.model, "good-model");
+  assert.match(item.modelChoice.reasons[0], /3 of 3 past runs verified/u);
+  assert.ok(world.find({ type: "event" }).some((event) => event.attrs.kind === "model_choice" && event.attrs.chosen === "good-model"), "the decision is recorded");
+  installed = [];
+  const none = await fetch(`${origin}/v1/missions`, { method: "POST", headers: admin, body: JSON.stringify({ repository: directory, model: "auto", tasks: ["x"] }) });
+  assert.equal(none.status, 400);
+  assert.match((await none.json()).message, /No local models/u);
 });
 
 test("over HTTP: three versions run in parallel and each one's result shows in the command center", async (t) => {

@@ -295,6 +295,8 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
     goal: { title: child.metadata?.request ?? child.objective, doneWhen: "a patch from an isolated worktree is ready to review" },
     capabilities: ["code"],
     harness: "atlas-cli",
+    // Recorded so capability economics can learn which model succeeds at what.
+    model,
     environment: { kind: "local", repository },
   }, async () => {
     result = await runIsolatedLocalCoder(
