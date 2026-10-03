@@ -36,6 +36,7 @@ import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { WorldState } from "./agent/kernel/world-state.mjs";
 import { createKernel } from "./agent/kernel/kernel.mjs";
+import { GoalService, GoalStore } from "./agent/goals.mjs";
 import { decideStrategy } from "./agent/kernel/branching.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { ScopedMemoryStore } from "./platform/memory/memory-store.mjs";
@@ -187,9 +188,15 @@ const team = createTeamService({
 });
 // Automations: schedule, webhook and manual triggers that start normal missions.
 const automationStore = new AutomationStore(join(dataDirectory, "automations.sqlite"));
-const automations = new AutomationService({ store: automationStore, missionService, team });
+// Goals sleep between events and wake on signed GitHub deliveries (Track B7).
+const goalStore = new GoalStore(join(dataDirectory, "goals.sqlite"));
+const goals = new GoalService({ store: goalStore, missionService, world });
+const automations = new AutomationService({ store: automationStore, missionService, team, onEvent: (event) => goals.onEvent(event) });
 automations.startWatchers();
-const automationTimer = setInterval(() => { automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`)); }, 30_000);
+const automationTimer = setInterval(() => {
+  automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`));
+  try { goals.tick(); } catch (error) { console.error(`Goal tick failed: ${error.message}`); }
+}, 30_000);
 automationTimer.unref();
 const recoveredMissions = missionService.recover();
 team.reattach();
@@ -259,6 +266,7 @@ const server = createLocalControlServer({
   laneApplier,
   automations,
   world,
+  goals,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -320,6 +328,7 @@ function shutdown() {
     clearInterval(automationTimer);
     automations.stopWatchers();
     automationStore.close();
+    goalStore.close();
     world.close();
     platformStore.close();
     store.close();

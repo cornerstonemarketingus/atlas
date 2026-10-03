@@ -88,6 +88,14 @@ export const LOCAL_UI_HTML = `<!doctype html>
     <label id="launch-count-label" hidden>How many versions<input id="launch-count" type="number" min="2" max="5" value="3"></label>
     <div class="actions"><button>Start</button></div>
     <p class="hint">Each agent works in its own copy of the repository and hands back a patch; nothing changes in your folder until you apply one.</p></form></details>
+  <details class="panel" id="command-goal-panel"><summary>Keep at it until a pull request merges</summary>
+   <form id="command-goal"><label>What to keep doing<textarea id="goal-text" required maxlength="4000" rows="3" placeholder="Get this pull request merged: fix failing checks and answer review comments"></textarea></label>
+    <label>Repository folder<input id="goal-repository" required placeholder="C:\\path\\to\\project"></label>
+    <label>GitHub repository<input id="goal-watch" required placeholder="owner/name" pattern="[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"></label>
+    <label>Pull request number<input id="goal-pr" type="number" min="1" required></label>
+    <label>Model<input id="goal-model" required value="qwen2.5-coder:7b"></label>
+    <div class="actions"><button>Start and keep watching</button></div>
+    <p class="hint">Atlas works now, then sleeps. It wakes when checks fail, a review arrives or someone comments, and stops when the pull request merges (at most 10 wakes, 14 days). Events arrive through a GitHub automation's webhook for that repository.</p></form></details>
   <div class="chips" id="command-counts" aria-live="polite"></div>
   <p id="command-notice" class="hint" role="status" aria-live="polite"></p>
   <div id="command-items" class="list"><p class="empty">Unlock this tab to see what Atlas is doing.</p></div>
@@ -724,7 +732,7 @@ function refreshView(){
 }
 
 /* ---- Command center: every running thing, with per-lane control. ---- */
-const COMMAND_KINDS={suggestion:'Suggestion',automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
+const COMMAND_KINDS={goal:'Goal (sleeps between events)',suggestion:'Suggestion',automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
 const COMMAND_BUCKETS={attention:'Needs you',running:'Running',waiting:'Waiting',done:'Recently finished'};
 function commandButtons(actions,key){return (actions||[]).map((a,i)=>'<button type="button" class="'+(a.name==='cancel'?'ghost':'secondary')+'" data-command="'+esc(key)+'" data-index="'+i+'">'+esc(a.label)+'</button>').join('')}
 /* A lane's kernel run, step by step: what it set out to do, the capabilities it had, each action, and the check. */
@@ -786,6 +794,11 @@ $('#command-launch').onsubmit=async e=>{e.preventDefault();const notice=$('#comm
  if($('#launch-mode').value==='auto'){body.objective=text;body.strategy='auto'}else if(variants){body.objective=text;body.variants=Number($('#launch-count').value)}else{body.tasks=text.split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean)}
  notice.textContent='Starting…';
  try{await sendJson('/v1/missions','POST',body);notice.textContent='Started.';$('#launch-text').value='';$('#command-launch-panel').open=false}catch(error){notice.textContent=error.message}
+ loadCommand().catch(()=>{})};
+$('#command-goal').onsubmit=async e=>{e.preventDefault();const notice=$('#command-notice');
+ const body={objective:$('#goal-text').value.trim(),repository:$('#goal-repository').value.trim(),model:$('#goal-model').value.trim(),watch:{repository:$('#goal-watch').value.trim(),pullRequest:Number($('#goal-pr').value)}};
+ notice.textContent='Starting…';
+ try{await sendJson('/v1/goals','POST',body);notice.textContent='Started; Atlas will keep watching.';$('#goal-text').value='';$('#command-goal-panel').open=false}catch(error){notice.textContent=error.message}
  loadCommand().catch(()=>{})};
 setInterval(()=>{if(currentView==='command'&&isUnlocked()&&!document.hidden)loadCommand().catch(()=>{})},4000);
 
