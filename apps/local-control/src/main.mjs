@@ -212,6 +212,8 @@ const genesisPreviews = new PreviewManager({ registryPath: join(dataDirectory, "
 for (const result of genesisPreviews.cleanupOrphans()) if (result.action === "stopped") console.log(`Genesis: stopped a preview left running by a previous Atlas (${result.projectId}).`);
 const genesisExecutor = new GenesisExecutor({
   genesis,
+  // Each build is a kernel run: traced, and its stages recorded in the world state.
+  kernel,
   projectsRoot: join(dataDirectory, "genesis", "projects"),
   runCheck,
   coder: createGenesisCoder({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan, intelligence: genesis.intelligence }),

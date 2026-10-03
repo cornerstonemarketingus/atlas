@@ -70,9 +70,10 @@ export class GenesisExecutor {
    *   checkTimeoutMs?: number,
    *   log?: (line: string) => void,
    *   now?: () => number,
+   *   kernel?: { begin: (spec: object) => { runId: string, act: Function, finish: Function } } | null,
    * }} options
    */
-  constructor({ genesis, projectsRoot, runCheck, coder = null, preview = null, inspector = null, checkTimeoutMs = 600_000, log = () => {}, now = () => Date.now() }) {
+  constructor({ genesis, projectsRoot, runCheck, coder = null, preview = null, inspector = null, checkTimeoutMs = 600_000, log = () => {}, now = () => Date.now(), kernel = null }) {
     this.genesis = genesis;
     this.store = genesis.store;
     this.tenantId = genesis.tenantId;
@@ -85,6 +86,9 @@ export class GenesisExecutor {
     this.log = log;
     this.now = now;
     this.running = new Map();
+    // The agent kernel: each build drive is a kernel run (goal, stages as actions, outcome).
+    this.kernel = kernel;
+    this.kernelRuns = new Map();
   }
 
   #project(id) { return this.store.get(this.tenantId, id); }
@@ -93,7 +97,10 @@ export class GenesisExecutor {
 
   #move(id, to, reason, evidence = {}, patch = {}) {
     this.log(`${to}: ${reason}`);
-    return this.genesis.advance(id, to, { reason, evidence, patch });
+    const moved = this.genesis.advance(id, to, { reason, evidence, patch });
+    // Each stage the build reaches is an action of its kernel run.
+    this.kernelRuns.get(id)?.act({ call: { name: `genesis.${to}` }, status: to === "failed" ? "failed" : to === "blocked" ? "awaiting_approval" : "succeeded", code: evidence?.kind ?? null });
+    return moved;
   }
 
   isRunning(id) { return this.running.has(id); }
@@ -118,6 +125,32 @@ export class GenesisExecutor {
   }
 
   async #drive(id) {
+    const project = this.#project(id);
+    const handle = this.kernel?.begin({
+      runId: `genesis-${id}-${this.now()}`,
+      task: { type: "task", key: `genesis:${id}` },
+      taskTitle: project?.name ?? id,
+      goal: { title: `Build ${project?.name ?? id}`, doneWhen: "the app passes its checks, runs, and passes inspection" },
+      capabilities: ["code", "design", "browser"],
+      harness: "genesis",
+      checker: "genesis checks and inspection",
+      environment: { kind: "local", repository: project?.workspace ?? null },
+    }) ?? null;
+    if (handle) this.kernelRuns.set(id, handle);
+    try {
+      return await this.#driveSteps(id);
+    } finally {
+      const state = this.#project(id)?.state;
+      handle?.finish({
+        passed: state === "ready" || state === "published",
+        status: state === "ready" || state === "published" ? "verified" : state === "cancelled" ? "cancelled" : ["paused", "blocked", "planned"].includes(state) ? "waiting" : "unverified",
+        reason: state === "ready" || state === "published" ? null : `the build stopped at "${state}"`,
+      });
+      this.kernelRuns.delete(id);
+    }
+  }
+
+  async #driveSteps(id) {
     try {
       for (let steps = 0; steps < MAX_STEPS; steps += 1) {
         if (!(await this.#step(this.#project(id)))) return this.genesis.view(id);
