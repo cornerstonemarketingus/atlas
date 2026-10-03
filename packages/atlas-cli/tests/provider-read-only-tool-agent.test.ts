@@ -254,3 +254,35 @@ test("empty-stop recovery remains bounded by one retry and the turn limit", asyn
     assert.equal(result.trace.turns, Math.min(maximumTurns, 2));
   }
 });
+
+import { RepositoryToolInputError } from "../src/infrastructure/repository-read-only-tools.js";
+
+test("invalid tool input is corrected on the next turn and remains audited", async () => {
+  let executions = 0;
+  const search: ModelToolDefinition = { name: "repository.search", description: "Search", inputSchema: {
+    type: "object", properties: { query: { type: "string" }, scope: { type: "string" }, maxResults: { type: "number" } }, additionalProperties: false,
+  } };
+  const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
+  target.register({ name: search.name, description: search.description, risk: "low", validateInput: input => {
+    if ("path" in (input as Record<string, unknown>)) throw new RepositoryToolInputError("Unknown tool input field: path");
+    return input;
+  }, execute: async () => { executions++; return { matches: [] }; } });
+  const provider = new MockModelProvider({ metadata, responses: [
+    response("one", [{ type: "tool-call", id: "bad", name: search.name, arguments: { path: "docs", query: "Atlas" } }], "tool-calls"),
+    response("two", [{ type: "tool-call", id: "good", name: search.name, arguments: { query: "Atlas" } }], "tool-calls"),
+    response("three", [{ type: "text", text: "Search complete." }], "stop"),
+  ] });
+  const audit = new InMemorySessionAuditLog();
+  const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: target, tools: [search], audit });
+  const result = await agent.run({ sessionId: "session", objective: "Search", evidence: [], scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" } });
+  assert.equal(result.status, "completed");
+  assert.equal(executions, 1, "invalid input must never execute");
+  const correction = provider.requests[1]?.messages.at(-1);
+  assert.equal(correction?.role, "tool");
+  const payload = JSON.parse(correction?.content[0]?.type === "text" ? correction.content[0].text : "{}");
+  assert.match(payload.error, /repository.search/u);
+  assert.match(payload.error, /path/u);
+  assert.deepEqual(payload.validFields, ["query", "scope", "maxResults"]);
+  assert.equal(payload.code, "INVALID_TOOL_INPUT");
+  assert.ok(audit.snapshot().some(event => event.type === "tool.completed" && (event.payload as { errorCode?: string }).errorCode === "INVALID_TOOL_INPUT"));
+});

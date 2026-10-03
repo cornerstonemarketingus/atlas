@@ -191,6 +191,10 @@ export class ProviderReadOnlyToolAgent {
             return { status: "approval-required", toolCallId: call.id, toolName: call.name, trace: trace() };
           }
           if (result.status === "failed") {
+            const properties = this.options.tools.find((tool) => tool.name === call.name)?.inputSchema["properties"];
+            const correction = result.errorCode === "INVALID_TOOL_INPUT"
+              ? { validFields: properties && typeof properties === "object" && !Array.isArray(properties) ? Object.keys(properties) : [] }
+              : {};
             this.options.audit.append("tool.completed", {
               toolCallId: call.id,
               outcome: "failed",
@@ -202,7 +206,7 @@ export class ProviderReadOnlyToolAgent {
               role: "tool",
               toolCallId: call.id,
               isError: true,
-              content: [{ type: "text", text: JSON.stringify({ error: result.message, ...(result.errorCode === undefined ? {} : { code: result.errorCode }) }) }],
+              content: [{ type: "text", text: JSON.stringify({ error: result.message, ...correction, ...(result.errorCode === undefined ? {} : { code: result.errorCode }) }) }],
             });
             continue;
           }
