@@ -17,6 +17,8 @@
  * can change anything anywhere.
  */
 
+import { readRepositoryContent } from "./repository-content.mjs";
+
 export const INSTANT_TOOL_NAMES = Object.freeze(["read_web_page", "web_search", "read_repository_file", "search_repository_code"]);
 
 const MAX_PAGE_BYTES = 600_000;
@@ -52,7 +54,7 @@ const READ_REPOSITORY_FILE = definition(
     ref: { type: "string", description: "Branch, tag or commit. Defaults to the default branch." },
     offset: { type: "integer", minimum: 0, description: "Character offset from nextOffset in the previous page. Defaults to 0." },
     maxChars: { type: "integer", minimum: 256, maximum: MAX_FILE_CHARS, description: "Page size; defaults to 3000 characters." },
-    fileSha: { type: "string", description: "File SHA from the previous page; required when offset is not 0, so changed files cannot be mixed." },
+    fileSha: { type: "string", description: "File SHA from the previous page; required when offset is not 0. Pins observed file content within this turn, also for rereading offset 0. Omit it at offset 0 to refresh a branch." },
   },
   ["repository", "path"],
 );
@@ -172,7 +174,7 @@ function parseArguments(call) {
  * message the model can read and recover from.
  *
  * @param {{ function?: { name?: string, arguments?: unknown } }} call
- * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined> }} context
+ * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined>, observeGitHub?: (observation: object) => void }} context
  * @returns {Promise<{ ok: boolean, label: string, content: string, preview?: { kind: "file" | "page", title: string, content: string, url?: string, repository?: string, path?: string } }>}
  */
 export async function runInstantTool(call, context = {}) {
@@ -246,10 +248,6 @@ function githubHeaders(token) {
   return { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "atlas-chat", "x-github-api-version": "2022-11-28" };
 }
 
-function encodePath(path) {
-  return path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
-}
-
 async function readRepositoryFile(args, fetcher, context) {
   const offset = args.offset ?? 0;
   const maxChars = args.maxChars ?? DEFAULT_FILE_CHARS;
@@ -260,14 +258,12 @@ async function readRepositoryFile(args, fetcher, context) {
   if (access.error) return access.error;
   const path = typeof args.path === "string" ? args.path.trim().replace(/^\/+/u, "").slice(0, 400) : "";
   if (path.split("/").includes("..")) return { ok: false, label: "Invalid path", content: "Paths cannot contain '..'." };
-  const ref = typeof args.ref === "string" && /^[\w./-]{1,200}$/u.test(args.ref) ? `?ref=${encodeURIComponent(args.ref)}` : "";
-  const response = await fetcher(`https://api.github.com/repos/${access.repository}/contents/${encodePath(path)}${ref}`, {
-    signal: AbortSignal.timeout(TOOL_TIMEOUT_MS), headers: githubHeaders(access.token),
-  });
+  const ref = typeof args.ref === "string" && /^[\w./-]{1,200}$/u.test(args.ref) ? args.ref : "";
+  const response = await readRepositoryContent({ context, repository: access.repository, token: access.token, path, ref, fileSha: args.fileSha, fetcher, headers: githubHeaders(access.token), timeoutMs: TOOL_TIMEOUT_MS });
   const shown = `${access.repository}/${path}`.replace(/\/$/u, "");
   if (response.status === 404) return { ok: false, label: `No ${shown}`, content: "That path does not exist on that ref." };
-  if (!response.ok) return { ok: false, label: `Could not read ${shown}`, content: `GitHub answered ${response.status}.` };
-  const body = await response.json();
+  if (!response.ok) return { ok: false, label: `Could not read ${shown}`, content: `GitHub answered ${response.status}.${response.retryAfterMs ? ` Retry after ${Math.ceil(response.retryAfterMs / 1000)} seconds.` : ""}` };
+  const body = response.body;
   if (Array.isArray(body)) {
     const entries = body.slice(0, 300).map((entry) => `${entry?.type === "dir" ? "dir " : "file"} ${entry?.path ?? ""}`);
     return { ok: true, label: `Listed ${shown || access.repository} (${body.length} entries)`, content: asData(`repository ${access.repository} directory ${path || "/"}`, entries.join("\n")) };
