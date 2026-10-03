@@ -28,7 +28,7 @@ const COMMON_SHARED = ["src/http.mjs", "scripts/check.mjs"];
  * file storage, per-app secrets and scheduled jobs. The cron parser is the
  * one Atlas automations use, copied in so the app stays dependency-free.
  */
-const BACKEND = ["tests/backend.test.mjs", "src/backend.mjs", "src/auth.mjs", "src/files.mjs", "src/secrets.mjs", "scripts/secret.mjs", "src/jobs.mjs", { from: "../../automations/cron.mjs", target: "src/cron.mjs" }];
+const BACKEND = ["tests/backend.test.mjs", "src/backend.mjs", "src/auth.mjs", "src/files.mjs", "src/secrets.mjs", "scripts/secret.mjs", "src/jobs.mjs", "src/queue.mjs", { from: "../../automations/cron.mjs", target: "src/cron.mjs" }];
 
 /** Secret names for the integrations a spec asks for; values are set by the owner, never generated. */
 const INTEGRATION_SECRETS = { payments: ["PAYMENTS_SECRET_KEY"], email: ["EMAIL_API_KEY"], sms: ["SMS_API_KEY"], "google-oauth": ["GOOGLE_CLIENT_SECRET"], calendar: [] };
@@ -117,6 +117,7 @@ ${template.shared.includes("src/auth.mjs") ? `## Built in
 - **Files** (\`src/files.mjs\`): uploads at \`/api/files\` with a size limit and checked file types, stored in \`data/files/\`.
 - **Secrets** (\`src/secrets.mjs\`): \`node scripts/secret.mjs set NAME\` stores a key in \`data/secrets.json\` (git-ignored); an environment variable of the same name wins. Never sent to the browser.
 - **Scheduled jobs** (\`src/jobs.mjs\`): cron schedules in app.config.json \`jobs\`, the work in server.mjs.
+- **Background queue** (\`src/queue.mjs\`): durable jobs that survive restarts, deduplicate by key and retry with backoff; \`backend.queue.enqueue(kind, payload)\` with handlers passed as \`queueHandlers\`.
 
 ` : ""}## Assumptions
 

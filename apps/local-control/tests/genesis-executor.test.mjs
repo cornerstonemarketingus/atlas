@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { GenesisService, GenesisStore } from "../src/platform/genesis/index.mjs";
-import { GenesisExecutor, testSummary } from "../src/platform/genesis/executor.mjs";
+import { GenesisExecutor, outputTail, testSummary } from "../src/platform/genesis/executor.mjs";
 import { PreviewManager } from "../src/platform/genesis/preview.mjs";
 import { createInspector, inspectOverHttp } from "../src/platform/genesis/inspector.mjs";
 import { runCheck } from "../src/platform/self-improve/runtime.mjs";
@@ -185,6 +185,16 @@ test("the preview manager starts on a free port, reports failed starts with logs
 test("test output is summarised from node:test", () => {
   assert.deepEqual(testSummary("ok 1\n# tests 12\n# suites 0\n# pass 11\n# fail 1\n"), { tests: 12, pass: 11, fail: 1 });
   assert.equal(testSummary("no tests here"), null);
+});
+
+test("a failing test's name survives even when later tests push it out of the output tail", () => {
+  const early = "not ok 3 - Items: create, list, search, update and delete\n  error: expected 201\n";
+  const later = Array.from({ length: 400 }, (_, i) => `ok ${i + 10} - later test ${i}`).join("\n");
+  const tail = outputTail({ stdout: `${early}${later}\n# tests 410\n# pass 409\n# fail 1\n`, stderr: "" });
+  assert.ok(tail.length <= 4000);
+  assert.match(tail, /^not ok 3 - Items: create, list, search, update and delete/u, "kept at the top");
+  assert.match(tail, /# fail 1/u, "and the summary at the end");
+  assert.equal(outputTail({ stdout: "short output", stderr: "" }), "short output");
 });
 
 test("an observer that starts runs on every transition still gets exactly one run (the daemon's wiring)", async () => {
