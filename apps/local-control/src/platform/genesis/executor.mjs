@@ -38,7 +38,13 @@ const TAIL = 4_000;
 const MAX_STEPS = 60;
 
 export function outputTail(result) {
-  return `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim().slice(-TAIL);
+  const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
+  if (text.length <= TAIL) return text;
+  // The failing tests' names can sit far above the end (tests that ran after
+  // them push them out of the tail). Keep them: the repair needs to know what failed.
+  const failing = [...new Set(text.split(/\r?\n/u).map((line) => line.trim()).filter((line) => /^not ok \d+ - /u.test(line)))].slice(0, 20).join("\n").slice(0, 2000);
+  const head = failing ? `${failing}\n…\n` : "";
+  return `${head}${text.slice(-(TAIL - head.length))}`;
 }
 
 /** Counts from node:test output ("# tests 12", "# pass 11", "# fail 1"); null when absent. */
