@@ -100,15 +100,16 @@ remaining Actions allowance before it starts and refuses if the run would eat
 into a reserve held back for ordinary CI:
 
 ```
-ATLAS_ESTIMATED_RUN_MINUTES   = 120   (what a CPU run costs; default)
+ATLAS_ESTIMATED_RUN_MINUTES   = 120   (conservative reservation; configurable)
 ATLAS_ACTIONS_MINUTES_RESERVE = 300   (kept free for CI; default)
 ```
 
-It **fails open**. If the budget cannot be read — the token has no billing
-permission, the API is down — the run proceeds and prints why it could not
-check. A permissions gap that silently blocked every run would get the guard
-switched off, and a guard that is off protects nothing. Hosted-API runs are
-not checked at all: three minutes does not need a guard.
+Unreadable usage is **UNKNOWN** and blocks self-hosted coder runs by default.
+Set `ATLAS_ACTIONS_UNKNOWN_POLICY=allow` explicitly for workloads permitted to
+continue without a verified budget. The UNKNOWN verdict remains in `budget.json`,
+the job summary, and the hosted task result. Invalid policy values block; this
+override never bypasses a known insufficient allowance. Hosted-API runs and
+ordinary CI do not invoke this guard.
 
 **Try it once by hand before trusting it to the schedule.** Dispatch
 `atlas-coder.yml` manually with the variables set and read the timings in the

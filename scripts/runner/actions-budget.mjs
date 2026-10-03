@@ -1,25 +1,11 @@
-/**
- * Refuses to start a long self-hosted run when it would eat the month's
- * GitHub Actions allowance.
- *
- * A hosted-API coder run takes one to three minutes. A self-hosted run on the
- * runner's CPU takes one to two HOURS, and on a private repository those
- * minutes are billed past the free allowance. Thirty of them is the whole
- * monthly budget with nothing left for CI. The failure this prevents is not a
- * broken run — it is a surprise invoice, and the owner finding out about it
- * after the fact.
- *
- * FAILS OPEN, deliberately. If the budget cannot be read — no token, no
- * billing permission, API down — the run proceeds and the reason is printed.
- * The alternative is a permissions gap silently blocking every run, which
- * would get this guard switched off within a week, and a guard that is off
- * protects nothing. An unreadable budget is reported loudly rather than
- * treated as empty.
- */
+/** Actions allowance guard. UNKNOWN blocks by default; explicit allow preserves the unknown verdict. */
 
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-/** A CPU run's realistic wall time, in minutes. Overridable. */
+/** Conservative reservation in minutes, configurable for the workload. */
 export const DEFAULT_ESTIMATED_RUN_MINUTES = 120;
 /** Minutes deliberately held back so ordinary CI still works. */
 export const DEFAULT_RESERVE_MINUTES = 300;
@@ -36,7 +22,7 @@ export function evaluateActionsBudget({
   estimatedRunMinutes = DEFAULT_ESTIMATED_RUN_MINUTES,
   reserveMinutes = DEFAULT_RESERVE_MINUTES,
 } = {}) {
-  if (!Number.isFinite(includedMinutes) || !Number.isFinite(usedMinutes)) {
+  if (!Number.isFinite(includedMinutes) || !Number.isFinite(usedMinutes) || includedMinutes < 0 || usedMinutes < 0) {
     return { decision: "unknown", reason: "Actions usage could not be read." };
   }
   // A plan with unlimited minutes (public repositories, some paid plans)
@@ -69,8 +55,7 @@ function positiveInteger(raw, fallback) {
 /**
  * Reads the account's Actions usage.
  *
- * Returns nulls rather than throwing on any failure: the caller's job is to
- * proceed and say why it could not check, not to stop.
+ * Returns unavailable usage on failure; the caller applies the unknown policy.
  */
 function readUsage(token, account) {
   if (!token || !account) return { includedMinutes: null, usedMinutes: null, error: "No token or account available." };
@@ -82,51 +67,56 @@ function readUsage(token, account) {
   ], { encoding: "utf8", windowsHide: true });
 
   if (result.error || result.status !== 0) {
-    const body = (result.stdout ?? "").trim();
-    return { includedMinutes: null, usedMinutes: null, error: body || result.error?.message || `curl exit ${result.status}` };
+    return { includedMinutes: null, usedMinutes: null, error: "Billing request failed or was not authorized." };
   }
   try {
     const parsed = JSON.parse(result.stdout);
     return {
-      includedMinutes: Number(parsed.included_minutes),
-      usedMinutes: Number(parsed.total_minutes_used),
+      includedMinutes: parsed?.included_minutes,
+      usedMinutes: parsed?.total_minutes_used,
       error: null,
     };
-  } catch (error) {
-    return { includedMinutes: null, usedMinutes: null, error: `Unparseable billing response: ${error.message}` };
+  } catch {
+    return { includedMinutes: null, usedMinutes: null, error: "Unparseable billing response." };
   }
 }
 
-function main() {
-  const estimatedRunMinutes = positiveInteger(process.env.ATLAS_ESTIMATED_RUN_MINUTES, DEFAULT_ESTIMATED_RUN_MINUTES);
-  const reserveMinutes = positiveInteger(process.env.ATLAS_ACTIONS_MINUTES_RESERVE, DEFAULT_RESERVE_MINUTES);
-
-  const usage = readUsage(process.env.GH_TOKEN, process.env.ATLAS_BILLING_ACCOUNT);
-  if (usage.error) {
-    console.log("Actions budget not checked, so this run proceeds.");
-    console.log(`Reason: ${usage.error}`);
-    console.log("To enable the check, the token needs read access to the account's plan/billing.");
-    return 0;
+export function budgetVerdict(usage, environment = {}) {
+  const unknownPolicy = environment.ATLAS_ACTIONS_UNKNOWN_POLICY?.trim() || "block";
+  if (!["block", "allow"].includes(unknownPolicy)) {
+    return { decision: "unknown", action: "block", reason: "Invalid ATLAS_ACTIONS_UNKNOWN_POLICY; expected block or allow." };
   }
-
-  const verdict = evaluateActionsBudget({ ...usage, estimatedRunMinutes, reserveMinutes });
-  if (verdict.decision === "block") {
-    console.error(`Refusing to start: ${verdict.reason}`);
-    console.error("Raise ATLAS_ACTIONS_MINUTES_RESERVE, or wait for the allowance to reset, or use a hosted model (a run costs minutes, not hours).");
-    return 1;
-  }
-  console.log(`Actions budget OK. ${verdict.reason}`);
-  return 0;
+  const verdict = evaluateActionsBudget({
+    ...usage,
+    ...(usage.error ? { includedMinutes: null, usedMinutes: null } : {}),
+    estimatedRunMinutes: positiveInteger(environment.ATLAS_ESTIMATED_RUN_MINUTES, DEFAULT_ESTIMATED_RUN_MINUTES),
+    reserveMinutes: positiveInteger(environment.ATLAS_ACTIONS_MINUTES_RESERVE, DEFAULT_RESERVE_MINUTES),
+  });
+  return { ...verdict, action: verdict.decision === "unknown" ? unknownPolicy : verdict.decision };
 }
 
-if (process.argv[1] && process.argv[1].endsWith("actions-budget.mjs")) {
-  let code = 0;
-  try {
-    code = main();
-  } catch (error) {
-    // A broken guard must not block work it was meant to protect.
-    console.log(`Actions budget check failed (${error?.message ?? error}); proceeding.`);
-    code = 0;
+export function runBudgetCheck(environment = process.env, read = readUsage) {
+  let usage;
+  try { usage = read(environment.GH_TOKEN, environment.ATLAS_BILLING_ACCOUNT); }
+  catch { usage = { error: "Billing request failed." }; }
+  const verdict = budgetVerdict(usage ?? {}, environment);
+  const message = "Actions budget " + verdict.decision.toUpperCase() + ": " + verdict.reason + " Policy: " + verdict.action + ".";
+  console.log(message);
+  const directory = environment.ATLAS_OUTPUT_DIR;
+  if (directory) {
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "budget.json"), JSON.stringify(verdict, null, 2));
+    if (verdict.action === "block") {
+      fs.writeFileSync(path.join(directory, "status.json"), JSON.stringify({ status: "blocked", message }, null, 2));
+    }
   }
-  process.exit(code);
+  return verdict.action === "block" ? 1 : 0;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { process.exitCode = runBudgetCheck(); }
+  catch {
+    console.error("Actions budget UNKNOWN: guard failed; refusing to start.");
+    process.exitCode = 1;
+  }
 }
