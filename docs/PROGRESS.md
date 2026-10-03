@@ -207,3 +207,10 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 - Genesis bug fixed on the way: `outputTail` kept only the last 4 000 characters of check output, so a failing test that later tests pushed out of the tail reached the repair loop without its name ("Fixing: name: 'AssertionError'"). Failing `not ok` lines are now kept at the top of the tail.
 - Evidence: local-control 641 tests, 639 pass, 0 fail (2 skipped); generated-app tests run the queue tests with sign-in on and off; 7 queue/worker guard mutations in a real generated app, all caught. Queue tests close SQLite before deleting their folder (the Windows failure mode from #169).
 - Open: #172 can be closed once this merges; its web typecheck fixes already reached main through #174.
+
+## 2026-10-03 empty final answers reach the cross-provider fallback
+
+- Production report (Automatic provider): after two completed steps (a repository search and a file read), hosted chat ended with "I could not reach a model to write up the answer … the model returned an empty reply." Root cause in `apps/web/app/api/chat/agent-loop.mjs` `synthesize()`: on empty replies it retried the configured model, switched at most to the same-provider fallback model, and never asked the cross-provider fallback (OpenAI under Automatic), which was only used for rejected tool calls.
+- Fix: empty replies walk a chain (configured model, which keeps its second try; same-provider fallback model; cross-provider fallback), each fallback getting an attempt of its own; a model cut off by the token limit gets one more try with more room before the chain moves on.
+- Evidence: web lint and typecheck clean; 347 web tests pass, including four new synthesis tests (Automatic falls through to the cross-provider fallback, streaming and not; the full chain order; a cut-off fallback retried with more room); 4 mutations of the chain, the retry rule and the attempt budget, all caught.
+- Open: per CLAUDE.md, run "Verify hosted Atlas" in `chat` mode after the deploy (the chat release gate). If the fallback provider also returns empty, the reply still ends with the saved work and the reason.

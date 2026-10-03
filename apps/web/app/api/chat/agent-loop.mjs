@@ -562,7 +562,17 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     let reason = failure;
     inferenceDiagnostic("inference.finalizing", { ...diagnostics, steps: steps.length, cause: failure ? "interrupted" : lastEmpty ? "empty_response" : "no_final_text", reasoningEffort: reasoningEffort ?? null, maxTokens: tokens });
     emit("tool", { id: progressId, label: "Writing the answer from the results…", state: "running", ...tag });
-    for (let attempt = 0; attempt < SYNTHESIS_ATTEMPTS; attempt += 1) {
+    // Who writes the answer when a model replies with nothing: the configured
+    // model, then its same-provider fallback model, then the cross-provider
+    // fallback (Automatic → OpenAI). Each fallback gets an attempt of its own.
+    const emptyChain = [
+      endpoint,
+      ...(endpoint.fallbackModel && endpoint.fallbackModel !== endpoint.model ? [{ ...endpoint, model: endpoint.fallbackModel, fallbackModel: null }] : []),
+      ...(endpoint.providerFallback ? [endpoint.providerFallback] : []),
+    ];
+    let emptiesFromTarget = 0;
+    const attempts = SYNTHESIS_ATTEMPTS + emptyChain.length - 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       let result;
       try {
         // No tools: the model cannot start another tool cycle, only answer.
@@ -578,10 +588,16 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       inferenceDiagnostic(result.ok ? "inference.empty_response" : "inference.retry", { ...describe(result, "synthesis"), attempt, reasoningEffort: reasoningEffort ?? null });
       if (result.ok) {
         adaptTo(result);
-        // Empty twice from one model: the configured fallback model writes it.
-        if (attempt >= 1 && target === endpoint && endpoint.fallbackModel) {
-          target = { ...endpoint, model: endpoint.fallbackModel, fallbackModel: null };
-          inferenceDiagnostic("inference.target_changed", { ...diagnostics, round: "synthesis", from: endpoint.model, to: endpoint.fallbackModel, cause: "empty_response" });
+        emptiesFromTarget += 1;
+        // The configured model gets a second try (an empty body can be a one-off),
+        // and any model that ran out of room gets one more with the room it now
+        // has; after that the next model in the chain writes the answer.
+        const retrySame = emptiesFromTarget < 2 && (target === endpoint || result.finishReason === "length");
+        const next = emptyChain[emptyChain.indexOf(target) + 1];
+        if (!retrySame && next && emptyChain.includes(target)) {
+          inferenceDiagnostic("inference.target_changed", { ...diagnostics, round: "synthesis", from: target.model, to: next.model, cause: "empty_response" });
+          target = next;
+          emptiesFromTarget = 0;
         }
         reason = "the model returned an empty reply.";
         continue;
