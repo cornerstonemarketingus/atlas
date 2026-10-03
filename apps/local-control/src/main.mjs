@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
@@ -22,6 +22,8 @@ import { createConversationExecutor } from "./agent/conversation-executor.mjs";
 import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
+import { createLaneApplier } from "./agent/lane-apply.mjs";
+import { AutomationService, AutomationStore } from "./platform/automations/service.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
 import { ModelManager } from "./agent/models/manager.mjs";
 import { ModelPlanStore } from "./agent/models/hosting.mjs";
@@ -32,6 +34,9 @@ import { createRoutedClient } from "./agent/models/routed-client.mjs";
 import { createTeamService } from "./agent/team/team-service.mjs";
 import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform/self-improve/index.mjs";
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
+import { WorldState } from "./agent/kernel/world-state.mjs";
+import { createKernel } from "./agent/kernel/kernel.mjs";
+import { decideStrategy } from "./agent/kernel/branching.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { ScopedMemoryStore } from "./platform/memory/memory-store.mjs";
 import { connectMcpServers, parseMcpServers } from "./platform/mcp/daemon-bridge.mjs";
@@ -133,6 +138,10 @@ try {
   mcpReport = [{ id: "*", status: "failed", message: error.message }];
   console.error(error.message);
 }
+// Atlas's world state: every kernel run and every tool call updates it.
+const world = new WorldState(join(dataDirectory, "world.sqlite"));
+// One kernel for every agent run: team steps, coder lanes (as a harness), and later chat.
+const kernel = createKernel({ toolRegistry, world });
 const runtime = new AgentRuntime({
   sessions,
   executors: buildExecutors(),
@@ -145,10 +154,15 @@ const runtime = new AgentRuntime({
 const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
-const missionService = new MissionService({ store, execute: runMissionChild });
+// strategy "auto": the kernel decides between one lane and competing versions, using the world state's history.
+const missionService = new MissionService({ store, execute: runMissionChild, decide: (input) => decideStrategy({ ...input, world }) });
+// Applying a finished lane's patch to the owner's repository goes through code.write approvals.
+const laneApplier = createLaneApplier({ missionService, store, dataDirectory });
 // Agent missions: goal → plan over the agent organization → steps run by the
 // assigned agents on the same mission scheduler as coder missions.
 const teamStep = createAgentStepExecutor({
+  world,
+  kernel,
   family: innovation.registry,
   delegation: innovation.pipeline.delegation,
   toolRegistry,
@@ -171,9 +185,17 @@ const team = createTeamService({
   model: process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
   workspace: join(dataDirectory, "workspace"),
 });
+// Automations: schedule, webhook and manual triggers that start normal missions.
+const automationStore = new AutomationStore(join(dataDirectory, "automations.sqlite"));
+const automations = new AutomationService({ store: automationStore, missionService, team });
+automations.startWatchers();
+const automationTimer = setInterval(() => { automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`)); }, 30_000);
+automationTimer.unref();
 const recoveredMissions = missionService.recover();
 team.reattach();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
+// A schedule that fell due while Atlas was stopped runs once now.
+automations.tick().catch((error) => console.error(`Automation catch-up failed: ${error.message}`));
 
 // Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
 const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
@@ -228,7 +250,13 @@ const server = createLocalControlServer({
   genesis,
   genesisPreviews,
   genesisPublisher,
-  onApprovalDecided: (approval) => genesisPublisher.onApprovalDecided(approval),
+  onApprovalDecided: async (approval) => {
+    await laneApplier.onApprovalDecided(approval);
+    return genesisPublisher.onApprovalDecided(approval);
+  },
+  laneApplier,
+  automations,
+  world,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -248,15 +276,32 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
   const repository = child.metadata?.repository;
   const model = child.metadata?.model;
   if (!repository || !model) return { status: "failed", code: "INVALID_CHILD", summary: "The mission child is missing its repository or model." };
-  const result = await runIsolatedLocalCoder(
-    { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: child.objective, model },
-    { dataDirectory, signal },
-  );
+  // A coder lane is a kernel run whose act phase is the atlas-cli coder harness.
+  let result = null;
+  const { runId, verdict } = await kernel.runHarness({
+    // Child ids repeat across missions, so the run gets its own id; the lane's evidence links to it.
+    runId: `coder-${child.id}-${randomBytes(6).toString("hex")}`,
+    // A version's goal is the request it competes on, so history and branching see one objective.
+    goal: { title: child.metadata?.request ?? child.objective, doneWhen: "a patch from an isolated worktree is ready to review" },
+    capabilities: ["code"],
+    harness: "atlas-cli",
+    environment: { kind: "local", repository },
+  }, async () => {
+    result = await runIsolatedLocalCoder(
+      { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: child.objective, model },
+      { dataDirectory, signal },
+    );
+    return {
+      ok: result.ok, cancelled: result.cancelled, summary: result.message,
+      artifacts: result.patch ? [{ kind: "patch", key: basename(result.patch), attrs: { bytes: result.patchBytes ?? null } }] : [],
+    };
+  });
   await checkpoint();
+  if (!result) return { status: "failed", code: "CODER_FAILED", summary: verdict.reason, evidence: [{ kind: "kernel_run", run: runId }] };
   return {
     status: result.ok ? "completed" : result.cancelled ? "cancelled" : "failed",
     summary: result.message ?? (result.ok ? "Child completed." : "Child failed."),
-    evidence: result.patch ? [{ kind: "patch", path: result.patch, bytes: result.patchBytes ?? null }] : [],
+    evidence: [...(result.patch ? [{ kind: "patch", path: result.patch, bytes: result.patchBytes ?? null }] : []), { kind: "kernel_run", run: runId }],
     handoff: { worktree: result.worktree ?? null, patch: result.patch ?? null },
   };
 }
@@ -270,6 +315,10 @@ function shutdown() {
     sessions.close();
     innovation.close();
     genesisStore.close();
+    clearInterval(automationTimer);
+    automations.stopWatchers();
+    automationStore.close();
+    world.close();
     platformStore.close();
     store.close();
     process.exit(0);
@@ -290,6 +339,7 @@ function buildExecutors() {
       client: modelClient,
       registry: toolRegistry,
       approvals: toolApprovals,
+      kernel,
     }),
   };
   const token = process.env.ATLAS_GITHUB_TOKEN;

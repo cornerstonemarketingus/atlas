@@ -74,3 +74,15 @@ and leave the smoke PR unmerged unless the documentation is wanted.
 Public Workers must leave `ATLAS_TRUST_PLATFORM_HEADERS` unset. Only deployments
 behind an ingress that removes client identity headers may opt in to that legacy
 platform-header authentication path.
+
+### Bounded repository reads
+
+Hosted chat's `read_repository_file` returns 3000 characters by default (maximum
+4000 per call). A partial file includes `nextOffset` and `fileSha`; continuation
+calls pass these as `offset` and `fileSha`. A changed SHA refuses continuation so
+the answer cannot silently combine different file versions. The original
+allowlist, credential boundary and untrusted-data wrapper apply to every page.
+The preview shows the returned page, not an implied complete file. Models must
+read omitted sections before making claims about them. This lowers per-call
+context pressure; it does not create provider quota or guarantee arbitrary files
+can be completely read within the bounded chat tool loop.

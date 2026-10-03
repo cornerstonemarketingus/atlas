@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderResult, deliverResult, buildResultPayload } from "./report-result.mjs";
+import { renderResult, deliverResult, deliveryMessage, buildResultPayload } from "./report-result.mjs";
 
 test("inspection returns useful bounded findings without claiming a generated plan", () => {
   const text = renderResult({ inspection: { fileCount: 42, languages: [{ name: "TypeScript", fileCount: 30 }], frameworks: [], manifests: [{ path: "package.json" }] }, conclusion: "success" });
@@ -24,6 +24,16 @@ test("delivery retries server errors with the same body and fails visibly on rej
   assert.equal(calls.length, 2);
   assert.equal(calls[0], calls[1]);
   await assert.rejects(deliverResult({ endpoint: "https://example.test", token: "test", payload: {} }, async () => new Response(null, { status: 403 })), /403/);
+});
+
+test('an absent hosted task is not reported as successful result delivery', async () => {
+  const request = { endpoint: 'https://example.test/result', token: 'test', payload: {} };
+  const missing = await deliverResult(request, async () => new Response(null, { status: 404 }));
+  const delivered = await deliverResult(request, async () => new Response(null, { status: 200 }));
+  assert.deepEqual(missing, { delivered: false, reason: 'task-not-found' });
+  assert.deepEqual(delivered, { delivered: true });
+  assert.match(deliveryMessage(missing, 'task-id', null), /^Result was not delivered: no hosted task exists/);
+  assert.match(deliveryMessage(delivered, 'task-id', null), /^Delivered result for task task-id/);
 });
 
 test("result payload carries a valid correlation id and omits a missing or forged one", async () => {

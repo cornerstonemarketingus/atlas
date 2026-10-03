@@ -48,11 +48,15 @@ export async function deliverResult({ endpoint, token, payload }, fetcher = fetc
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (response.ok) return;
+    if (response.ok) return { delivered: true };
     // Manually dispatched maintenance jobs have no hosted conversation.
-    if (response.status === 404) { console.log("No hosted task exists for this run."); return; }
+    if (response.status === 404) return { delivered: false, reason: 'task-not-found' };
     if (response.status < 500 || attempt === 2) throw new Error(`Result delivery failed: HTTP ${response.status}`);
   }
+}
+
+export function deliveryMessage(delivery, taskId, correlationId) {
+  return delivery.delivered ? `Delivered result for task ${taskId}.${correlationLogSuffix(correlationId)}` : `Result was not delivered: no hosted task exists for ${taskId}.${correlationLogSuffix(correlationId)}`;
 }
 
 async function main() {
@@ -78,8 +82,8 @@ async function main() {
   const endpoint = process.env.ATLAS_RESULT_URL || "https://atlas-web.cornerstonemarketingus.workers.dev/api/tasks/result";
   if (new URL(endpoint).protocol !== "https:") throw new Error("Result endpoint must use HTTPS");
   const correlationId = correlationIdFromEnv();
-  await deliverResult({ endpoint, token, payload: buildResultPayload({ taskId, summary, correlationId }) });
-  console.log(`Delivered result for task ${taskId}.${correlationLogSuffix(correlationId)}`);
+  const delivery = await deliverResult({ endpoint, token, payload: buildResultPayload({ taskId, summary, correlationId }) });
+  console.log(deliveryMessage(delivery, taskId, correlationId));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

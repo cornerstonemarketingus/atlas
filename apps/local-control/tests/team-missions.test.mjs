@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { MissionService } from "../src/agent/mission-service.mjs";
 import { ToolRegistry } from "../src/agent/tool-registry.mjs";
+import { WorldState } from "../src/agent/kernel/world-state.mjs";
 import { createAgentStepExecutor, verifyStep } from "../src/agent/team/step-executor.mjs";
 import { createTeamService } from "../src/agent/team/team-service.mjs";
 import { validatePlan } from "../src/agent/team/planner.mjs";
@@ -48,7 +49,7 @@ function scriptedModel({ plan, verdict = () => true, onStep = null }) {
   };
 }
 
-async function harness(t, model, { memory = null, approvals = null, policy = () => "allow", authorized = false } = {}) {
+async function harness(t, model, { memory = null, approvals = null, policy = () => "allow", authorized = false, world = null } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "atlas-team-"));
   const store = new LocalTaskStore(join(dir, "atlas.sqlite"));
   const platformStore = new PlatformTaskStore(join(dir, "platform.sqlite"));
@@ -69,7 +70,7 @@ async function harness(t, model, { memory = null, approvals = null, policy = () 
   }
   let missionService;
   const step = createAgentStepExecutor({
-    family, delegation, toolRegistry, authorizedExecutor, client: model, platformStore, approvals, memory,
+    family, delegation, toolRegistry, authorizedExecutor, client: model, platformStore, approvals, memory, world,
     resultsOf: (missionId, ids) => (missionService.get(missionId)?.children ?? []).filter((c) => ids.includes(c.id)).map((c) => ({ title: c.metadata.stepTitle, summary: c.result?.handoff?.report ?? "" })),
   });
   missionService = new MissionService({ store, execute: (input) => step(input) });
@@ -201,6 +202,30 @@ test("a goal becomes a plan the agents carry out, with delegation, traces, verif
   assert.ok(detail.usage.toolCalls >= 2);
   assert.equal(delegation.getAssignment("local", `mission:${started.mission.id}`).state, "completed");
   assert.deepEqual(platformStore.listTransitions("local", detail.taskId).map((x) => x.to), ["authorized", "queued", "running", "verifying", "completed"]);
+});
+
+test("each team step runs through the agent kernel: traced phases and world state", async (t) => {
+  const world = new WorldState();
+  t.after(() => world.close());
+  const model = scriptedModel({ plan: twoStepPlan });
+  const { team, until } = await harness(t, model, { world });
+  const started = await team.start({ goal: "Confirm the published value matches the code." });
+  const done = await until(started.mission.id, ["completed", "failed"]);
+  assert.equal(done.status, "completed");
+  const runs = world.find({ type: "run" });
+  assert.equal(runs.length, 2);
+  assert.ok(runs.every((run) => run.attrs.status === "verified"));
+  for (const run of runs) {
+    const phases = world.traceOf(run.key).map((entry) => entry.phase);
+    assert.deepEqual([phases[0], phases.at(-1)], ["goal", "finish"]);
+    assert.ok(phases.includes("act") && phases.includes("verify"), phases.join(","));
+    assert.ok(world.relations(run.id).some((edge) => edge.relation === "created_by" && edge.to.startsWith("agent:")));
+  }
+  const evidence = done.children.map((child) => child.result.evidence[0].run);
+  assert.deepEqual(evidence.sort(), runs.map((run) => run.key).sort(), "step evidence links to its kernel run");
+  assert.ok(world.find({ type: "event" }).some((event) => event.attrs.tool === "browser.extract"));
+  // Each step perceives its place in the world state (its task, its run) as data before acting.
+  assert.ok(model.seen.some((s) => /<data source="world state">[\s\S]*task:/u.test(s.last)));
 });
 
 test("team tool calls use the durable authorized executor when configured", async (t) => {

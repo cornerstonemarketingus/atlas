@@ -50,7 +50,7 @@ export function verifyPassword(password, stored) {
 
 const AUTH_TEST = `import assert from "node:assert/strict";
 import test from "node:test";
-import { hashPassword, verifyPassword } from "../src/auth.mjs";
+import { hashPassword, verifyPassword } from "../src/passwords.mjs";
 
 test("passwords verify only with the right password", () => {
   const stored = hashPassword("correct horse battery");
@@ -110,19 +110,19 @@ test("a real bug is repaired by Atlas's real coder and verified again", { skip, 
   });
 });
 
-test("a coder task (sign-in) is built by the real coder, its tests count, and the app is verified", { skip, timeout: 600_000 }, async () => {
+test("a coder task (email notifications) is built by the real coder, its tests count, and the app is verified", { skip, timeout: 600_000 }, async () => {
   await harness(({ objective, turn }) => {
     if (turn > 0) return { say: "Done." };
-    if (/sign-in/u.test(objective)) return { edits: [{ operation: "create", path: "src/auth.mjs", content: AUTH_MODULE }, { operation: "create", path: "tests/auth.test.mjs", content: AUTH_TEST }] };
+    if (/email notifications/iu.test(objective)) return { edits: [{ operation: "create", path: "src/passwords.mjs", content: AUTH_MODULE }, { operation: "create", path: "tests/passwords.test.mjs", content: AUTH_TEST }] };
     return { say: "The interface already follows the guidelines; no changes." };
   }, async ({ genesis, executor }) => {
-    const project = await genesis.create("Build a small app where my team can log in and track tasks");
+    const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
     const done = await executor.run(project.id);
     assert.equal(done.state, "ready", JSON.stringify(done.transitions.at(-1), null, 1));
-    const signIn = done.tasks.find((t) => /sign-in/u.test(t.title));
-    assert.equal(signIn.status, "passed");
-    assert.equal(signIn.evidence.at(-1).model, "scripted-coder");
-    assert.ok(existsSync(join(done.workspace, "src", "auth.mjs")));
+    const emailTask = done.tasks.find((t) => /email notifications/iu.test(t.title));
+    assert.equal(emailTask.status, "passed");
+    assert.equal(emailTask.evidence.at(-1).model, "scripted-coder");
+    assert.ok(existsSync(join(done.workspace, "src", "passwords.mjs")));
     const checks = done.transitions.findLast((t) => t.to === "previewing").evidence.results;
     assert.ok(checks.find((r) => r.name === "test").summary.pass >= 6, "the new tests ran with the app's own");
     assert.equal(done.tasks.find((t) => t.kind === "polish").status, "passed", "the polish pass ran through the real coder");

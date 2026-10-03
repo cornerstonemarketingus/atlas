@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { classifyIntent } from "./intent.mjs";
 import { MessageBody } from "./MessageBody.js";
 import { TaskActivity } from "./TaskActivity.js";
-import { AgentTree, ToolSteps, WorkPanel, type AgentNode, type LogLine, type ToolStep, type WorkItem } from "./Workspace.js";
+import { AgentTree, ToolSteps, WorkPanel, itemFromPreview, type Preview, type AgentNode, type LogLine, type ToolStep, type WorkItem } from "./Workspace.js";
 import { createEventParser } from "../api/chat/stream.mjs";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
@@ -36,17 +36,10 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
 
 type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
-type Preview = { kind: "file" | "page"; title: string; content: string; url?: string; repository?: string; path?: string };
 const PANEL_KEY = "atlas.workPanel";
 
 function readPanelPreference() {
   try { return typeof window !== "undefined" && window.localStorage.getItem(PANEL_KEY) === "open"; } catch { return false; }
-}
-
-/** Files and pages Atlas read become panel items; the same file read twice is one item, refreshed. */
-function itemFromPreview(preview: Preview): WorkItem {
-  if (preview.kind === "page") return { id: `page:${preview.url}`, kind: "page", title: preview.title, url: preview.url ?? "", content: preview.content };
-  return { id: `file:${preview.repository}/${preview.path}`, kind: "file", title: preview.path ?? preview.title, path: preview.path ?? preview.title, repository: preview.repository, content: preview.content };
 }
 
 function upsert<T extends { id: string }>(list: T[], item: T) {
@@ -66,7 +59,8 @@ export function ChatSection() {
   const [repository, setRepository] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(PROJECT_STORAGE_KEY) ?? "");
   const [branch, setBranch] = useState("main");
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [ready, setReady] = useState<{ configured: boolean; reason: string | null } | null>(null);
+  const [ready, setReady] = useState<{ configured: boolean; reason: string | null; providers?: { id: string; label: string; available: boolean; paid?: boolean }[] } | null>(null);
+  const [provider, setProvider] = useState("auto");
   const [version, setVersion] = useState(0);
   const { threads, close } = useThreads(version);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
@@ -228,7 +222,7 @@ export function ChatSection() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text, stream: true }),
+        body: JSON.stringify({ conversationId, message: text, stream: true, provider }),
         signal: controller.signal,
       });
       if (!response.ok || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
@@ -409,7 +403,10 @@ export function ChatSection() {
       <textarea aria-label="Message Atlas" value={draft} rows={3} onKeyDown={keyDown}
         onChange={(event) => setDraft(event.target.value)}
       placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything…"} />
-      <div className="composer-actions">
+        <div className="composer-actions">
+          <label>Model <select aria-label="Model provider" value={provider} onChange={(event) => setProvider(event.target.value)} disabled={streaming !== null}>
+            {(ready?.providers ?? [{ id: "auto", label: "Automatic", available: true }]).map((option) => <option key={option.id} value={option.id} disabled={!option.available}>{option.label}{option.paid ? " (paid API)" : ""}{!option.available ? " — not configured" : ""}</option>)}
+          </select></label>
         <div><span className="composer-hint">Enter sends · Shift+Enter for a new line</span></div>
         {streaming !== null
           ? <button type="button" className="send" onClick={stop} aria-label="Stop the reply">■</button>

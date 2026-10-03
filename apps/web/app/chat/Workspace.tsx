@@ -12,10 +12,21 @@ import { DiffLines, MessageBody } from "./MessageBody.js";
 export type ToolStep = { id: string; label: string; state: "running" | "done" | "failed"; agentId?: string };
 export type AgentNode = { id: string; parentId: string | null; name: string; role?: string; title: string; state: string; depth: number; summary?: string };
 export type LogLine = { id: string; at: number; kind: "agent" | "tool" | "run" | "note"; state?: string; who?: string; text: string };
+export type FilePage = { offset: number; end: number; totalChars: number; nextOffset: number | null; fileSha: string | null };
+export type Preview = { kind: "file" | "page"; title: string; content: string; url?: string; repository?: string; path?: string; page?: FilePage };
 export type WorkItem =
-  | { id: string; kind: "file"; title: string; path: string; repository?: string; content: string }
+  | { id: string; kind: "file"; title: string; path: string; repository?: string; content: string; page?: FilePage }
   | { id: string; kind: "page"; title: string; url: string; content: string }
   | { id: string; kind: "diff"; title: string; path: string; status: string; additions: number; deletions: number; patch: string | null; truncated: boolean; pullRequestUrl?: string | null };
+
+/** Keep each read range and revision distinct; rereading the same page refreshes it. */
+export function itemFromPreview(preview: Preview): WorkItem {
+  if (preview.kind === "page") return { id: `page:${preview.url}`, kind: "page", title: preview.title, url: preview.url ?? "", content: preview.content };
+  const page = preview.page;
+  const partial = page && (page.offset > 0 || page.end < page.totalChars);
+  const title = preview.path ?? preview.title;
+  return { id: `file:${preview.repository}/${preview.path}${page ? `:${page.fileSha}:${page.offset}:${page.end}` : ""}`, kind: "file", title: partial ? `${title} · ${page.offset}–${page.end}` : title, path: title, repository: preview.repository, content: preview.content, page };
+}
 
 const STEP_MARK: Record<ToolStep["state"], string> = { running: "●", done: "✓", failed: "✕" };
 const AGENT_MARK: Record<string, string> = { planning: "◌", running: "●", verifying: "◎", done: "✓", unverified: "!", failed: "✕", skipped: "–" };
@@ -118,8 +129,10 @@ export function FilePreview({ item }: { readonly item: WorkItem }) {
     return <div><p className="preview-head"><strong>{item.title}</strong> <small><a href={item.url} target="_blank" rel="noreferrer noopener">{item.url} ↗</a></small></p><MessageBody text={item.content} /></div>;
   }
   const markdown = /\.(md|mdx|markdown)$/iu.test(item.path);
+  const partial = item.page && (item.page.offset > 0 || item.page.end < item.page.totalChars);
   return <div>
     <p className="preview-head"><strong>{item.path}</strong>{item.repository ? <small> · {item.repository}</small> : null}</p>
-    {markdown ? <MessageBody text={item.content} /> : <pre className="md-code code-view"><code>{item.content.split("\n").map((line, i) => <span key={i} className="code-line"><span className="line-no">{i + 1}</span>{line || " "}{"\n"}</span>)}</code></pre>}
+    {partial && <p className="terminal-empty">Partial file · offsets {item.page!.offset}–{item.page!.end} of {item.page!.totalChars} (UTF-16). Other ranges are not shown here.</p>}
+    {partial ? <pre className="md-code"><code>{item.content}</code></pre> : markdown ? <MessageBody text={item.content} /> : <pre className="md-code code-view"><code>{item.content.split("\n").map((line, i) => <span key={i} className="code-line"><span className="line-no">{i + 1}</span>{line || " "}{"\n"}</span>)}</code></pre>}
   </div>;
 }
