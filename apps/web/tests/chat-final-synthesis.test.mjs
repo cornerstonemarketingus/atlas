@@ -303,6 +303,52 @@ test("the fallback model's empty reply is recovered like any other", async () =>
   assert.deepEqual(requests.map((request) => request.model), ["m", "small", "m"]);
 });
 
+// Production (Automatic provider): two steps of work, then every attempt to
+// write the answer came back empty from the configured provider, and the
+// answer ended "the model returned an empty reply." although OpenAI was
+// configured as the cross-provider fallback and was never asked.
+for (const stream of [false, true]) {
+  test(`an empty final answer moves to the cross-provider fallback instead of giving up (stream=${stream})`, async () => {
+    const read = { choices: [{ message: { tool_calls: [{ id: "read1", type: "function", function: { name: "read_web_page", arguments: JSON.stringify({ url: "https://example.com" }) } }] } }] };
+    const empty = json({ choices: [{ message: { content: "" }, finish_reason: "stop" }] });
+    const { fetcher, requests } = scripted([json(read), empty, empty, empty, json({ choices: [{ message: { content: "The page says: Example body." } }] })]);
+    const locations = [];
+    const observedFetcher = async (url, init) => {
+      if (String(url).startsWith("https://model.test")) locations.push(String(url));
+      return fetcher(url, init);
+    };
+    const providerFallback = { baseUrl: "https://model.test/openai/v1", apiKey: "openai-key", model: "gpt-mini" };
+    const outcome = await run(observedFetcher, { stream, endpoint: { ...endpoint, providerFallback } }).promise;
+    assert.equal(outcome.reply, "The page says: Example body.");
+    assert.equal(outcome.finalization, undefined, "answered, not incomplete");
+    // Tool round, the empty turn, the configured model's two synthesis tries, then the fallback provider writes it.
+    assert.deepEqual(requests.map((request) => request.model), ["m", "m", "m", "m", "gpt-mini"]);
+    assert.match(locations.at(-1), /\/openai\//u);
+    assert.match(JSON.stringify(requests.at(-1).messages), /Example body/u, "the fallback writes from the work already done");
+  });
+}
+
+test("an empty final answer: the configured model twice, then the same-provider fallback model, then the other provider", async () => {
+  const empty = json({ choices: [{ message: { content: "" }, finish_reason: "stop" }] });
+  const { fetcher, requests } = scripted([empty, empty, empty, empty, json({ choices: [{ message: { content: "Answered at last." } }] })]);
+  const providerFallback = { baseUrl: "https://model.test/openai/v1", apiKey: "openai-key", model: "gpt-mini" };
+  const outcome = await run(fetcher, { stream: false, endpoint: { ...endpoint, fallbackModel: "small", providerFallback } }).promise;
+  assert.equal(outcome.reply, "Answered at last.");
+  assert.deepEqual(requests.map((request) => request.model), ["m", "m", "m", "small", "gpt-mini"]);
+});
+
+test("a fallback model cut off by the token limit gets one more try with more room before moving on", async () => {
+  const empty = json({ choices: [{ message: { content: "" }, finish_reason: "stop" }] });
+  const cutOff = json({ choices: [{ message: { content: "" }, finish_reason: "length" }], usage: { completion_tokens: 4000 } });
+  const { fetcher, requests } = scripted([empty, empty, empty, cutOff, json({ choices: [{ message: { content: "Done with room to spare." } }] })]);
+  const providerFallback = { baseUrl: "https://model.test/openai/v1", apiKey: "openai-key", model: "gpt-mini" };
+  const outcome = await run(fetcher, { stream: false, endpoint: { ...endpoint, fallbackModel: "small", providerFallback } }).promise;
+  assert.equal(outcome.reply, "Done with room to spare.");
+  assert.deepEqual(requests.map((request) => request.model), ["m", "m", "m", "small", "small"], "the cut-off fallback, given more room");
+  const room = (request) => request.max_tokens ?? request.max_completion_tokens;
+  assert.ok(room(requests[4]) > room(requests[3]));
+});
+
 test("an agent team's results reach the answer even when the lead's next turn is empty", async () => {
   const team = Object.assign(async () => ({ ok: true, label: "Agent team finished: 3/3 steps verified", content: "<data>auth lives in session.ts</data>" }), { pending: "Handing this to an agent team…" });
   const tools = [{ type: "function", function: { name: "run_agent_team", description: "team", parameters: { type: "object", properties: {} } } }];
