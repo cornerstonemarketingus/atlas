@@ -8,16 +8,19 @@ import { GenesisExecutor, outputTail, testSummary } from "../src/platform/genesi
 import { PreviewManager } from "../src/platform/genesis/preview.mjs";
 import { createInspector, inspectOverHttp } from "../src/platform/genesis/inspector.mjs";
 import { runCheck } from "../src/platform/self-improve/runtime.mjs";
+import { createKernel } from "../src/agent/kernel/kernel.mjs";
+import { WorldState } from "../src/agent/kernel/world-state.mjs";
+import { ToolRegistry } from "../src/agent/tool-registry.mjs";
 
 const LEAD_TRACKER = "Build a simple customer lead tracker with: add customer, name/email/phone, status, notes, dashboard, search";
 
-async function harness(run, { coder = null, inspector = undefined } = {}) {
+async function harness(run, { coder = null, inspector = undefined, kernel = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), "atlas-genesis-run-"));
   const store = new GenesisStore(join(root, "genesis.sqlite"));
   const genesis = new GenesisService({ store, policy: () => ({ decision: "allow" }) });
   const preview = new PreviewManager({ registryPath: join(root, "previews.json"), runPrepare: runCheck });
   const executor = new GenesisExecutor({
-    genesis, projectsRoot: join(root, "projects"), runCheck, coder, preview,
+    genesis, projectsRoot: join(root, "projects"), runCheck, coder, preview, kernel,
     inspector: inspector === undefined ? createInspector({ artifactsRoot: join(root, "inspections") }) : inspector,
   });
   try {
@@ -181,6 +184,46 @@ test("the preview manager starts on a free port, reports failed starts with logs
   const cleaned = preview.cleanupOrphans();
   assert.equal(cleaned[0].action, "left");
 }));
+
+test("a Genesis build is a kernel run: each stage is an action and the outcome is recorded", async () => {
+  const world = new WorldState();
+  try {
+    await harness(async ({ genesis, executor }) => {
+      const project = await genesis.create("Build a REST API for managing inventory items");
+      const done = await executor.run(project.id);
+      assert.equal(done.state, "ready", JSON.stringify(done.transitions.at(-1), null, 1));
+      const [run] = world.find({ type: "run" });
+      assert.equal(run.attrs.status, "verified");
+      assert.equal(run.attrs.harness, "genesis");
+      assert.ok(world.relations(run.id).some((edge) => edge.relation === "part_of" && edge.to === `task:genesis:${project.id}`));
+      const trace = world.traceOf(run.key);
+      assert.deepEqual([trace[0].phase, trace.at(-1).phase], ["goal", "finish"]);
+      const stages = trace.filter((entry) => entry.phase === "act").map((entry) => entry.data.tool);
+      for (const stage of ["genesis.building", "genesis.verifying", "genesis.previewing", "genesis.ready"]) assert.ok(stages.includes(stage), `${stage} in ${stages.join(", ")}`);
+    }, { inspector: async (project, preview) => inspectOverHttp(project, preview), kernel: createKernel({ toolRegistry: new ToolRegistry(), world }) });
+  } finally {
+    world.close();
+  }
+});
+
+test("a Genesis build that waits on the owner is recorded as waiting, not as failed", async () => {
+  const world = new WorldState();
+  const coder = scriptedCoder();
+  coder.available = async () => false;
+  try {
+    await harness(async ({ genesis, executor }) => {
+      const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
+      const blocked = await executor.run(project.id);
+      assert.equal(blocked.state, "blocked");
+      const [run] = world.find({ type: "run" });
+      assert.equal(run.attrs.status, "waiting");
+      assert.match(run.attrs.reason, /blocked/u);
+      assert.equal(world.traceOf(run.key).filter((entry) => entry.phase === "act").at(-1).data.status, "awaiting_approval");
+    }, { coder, inspector: async () => ({ ok: true, findings: [], evidence: {} }), kernel: createKernel({ toolRegistry: new ToolRegistry(), world }) });
+  } finally {
+    world.close();
+  }
+});
 
 test("test output is summarised from node:test", () => {
   assert.deepEqual(testSummary("ok 1\n# tests 12\n# suites 0\n# pass 11\n# fail 1\n"), { tests: 12, pass: 11, fail: 1 });
