@@ -262,3 +262,10 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 - Evidence: all 354 web tests pass, including seven new immediate-dispatch cases (real SSE and JSON, lookup ordering, task refusal, uncertain response, child/unoffered calls and invalid arguments). Disabling immediate dispatch makes the regression tests fail; restored implementation passes. Build/typecheck/lint and required CI are checked before merge.
 - Ownership: limited stale overlaps with #158/#160 (September 27) and #191 (October 2 14:34 UTC) documented under PROGRAM section 4; branches and their distinct work preserved. #207 and local snapshot commit e073218 remain untouched.
 - Remaining: first-call provider failure can still prevent task selection; a dispatched coder still needs its own available model. Durable phase/checkpoint recovery and the full edit/test/PR live gate are not established by these tests. Next highest-value slice is persisted recovery for a specific verified-coder provider failure, using existing task/mission state rather than chat text as its sole checkpoint.
+
+## 2026-10-04 immediate coder handoff released (#217)
+
+- #217 merged as 7a54692f919404804dacb39ff565836a69a82437. All required CI checks passed in run 37240576618; Cloudflare deployment 37240814686 succeeded. Local production build/typecheck/lint and 354 web tests passed. No protected merge/review controls were bypassed.
+- Selected coder tasks now enter the existing authorized task runtime before optional chat lookups or synthesis. The deterministic receipt survives lack of capacity for a subsequent answer-writing call. This release does not claim that first-call provider exhaustion or durable coder resumption is fixed.
+- Next: persist and resume a concrete provider-blocked coder attempt through existing task/mission state, with a real edit/test/PR validation gate. Snapshot work e073218 remains preserved separately pending #207 ownership reconciliation.
+- Post-deployment authenticated hosted inspect gate 37240938790 passed. This checks task execution/result persistence without a model call; it does not replace the still-needed model-backed coding/resumption gate.
