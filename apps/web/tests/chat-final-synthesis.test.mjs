@@ -362,13 +362,14 @@ test("an agent team's results reach the answer even when the lead's next turn is
   assert.match(requests.at(-1).messages.at(-1).content, /auth lives in session\.ts/u);
 });
 
-test("a task-only reply gets words, then the started runs", async () => {
-  const { fetcher } = scripted([
+test("a task-only reply dispatches without model synthesis", async () => {
+  const { fetcher, requests } = scripted([
     [callTool("s1", "start_atlas_task", { mode: "coder", objective: "Fix the login bug", repository: "cornerstonemarketingus/atlas" })],
     [say("Starting that now.")],
   ]);
   const outcome = await run(fetcher).promise;
-  assert.match(outcome.reply, /^Starting that now\.\n\nStarted /u);
+  assert.equal(requests.length, 1);
+  assert.equal(outcome.reply, "Started coder.");
 });
 
 test("a child agent's report is never empty either", async () => {
