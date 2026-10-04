@@ -291,14 +291,14 @@ test("tool calls made outside a run (chat) are recorded too, and never break the
   assert.ok(observation.entities.some((e) => e.type === "person" && e.key === "ann@example.com"));
 });
 
-test("/v1/world is owner-only and shows entities, relations and traces", (t) => {
+test("/v1/world is owner-only and shows entities, relations and traces", async (t) => {
   const state = world(t);
   state.apply({ entities: [{ type: "task", key: "t1" }, { type: "run", key: "r1" }], relations: [{ from: "run:r1", relation: "part_of", to: "task:t1" }] });
   state.trace("r1", "goal", {});
   const sent = [];
   const handle = createWorldRoutes({ world: state, send: (_response, status, body) => { sent.push({ status, body }); return true; } });
   const call = (path, role = "admin", method = "GET") => { handle({ url: path, method }, {}, { role }); return sent.at(-1); };
-  assert.equal(handle({ url: "/v1/other", method: "GET" }, {}, { role: "admin" }), false);
+  assert.equal(await handle({ url: "/v1/other", method: "GET" }, {}, { role: "admin" }), false);
   assert.equal(call("/v1/world", "device").status, 403);
   assert.equal(call("/v1/world", "admin", "POST").status, 405);
   assert.equal(call("/v1/world?type=task").body.entities.length, 1);
