@@ -67,6 +67,7 @@ function missionItem(mission) {
     }
   }
   const strategy = mission.children?.[0]?.metadata?.strategy ?? null;
+  const modelChoice = mission.children?.[0]?.metadata?.modelChoice ?? null;
   const held = lanes.some((lane) => lane.held);
   const failedLane = lanes.some((lane) => lane.state === "failed" || lane.state === "blocked");
   const bucket = mission.status === "failed" || mission.status === "interrupted" || held || (failedLane && !MISSION_DONE.has(mission.status))
@@ -88,6 +89,7 @@ function missionItem(mission) {
     detail: recommendation ?? mission.reason ?? null,
     // Why Atlas chose one lane or several versions, when the kernel decided.
     strategy: strategy ? { branch: Boolean(strategy.branch), versions: lanes.length, reasons: strategy.reasons ?? [] } : null,
+    modelChoice: modelChoice ? { model: modelChoice.model, reasons: modelChoice.reasons ?? [] } : null,
     progress: { done: lanes.filter((lane) => lane.state === "completed").length, total: lanes.length },
     lanes,
     actions,

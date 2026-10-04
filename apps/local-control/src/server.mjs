@@ -19,6 +19,7 @@ import { createGenesisRoutes } from "./platform/genesis/routes.mjs";
 import { createCommandCenterRoutes } from "./platform/command-center.mjs";
 import { createWorldRoutes } from "./agent/kernel/routes.mjs";
 import { createGoalRoutes } from "./agent/goal-routes.mjs";
+import { choosePath, localModelCandidates } from "./agent/kernel/economics.mjs";
 import { createAutomationRoutes, createWebhookRoute } from "./platform/automations/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -28,7 +29,16 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
-  const missionRoutes = missionService ? createMissionRoutes({ missionService, laneApplier }) : null;
+  // model "auto": the installed models, chosen by their verified history (capability economics).
+  const chooseModel = world ? async ({ budget }) => {
+    const { models } = await discoverModels();
+    if (!models.length) throw Object.assign(new Error("No local models are installed to choose from."), { code: "INVALID_MISSION" });
+    const decision = choosePath(localModelCandidates(world, models), { budget: { ...budget, localOnly: true }, prefer: model });
+    if (!decision.chosen) throw Object.assign(new Error(`No installed model fits: ${decision.rejected.map((r) => `${r.id} ${r.reason}`).join("; ")}`), { code: "INVALID_MISSION" });
+    world.upsert({ type: "event", key: `model-choice:${Date.now()}`, attrs: { kind: "model_choice", chosen: decision.chosen.id, reasons: decision.reasons, rejected: decision.rejected } });
+    return { model: decision.chosen.id, reasons: decision.reasons };
+  } : null;
+  const missionRoutes = missionService ? createMissionRoutes({ missionService, laneApplier, chooseModel }) : null;
   const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore, stream: platformStream }) : null;
   const teamRoutes = team ? createTeamRoutes({ team, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const knowledgeRoutes = createKnowledgeRoutes({ memory, connections, send: (response, status, value) => { send(response, status, value); return true; } });

@@ -3,7 +3,11 @@ const SSE_KEEPALIVE_MS = 15_000;
 const MISSION_ID = "[A-Za-z0-9_-]{1,128}";
 
 /** Authenticated HTTP adapter for the durable mission service. */
-export function createMissionRoutes({ missionService, laneApplier = null, keepaliveMs = SSE_KEEPALIVE_MS }) {
+/**
+ * `chooseModel({ objective, repository, budget })` resolves `model: "auto"`
+ * (capability economics) to { model, reasons } or throws when nothing fits.
+ */
+export function createMissionRoutes({ missionService, laneApplier = null, chooseModel = null, keepaliveMs = SSE_KEEPALIVE_MS }) {
   if (!missionService) throw new TypeError("missionService is required.");
 
   async function handle(request, response, identity) {
@@ -23,6 +27,13 @@ export function createMissionRoutes({ missionService, laneApplier = null, keepal
       const body = await readJson(request, response);
       if (body === null) return true;
       try {
+        if (body.model === "auto") {
+          if (!chooseModel) return send(response, 400, { code: "INVALID_MISSION", message: "Automatic model choice is not available here; name a model." });
+          const objective = body.objective ?? (Array.isArray(body.tasks) ? body.tasks.join("\n") : "");
+          const choice = await chooseModel({ objective, repository: body.repository, budget: body.budget ?? {} });
+          body.model = choice.model;
+          body.modelChoice = { decidedBy: "kernel", model: choice.model, reasons: choice.reasons };
+        }
         return send(response, 201, { mission: await missionService.create(body) });
       } catch (error) {
         return sendError(response, error);
