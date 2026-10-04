@@ -252,3 +252,22 @@ test("apps that need a server are not deployed to static hosting, and say where 
   await assert.rejects(new GenesisPublisher({ genesis, approvals: fakeApprovals("deny"), credentials: async () => "token" }).requestRepository(project.id, { host: "github" }), (error) => error.code === "DENIED_BY_POLICY");
   store.close();
 }));
+
+test("adaptive autonomy: with deploys allowed, a preview deploys at once but production waits for a level 4 approval", () => withRoot(async (root) => {
+  const { store, genesis, project } = await readySite(root);
+  const vercel = fakeVercel();
+  const approvals = fakeApprovals("allow");
+  const publisher = new GenesisPublisher({
+    genesis, approvals,
+    credentials: async (name) => (name === "ATLAS_VERCEL_TOKEN" ? "vc-token" : null),
+    adapters: { vercel: (options) => createVercelAdapter({ ...options, fetchImpl: vercel.fetchImpl }) },
+  });
+  const production = await publisher.requestDeployment(project.id, { target: "production" });
+  assert.equal(production.status, "awaiting-approval", "allowed deploys still ask for production");
+  assert.equal(approvals.created[0].riskLevel, 4, "and the approval is confirmed a second time");
+  assert.equal(vercel.deployments.length, 0);
+  const preview = await publisher.requestDeployment(project.id, { target: "preview" });
+  assert.equal(preview.status, "deployed", JSON.stringify(preview));
+  assert.equal(approvals.created.length, 1, "a preview needs no approval when deploys are allowed");
+  store.close();
+}));

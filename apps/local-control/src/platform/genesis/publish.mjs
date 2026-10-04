@@ -129,7 +129,7 @@ export class GenesisPublisher {
     const commit = (await git(project.workspace, ["rev-parse", "HEAD"])).stdout.trim();
     const stored = { ...plan, host, baseUrl };
     if (decision === "allow") return this.#createRepository(project, stored, commit, { approval: null });
-    const approval = this.approvals.create({ capability: "publish.remote", summary: `Create ${plan.target} on ${host} and publish "${project.name}" (commit ${commit.slice(0, 8)}) to it`, actionDigest: publishDigest({ projectId, remote: plan.digest, commit }) });
+    const approval = this.approvals.create({ capability: "publish.remote", summary: `Create ${plan.target} on ${host} and publish "${project.name}" (commit ${commit.slice(0, 8)}) to it`, actionDigest: publishDigest({ projectId, remote: plan.digest, commit }), riskLevel: 3 });
     this.genesis.store.recordPublishRequest(projectId, { approvalId: approval.id, remote: plan.digest, commit, kind: "repository", plan: stored });
     return { status: "awaiting-approval", approvalId: approval.id, plan: { target: plan.target, notes: plan.notes }, commit };
   }
@@ -173,8 +173,11 @@ export class GenesisPublisher {
     const vercel = await this.#vercel();
     const plan = (() => { try { return vercel.planStaticDeployment({ name: deploymentName(project.name), files, target }); } catch (error) { throw new PublishError(error.code ?? "PLAN_FAILED", error.message); } })();
     const commit = (await git(project.workspace, ["rev-parse", "HEAD"])).stdout.trim();
-    if (decision === "allow") return this.#deploy(project, plan, commit, { approval: null });
-    const approval = this.approvals.create({ capability: "deploy.remote", summary: `Deploy "${project.name}" to Vercel (${target}, ${files.length} files)`, actionDigest: publishDigest({ projectId, remote: plan.digest, commit }) });
+    // Adaptive autonomy (kernel/autonomy.mjs): production is level 4, so it is
+    // approved and confirmed a second time even where deploys are allowed.
+    const production = target === "production";
+    if (decision === "allow" && !production) return this.#deploy(project, plan, commit, { approval: null });
+    const approval = this.approvals.create({ capability: "deploy.remote", summary: `Deploy "${project.name}" to Vercel (${target}, ${files.length} files)`, actionDigest: publishDigest({ projectId, remote: plan.digest, commit }), riskLevel: production ? 4 : 3 });
     this.genesis.store.recordPublishRequest(projectId, { approvalId: approval.id, remote: plan.digest, commit, kind: "deploy", plan });
     return { status: "awaiting-approval", approvalId: approval.id, plan: { target: plan.target, notes: plan.notes, files: files.length }, commit };
   }
@@ -206,7 +209,7 @@ export class GenesisPublisher {
     const decision = this.approvals.policy("publish.remote").decision;
     if (decision === "deny") throw new PublishError("DENIED_BY_POLICY", "Your policy does not allow publishing (publish.remote is set to deny in Settings → Policies).");
     if (decision === "allow") return this.#publish(project, destination, commit, { approval: null, policy: "allow" });
-    const approval = this.approvals.create({ capability: "publish.remote", summary: `Publish "${project.name}" (commit ${commit.slice(0, 8)}) to ${destination}`, actionDigest: digest });
+    const approval = this.approvals.create({ capability: "publish.remote", summary: `Publish "${project.name}" (commit ${commit.slice(0, 8)}) to ${destination}`, actionDigest: digest, riskLevel: 3 });
     this.genesis.store.recordPublishRequest(projectId, { approvalId: approval.id, remote: destination, commit });
     return { status: "awaiting-approval", approvalId: approval.id, remote: destination, commit };
   }

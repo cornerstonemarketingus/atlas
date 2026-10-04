@@ -11,6 +11,7 @@ import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { PlatformTaskStore } from "./platform/task-store.mjs";
 import { createLegacyPolicyBridge, createLegacyPolicyEngine } from "./platform/legacy-policy-bridge.mjs";
+import { withAutonomy } from "./agent/kernel/autonomy.mjs";
 import { AuthorizedToolExecutor } from "./platform/executor.mjs";
 import { adaptRegistryTool } from "./platform/adapters.mjs";
 import { bootstrapInnovation } from "./platform/innovation/bootstrap.mjs";
@@ -110,8 +111,8 @@ const toolApprovals = {
   // One-time and digest-bound: spending an approval consumes it, and it
   // only matches the exact action it was granted for.
   check: (digest) => store.consumeApprovedDigest(digest),
-  request: ({ digest, capability, summary, sessionId }) =>
-    store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
+  request: ({ digest, capability, summary, sessionId, autonomy = null }) =>
+    store.createApproval({ capability, summary: autonomy?.reasons?.length ? `${summary} (${autonomy.reasons.join("; ")})` : summary, actionDigest: digest, sessionId, riskLevel: autonomy?.level ?? null }),
   // Agent steps wait on the owner's decision rather than failing.
   status: (id) => store.approval(id)?.status ?? null,
 };
@@ -371,7 +372,9 @@ function buildExecutors() {
  */
 function buildToolRegistry() {
   const registry = new ToolRegistry({
-    policy: createLegacyPolicyBridge({
+    // Adaptive autonomy (Track B8) wraps the owner's policy: it only tightens
+    // it (level 4 asks with a second confirmation, level 5 is refused).
+    policy: withAutonomy(createLegacyPolicyBridge({
       policyForCapability: (capability) => store.policy(capability),
       audit: (event) => {
         store.audit("policy.decision", `${event.tool} ${event.effect}: ${event.reasons.join("; ")}`);
@@ -389,7 +392,7 @@ function buildToolRegistry() {
           }
         }
       },
-    }),
+    }), { audit: ({ tool, level, reasons }) => store.audit("autonomy.acted", `${tool} ran on its own at level ${level}: ${reasons.join("; ")}`) }),
     // Secrets resolve by reference, from the OS-backed credential vault first
     // and the process environment only as a fallback for existing setups
     // (SECURITY-REVIEW SEC-8). No tool receives a value it did not declare.

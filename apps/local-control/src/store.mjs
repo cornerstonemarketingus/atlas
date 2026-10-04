@@ -59,7 +59,7 @@ export class LocalTaskStore {
     // Additive migrations for approvals bound to an agent action. Older
     // installations have the table without these columns; adding them is
     // safe and keeps existing approvals readable.
-    for (const column of ["action_digest TEXT", "session_id TEXT", "consumed_at TEXT"]) {
+    for (const column of ["action_digest TEXT", "session_id TEXT", "consumed_at TEXT", "risk_level INTEGER"]) {
       try { this.#db.exec(`ALTER TABLE local_approvals ADD COLUMN ${column}`); }
       catch { /* Already present. */ }
     }
@@ -105,21 +105,23 @@ export class LocalTaskStore {
     this.audit("policy.changed", `${capability}=${decision}`); return this.policy(capability);
   }
 
-  createApproval({ taskId = null, capability, summary, actionDigest = null, sessionId = null }) {
+  createApproval({ taskId = null, capability, summary, actionDigest = null, sessionId = null, riskLevel = null }) {
     // One pending approval per action: a model that asks twice for the same
     // thing must not produce two prompts the operator has to answer.
     if (actionDigest) {
       const existing = this.#db.prepare("SELECT id FROM local_approvals WHERE action_digest = ? AND status = 'pending'").get(actionDigest);
       if (existing) return this.approval(existing.id);
     }
-    const row = { id: randomUUID(), taskId, capability, summary, status: "pending", requestedAt: new Date().toISOString(), resolvedAt: null, actionDigest, sessionId };
-    this.#db.prepare("INSERT INTO local_approvals (id, task_id, capability, summary, status, requested_at, resolved_at, action_digest, session_id, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)")
-      .run(row.id, row.taskId, row.capability, row.summary, row.status, row.requestedAt, row.resolvedAt, actionDigest, sessionId);
+    // Autonomy level (kernel/autonomy.mjs): 4 means the owner confirms twice.
+    const level = Number.isInteger(riskLevel) && riskLevel >= 0 && riskLevel <= 5 ? riskLevel : null;
+    const row = { id: randomUUID(), taskId, capability, summary, status: "pending", requestedAt: new Date().toISOString(), resolvedAt: null, actionDigest, sessionId, riskLevel: level };
+    this.#db.prepare("INSERT INTO local_approvals (id, task_id, capability, summary, status, requested_at, resolved_at, action_digest, session_id, consumed_at, risk_level) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)")
+      .run(row.id, row.taskId, row.capability, row.summary, row.status, row.requestedAt, row.resolvedAt, actionDigest, sessionId, level);
     this.audit("approval.requested", `${capability}: ${summary}`);
     return row;
   }
-  approvals() { return this.#db.prepare("SELECT id, task_id AS taskId, capability, summary, status, requested_at AS requestedAt, resolved_at AS resolvedAt, action_digest AS actionDigest, session_id AS sessionId FROM local_approvals ORDER BY requested_at DESC").all(); }
-  approval(id) { return this.#db.prepare("SELECT id, task_id AS taskId, capability, summary, status, requested_at AS requestedAt, resolved_at AS resolvedAt, action_digest AS actionDigest, session_id AS sessionId FROM local_approvals WHERE id = ?").get(id) ?? null; }
+  approvals() { return this.#db.prepare("SELECT id, task_id AS taskId, capability, summary, status, requested_at AS requestedAt, resolved_at AS resolvedAt, action_digest AS actionDigest, session_id AS sessionId, risk_level AS riskLevel FROM local_approvals ORDER BY requested_at DESC").all(); }
+  approval(id) { return this.#db.prepare("SELECT id, task_id AS taskId, capability, summary, status, requested_at AS requestedAt, resolved_at AS resolvedAt, action_digest AS actionDigest, session_id AS sessionId, risk_level AS riskLevel FROM local_approvals WHERE id = ?").get(id) ?? null; }
 
   /**
    * Spends an approval for exactly this action digest, once.
@@ -142,7 +144,9 @@ export class LocalTaskStore {
       throw error;
     }
   }
-  decideApproval(id, decision) { if (!['approved','denied'].includes(decision)) throw new Error("Invalid approval decision."); const current = this.approval(id); if (!current || current.status !== 'pending') return null; this.#db.prepare("UPDATE local_approvals SET status = ?, resolved_at = ? WHERE id = ?").run(decision, new Date().toISOString(), id); this.audit("approval.decided", `${id}=${decision}`); return this.approval(id); }
+  decideApproval(id, decision, { confirmed = false } = {}) { if (!['approved','denied'].includes(decision)) throw new Error("Invalid approval decision."); const current = this.approval(id); if (!current || current.status !== 'pending') return null;
+    // Level 4 (money, production, destroyed data, credentials): approving takes a second, explicit confirmation.
+    if (decision === 'approved' && (current.riskLevel ?? 0) >= 4 && confirmed !== true) { const error = new Error("This action needs a second confirmation: approve it again with confirm set."); error.code = "CONFIRMATION_REQUIRED"; throw error; } this.#db.prepare("UPDATE local_approvals SET status = ?, resolved_at = ? WHERE id = ?").run(decision, new Date().toISOString(), id); this.audit("approval.decided", `${id}=${decision}`); return this.approval(id); }
 
   addPairingCode(codeHash, expiresAt) { this.#db.prepare("INSERT INTO local_pairing_codes VALUES (?, ?, NULL)").run(codeHash, expiresAt); }
   consumePairingCode(codeHash, now) { const row = this.#db.prepare("SELECT code_hash AS codeHash FROM local_pairing_codes WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?").get(codeHash, now); if (!row) return false; this.#db.prepare("UPDATE local_pairing_codes SET used_at = ? WHERE code_hash = ?").run(now, codeHash); return true; }

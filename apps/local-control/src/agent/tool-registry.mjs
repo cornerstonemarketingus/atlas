@@ -169,6 +169,7 @@ export class ToolRegistry {
       capability: tool.capability,
       risk: tool.risk,
       requiresApproval: tool.requiresApproval,
+      ...(tool.effects ? { effects: tool.effects } : {}),
     }));
   }
 
@@ -200,16 +201,27 @@ export class ToolRegistry {
       return { status: "rejected", code: "INVALID_INPUT", message };
     }
 
-    const decision = this.#policy(tool.capability, tool.risk, tool, input, { sessionId, ...context });
+    // A policy answers "allow" | "ask" | "deny", or { decision, autonomy } when
+    // it also says how much Atlas may do on its own (kernel/autonomy.mjs).
+    const verdict = this.#policy(tool.capability, tool.risk, tool, input, { sessionId, ...context });
+    const decision = typeof verdict === "string" ? verdict : verdict?.decision ?? "deny";
+    const autonomy = typeof verdict === "object" && verdict?.autonomy ? { autonomy: verdict.autonomy } : {};
     if (decision === "deny") {
-      return { status: "rejected", code: "POLICY_DENIED", message: `Local policy denies the capability '${tool.capability}'.`, input };
+      const prohibited = autonomy.autonomy?.level === 5;
+      return {
+        status: "rejected",
+        code: prohibited ? "PROHIBITED" : "POLICY_DENIED",
+        message: prohibited ? `Atlas will not do this on its own: ${autonomy.autonomy.reasons.join("; ")}.` : `Local policy denies the capability '${tool.capability}'.`,
+        input,
+        ...autonomy,
+      };
     }
 
     const digest = actionDigest({ sessionId, tool: name, input });
     if (tool.requiresApproval || decision === "ask") {
       const granted = approvals ? await approvals.check(digest) : false;
       if (!granted) {
-        return { status: "approval-required", code: "APPROVAL_REQUIRED", digest, input, capability: tool.capability, risk: tool.risk };
+        return { status: "approval-required", code: "APPROVAL_REQUIRED", digest, input, capability: tool.capability, risk: tool.risk, ...autonomy };
       }
     }
 
