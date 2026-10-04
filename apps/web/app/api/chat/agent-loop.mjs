@@ -10,8 +10,8 @@ import { createDeltaParser } from "./stream.mjs";
  * connected repository) for up to MAX_TOOL_STEPS rounds, seeing each result
  * before deciding what to do next, and then answers. Each tool call is
  * reported through `emit("tool", …)` while it runs, so the chat can show it as
- * a step. Long work the model asked for (start_atlas_task) starts once the
- * reply is written, through `startTasks`.
+ * a step. Selected long work starts immediately through `startTasks`; its
+ * dispatch receipt does not depend on another model call to write an answer.
  */
 
 /** Rounds of tool use before Atlas must answer. */
@@ -382,7 +382,6 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   const tag = agentId ? { agentId } : {};
   const working = [...turns];
   const billingBlocked = new Set();
-  const taskCalls = [];
   const steps = [];
   const toolResults = [];
   let text = "";
@@ -497,16 +496,36 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       lastEmpty = result;
       break;
     }
-    if (allowTasks) taskCalls.push(...calls.filter((call) => !runnable(call.function.name)));
+    const selectedTasks = allowTasks && offered.has(TASK_TOOL.function.name)
+      ? calls.filter(call => call.function.name === TASK_TOOL.function.name).slice(0, 3) : [];
+    if (selectedTasks.length) {
+      const batch = taskRequestsFromCalls(selectedTasks, { defaultRepository, userMessage });
+      let lines = batch.errors;
+      if (batch.requests.length) {
+        emit("tool", { id: "task-dispatch", label: "Sending work to the task runtime…", state: "running", ...tag });
+        try {
+          // This callback uses the same authenticated /api/tasks boundary as
+          // the composer. Never retry an uncertain dispatch: it may have run.
+          lines = await startTasks(batch);
+          emit("tool", { id: "task-dispatch", label: "Task service responded", state: "done", ...tag });
+        } catch {
+          lines = ["I could not confirm whether the task started. Check task history before retrying to avoid starting it twice."];
+          emit("tool", { id: "task-dispatch", label: "Task dispatch could not be confirmed", state: "failed", ...tag });
+        }
+      }
+      if (!lines.length) lines = ["The task service returned no confirmation. Check task history before retrying."];
+      const addition = `${text.trim() ? "\n\n" : ""}${lines.join("\n\n")}`;
+      text += addition;
+      emit("delta", { text: addition });
+      return { reply: text.trim(), steps };
+    }
     const instant = calls.filter((call) => runnable(call.function.name));
     if (instant.length === 0 || round === maxRounds) break;
     working.push({ role: "assistant", content: result.text || null, tool_calls: calls });
     let used = 0;
     for (const call of calls) {
       if (!runnable(call.function.name)) {
-        working.push({ role: "tool", tool_call_id: call.id, content: allowTasks
-          ? "Queued: this starts as soon as your reply is finished. Tell the person it is starting; do not claim a result."
-          : `You cannot use '${call.function.name}'. Report what you found instead.` });
+        working.push({ role: "tool", tool_call_id: call.id, content: `You cannot use '${call.function.name}'. Use an offered tool or report what you found instead.` });
         continue;
       }
       if (used >= MAX_CALLS_PER_STEP) {
@@ -540,7 +559,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   async function synthesize() {
     const progressId = `synthesis${agentId ? `-${agentId}` : ""}`;
     const objective = userMessage || [...turns].reverse().find((turn) => turn.role === "user")?.content || "";
-    const message = synthesisMessage({ objective: typeof objective === "string" ? objective : "", steps, toolResults, partial: text.trim(), failure, queuedRuns: taskCalls.length });
+    const message = synthesisMessage({ objective: typeof objective === "string" ? objective : "", steps, toolResults, partial: text.trim(), failure, queuedRuns: 0 });
     let tokens = Math.max(maxTokens, MAX_REPLY_TOKENS);
     let reasoningEffort;
     let target = endpoint;
@@ -642,13 +661,5 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   }
 
   const finish = (reply) => (unfinished ? { reply, steps, finalization: unfinished } : { reply, steps });
-  if (!allowTasks) return finish(text.trim());
-  // Runs the model asked for start after its words, and each gets one line saying whether it started.
-  const started = await startTasks(taskRequestsFromCalls(taskCalls.slice(0, 3), { defaultRepository, userMessage }));
-  if (started.length) {
-    const addition = `${text.trim() ? "\n\n" : ""}${started.join("\n\n")}`;
-    text += addition;
-    emit("delta", { text: addition });
-  }
   return finish(text.trim());
 }

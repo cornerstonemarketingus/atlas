@@ -75,7 +75,7 @@ test("Atlas reads a page, sees the result, then answers", async () => {
   assert.match(second.at(-1).content, /<data source="web page https:\/\/example.com\/">[\s\S]*Example body/u);
 });
 
-test("tasks the model starts run once, after the reply", async () => {
+test("tasks the model selects dispatch once with its introduction", async () => {
   const { fetcher } = scripted([[say("Starting it."), callTool("s1", "start_atlas_task", { mode: "coder", objective: "Fix the login bug", repository: "cornerstonemarketingus/atlas" })]]);
   const { promise, started } = run(fetcher);
   const outcome = await promise;
