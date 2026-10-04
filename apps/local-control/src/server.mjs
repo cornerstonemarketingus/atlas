@@ -101,7 +101,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
       return send(response, 403, { message: "The owner token only works on this computer.", unblock: "Pair this device from Settings on the computer running Atlas, or allow owner access remotely there." });
     }
     if (commandCenterRoutes(request, response)) return;
-    if (worldRoutes && worldRoutes(request, response, identity)) return;
+    if (worldRoutes && await worldRoutes(request, response, identity)) return;
     if (goalRoutes && (request.url ?? "").startsWith("/v1/goals")) { if (await goalRoutes(request, response, identity)) return; }
     if (automationRoutes && (request.url ?? "").startsWith("/v1/automations")) { if (await automationRoutes(request, response, identity)) return; }
     if ((request.url ?? "").startsWith("/v1/genesis")) {
