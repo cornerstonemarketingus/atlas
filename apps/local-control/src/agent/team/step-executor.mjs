@@ -149,7 +149,7 @@ async function runTool({ call, allowedTools, toolRegistry, authorizedExecutor, a
     });
     outcome = await invoke();
     if (outcome.status === "approval-required" && approvals?.request) {
-      const request = approvals.request({ digest: outcome.digest, capability: outcome.capability, summary: `${agent.name} wants to use ${call.name}: ${summarizeInput(input)}`, sessionId: meta.rootTaskId });
+      const request = approvals.request({ digest: outcome.digest, capability: outcome.capability, summary: `${agent.name} wants to use ${call.name}: ${summarizeInput(input)}`, sessionId: meta.rootTaskId, autonomy: outcome.autonomy ?? null });
       // The step waits for the owner (pause and cancel still work through the
       // checkpoint), then runs exactly the approved action once.
       if (request?.id && approvals.status) {
@@ -160,7 +160,7 @@ async function runTool({ call, allowedTools, toolRegistry, authorizedExecutor, a
       }
     }
   }
-  const status = outcome.status === "completed" ? "succeeded" : outcome.status === "approval-required" ? "awaiting_approval" : ["NOT_PERMITTED", "POLICY_DENIED", "APPROVAL_DENIED"].includes(outcome.code) ? "denied" : "failed";
+  const status = outcome.status === "completed" ? "succeeded" : outcome.status === "approval-required" ? "awaiting_approval" : ["NOT_PERMITTED", "POLICY_DENIED", "PROHIBITED", "APPROVAL_DENIED"].includes(outcome.code) ? "denied" : "failed";
   if (recorded) {
     platformStore.updateToolCall(TENANT, recorded.id, {
       status, durationMs: Date.now() - started,

@@ -20,6 +20,7 @@ import { createCommandCenterRoutes } from "./platform/command-center.mjs";
 import { createWorldRoutes } from "./agent/kernel/routes.mjs";
 import { createGoalRoutes } from "./agent/goal-routes.mjs";
 import { choosePath, localModelCandidates } from "./agent/kernel/economics.mjs";
+import { AUTONOMY_LEVELS, assessAction, suggestRelaxations } from "./agent/kernel/autonomy.mjs";
 import { createAutomationRoutes, createWebhookRoute } from "./platform/automations/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -115,7 +116,16 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (teamRoutes && (request.url ?? "").startsWith("/v1/team/")) { if (await teamRoutes(request, response, identity)) return; }
     if (!teamRoutes && (request.url ?? "").startsWith("/v1/team/")) return send(response, 503, { message: "Agent missions are not running in this process." });
     // What agents can do on this machine, and what the owner's policy says about each capability.
-    if (request.method === "GET" && request.url === "/v1/tools") return send(response, 200, { tools: (toolCatalog?.() ?? []).map((tool) => ({ ...tool, decision: store.policy(tool.capability).decision })) });
+    if (request.method === "GET" && request.url === "/v1/tools") return send(response, 200, { tools: (toolCatalog?.() ?? []).map((tool) => ({ ...tool, decision: store.policy(tool.capability).decision, autonomy: autonomyOf(tool) })) });
+    // Adaptive autonomy: each tool's level before its arguments are known, and policies precedent says could be relaxed.
+    if (request.method === "GET" && request.url === "/v1/autonomy") {
+      const tools = toolCatalog?.() ?? [];
+      return send(response, 200, {
+        levels: AUTONOMY_LEVELS,
+        tools: tools.map((tool) => ({ name: tool.name, capability: tool.capability, decision: store.policy(tool.capability).decision, ...autonomyOf(tool) })),
+        suggestions: suggestRelaxations({ policies: store.policies(), approvals: store.approvals(), tools }),
+      });
+    }
     if (/^\/v1\/(knowledge|connections)(\/|\?|$)/u.test(request.url ?? "")) { if (await knowledgeRoutes(request, response, identity)) return; }
     if (innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) { if (await innovationRoutes.handle(request, response, identity)) return; }
     if (!innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) return send(response, 503, { message: "The Atlas innovation pipeline is not running in this process." });
@@ -187,7 +197,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
           }
           return send(response, 200, { approval: store.approval(pending.id) });
         }
-        const approval = store.decideApproval(approvalMatch[1], body.decision);
+        const approval = store.decideApproval(approvalMatch[1], body.decision, { confirmed: body.confirm === true });
         if (!approval) return send(response, 409, { message: "Approval is missing or already resolved." });
         if (approval.taskId) {
           if (body.decision === "approved") queueMicrotask(() => startTask(approval.taskId));
@@ -206,7 +216,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
           });
         }
         return send(response, 200, { approval });
-      } catch (error) { return send(response, 400, { message: error.message }); }
+      } catch (error) { return send(response, error.code === "CONFIRMATION_REQUIRED" ? 409 : 400, { message: error.message, ...(error.code ? { code: error.code } : {}) }); }
     }
     if (request.method === "POST" && request.url === "/v1/pair") { if (identity.role !== "admin") return send(response,403,{message:"Owner access required."}); const code=String(randomInt(100000,1000000)); const expiresAt=new Date(Date.now()+5*60_000).toISOString(); store.addPairingCode(digest(code),expiresAt); return send(response,201,{code,expiresAt}); }
     if (request.method === "GET" && request.url === "/v1/devices") { if (identity.role !== "admin") return send(response,403,{message:"Owner access required."}); return send(response,200,{devices:store.devices()}); }
@@ -247,3 +257,8 @@ async function readBody(request) {
 
 function send(response, status, value) { response.writeHead(status); response.end(JSON.stringify(value)); }
 function sendText(response, status, contentType, value) { response.setHeader("content-type", contentType); response.writeHead(status); response.end(value); }
+
+function autonomyOf(tool) {
+  const { level, mode, label, reasons } = assessAction({ tool });
+  return { level, mode, label, reasons };
+}
