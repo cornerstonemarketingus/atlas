@@ -7,6 +7,17 @@ export function openAIModel(environment = process.env) {
     model: "gpt-5.4-mini", apiKey, fallbackModel: null } : null;
 }
 
+/**
+ * Groq as a fallback, when the configured model is somewhere else (a model on
+ * the owner's machine, behind the model gateway) and a Groq key reaches the
+ * Worker: chat keeps answering while that machine is off or busy.
+ */
+export function groqModel(environment = process.env) {
+  const apiKey = (environment.GROQ_API_KEY || "").trim();
+  return apiKey ? { configured: true, reason: undefined, provider: "groq", baseUrl: "https://api.groq.com/openai/v1/",
+    model: "openai/gpt-oss-120b", apiKey, fallbackModel: "openai/gpt-oss-20b" } : null;
+}
+
 /** Only server-owned provider IDs may be selected, never client endpoints or keys. */
 export function resolveChatProvider(environment = process.env, selection = "auto") {
   const openai = openAIModel(environment);
@@ -23,7 +34,14 @@ export function resolveChatProvider(environment = process.env, selection = "auto
   if (selection === "configured") return primary;
   // Invalid explicit endpoints remain errors; missing primary configuration can use OpenAI alone.
   if (!primary.configured) return !environment.ATLAS_CHAT_BASE_URL && !environment.ATLAS_CHAT_MODEL && openai ? openai : primary;
-  return { ...primary, ...(!fallbackDisabled && openai && new URL(primary.baseUrl).origin !== "https://api.openai.com" ? { providerFallback: openai } : {}) };
+  if (fallbackDisabled) return primary;
+  // Automatic: the configured model, then Groq (unless it is the configured
+  // provider), then OpenAI (unless it is), each with its own fallback model.
+  const origin = new URL(primary.baseUrl).origin;
+  const groq = origin !== "https://api.groq.com" ? groqModel(environment) : null;
+  const last = origin !== "https://api.openai.com" ? openai : null;
+  const second = groq ? { ...groq, ...(last ? { providerFallback: last } : {}) } : last;
+  return { ...primary, ...(second ? { providerFallback: second } : {}) };
 }
 
 export function chatProviderChoices(environment = process.env) {

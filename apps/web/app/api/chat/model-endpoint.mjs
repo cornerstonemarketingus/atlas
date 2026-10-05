@@ -22,6 +22,9 @@
  */
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1", "[::1]"];
+/** Hosted providers answer within a minute; anything else is a model the owner runs, which may take longer. */
+const HOSTED_ORIGINS = new Set(["https://api.groq.com", "https://api.openai.com"]);
+const SELF_HOSTED_TIMEOUT_MS = 300_000;
 
 /**
  * A second model on the same endpoint for when the first is rate-limited.
@@ -65,7 +68,7 @@ export function resolveChatModel(environment = process.env) {
 
   if (url.search || url.hash) return { configured: false, reason: "The model endpoint must not contain a query or fragment." };
   if (!apiKey && url.origin === "https://api.groq.com") apiKey = (environment.GROQ_API_KEY || "").trim();
-  return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel: fallbackModelFor(environment, url, model) };
+  return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel: fallbackModelFor(environment, url, model), ...(HOSTED_ORIGINS.has(url.origin) ? {} : { timeoutMs: SELF_HOSTED_TIMEOUT_MS }) };
 }
 
 /**
