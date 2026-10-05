@@ -18,6 +18,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
  <nav class="nav" aria-label="Sections">
   <a href="#/home" data-nav="home"><span class="ico" aria-hidden="true">⌂</span>Home</a>
   <a href="#/command" data-nav="command"><span class="ico" aria-hidden="true">▦</span>Command center</a>
+  <a href="#/opportunities" data-nav="opportunities"><span class="ico" aria-hidden="true">$</span>Opportunities</a>
   <a href="#/automations" data-nav="automations"><span class="ico" aria-hidden="true">⟳</span>Automations</a>
   <a href="#/build" data-nav="build"><span class="ico" aria-hidden="true">✚</span>Build</a>
   <a href="#/missions" data-nav="missions"><span class="ico" aria-hidden="true">◎</span>Missions</a>
@@ -120,6 +121,18 @@ export const LOCAL_UI_HTML = `<!doctype html>
   <p id="automations-notice" class="hint" role="status" aria-live="polite"></p>
   <div id="automation-secret" class="card" hidden></div>
   <div id="automations-list" class="list"><p class="empty">Unlock this tab to see automations.</p></div>
+ </section>
+
+ <section class="view" data-view="opportunities" hidden aria-labelledby="opportunities-heading">
+  <div class="section-title"><div><p class="eyebrow">EARN</p><h2 id="opportunities-heading">Opportunities</h2></div><button type="button" class="secondary" id="opportunities-refresh">Refresh</button></div>
+  <p class="hint">Tell Atlas what you want to earn. It searches the web, reads what it finds, and ranks each opportunity by the pay you can count on, the chance of qualifying and the time it takes. Atlas never makes up an answer for an application: the questions an application asks are listed for you. Nothing is submitted without your approval, and anything that needs you (a CAPTCHA, an ID check, an interview, a signature) is marked as yours to do.</p>
+  <form id="hunt-form" class="panel"><label for="hunt-goal">What do you want to earn?</label><textarea id="hunt-goal" rows="2" maxlength="1000" required placeholder="Find legitimate opportunities for me to make $500 this week"></textarea>
+   <div class="actions"><button id="hunt-start">Find opportunities</button></div></form>
+  <p id="opportunities-notice" class="hint" role="status" aria-live="polite"></p>
+  <div id="hunt-list" class="list"></div>
+  <section aria-labelledby="opportunities-list-heading"><h3 id="opportunities-list-heading">Ranked</h3>
+   <div class="chips" id="opportunity-filter"><button type="button" class="chip" data-filter="">Open</button><button type="button" class="chip" data-filter="approved">Approved</button><button type="button" class="chip" data-filter="manual">Mine</button><button type="button" class="chip" data-filter="pursuing">In progress</button><button type="button" class="chip" data-filter="applied">Applied</button><button type="button" class="chip" data-filter="won">Won</button><button type="button" class="chip" data-filter="skipped">Skipped</button><button type="button" class="chip" data-filter="rejected">Rejected</button></div>
+   <div id="opportunity-list" class="list"><p class="empty">Unlock this tab to see opportunities.</p></div></section>
  </section>
 
  <section class="view" data-view="build" hidden aria-labelledby="build-heading">
@@ -523,7 +536,7 @@ if(sessionStorage.getItem('atlas-token')){loadMissions();loadMissionModels()}
 setInterval(()=>{if(sessionStorage.getItem('atlas-token'))loadMissions()},5000);
 
 /* ---- Shell: sections, theme, lock state, and the views built on the platform APIs. ---- */
-const VIEWS={home:'Home',command:'Command center',automations:'Automations',build:'Build',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
+const VIEWS={home:'Home',command:'Command center',opportunities:'Opportunities',automations:'Automations',build:'Build',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
 const $=q,$$=s=>[...document.querySelectorAll(s)];
 const isUnlocked=()=>Boolean(sessionStorage.getItem('atlas-token'));
 let currentView='home',openMissionId=null,shownMission='';
@@ -726,13 +739,13 @@ $('#build-refresh').onclick=()=>loadBuild();
 
 function refreshView(){
  if(!isUnlocked())return;
- const run={home:loadHome,command:loadCommand,automations:loadAutomations,missions:loadTeam,improve:loadImprove,models:loadModels,build:loadBuild,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections,settings:loadRemote}[currentView];
+ const run={home:loadHome,command:loadCommand,opportunities:loadOpportunities,automations:loadAutomations,missions:loadTeam,improve:loadImprove,models:loadModels,build:loadBuild,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections,settings:loadRemote}[currentView];
  if(run)run().catch(()=>{});
  loadBadge().catch(()=>{});
 }
 
 /* ---- Command center: every running thing, with per-lane control. ---- */
-const COMMAND_KINDS={goal:'Goal (sleeps between events)',suggestion:'Suggestion',automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
+const COMMAND_KINDS={goal:'Goal (sleeps between events)',hunt:'Opportunity hunt',opportunities:'Opportunities',suggestion:'Suggestion',automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
 const COMMAND_BUCKETS={attention:'Needs you',running:'Running',waiting:'Waiting',done:'Recently finished'};
 function commandButtons(actions,key){return (actions||[]).map((a,i)=>'<button type="button" class="'+(a.name==='cancel'?'ghost':'secondary')+'" data-command="'+esc(key)+'" data-index="'+i+'">'+esc(a.label)+'</button>').join('')}
 /* A lane's kernel run, step by step: what it set out to do, the capabilities it had, each action, and the check. */
@@ -839,6 +852,65 @@ $('#automation-form').onsubmit=async e=>{e.preventDefault();const notice=$('#aut
  catch(error){notice.textContent=error.message}
  loadAutomations().catch(()=>{})};
 $('#automations-refresh').onclick=()=>loadAutomations();
+
+/* ---- Opportunities ---- */
+let opportunityFilter='';
+const CLASS_TEXT={AUTO:'Atlas can do this',APPROVAL_REQUIRED:'Needs your approval',MANUAL:'Needs you'};
+const usd=n=>n==null?'-':'$'+Number(n).toLocaleString();
+const attr=v=>esc(v).replaceAll('"','&quot;');
+const payText=o=>o.payoutMinUsd==null?'Pay not stated':(o.payoutMaxUsd>o.payoutMinUsd?usd(o.payoutMinUsd)+' to '+usd(o.payoutMaxUsd):usd(o.payoutMinUsd))+(o.payoutUnit==='hour'?' per hour':'');
+const OPEN_STATUSES=['discovered','approved','manual','pursuing','applied'];
+function opportunityActions(o){
+ const id=attr(o.id),b=(d,label,cls)=>'<button type="button" class="'+cls+'" data-opp="'+d+'" data-id="'+id+'" data-digest="'+attr(o.digest)+'">'+label+'</button>';
+ if(o.status==='discovered')return (o.executionClass==='MANUAL'?'':b('approve','Approve','')) +b('take_over',"I'll do this",'secondary')+b('skip','Skip','ghost');
+ if(o.status==='approved')return b('skip','Skip','ghost');
+ if(o.status==='manual')return b('applied','I applied','secondary')+b('won','I won','secondary')+b('lost','Did not work out','ghost')+b('skip','Skip','ghost');
+ if(o.status==='pursuing')return b('applied','I applied','secondary')+b('lost','Did not work out','ghost')+b('skip','Skip','ghost');
+ if(o.status==='applied')return b('won','I won','secondary')+b('lost','Did not win','ghost');
+ return '';
+}
+function opportunityCard(o){
+ const link=/^https?:/.test(o.url)?'<a href="'+attr(o.url)+'" target="_blank" rel="noopener noreferrer">'+esc(o.title)+'</a>':esc(o.title);
+ const meta='<div class="meta"><span>'+esc(payText(o))+'</span><span>'+(o.estimatedHours==null?'time unknown (assuming 2 h)':'about '+o.estimatedHours+' h')+'</span>'+(o.deadline?'<span>due '+esc(o.deadline)+'</span>':'')+'<span>'+esc(o.source)+'</span>'+(o.score==null?'':'<span>'+usd(o.score)+'/hour expected</span>')+'<span>fit '+Math.round(o.fit*100)+'%, confidence '+Math.round(o.confidence*100)+'%</span></div>';
+ const why=(o.classReasons||[]).map(r=>'<li>'+esc(r)+'</li>').join('');
+ const questions=(o.questions||[]).length?'<p class="hint">Questions this application asks. Atlas will not answer them for you:</p><ul>'+o.questions.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':'';
+ const needs=(o.requirements||[]).length?'<p class="hint">Requirements: '+esc(o.requirements.join('; '))+'</p>':'';
+ const warn=(o.warnings||[]).map(w=>'<p class="hint">'+esc(w)+'</p>').join('');
+ const proof=(o.evidence||[]).length?'<details class="more"><summary>What the page says</summary>'+o.evidence.map(x=>'<blockquote>'+esc(x)+'</blockquote>').join('')+'</details>':'';
+ return '<article class="card"><div class="task-top"><h4>'+link+'</h4>'+pill(o.status)+'</div>'
+  +'<div class="meta"><span class="status '+(o.executionClass==='MANUAL'?'blocked':o.executionClass==='AUTO'?'completed':'pending')+'">'+esc(CLASS_TEXT[o.executionClass]||o.executionClass)+'</span><span>'+esc(String(o.kind).replaceAll('_',' '))+'</span></div>'
+  +(o.summary?'<p>'+esc(o.summary)+'</p>':'')+meta+'<ul class="hint">'+why+'</ul>'+needs+questions+warn+proof
+  +(o.statusReason&&o.status!=='discovered'?'<p class="hint">'+esc(o.statusReason)+'</p>':'')
+  +'<div class="actions">'+opportunityActions(o)+'</div></article>';
+}
+function huntCard(h){
+ const p=h.progress||{};
+ const line=h.state==='scouting'?esc((h.notes||[]).slice(-1)[0]||'Searching...'):h.state==='done'?esc((h.stats?h.stats.created+' new, '+h.stats.skippedKnown+' already known, '+h.stats.rejected+' rejected. ':'')+(p.targetUsd?'Target '+usd(p.targetUsd)+'; the pipeline is worth about '+usd(p.expectedUsd)+' ('+Math.round((p.coverage||0)*100)+'% of target)'+(p.earnedUsd?', earned '+usd(p.earnedUsd):'')+'. This is an estimate, not a promise.':'')):esc(h.message||'');
+ return '<article class="card"><div class="task-top"><h4>'+esc(h.goal)+'</h4>'+pill(h.state)+'</div><p class="hint">'+line+'</p>'+(h.state==='scouting'?'<div class="actions"><button type="button" class="secondary" data-hunt-cancel="'+attr(h.id)+'">Cancel</button></div>':'')+'</article>';
+}
+async function loadOpportunities(){
+ const list=$('#opportunity-list');
+ let hunts,data;
+ try{[hunts,data]=await Promise.all([getJson('/v1/opportunities/hunts'),getJson('/v1/opportunities'+(opportunityFilter?'?status='+encodeURIComponent(opportunityFilter):''))])}catch(error){list.innerHTML=problem(error);return}
+ $('#hunt-list').innerHTML=hunts.hunts.slice(0,3).map(huntCard).join('');
+ $('#hunt-list').querySelectorAll('[data-hunt-cancel]').forEach(b=>b.onclick=()=>getJson('/v1/opportunities/hunts/'+encodeURIComponent(b.dataset.huntCancel),{method:'DELETE'}).then(()=>loadOpportunities()).catch(error=>{$('#opportunities-notice').textContent=error.message}));
+ $$('#opportunity-filter [data-filter]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.filter===opportunityFilter)));
+ const rows=opportunityFilter?data.opportunities:data.opportunities.filter(o=>OPEN_STATUSES.includes(o.status));
+ list.innerHTML=rows.length?rows.map(opportunityCard).join(''):'<p class="empty">Nothing here yet. Describe what you want to earn above.</p>';
+ list.querySelectorAll('[data-opp]').forEach(b=>b.onclick=()=>opportunityDecision(b.dataset.id,b.dataset.opp,b.dataset.digest));
+}
+async function opportunityDecision(id,decision,digest){
+ const notice=$('#opportunities-notice');const body={decision,digest};
+ if(decision==='won'){const amount=prompt('How much did you earn, in dollars? (leave empty if unknown)');if(amount===null)return;if(amount.trim())body.amountUsd=Number(amount)}
+ try{await sendJson('/v1/opportunities/'+encodeURIComponent(id)+'/decision','POST',body);notice.textContent=''}catch(error){notice.textContent=error.message}
+ loadOpportunities().catch(()=>{});
+}
+$('#hunt-form').onsubmit=async e=>{e.preventDefault();const notice=$('#opportunities-notice');
+ try{await sendJson('/v1/opportunities/hunts','POST',{goal:$('#hunt-goal').value.trim()});$('#hunt-goal').value='';notice.textContent='Looking. Results appear below as Atlas reads each page.'}catch(error){notice.textContent=error.message}
+ loadOpportunities().catch(()=>{})};
+$$('#opportunity-filter [data-filter]').forEach(b=>b.onclick=()=>{opportunityFilter=b.dataset.filter;loadOpportunities().catch(()=>{})});
+$('#opportunities-refresh').onclick=()=>loadOpportunities();
+setInterval(()=>{if(currentView==='opportunities'&&isUnlocked()&&!document.hidden)loadOpportunities().catch(()=>{})},4000);
 
 /* ---- Home ---- */
 async function loadBadge(){

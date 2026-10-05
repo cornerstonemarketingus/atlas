@@ -27,9 +27,10 @@ const DONE_LIMIT = 20;
 /**
  * @param {{ missions?: object[], genesisProjects?: object[], tasks?: object[], selfImprove?: object | null, now?: number }} sources
  */
-export function buildCommandCenter({ missions = [], genesisProjects = [], tasks = [], selfImprove = null, automations = [], goals = [], now = Date.now() } = {}) {
+export function buildCommandCenter({ missions = [], genesisProjects = [], tasks = [], selfImprove = null, automations = [], goals = [], opportunities = null, now = Date.now() } = {}) {
   const items = [
     ...goals.map(goalItem),
+    ...opportunityItems(opportunities),
     ...automations.filter((automation) => !automation.enabled && automation.consecutiveFailures > 0).map(automationItem),
     ...suggestionItems(missions, automations),
     ...missions.map(missionItem),
@@ -193,6 +194,36 @@ function goalItem(goal) {
   };
 }
 
+/**
+ * Opportunity hunts: a running hunt is "running", a failed one needs a look,
+ * and found opportunities waiting on the owner are one "attention" item per
+ * kind of wait (approve these, or these need you). Hunts that finished clean
+ * show once, as done.
+ */
+function opportunityItems(source) {
+  if (!source) return [];
+  const items = [];
+  for (const hunt of source.hunts ?? []) {
+    const base = `/v1/opportunities/hunts/${encodeURIComponent(hunt.id)}`;
+    const target = hunt.progress?.targetUsd ? ` Target $${hunt.progress.targetUsd}; the pipeline is worth about $${hunt.progress.expectedUsd} so far.` : "";
+    items.push({
+      kind: "hunt", id: hunt.id, title: `Find opportunities: ${hunt.goal.slice(0, 140)}`, state: hunt.state,
+      bucket: hunt.state === "scouting" ? "running" : hunt.state === "failed" || hunt.state === "interrupted" ? "attention" : "done",
+      updatedAt: hunt.updatedAt ?? null, link: "#/opportunities",
+      detail: hunt.message ?? (hunt.state === "scouting" ? (hunt.notes?.at(-1) ?? "Searching…") : hunt.stats ? `${hunt.stats.created} new, ${hunt.stats.skippedKnown} already known, ${hunt.stats.rejected} rejected.${target}` : null),
+      progress: null, lanes: [],
+      actions: hunt.state === "scouting" ? [{ name: "cancel", label: "Cancel", method: "DELETE", path: base, body: {} }] : [],
+    });
+  }
+  const waiting = (source.pending ?? []).filter((opportunity) => opportunity.status === "discovered");
+  const approve = waiting.filter((opportunity) => opportunity.executionClass !== "MANUAL");
+  const manual = waiting.filter((opportunity) => opportunity.executionClass === "MANUAL");
+  const newest = (list) => list.map((opportunity) => opportunity.updatedAt).sort().at(-1) ?? null;
+  if (approve.length) items.push({ kind: "opportunities", id: "opportunities-approve", title: `${approve.length} opportunit${approve.length === 1 ? "y" : "ies"} ready for your approval`, state: "awaiting_approval", bucket: "attention", updatedAt: newest(approve), link: "#/opportunities", detail: `Best: ${approve[0].title.slice(0, 100)}${approve[0].score === null ? "" : ` ($${approve[0].score}/hour expected)`}.`, progress: null, lanes: [], actions: [] });
+  if (manual.length) items.push({ kind: "opportunities", id: "opportunities-manual", title: `${manual.length} opportunit${manual.length === 1 ? "y needs" : "ies need"} you`, state: "needs_owner", bucket: "attention", updatedAt: newest(manual), link: "#/opportunities", detail: manual[0].classReasons?.[0] ?? null, progress: null, lanes: [], actions: [] });
+  return items;
+}
+
 /** Only automations that paused themselves need the owner here; their runs show as missions. */
 function automationItem(automation) {
   const base = `/v1/automations/${encodeURIComponent(automation.id)}`;
@@ -274,7 +305,7 @@ function latest(values) {
 }
 
 /** GET /v1/command-center — any authenticated caller; every action goes through its own owner-only route. */
-export function createCommandCenterRoutes({ missionService = null, genesis = null, store = null, selfImprove = null, automations = null, goals = null, send }) {
+export function createCommandCenterRoutes({ missionService = null, genesis = null, store = null, selfImprove = null, automations = null, goals = null, opportunities = null, send }) {
   return function handle(request, response) {
     if (request.method !== "GET" || new URL(request.url ?? "/", "http://local.atlas").pathname !== "/v1/command-center") return false;
     const read = (fn, fallback) => { try { return fn() ?? fallback; } catch { return fallback; } };
@@ -285,6 +316,7 @@ export function createCommandCenterRoutes({ missionService = null, genesis = nul
       selfImprove: read(() => selfImprove?.status(), null),
       automations: read(() => automations?.list(), []),
       goals: read(() => goals?.list(), []),
+      opportunities: opportunities ? { hunts: read(() => opportunities.hunts(), []), pending: read(() => opportunities.list({ status: "discovered" }), []) } : null,
     }));
   };
 }

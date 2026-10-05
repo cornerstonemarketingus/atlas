@@ -51,6 +51,11 @@ import { registerTerminalTools } from "./agent/tools/terminal-tools.mjs";
 import { registerCommunicationsTools } from "./agent/tools/communications-tools.mjs";
 import { registerWorkflowTools } from "./agent/tools/workflow-tools.mjs";
 import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.mjs";
+import { registerOpportunityTools } from "./agent/tools/opportunity-tools.mjs";
+import { OpportunityService } from "./opportunity/service.mjs";
+import { OpportunityStore } from "./opportunity/store.mjs";
+import { createScout } from "./opportunity/scout.mjs";
+import { createPageReader, createTavilySearch, searchKeyFrom } from "./opportunity/sources.mjs";
 import { createCredentialVault } from "./agent/credential-vault.mjs";
 import { openInBrowser, ownerAccount, resolveOwnerToken, signInUrl } from "./identity/owner.mjs";
 import { RemoteAccess } from "./remote/access.mjs";
@@ -192,11 +197,24 @@ const automationStore = new AutomationStore(join(dataDirectory, "automations.sql
 // Goals sleep between events and wake on signed GitHub deliveries (Track B7).
 const goalStore = new GoalStore(join(dataDirectory, "goals.sqlite"));
 const goals = new GoalService({ store: goalStore, missionService, world });
+// Opportunities: goals like "make $500 this week" → hunts that find, normalize, rank and remember paid opportunities.
+const opportunityStore = new OpportunityStore(join(dataDirectory, "opportunities.sqlite"));
+const searchKey = searchKeyFrom(process.env);
+const opportunities = new OpportunityService({
+  store: opportunityStore,
+  // Without a search key there is nothing to hunt with; starting a hunt then says exactly that.
+  scout: searchKey ? createScout({ search: createTavilySearch({ apiKey: searchKey }), readPage: createPageReader(), complete: completeText }) : null,
+  kernel,
+  world,
+  audit: (category, summary) => store.audit(category, summary),
+});
+opportunities.recover();
 const automations = new AutomationService({ store: automationStore, missionService, team, onEvent: (event) => goals.onEvent(event) });
 automations.startWatchers();
 const automationTimer = setInterval(() => {
   automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`));
   try { goals.tick(); } catch (error) { console.error(`Goal tick failed: ${error.message}`); }
+  try { opportunities.tick(); } catch (error) { console.error(`Opportunity tick failed: ${error.message}`); }
 }, 30_000);
 automationTimer.unref();
 const recoveredMissions = missionService.recover();
@@ -268,6 +286,7 @@ const server = createLocalControlServer({
   automations,
   world,
   goals,
+  opportunities,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -319,6 +338,18 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
   };
 }
 
+/** One model answer as text, for the scout's structured reads (no tools, no streaming to a client). */
+async function completeText({ system, user, signal, model = null }) {
+  let text = "";
+  for await (const chunk of modelClient.stream({
+    model: model || process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
+    messages: [{ role: "system", content: system }, { role: "user", content: user }],
+    maxOutputTokens: 1500,
+    signal,
+  })) if (chunk.type === "text") text += chunk.delta;
+  return text;
+}
+
 function shutdown() {
   modelManager.stopServer();
   genesisPreviews.stopAll().catch(() => {});
@@ -332,6 +363,7 @@ function shutdown() {
     automations.stopWatchers();
     automationStore.close();
     goalStore.close();
+    opportunityStore.close();
     world.close();
     platformStore.close();
     store.close();
@@ -407,6 +439,8 @@ function buildToolRegistry() {
   // Genesis is created after the registry; the tools look it up when they run.
   registerGenesisTools(registry, () => genesis, () => genesisPublisher);
   registerWorkflowTools(registry);
+  // Opportunity tools look the service up when they run (it is created after the registry).
+  registerOpportunityTools(registry, () => opportunities);
   // The browser family is registered whether or not a companion is attached:
   // its tools then fail closed with "no browser on this machine", which is a
   // better answer than the model never learning the capability exists.

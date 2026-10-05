@@ -19,13 +19,14 @@ import { createGenesisRoutes } from "./platform/genesis/routes.mjs";
 import { createCommandCenterRoutes } from "./platform/command-center.mjs";
 import { createWorldRoutes } from "./agent/kernel/routes.mjs";
 import { createGoalRoutes } from "./agent/goal-routes.mjs";
+import { createOpportunityRoutes } from "./opportunity/routes.mjs";
 import { choosePath, localModelCandidates } from "./agent/kernel/economics.mjs";
 import { AUTONOMY_LEVELS, assessAction, suggestRelaxations } from "./agent/kernel/autonomy.mjs";
 import { createAutomationRoutes, createWebhookRoute } from "./platform/automations/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, opportunities = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -53,7 +54,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     readRaw: async (request, response) => { try { return await readBody(request); } catch (error) { send(response, error?.code === "BODY_TOO_LARGE" ? 413 : 400, { message: error.message }); return null; } } }) : null;
   const worldRoutes = world ? createWorldRoutes({ world, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const goalRoutes = goals ? createGoalRoutes({ goals, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
-  const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, automations, goals, send: (response, status, value) => { send(response, status, value); return true; } });
+  const opportunityRoutes = opportunities ? createOpportunityRoutes({ opportunities, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, automations, goals, opportunities, send: (response, status, value) => { send(response, status, value); return true; } });
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
 
   async function startTask(taskId) {
@@ -103,6 +105,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (commandCenterRoutes(request, response)) return;
     if (worldRoutes && await worldRoutes(request, response, identity)) return;
     if (goalRoutes && (request.url ?? "").startsWith("/v1/goals")) { if (await goalRoutes(request, response, identity)) return; }
+    if (opportunityRoutes && (request.url ?? "").startsWith("/v1/opportunities")) { if (await opportunityRoutes(request, response, identity)) return; }
     if (automationRoutes && (request.url ?? "").startsWith("/v1/automations")) { if (await automationRoutes(request, response, identity)) return; }
     if ((request.url ?? "").startsWith("/v1/genesis")) {
       if (!genesisRoutes) return send(response, 503, { message: "Project Genesis is not running in this process." });
