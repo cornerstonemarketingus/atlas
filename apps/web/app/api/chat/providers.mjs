@@ -15,7 +15,9 @@ export function openAIModel(environment = process.env) {
 export function groqModel(environment = process.env) {
   const apiKey = (environment.GROQ_API_KEY || "").trim();
   return apiKey ? { configured: true, reason: undefined, provider: "groq", baseUrl: "https://api.groq.com/openai/v1/",
-    model: "openai/gpt-oss-120b", apiKey, fallbackModel: "openai/gpt-oss-20b" } : null;
+    model: "openai/gpt-oss-120b", apiKey, fallbackModel: "openai/gpt-oss-20b",
+    // gpt-oss-120b/20b: 131,072-token context, tool calls and streaming. A request that cannot fit is not sent.
+    capabilities: { tools: true, streaming: true, contextTokens: 131072 } } : null;
 }
 
 /** Only server-owned provider IDs may be selected, never client endpoints or keys. */

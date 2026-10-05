@@ -119,3 +119,56 @@ test("the snapshot is metadata only and the state survives JSON (Durable Object 
   assert.equal(reserveCapacity(restored, ask("secret-request-id", 100), 1).replay, true);
   assert.doesNotMatch(JSON.stringify(ledgerSnapshot(state, 0)), /secret-request-id/u);
 });
+
+test("a billing, key or permission failure disables the whole account scope, including models never tried", () => {
+  for (const kind of ["BILLING", "AUTHENTICATION", "PERMISSION"]) {
+    const state = emptyLedgerState();
+    assert.equal(reserveCapacity(state, ask("a", 100, { models: ["one", "two"] }), 0).granted, true);
+    releaseReservation(state, { requestId: "a", model: "one", status: 429, kind }, 0);
+    const refused = reserveCapacity(state, ask("b", 100, { models: ["two", "three"] }), 1_000);
+    assert.deepEqual([refused.granted, refused.permanent, refused.kind, refused.reason], [false, true, kind, "account_disabled"], kind);
+    assert.equal(Object.keys(state.waiting).length, 0, "nobody queues for an account that cannot serve");
+    assert.equal(ledgerSnapshot(state, 1_000).account.kind, kind);
+  }
+});
+
+test("a model-scoped failure leaves the account and its other models alone; success clears an account block", () => {
+  const state = emptyLedgerState();
+  reserveCapacity(state, ask("a", 100, { models: ["one"] }), 0);
+  releaseReservation(state, { requestId: "a", model: "one", status: 404, kind: "MODEL_NOT_FOUND" }, 0);
+  assert.equal(reserveCapacity(state, ask("b", 100, { models: ["one", "two"] }), 1).model, "two", "only the missing model is skipped");
+  releaseReservation(state, { requestId: "b", model: "two", status: 402, kind: "BILLING" }, 2);
+  assert.equal(reserveCapacity(state, ask("c", 100, { models: ["two"] }), 3).permanent, true);
+  releaseReservation(state, { requestId: "x", model: "two", status: 200, kind: null }, 4);
+  assert.equal(ledgerSnapshot(state, 5).account, null);
+  assert.equal(reserveCapacity(state, ask("d", 100, { models: ["two"] }), 5).granted, true, "a success restores the account and the model that served it");
+  assert.equal(reserveCapacity(state, ask("e", 100, { models: ["one"] }), 6).granted, false, "the model that does not exist stays disabled");
+});
+
+test("an account block ends after its cooldown, so the owner's fix is noticed without a restart", () => {
+  const state = emptyLedgerState();
+  reserveCapacity(state, ask("a", 100), 0);
+  releaseReservation(state, { requestId: "a", model: "big", status: 402, kind: "BILLING" }, 0);
+  assert.equal(reserveCapacity(state, ask("b", 100), 3_599_000).permanent, true);
+  assert.equal(reserveCapacity(state, ask("c", 100, { models: ["other"] }), 3_600_001).granted, true);
+});
+
+test("a request bigger than a model's whole allowance is never queued for it; another model that fits is used", () => {
+  const state = emptyLedgerState();
+  observeLedger(state, "small", groq("5000"), 0); // limit 6000 tokens
+  const refused = reserveCapacity(state, ask("a", 18_000, { models: ["small"] }), 0);
+  assert.deepEqual([refused.granted, refused.permanent, refused.kind, refused.reason, refused.waitMs], [false, true, "CAPACITY_EXCEEDED", "request_exceeds_allowance", 0]);
+  assert.equal(Object.keys(state.waiting).length, 0);
+  assert.equal(reserveCapacity(state, ask("b", 18_000, { models: ["small", "large"] }), 0).model, "large");
+  assert.equal(reserveCapacity(state, ask("c", 5_000, { models: ["small"] }), 0).granted, true, "a request that fits is unaffected");
+});
+
+test("an unobserved model admits one request at a time until a response teaches the ledger its allowance", () => {
+  const state = emptyLedgerState();
+  assert.equal(reserveCapacity(state, ask("first", 1_000), 0).granted, true);
+  const second = reserveCapacity(state, ask("second", 1_000), 0);
+  assert.deepEqual([second.granted, second.reason, second.waitMs], [false, "learning_capacity", 1_000]);
+  observeLedger(state, "big", groq("5000"), 10); // the first response's headers arrive
+  assert.equal(reserveCapacity(state, ask("second", 1_000), 20).granted, true, "once known, requests are sized by the real allowance");
+  assert.equal(reserveCapacity(state, ask("third", 4_000), 20).granted, false, "and still cannot oversubscribe it");
+});

@@ -67,6 +67,7 @@ export function chatGovernor(stub, { latencyClass = "INTERACTIVE" } = {}) {
     latencyClass,
     reserve: (request) => governorCall(stub, "reserve", request),
     release: (outcome) => governorCall(stub, "release", outcome),
+    observe: (observation) => governorCall(stub, "observe", observation),
     withdraw: (requestId) => governorCall(stub, "withdraw", { requestId }),
   };
 }

@@ -1,4 +1,5 @@
-import { admit, claimProbe, effectiveHealth, initialHealth, recordOutcome } from "./circuit.mjs";
+import { CIRCUIT, admit, claimProbe, effectiveHealth, initialHealth, recordOutcome } from "./circuit.mjs";
+import { InferenceErrorKind as K } from "./errors.mjs";
 import { compareRequests } from "./contracts.mjs";
 import { parseRateLimitHeaders } from "./rate-limit-state.mjs";
 
@@ -31,7 +32,7 @@ export const WAITING_TTL_MS = 60_000;
 export const POLL_MS = 1_000;
 
 export function emptyLedgerState() {
-  return { version: 1, models: {}, reservations: {}, waiting: {} };
+  return { version: 1, models: {}, reservations: {}, waiting: {}, account: null };
 }
 
 function modelEntry(state, model) {
@@ -44,7 +45,15 @@ function modelEntry(state, model) {
 }
 
 /** Drops expired reservations and waiters, and windows that have reset. Mutates `state`. */
+/**
+ * Failures that belong to the whole account (or key) behind this ledger, not
+ * to one model: no credit, a rejected key, no permission. Every model in the
+ * scope is unusable until the owner fixes it, including models never tried.
+ */
+const ACCOUNT_KINDS = new Set([K.BILLING, K.AUTHENTICATION, K.PERMISSION]);
+
 export function prune(state, now) {
+  if (state.account && state.account.openUntil <= now) state.account = null;
   for (const [id, reservation] of Object.entries(state.reservations)) if (reservation.expiresAt <= now) delete state.reservations[id];
   for (const [id, waiter] of Object.entries(state.waiting)) if (waiter.expiresAt <= now) delete state.waiting[id];
   for (const entry of Object.values(state.models)) {
@@ -72,7 +81,12 @@ function reservedOn(state, model) {
  */
 function available(state, model, now) {
   const entry = state.models[model];
-  if (!entry) return { tokens: Number.POSITIVE_INFINITY, requests: Number.POSITIVE_INFINITY, blockedMs: 0, resetMs: null };
+  // Nothing observed yet: unknown is not empty, but it is not a licence for a stampede either.
+  // One request at a time learns the allowance (from its response headers), then the rest are sized by it.
+  if (!entry || entry.observedAt === null) {
+    if (reservedOn(state, model).requests > 0) return { tokens: 0, requests: 0, blockedMs: POLL_MS, resetMs: POLL_MS, reason: "learning_capacity" };
+    if (!entry) return { tokens: Number.POSITIVE_INFINITY, requests: Number.POSITIVE_INFINITY, blockedMs: 0, resetMs: null };
+  }
   if (entry.blockedUntil !== null && entry.blockedUntil > now) return { tokens: 0, requests: 0, blockedMs: entry.blockedUntil - now, resetMs: entry.blockedUntil - now, reason: entry.blockedReason };
   const reserved = reservedOn(state, model);
   const tokens = entry.remainingTokens === null ? Number.POSITIVE_INFINITY : entry.remainingTokens - reserved.tokens;
@@ -93,6 +107,8 @@ export function reserve(state, request, now) {
   prune(state, now);
   const existing = state.reservations[request.requestId];
   if (existing) return { granted: true, model: existing.model, expiresAt: existing.expiresAt, replay: true };
+  // The whole account is unusable: no model in this scope is tried, and nobody queues for it.
+  if (state.account) return { granted: false, permanent: true, kind: state.account.kind, waitMs: state.account.openUntil - now, reason: "account_disabled", position: 0 };
 
   const me = {
     latencyClass: request.latencyClass ?? "TASK_CRITICAL", priority: request.priority ?? 0,
@@ -103,7 +119,11 @@ export function reserve(state, request, now) {
 
   let soonest = Number.POSITIVE_INFINITY;
   let reason = "capacity";
+  let tooLarge = 0;
   for (const model of request.models) {
+    // Bigger than this model's whole allowance: no wait makes it fit, so it is not a candidate.
+    const limit = state.models[model]?.limitTokens ?? null;
+    if (limit !== null && request.estimatedTokens > limit) { tooLarge += 1; continue; }
     // A target whose circuit is open is not sent to; a recovering one gets one probe at a time.
     const gate = admit(state.models[model]?.health, request.requestId, now);
     if (!gate.allowed) {
@@ -133,6 +153,7 @@ export function reserve(state, request, now) {
     soonest = Math.min(soonest, room.resetMs ?? POLL_MS);
   }
 
+  if (tooLarge === request.models.length) return { granted: false, permanent: true, kind: K.CAPACITY_EXCEEDED, waitMs: 0, reason: "request_exceeds_allowance", position: 0 };
   state.waiting[request.requestId] = {
     models: [...request.models], tokens: request.estimatedTokens, latencyClass: me.latencyClass, priority: me.priority,
     registeredAt: me.enqueuedAt, enqueuedAt: me.enqueuedAt, expiresAt: now + WAITING_TTL_MS,
@@ -182,8 +203,13 @@ export function release(state, outcome, now) {
     const until = outcome.retryAfterMs != null ? now + outcome.retryAfterMs : known.length ? Math.min(...known) : now + 2_000;
     block(entry, until, outcome.scope === "daily" ? "daily_limit" : "rate_limit");
   }
+  if (outcome.kind === null && state.account) state.account = null;
   let transition = null;
-  if (model && outcome.kind !== undefined) transition = recordOutcome(modelEntry(state, model).health, outcome.kind, now);
+  if (ACCOUNT_KINDS.has(outcome.kind)) {
+    state.account = { kind: outcome.kind, openUntil: now + CIRCUIT.configurationCooldownMs, since: now };
+    for (const name of Object.keys(state.models)) recordOutcome(modelEntry(state, name).health, outcome.kind, now);
+    transition = null;
+  } else if (model && outcome.kind !== undefined) transition = recordOutcome(modelEntry(state, model).health, outcome.kind, now);
   else if (model) {
     // No outcome reported (the caller gave up): free a probe slot so another request can probe.
     const health = modelEntry(state, model).health;
@@ -213,6 +239,7 @@ export function ledgerSnapshot(state, now) {
       const { probeRequestId: _probe, ...health } = effectiveHealth(entry.health, now);
       return [model, { ...entry, health, reserved: reservedOn(state, model) }];
     })),
+    account: state.account ? { kind: state.account.kind, openUntil: state.account.openUntil } : null,
     reservations: Object.keys(state.reservations).length,
     waiting: Object.values(state.waiting).sort(compareRequests).map((waiter) => ({ latencyClass: waiter.latencyClass, priority: waiter.priority, tokens: waiter.tokens })),
   };
