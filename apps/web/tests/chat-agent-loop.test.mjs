@@ -45,7 +45,8 @@ test("a plain answer is one round with the tools offered", async () => {
   const { fetcher, requests } = scripted([[say("Hello "), say("there")]]);
   const { promise, events } = run(fetcher);
   const outcome = await promise;
-  assert.deepEqual(outcome, { reply: "Hello there", steps: [] });
+  // The test endpoint is neither Groq nor OpenAI, so it counts as self-hosted.
+  assert.deepEqual(outcome, { reply: "Hello there", steps: [], servedBy: { provider: "self-hosted", model: "m" } });
   assert.equal(requests.length, 1);
   assert.ok(requests[0].tools.some((tool) => tool.function.name === "read_web_page"));
   assert.equal(requests[0].tool_choice, "auto");

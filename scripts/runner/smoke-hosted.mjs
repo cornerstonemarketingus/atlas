@@ -44,6 +44,9 @@ async function streamChat(message) {
 const mode = process.env.ATLAS_SMOKE_MODE || "inspect";
 const status = await api("/api/setup/status");
 console.log(`Setup: ${status.overall} (${status.completedSteps}/${status.totalSteps})`);
+// Provider kinds only (self-hosted, groq, openai): never addresses or keys.
+const route = Array.isArray(status.optional?.chat?.route) ? status.optional.chat.route.map(String) : [];
+if (route.length) console.log(`Chat route: ${route.join(" → ")}`);
 // An unauthenticated identity header must not grant access on workers.dev.
 const forged = await fetch(`${base}/api/tasks`, { headers: { "oai-authenticated-user-id": "operator" } });
 if (forged.status !== 401) throw new Error("Untrusted identity header was accepted");
@@ -54,7 +57,7 @@ if (mode === "chat") {
   // "Stopped early" note, or an error event fails the gate.
   const message = (process.env.ATLAS_SMOKE_CHAT_MESSAGE || "").trim()
     || "Read https://example.com and tell me in two sentences what the page is for, then name one thing it does not say.";
-  const evidence = { mode: "chat", messageChars: message.length };
+  const evidence = { mode: "chat", messageChars: message.length, route };
   const judge = (label, outcome) => {
     const content = outcome.reply?.content ?? "";
     const problems = [];
@@ -66,10 +69,12 @@ if (mode === "chat") {
       conversationId: outcome.conversationId, replyChars: content.length, stored: Boolean(outcome.stored),
       steps: (outcome.steps ?? []).map((step) => ({ label: String(step.label).slice(0, 120), ok: Boolean(step.ok) })),
       ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.error ? { error: outcome.error } : {}),
+      ...(outcome.servedBy ? { servedBy: { provider: String(outcome.servedBy.provider), model: String(outcome.servedBy.model).slice(0, 120) } } : {}),
       passed: problems.length === 0 && !outcome.error,
     };
     const verdict = outcome.error ? `error: ${outcome.error}` : problems.length ? problems.join("; ") : "answered and stored";
-    console.log(`${label}: ${verdict} (${content.length} chars, ${evidence[label].steps.length} tool steps)`);
+    const served = evidence[label].servedBy ? `, written by ${evidence[label].servedBy.provider} ${evidence[label].servedBy.model}` : "";
+    console.log(`${label}: ${verdict} (${content.length} chars, ${evidence[label].steps.length} tool steps${served})`);
   };
 
   judge("nonStreaming", await api("/api/chat", { message }));

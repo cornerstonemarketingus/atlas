@@ -1,4 +1,4 @@
-import { resolveChatModel } from "./model-endpoint.mjs";
+import { providerKind, resolveChatModel } from "./model-endpoint.mjs";
 
 // Dedicated credentials only ever travel to this fixed OpenAI API origin.
 export function openAIModel(environment = process.env) {
@@ -44,6 +44,13 @@ export function resolveChatProvider(environment = process.env, selection = "auto
   const last = origin !== "https://api.openai.com" ? openai : null;
   const second = groq ? { ...groq, ...(last ? { providerFallback: last } : {}) } : last;
   return { ...primary, ...(second ? { providerFallback: second } : {}) };
+}
+
+/** Automatic's route as provider kinds ("self-hosted", "groq", "openai"), never addresses or keys. */
+export function chatRoute(environment = process.env) {
+  const kinds = [];
+  for (let provider = resolveChatProvider(environment); provider?.configured && kinds.length < 4; provider = provider.providerFallback) kinds.push(providerKind(provider.baseUrl));
+  return kinds;
 }
 
 export function chatProviderChoices(environment = process.env) {
