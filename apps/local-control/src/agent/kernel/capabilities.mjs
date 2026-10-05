@@ -24,6 +24,7 @@ export const CAPABILITIES = Object.freeze({
   design: Object.freeze(["filesystem.read", "filesystem.write", "genesis.build"]),
   vision: Object.freeze(["desktop.observe", "browser.read"]),
   automation: Object.freeze(["workflow.prepare"]),
+  opportunity: Object.freeze(["opportunity.read", "opportunity.scout", "opportunity.pursue"]),
   atlas: Object.freeze(["genesis.build", "innovation.build", "atlas.self_improve"]),
 });
 
