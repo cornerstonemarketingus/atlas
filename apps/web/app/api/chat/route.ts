@@ -44,7 +44,7 @@ export async function POST(request: Request) {
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
   const selection = body.provider ?? "auto";
-  if (typeof selection !== "string" || !["auto", "configured", "openai"].includes(selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
+  if (typeof selection !== "string" || !["auto", "configured", "workers-ai", "openai"].includes(selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
   const resolved = resolveChatProvider(process.env, selection);
   if (!resolved.configured) {
     return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });

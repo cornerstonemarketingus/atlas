@@ -829,7 +829,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     // model, then its same-provider fallback model, then the cross-provider
     // fallback (Automatic → OpenAI). Each fallback gets an attempt of its own.
     const emptyChain = [];
-    for (let provider = endpoint, hops = 0; provider && hops < 4; provider = provider.providerFallback, hops += 1) {
+    for (let provider = endpoint, hops = 0; provider && hops < 5; provider = provider.providerFallback, hops += 1) {
       emptyChain.push(provider);
       if (provider === endpoint && provider.fallbackModel && provider.fallbackModel !== provider.model) emptyChain.push({ ...provider, model: provider.fallbackModel, fallbackModel: null });
     }
