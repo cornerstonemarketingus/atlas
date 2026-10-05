@@ -54,6 +54,7 @@ test('real setup GET reports missing task columns and withholds database error t
       githubOAuthConfiguration: () => ({ configured: true }), stripeConfiguration: () => ({ configured: false }),
       githubAppConfiguration: () => ({ configured: false }), platformGitHubToken: () => 'fixture',
       allowedRepositories: () => new Set(['owner/repo']), probeGitHubDispatch: async () => ({ ok: true }), chatReadiness: () => ({ configured: true }),
+      resolveChatModel: () => ({ configured: true }), governorReadiness: async () => ({ bound: false }), workerEnv: {},
     };
     const { GET } = new Function(...Object.keys(dependencies), compiled + '; return { GET };')(...Object.values(dependencies));
     const request = new Request('https://atlas.test/api/setup/status');

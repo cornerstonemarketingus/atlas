@@ -32,10 +32,12 @@ that fallback credential to another model host.
 Optional repository secrets, uploaded to the Worker by the deploy:
 `ATLAS_CHAT_FALLBACK_MODEL` (a second model on the same endpoint for when the
 first is rate-limited; on Groq it defaults to `openai/gpt-oss-20b`, and `none`
-turns it off), `ATLAS_TAVILY_API_KEY` (chat's web search), and
+turns it off), `ATLAS_CHAT_MODELS` (more models on the same endpoint,
+comma-separated; with the quota ledger bound, each call goes to the first one
+that has capacity), `ATLAS_TAVILY_API_KEY` (chat's web search), and
 `ATLAS_ALLOWED_REPOSITORIES`. `GET /api/setup/status` reports under
 `optional.chat` whether chat, its fallback model and web search are configured,
-as flags only. `apps/web/tests/deploy-configuration.test.mjs` fails if chat reads
+and how many models the pool has, as flags and counts only. `apps/web/tests/deploy-configuration.test.mjs` fails if chat reads
 a variable the deploy does not upload.
 
 A chat turn always ends in words. If the model's last response carried none (an

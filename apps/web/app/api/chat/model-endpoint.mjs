@@ -40,7 +40,24 @@ function fallbackModelFor(environment, url, model) {
   return fallback && fallback !== model ? fallback : null;
 }
 
-/** @returns {{ configured: boolean, reason?: string, baseUrl?: string, model?: string, apiKey?: string|null, fallbackModel?: string|null }} */
+/** Model names as a provider writes them (e.g. "openai/gpt-oss-120b", "qwen3:32b"); nothing that could smuggle a separator. */
+const MODEL_NAME = /^[\w.:/@+-]{1,128}$/u;
+export const MAX_POOL_MODELS = 8;
+
+/**
+ * Every model chat may use on this endpoint, in preference order: the main
+ * model, then ATLAS_CHAT_MODELS (comma- or space-separated), then the
+ * fallback. With the quota ledger bound, a call goes to the first of these
+ * that has capacity right now, so one exhausted model does not make a person
+ * wait while another has room. Names that do not look like model names are
+ * dropped rather than sent.
+ */
+function modelPoolFor(environment, model, fallback) {
+  const extra = (environment.ATLAS_CHAT_MODELS || "").split(/[\s,]+/u).filter((name) => MODEL_NAME.test(name));
+  return [...new Set([model, ...extra, ...(fallback ? [fallback] : [])])].slice(0, MAX_POOL_MODELS);
+}
+
+/** @returns {{ configured: boolean, reason?: string, baseUrl?: string, model?: string, apiKey?: string|null, fallbackModel?: string|null, models?: string[] }} */
 export function resolveChatModel(environment = process.env) {
   const baseUrl = (environment.ATLAS_CHAT_BASE_URL || "").trim();
   const model = (environment.ATLAS_CHAT_MODEL || "").trim();
@@ -68,7 +85,8 @@ export function resolveChatModel(environment = process.env) {
 
   if (url.search || url.hash) return { configured: false, reason: "The model endpoint must not contain a query or fragment." };
   if (!apiKey && url.origin === "https://api.groq.com") apiKey = (environment.GROQ_API_KEY || "").trim();
-  return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel: fallbackModelFor(environment, url, model), ...(HOSTED_ORIGINS.has(url.origin) ? {} : { timeoutMs: SELF_HOSTED_TIMEOUT_MS }) };
+  const fallbackModel = fallbackModelFor(environment, url, model);
+  return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel, models: modelPoolFor(environment, model, fallbackModel), ...(HOSTED_ORIGINS.has(url.origin) ? {} : { timeoutMs: SELF_HOSTED_TIMEOUT_MS }) };
 }
 
 /**
@@ -85,6 +103,7 @@ export function chatReadiness(environment = process.env) {
     configured: resolved.configured,
     ...(resolved.configured ? {} : { reason: resolved.reason }),
     fallbackModelConfigured: Boolean(resolved.fallbackModel),
+    modelPoolSize: resolved.configured ? resolved.models.length : 0,
     webSearchConfigured: Boolean(searchKey),
   };
 }
