@@ -28,7 +28,15 @@ const REQUEST_TIMEOUT_MS = 60_000;
  * work already done is not thrown away over one refused request.
  */
 const SYNTHESIS_ATTEMPTS = 3;
-const SYNTHESIS_WAIT_BUDGET_MS = 45_000;
+/**
+ * Waiting for model capacity, per reply. Free tiers limit tokens and requests
+ * per minute, so the provider's stated reset (up to about a minute) is waited
+ * out rather than the reply given up; a longer reset (a daily quota) is not
+ * waited for, and the reply says when it ends. Every provider in the route is
+ * tried before any wait.
+ */
+const SYNTHESIS_WAIT_BUDGET_MS = 150_000;
+const MAX_CAPACITY_WAIT_MS = 65_000;
 /** Output ceiling when a reasoning model spent the whole budget thinking and wrote nothing. */
 const MAX_SYNTHESIS_TOKENS = 8_192;
 /** Room kept for the written answer on top of what the model was seen to spend thinking. */
@@ -143,10 +151,19 @@ export function compactOversizedTools(turns) {
 }
 
 async function sendWithRateLimitRetry(endpoint, turns, options) {
-  if (options.billingBlocked?.has(endpoint.baseUrl)) return Response.json({ error: { code: "insufficient_quota" } }, { status: 429 });
+  if (options.billingBlocked?.has(endpoint.baseUrl)) {
+    options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: 429, category: "billing", retryAfterMs: null });
+    return Response.json({ error: { code: "insufficient_quota" } }, { status: 429 });
+  }
   const send = async messages => {
     const response = await sendModel(endpoint, messages, options);
-    if (response.status === 429 && rateLimitDetails(await response.clone().text().catch(() => "")).category === "billing") options.billingBlocked?.add(endpoint.baseUrl);
+    if (TRANSIENT_STATUSES.has(response.status)) {
+      const body = response.status === 429 ? await response.clone().text().catch(() => "") : "";
+      const category = response.status === 429 ? rateLimitDetails(body).category : "unavailable";
+      if (category === "billing") options.billingBlocked?.add(endpoint.baseUrl);
+      // Who refused and why, in fixed categories only (never provider text).
+      options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: response.status, category, retryAfterMs: response.status === 429 ? retryAfterMs(response.headers, body) : null });
+    }
     return response;
   };
   let response = await send(turns);
@@ -240,7 +257,8 @@ function sleep(ms) {
  * all (EMPTY_MODEL_RESPONSE is not a successful inference).
  */
 async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked }) {
-  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked });
+  const trail = [];
+  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked, trail });
   let toolsDropped = false;
   if (response.status === 400 || (tools && response.status === 422)) {
     const body = await response.clone().text().catch(() => "");
@@ -249,7 +267,7 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
     // and let the loop ask for a corrected call.
     if (rejected) return { ok: false, status: 400, rejectedTool: rejected, model: answeredBy.get(response) ?? endpoint.model, fallbackUsed: answeredBy.has(response) };
     if (tools) {
-      response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked });
+      response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked, trail });
       toolsDropped = true;
     }
   }
@@ -257,7 +275,7 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
   const fallbackUsed = model !== endpoint.model;
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    return { ok: false, status: response.status, retryAfterMs: retryAfterMs(response.headers, body), limitCategory: response.status === 429 ? rateLimitDetails(body).category : null, model, fallbackUsed };
+    return { ok: false, status: response.status, retryAfterMs: soonestReset(trail) ?? retryAfterMs(response.headers, body), limitCategory: response.status === 429 ? rateLimitDetails(body).category : null, model, fallbackUsed, refusals: trail };
   }
   if (!stream || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
     // Not streaming, or a server that ignored stream:true: the whole reply at once.
@@ -351,6 +369,38 @@ function workSummary({ steps, failure }) {
     failure ? `Why it stopped: ${failure}` : "",
     "These results are saved in this conversation. Ask me to continue and I will pick up from here.",
   ].filter(Boolean).join("\n\n");
+}
+
+/** The soonest a rate-limited model in this call said it would have room again. */
+function soonestReset(refusals) {
+  const waits = refusals.filter((entry) => entry.category === "rate_limit" && Number.isFinite(entry.retryAfterMs)).map((entry) => entry.retryAfterMs);
+  return waits.length ? Math.min(...waits) : null;
+}
+
+function roughly(ms) {
+  if (ms < 90_000) return `${Math.max(1, Math.round(ms / 1000))} s`;
+  if (ms < 90 * 60_000) return `${Math.round(ms / 60_000)} min`;
+  return `${Math.round(ms / 3_600_000)} h`;
+}
+
+/**
+ * Which models refused and why, for the person: model and provider host, and
+ * a fixed reason (rate-limited and for how long, no credits, too large,
+ * unavailable). Never the provider's own text, which can echo the prompt.
+ */
+export function describeRefusals(refusals = []) {
+  const latest = new Map();
+  for (const entry of refusals) latest.set(`${entry.host} ${entry.model}`, entry);
+  return [...latest.values()].map((entry) => `${entry.model} (${entry.host}) ${
+    entry.category === "billing" ? "has no API credits or reached a billing limit"
+      : entry.category === "input_too_large" ? "refused a request larger than its per-minute token allowance"
+        : entry.status === 429 ? `is rate-limited${Number.isFinite(entry.retryAfterMs) ? ` for about ${roughly(entry.retryAfterMs)}` : ""}`
+          : `answered ${entry.status}`}`).join("; ");
+}
+
+function limitReason(result) {
+  const detail = describeRefusals(result.refusals);
+  return `the model provider's rate limit was reached${detail ? ` (${detail})` : ""}.`;
 }
 
 /**
@@ -457,15 +507,15 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     // The status is the actionable part; the body can contain the prompt echoed back.
     if (!result.ok) {
       const message = result.limitCategory === "billing" ? "The provider has no available API credits or has reached a billing limit. Use a configured free/local provider; waiting will not restore credit." : result.status === 429
-        ? "The model provider's rate limit was reached (429). Wait a minute and ask again, or set a higher-limit model or ATLAS_CHAT_FALLBACK_MODEL."
+        ? `The model provider's rate limit was reached (429)${describeRefusals(result.refusals) ? `: ${describeRefusals(result.refusals)}` : ""}. Wait and ask again, or set a higher-limit model or ATLAS_CHAT_FALLBACK_MODEL.`
         : `The model endpoint answered ${result.status}.`;
       inferenceDiagnostic(result.status === 429 ? "inference.rate_limited" : "inference.failed", describe(result, round));
       const wait = Math.max(1_000, result.retryAfterMs ?? 2_000);
-      if (round === 0 && result.limitCategory !== "billing" && result.limitCategory !== "input_too_large" && TRANSIENT_STATUSES.has(result.status) && wait <= waitBudget && firstCallRetries < FIRST_CALL_RETRIES) {
+      if (round === 0 && result.limitCategory !== "billing" && result.limitCategory !== "input_too_large" && TRANSIENT_STATUSES.has(result.status) && wait <= waitBudget && wait <= MAX_CAPACITY_WAIT_MS && firstCallRetries < FIRST_CALL_RETRIES) {
         firstCallRetries += 1;
         // Nothing done yet and nothing to synthesize from: wait out the
         // provider's stated reset and ask again, rather than refusing the request.
-        emit("tool", { id: "capacity", label: "Waiting briefly for model capacity…", state: "running", ...tag });
+        emit("tool", { id: "capacity", label: `Waiting about ${roughly(wait)} for model capacity…`, state: "running", ...tag });
         await pause(wait);
         waitBudget -= wait;
         inferenceDiagnostic("inference.retry", { ...describe(result, round), waitedMs: wait });
@@ -475,7 +525,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       if (round === 0) return { error: message, status: result.status === 429 ? 429 : 502 };
       // Work is already done. A transient refusal goes to final synthesis,
       // which waits and retries; a configuration error would only fail again.
-      if (TRANSIENT_STATUSES.has(result.status)) failure = result.status === 429 ? "the model provider's rate limit was reached." : `the model endpoint answered ${result.status}.`;
+      if (TRANSIENT_STATUSES.has(result.status)) failure = result.status === 429 ? limitReason(result) : `the model endpoint answered ${result.status}.`;
       else fatal = message;
       break;
     }
@@ -644,10 +694,10 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       }
       if (result.limitCategory === "billing") { reason = "the provider has no available API credits or has reached a billing limit; use a configured free/local provider."; break; }
       if (!TRANSIENT_STATUSES.has(result.status)) { reason = `the model endpoint answered ${result.status}.`; break; }
-      reason = result.status === 429 ? "the model provider's rate limit was reached." : `the model endpoint answered ${result.status}.`;
+      reason = result.status === 429 ? limitReason(result) : `the model endpoint answered ${result.status}.`;
       const wait = Math.max(1_000, result.retryAfterMs ?? 2_000);
-      if (attempt === SYNTHESIS_ATTEMPTS - 1 || wait > waitBudget) break;
-      emit("tool", { id: progressId, label: "Waiting briefly for model capacity…", state: "running", ...tag });
+      if (attempt === SYNTHESIS_ATTEMPTS - 1 || wait > waitBudget || wait > MAX_CAPACITY_WAIT_MS) break;
+      emit("tool", { id: progressId, label: `Waiting about ${roughly(wait)} for model capacity…`, state: "running", ...tag });
       await pause(wait);
       waitBudget -= wait;
     }

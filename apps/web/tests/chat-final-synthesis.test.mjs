@@ -413,3 +413,39 @@ test("the planner's client asks again on an empty reply instead of feeding \"\" 
   const alwaysEmpty = plannerClient(endpoint, async () => json({ choices: [] })());
   await assert.rejects(async () => { for await (const chunk of alwaysEmpty.stream({ messages: [] })) void chunk; }, (error) => error.code === "EMPTY_MODEL_RESPONSE");
 });
+
+// Production (Automatic, Groq configured, 2026-10-05): one answer used the
+// minute's allowance, and the next reply ended "the model provider's rate
+// limit was reached." after 34 s, because Groq's model, Groq's fallback model
+// and the OpenAI fallback all refused within that minute and a ~40 s reset
+// was more than the reply would wait.
+for (const stream of [false, true]) {
+  const read = { choices: [{ message: { tool_calls: [{ id: "read1", type: "function", function: { name: "read_web_page", arguments: JSON.stringify({ url: "https://example.com" }) } }] } }] };
+  const limited = () => new Response("", { status: 429, headers: { "retry-after": "40" } });
+  const noCredits = () => new Response(JSON.stringify({ error: { code: "insufficient_quota", message: "private provider text" } }), { status: 429 });
+  const providerFallback = { baseUrl: "https://model.test/openai/v1", apiKey: "openai-key", model: "gpt-mini" };
+
+  test(`every provider refusing for a minute is waited out, then the answer is written (stream=${stream})`, async () => {
+    const { fetcher, requests } = scripted([json(read), limited, limited, noCredits, limited, limited, json({ choices: [{ message: { content: "Answer from the work." } }] })]);
+    const slept = [];
+    const { promise, events } = run(fetcher, { stream, endpoint: { ...endpoint, fallbackModel: "small", providerFallback }, sleep: async (ms) => { slept.push(ms); } });
+    const outcome = await promise;
+    assert.equal(outcome.reply, "Answer from the work.");
+    assert.equal(outcome.finalization, undefined);
+    assert.deepEqual(slept, [40_000], "every route is tried before waiting, and the wait is the stated reset");
+    // The OpenAI account without credits is not asked again in the same reply.
+    assert.deepEqual(requests.map((request) => request.model), ["m", "m", "small", "gpt-mini", "m", "small", "m"]);
+    assert.ok(events.some((event) => event.type === "tool" && /Waiting about 40 s for model capacity/u.test(event.data.label)));
+  });
+
+  test(`when no provider recovers, the reply names who refused and why (stream=${stream})`, async () => {
+    const { fetcher } = scripted([json(read), limited, limited, noCredits, ...Array.from({ length: 6 }, () => limited)]);
+    const slept = [];
+    const outcome = await run(fetcher, { stream, endpoint: { ...endpoint, fallbackModel: "small", providerFallback }, sleep: async (ms) => { slept.push(ms); } }).promise;
+    assert.deepEqual(slept, [40_000, 40_000]);
+    assert.equal(outcome.finalization.status, "incomplete");
+    assert.match(outcome.finalization.reason, /rate limit was reached \(m \(model\.test\) is rate-limited for about 40 s; small \(model\.test\) is rate-limited for about 40 s; gpt-mini \(model\.test\) has no API credits or reached a billing limit\)/u);
+    assert.match(outcome.reply, /Why it stopped: the model provider's rate limit was reached \(/u);
+    assert.doesNotMatch(outcome.reply, /private provider text/u);
+  });
+}
