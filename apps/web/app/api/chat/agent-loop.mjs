@@ -291,9 +291,12 @@ async function sendWithRateLimitRetry(endpoint, turns, options) {
     }
     return response;
   }
-  if (wait <= MAX_RATE_LIMIT_WAIT_MS) {
+  // With a pool behind the ledger the refusal is already recorded there, so the
+  // retry goes straight to a model with room (or waits in the ledger's queue).
+  const pooled = ledgerSaw.has(response) && (endpoint.models?.length ?? 0) > 1;
+  if (pooled || wait <= MAX_RATE_LIMIT_WAIT_MS) {
     await response.body?.cancel().catch(() => {});
-    await (options.sleep ?? sleep)(wait);
+    if (!pooled) await (options.sleep ?? sleep)(wait);
     response = await send(turns);
   }
   return response;
