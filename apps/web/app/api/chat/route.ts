@@ -18,6 +18,8 @@ import { threadTitle } from "./model-endpoint.mjs";
 import { resolveChatProvider, chatProviderChoices } from "./providers.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
+import { governChain } from "../inference/governor-client.mjs";
+import { workerEnv } from "../inference/worker-env.mjs";
 import { createAgentTeam } from "./agent-team.mjs";
 import { instantToolDefinitions } from "./instant-tools.mjs";
 
@@ -43,10 +45,12 @@ export async function POST(request: Request) {
   // question that was never sent anywhere is worse than no thread.
   const selection = body.provider ?? "auto";
   if (typeof selection !== "string" || !["auto", "configured", "openai"].includes(selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
-  const endpoint = resolveChatProvider(process.env, selection);
-  if (!endpoint.configured) {
-    return Response.json({ message: endpoint.reason, needsModelEndpoint: true }, { status: 503 });
+  const resolved = resolveChatProvider(process.env, selection);
+  if (!resolved.configured) {
+    return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
   }
+  // Every model call reserves through the provider scope's quota ledger (Phase 1.2); none when unbound.
+  const endpoint = await governChain(resolved, workerEnv);
 
   const db = getDb();
   const now = new Date().toISOString();

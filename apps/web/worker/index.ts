@@ -3,6 +3,9 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 import { withSecurityHeaders } from "./security-headers.mjs";
 
+// Durable Object classes must be exported from the Worker's entry point.
+export { InferenceGovernorObject } from "./inference-governor.mjs";
+
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;

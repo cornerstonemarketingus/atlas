@@ -2,6 +2,7 @@ import { TASK_TOOL, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } from "./instant-tools.mjs";
 import { completionsUrl, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
+import { classifyHttpFailure, classifyThrown, estimateRequestTokens } from "../../../../../packages/atlas-inference/src/index.mjs";
 
 /**
  * The agent loop behind one chat reply.
@@ -22,7 +23,113 @@ export const MAX_REPLY_TOKENS = 2048;
 /** The longest wait honoured from a provider's retry-after before trying the fallback model instead. */
 const MAX_RATE_LIMIT_WAIT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 60_000;
+/** Longest inline wait for the quota ledger before returning its retry time to the caller. */
+export const MAX_GOVERNOR_WAIT_MS = 8_000;
+/** Responses whose call the quota ledger took part in (it answered the reservation, so it recorded any refusal). */
+const ledgerSaw = new WeakSet();
+/** Ledger order (docs/PROGRAM.md 1.2): within a latency class the final synthesis goes first, because it turns work already paid for into the answer. */
+const SYNTHESIS_PRIORITY = 10;
 /** A model on the owner's own machine generates more slowly than a hosted one; its endpoint says so (`timeoutMs`). */
+/** Only the capacity headers go to the ledger: never a body, a key or any other header. */
+function capacityHeaders(headers) {
+  const kept = {};
+  for (const [name, value] of headers) if (name === "retry-after" || name.startsWith("x-ratelimit-")) kept[name] = value;
+  return kept;
+}
+
+/**
+ * sendModel through the shared quota ledger (endpoint.governor, see
+ * app/api/inference/governor-client.mjs): reserve the estimated tokens
+ * before sending, wait in the ledger's queue while it says capacity returns
+ * soon, then release with what the provider reported, so every isolate and
+ * agent on the same provider allowance sees the same remaining capacity.
+ *
+ * With a model pool (endpoint.models), the ledger grants the first candidate
+ * that has room and the call goes there.
+ *
+ * Missing/unavailable governors retain the legacy direct path. A known
+ * capacity refusal must never send anyway: return its retry time so the
+ * caller can use another model or its bounded recovery path.
+ */
+export async function governedSend(endpoint, turns, options) {
+  const governor = endpoint.governor;
+  if (!governor) return sendModel(endpoint, turns, options);
+  const requestId = crypto.randomUUID();
+  // The ledger grants the first candidate with room: this model, then the rest of the pool.
+  const candidates = [endpoint.model, ...(endpoint.models ?? []).filter((model) => model !== endpoint.model)];
+  const estimatedTokens = estimateRequestTokens({ messages: turns, tools: options.tools ?? undefined }) + (options.maxTokens ?? MAX_REPLY_TOKENS);
+  let waited = 0;
+  let target = endpoint;
+  let answered = false;
+  for (;;) {
+    const grant = await governor.reserve({ requestId, models: candidates, estimatedTokens, latencyClass: options.latencyClass ?? governor.latencyClass, priority: options.priority ?? 0 });
+    answered ||= Boolean(grant);
+    if (grant?.granted && grant.model !== endpoint.model && candidates.includes(grant.model)) target = { ...endpoint, model: grant.model };
+    if (!grant || grant.granted) break;
+    const waitMs = Number.isFinite(grant.waitMs) && grant.waitMs > 0 ? Math.ceil(grant.waitMs) : 1_000;
+    if (waited + waitMs > MAX_GOVERNOR_WAIT_MS) {
+      await governor.withdraw(requestId);
+      inferenceDiagnostic("inference.governor_wait_exceeded", { model: endpoint.model, reason: grant.reason, waitMs: grant.waitMs, waitedMs: waited });
+      const refusal = new Response(JSON.stringify({ error: { code: "ATLAS_CAPACITY_WAIT", message: "Model capacity is reserved; retry after the indicated delay." } }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": String(Math.ceil(waitMs / 1000)), "x-atlas-capacity-wait": "true" },
+      });
+      ledgerSaw.add(refusal);
+      return refusal;
+    }
+    await (options.sleep ?? sleep)(waitMs);
+    waited += waitMs;
+  }
+  let response;
+  try {
+    response = await sendModel(target, turns, options);
+  } catch (error) {
+    await governor.release({ requestId, model: target.model, kind: classifyThrown(error).kind });
+    throw error;
+  }
+  // Attribution and ledger participation follow the response the caller actually gets.
+  const tagged = (returned) => {
+    if (target !== endpoint) answeredBy.set(returned, target.model);
+    if (answered) ledgerSaw.add(returned);
+    return returned;
+  };
+  const failure = response.ok ? null : classifyHttpFailure({ status: response.status, body: await response.clone().text().catch(() => ""), headers: response.headers });
+  const outcome = {
+    requestId, model: target.model, headers: capacityHeaders(response.headers), status: response.status,
+    kind: failure?.kind ?? null, retryAfterMs: failure?.retryAfterMs ?? null, ...(failure?.scope ? { scope: failure.scope } : {}),
+  };
+  if (response.ok && response.body && (response.headers.get("content-type") ?? "").includes("text/event-stream")) {
+    const reader = response.body.getReader();
+    let released = false;
+    const release = async (kind = null) => {
+      if (released) return;
+      released = true;
+      await governor.release({ ...outcome, kind });
+    };
+    // Headers arrive before generation ends. Keep the reservation until the
+    // consumer finishes, cancels, or observes a stream failure.
+    const body = new ReadableStream({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) { await release(); controller.close(); }
+          else controller.enqueue(value);
+        } catch (error) {
+          await release(classifyThrown(error).kind);
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        try { await reader.cancel(reason); }
+        finally { await release("CANCELLED"); }
+      },
+    }, { highWaterMark: 0 });
+    return tagged(new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }));
+  }
+  await governor.release(outcome);
+  return tagged(response);
+}
+
 /**
  * Final synthesis: the call that turns completed work into the answer. It has
  * its own bounded recovery (retries, fallback, waiting out a rate limit) so
@@ -159,7 +266,7 @@ async function sendWithRateLimitRetry(endpoint, turns, options) {
     return Response.json({ error: { code: "insufficient_quota" } }, { status: 429 });
   }
   const send = async messages => {
-    const response = await sendModel(endpoint, messages, options);
+    const response = await governedSend(endpoint, messages, options);
     if (TRANSIENT_STATUSES.has(response.status)) {
       const body = response.status === 429 ? await response.clone().text().catch(() => "") : "";
       const category = response.status === 429 ? rateLimitDetails(body).category : "unavailable";
@@ -198,7 +305,7 @@ async function callConfiguredModel(endpoint, turns, options) {
   if (rateLimitDetails(await response.clone().text().catch(() => "")).category === "billing") return response;
   await response.body?.cancel().catch(() => {});
   const fallback = await sendWithRateLimitRetry({ ...endpoint, model: endpoint.fallbackModel }, turns, options);
-  answeredBy.set(fallback, endpoint.fallbackModel);
+  if (!answeredBy.has(fallback)) answeredBy.set(fallback, endpoint.fallbackModel);
   return fallback;
 }
 
@@ -260,9 +367,9 @@ function sleep(ms) {
  * reason, which model answered, and whether an HTTP 200 carried anything at
  * all (EMPTY_MODEL_RESPONSE is not a successful inference).
  */
-async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked }) {
+async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked, latencyClass, priority }) {
   const trail = [];
-  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked, trail });
+  let response = await callModel(endpoint, turns, { stream, tools, toolChoice, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked, trail, latencyClass, priority });
   let toolsDropped = false;
   if (response.status === 400 || (tools && response.status === 422)) {
     const body = await response.clone().text().catch(() => "");
@@ -271,7 +378,7 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
     // and let the loop ask for a corrected call.
     if (rejected) return { ok: false, status: 400, rejectedTool: rejected, model: answeredBy.get(response) ?? endpoint.model, fallbackUsed: answeredBy.has(response) };
     if (tools) {
-      response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked, trail });
+      response = await callModel(endpoint, turns, { stream, tools: null, fetcher, maxTokens, sleep: pause, reasoningEffort, billingBlocked, trail, latencyClass, priority });
       toolsDropped = true;
     }
   }
@@ -434,6 +541,8 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   const offered = new Set(tools.map((tool) => tool.function.name));
   const runnable = (name) => offered.has(name) && (isInstantTool(name) || name in handlers);
   const tag = agentId ? { agentId } : {};
+  // Ledger class: the reply a person is watching is INTERACTIVE; child agents are TASK_CRITICAL.
+  const latencyClass = agentId ? "TASK_CRITICAL" : "INTERACTIVE";
   const working = [...turns];
   const billingBlocked = new Set();
   const steps = [];
@@ -484,7 +593,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     let result;
     try {
       // The last round keeps the tool definitions (earlier rounds' results refer to them) but must answer in words.
-      result = await modelStep({ billingBlocked, endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sinkFor(), toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause });
+      result = await modelStep({ billingBlocked, endpoint, turns: working, tools: toolsSupported && tools.length ? tools : null, stream, emit: sinkFor(), toolChoice: round < maxRounds ? "auto" : "none", fetcher, maxTokens, sleep: pause, latencyClass });
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "TimeoutError";
       const message = timedOut ? "The model endpoint did not answer in time." : "No model server answered. Check the endpoint in Connections.";
@@ -649,7 +758,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       let result;
       try {
         // No tools: the model cannot start another tool cycle, only answer.
-        result = await modelStep({ billingBlocked, endpoint: target, turns: synthesisTurns, tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause, reasoningEffort });
+        result = await modelStep({ billingBlocked, endpoint: target, turns: synthesisTurns, tools: null, stream, emit: sinkFor(), fetcher, maxTokens: tokens, sleep: pause, reasoningEffort, latencyClass, priority: SYNTHESIS_PRIORITY });
       } catch (error) {
         result = { ok: false, status: error instanceof Error && error.name === "TimeoutError" ? 504 : 503, retryAfterMs: 2_000 };
       }

@@ -110,7 +110,7 @@ export function plannerClient(endpoint, fetcher = fetch, sleep = undefined) {
     async *stream({ messages, maxOutputTokens = 1500 }) {
       let maxTokens = maxOutputTokens;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const response = await callModel(endpoint, messages, { stream: false, tools: null, fetcher, maxTokens, sleep });
+        const response = await callModel(endpoint, messages, { stream: false, tools: null, fetcher, maxTokens, sleep, latencyClass: "TASK_CRITICAL" });
         if (!response.ok) throw Object.assign(new Error(`The model endpoint answered ${response.status}.`), { code: "MODEL_UNAVAILABLE" });
         let payload = null;
         try { payload = await response.json(); } catch { /* treated as empty below */ }

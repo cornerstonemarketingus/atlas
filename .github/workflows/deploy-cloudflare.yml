@@ -88,6 +88,9 @@ jobs:
           # the fallback was added, but it was never uploaded, so production
           # stopped on every 429 that a fallback would have absorbed.
           ATLAS_CHAT_FALLBACK_MODEL: ${{ secrets.ATLAS_CHAT_FALLBACK_MODEL }}
+          # More models on the same endpoint (comma-separated). With the quota
+          # ledger bound, each call goes to the first one with capacity.
+          ATLAS_CHAT_MODELS: ${{ secrets.ATLAS_CHAT_MODELS }}
           # Chat's web_search tool. Without it the tool reports it is not set up.
           ATLAS_TAVILY_API_KEY: ${{ secrets.ATLAS_TAVILY_API_KEY }}
           # Comma-separated owner/name repositories chat tools and tasks may act
@@ -125,6 +128,7 @@ jobs:
             ATLAS_CHAT_FALLBACK_MODEL \
             GROQ_API_KEY \
             OPENAI_API_KEY \
+            ATLAS_CHAT_MODELS \
             ATLAS_TAVILY_API_KEY \
             ATLAS_ALLOWED_REPOSITORIES \
             ATLAS_STRIPE_SECRET_KEY \
@@ -155,6 +159,6 @@ jobs:
         run: |
           echo "Sign-in needs: ATLAS_SESSION_SECRET, ATLAS_GITHUB_OAUTH_CLIENT_ID, ATLAS_GITHUB_OAUTH_CLIENT_SECRET"
           echo "Optional owner login: ATLAS_OWNER_GITHUB_LOGINS"
-          echo "Chat needs: ATLAS_CHAT_BASE_URL, ATLAS_CHAT_MODEL (ATLAS_MODEL_API_KEY only if your server authenticates); optional ATLAS_CHAT_FALLBACK_MODEL, ATLAS_TAVILY_API_KEY"
+          echo "Chat needs: ATLAS_CHAT_BASE_URL, ATLAS_CHAT_MODEL (ATLAS_MODEL_API_KEY only if your server authenticates); optional ATLAS_CHAT_FALLBACK_MODEL, ATLAS_CHAT_MODELS, ATLAS_TAVILY_API_KEY"
           echo "Billing needs: ATLAS_STRIPE_SECRET_KEY, ATLAS_STRIPE_WEBHOOK_SECRET, ATLAS_STRIPE_PRICE_PRO, ATLAS_STRIPE_PRICE_TEAM"
           echo "Verify live with: GET /api/setup/status (send your operator token as a Bearer credential)"

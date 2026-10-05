@@ -84,3 +84,16 @@ test("the fallback chat model: Groq defaults to gpt-oss-20b, configurable, and c
   assert.equal(resolve({ ...groq, ATLAS_CHAT_MODEL: "openai/gpt-oss-20b" }).fallbackModel, null);
   assert.equal(resolve({ ATLAS_CHAT_BASE_URL: "https://models.example.com/v1", ATLAS_CHAT_MODEL: "m" }).fallbackModel, null);
 });
+
+test("ATLAS_CHAT_MODELS adds models to the pool, in order, after the main model and before the fallback", async () => {
+  const { resolveChatModel, MAX_POOL_MODELS } = await import("../app/api/chat/model-endpoint.mjs");
+  const base = { ATLAS_CHAT_BASE_URL: "https://api.groq.com/openai/v1", ATLAS_CHAT_MODEL: "main" };
+  assert.deepEqual(resolveChatModel(base).models, ["main", "openai/gpt-oss-20b"]);
+  assert.deepEqual(resolveChatModel({ ...base, ATLAS_CHAT_MODELS: "qwen/qwen3-32b, llama-3.3-70b-versatile  main,qwen/qwen3-32b" }).models,
+    ["main", "qwen/qwen3-32b", "llama-3.3-70b-versatile", "openai/gpt-oss-20b"], "duplicates and the main model are listed once");
+  assert.deepEqual(resolveChatModel({ ...base, ATLAS_CHAT_FALLBACK_MODEL: "none", ATLAS_CHAT_MODELS: "a" }).models, ["main", "a"]);
+  assert.deepEqual(resolveChatModel({ ...base, ATLAS_CHAT_FALLBACK_MODEL: "none", ATLAS_CHAT_MODELS: "ok bad\"name <x> a;b" }).models, ["main", "ok"], "anything that is not a model name is dropped");
+  const many = Array.from({ length: 20 }, (_, index) => `m${index}`).join(",");
+  assert.equal(resolveChatModel({ ...base, ATLAS_CHAT_MODELS: many }).models.length, MAX_POOL_MODELS);
+  assert.equal(resolveChatModel({ ATLAS_CHAT_MODEL: "main" }).models, undefined, "an unconfigured endpoint has no pool");
+});
