@@ -22,6 +22,7 @@ export const MAX_REPLY_TOKENS = 2048;
 /** The longest wait honoured from a provider's retry-after before trying the fallback model instead. */
 const MAX_RATE_LIMIT_WAIT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 60_000;
+/** A model on the owner's own machine generates more slowly than a hosted one; its endpoint says so (`timeoutMs`). */
 /**
  * Final synthesis: the call that turns completed work into the answer. It has
  * its own bounded recovery (retries, fallback, waiting out a rate limit) so
@@ -47,7 +48,9 @@ const SYNTHESIS_RESULT_CHARS = 4_000;
 /** Retries of the very first call when the provider refuses it for now. */
 const FIRST_CALL_RETRIES = 2;
 /** Statuses that say "not now", as opposed to "not ever" (401, 403, 404, 400). */
-const TRANSIENT_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
+// 520–524 and 530 are Cloudflare's answers when the origin behind a tunnel is
+// down or unreachable (a self-hosted model on a machine that is off).
+const TRANSIENT_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529, 530]);
 
 /** Which model actually answered a response, when the fallback was used. */
 const answeredBy = new WeakMap();
@@ -55,7 +58,7 @@ const answeredBy = new WeakMap();
 function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, reasoningEffort }) {
   return fetcher(completionsUrl(endpoint.baseUrl), {
     method: "POST",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(endpoint.timeoutMs ?? REQUEST_TIMEOUT_MS),
     headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
     body: JSON.stringify({
       model: endpoint.model, messages: turns, stream,
@@ -207,7 +210,8 @@ export async function callModel(endpoint, turns, options) {
     if (!endpoint.providerFallback) throw error;
   }
   if (!endpoint.providerFallback || (response && !TRANSIENT_STATUSES.has(response.status))) return response;
-  const fallback = await callConfiguredModel(endpoint.providerFallback, turns, options);
+  // The fallback may have its own (self-hosted → Groq → OpenAI).
+  const fallback = await callModel(endpoint.providerFallback, turns, options);
   // A paid fallback without credits must not hide the free provider's reset.
   if (response?.status === 429 && fallback.status === 429 && rateLimitDetails(await fallback.clone().text().catch(() => "")).category === "billing") {
     await fallback.body?.cancel().catch(() => {});
@@ -634,11 +638,11 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     // Who writes the answer when a model replies with nothing: the configured
     // model, then its same-provider fallback model, then the cross-provider
     // fallback (Automatic → OpenAI). Each fallback gets an attempt of its own.
-    const emptyChain = [
-      endpoint,
-      ...(endpoint.fallbackModel && endpoint.fallbackModel !== endpoint.model ? [{ ...endpoint, model: endpoint.fallbackModel, fallbackModel: null }] : []),
-      ...(endpoint.providerFallback ? [endpoint.providerFallback] : []),
-    ];
+    const emptyChain = [];
+    for (let provider = endpoint, hops = 0; provider && hops < 4; provider = provider.providerFallback, hops += 1) {
+      emptyChain.push(provider);
+      if (provider === endpoint && provider.fallbackModel && provider.fallbackModel !== provider.model) emptyChain.push({ ...provider, model: provider.fallbackModel, fallbackModel: null });
+    }
     let emptiesFromTarget = 0;
     const attempts = SYNTHESIS_ATTEMPTS + emptyChain.length - 1;
     for (let attempt = 0; attempt < attempts; attempt += 1) {

@@ -52,12 +52,42 @@ unset `ATLAS_SELF_HOSTED_MODEL`, select `ATLAS_CODER_PROVIDER=groq` and a suppor
 The Atlas-only runner installs the target CLI's dependencies without lifecycle
 scripts and verifies `packages/atlas-cli` by default.
 
-Ollama is optional. An installed/downloaded model is not proof it fits in memory
-or responds within the request deadline. A Worker cannot reach the PC's localhost.
-If exposing a local model, put `scripts/local/model-gateway.mjs` behind HTTPS,
-configure a random 32+ character `ATLAS_MODEL_API_KEY`, and point the tunnel at
-gateway port 11435. Do not expose Ollama's unauthenticated management API directly.
-Availability then depends on the PC and tunnel remaining online.
+### Your own model as the main chat model (Ollama)
+
+Hosted chat can use a model on your own machine instead of Groq, with Groq and
+OpenAI kept as fallbacks for when that machine is off, busy or too slow
+(Automatic: your model → Groq `openai/gpt-oss-120b` → `openai/gpt-oss-20b` →
+OpenAI). A Worker cannot reach your PC's localhost, so the model is reached
+through `scripts/local/model-gateway.mjs` behind a public HTTPS address.
+
+1. Install Ollama and pull a model that supports tool calling and fits your
+   memory (for example `ollama pull qwen3:14b` with about 12 GB of GPU memory,
+   `qwen3:8b` with less). A downloaded model is not proof it fits or answers in
+   time: run one prompt with `ollama run` first.
+2. Make a gateway token (32+ characters), e.g.
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
+3. Start the gateway on the same machine (loopback port 11435):
+   `ATLAS_MODEL_API_KEY=<token> ATLAS_GATEWAY_MODELS=qwen3:14b node scripts/local/model-gateway.mjs`
+   (PowerShell: set `$env:ATLAS_MODEL_API_KEY` and `$env:ATLAS_GATEWAY_MODELS`
+   first). It serves only `/v1/models` and `/v1/chat/completions`, streaming
+   and tool calls included, behind the token; Ollama's management API is never
+   exposed. Requests beyond `ATLAS_GATEWAY_CONCURRENCY` (default 1) wait in a
+   short queue; a full queue answers 429, and Atlas moves to Groq.
+4. Give the gateway a public HTTPS address: `tailscale funnel 11435` (a stable
+   `https://<machine>.<tailnet>.ts.net` address, no domain needed), or a named
+   Cloudflare Tunnel to `http://127.0.0.1:11435` on a domain you own. Never
+   point a tunnel at Ollama's port 11434.
+5. In the repository's Actions secrets set `ATLAS_CHAT_BASE_URL` to
+   `https://<address>/v1`, `ATLAS_CHAT_MODEL` to the model name and
+   `ATLAS_MODEL_API_KEY` to the token. Keep `GROQ_API_KEY` and `OPENAI_API_KEY`
+   for the fallbacks (`GROQ_API_KEY` reaches the Worker as its own secret once
+   the deploy workflow uploads it).
+6. Run "Deploy Atlas web to Cloudflare Workers", then "Verify hosted Atlas" in
+   `chat` mode.
+
+A self-hosted model gets five minutes per request (hosted providers keep one).
+When the machine or tunnel is down (connection refused, Cloudflare 520–524 or
+530), chat routes to Groq without waiting.
 
 ## Live acceptance checks
 
