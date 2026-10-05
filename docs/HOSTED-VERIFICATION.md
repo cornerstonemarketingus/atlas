@@ -54,6 +54,30 @@ unset `ATLAS_SELF_HOSTED_MODEL`, select `ATLAS_CODER_PROVIDER=groq` and a suppor
 The Atlas-only runner installs the target CLI's dependencies without lifecycle
 scripts and verifies `packages/atlas-cli` by default.
 
+### No Groq, no Ollama: Cloudflare Workers AI
+
+Hosted Atlas already runs on Cloudflare, and the same account can serve the
+model through Workers AI's OpenAI-compatible endpoint (streaming and tool
+calls), so chat needs neither Groq, nor a machine of yours that must stay on,
+nor OpenAI credits. Workers AI has a free daily allowance and usage pricing
+beyond it on the paid Workers plan.
+
+1. In the Cloudflare dashboard create an API token with the **Workers AI**
+   permission only (My Profile → API Tokens → Create Token → Workers AI
+   template). Do not reuse the deploy token.
+2. Add it to the repository's Actions secrets as `ATLAS_WORKERS_AI_TOKEN`.
+   `CLOUDFLARE_ACCOUNT_ID` is already there for deploys. Optional:
+   `ATLAS_WORKERS_AI_MODEL` (default `@cf/openai/gpt-oss-120b`, with
+   `@cf/meta/llama-3.3-70b-instruct-fp8-fast` as its fallback model).
+3. Run "Deploy Atlas web to Cloudflare Workers", then "Verify hosted Atlas" in
+   `chat` mode: the route line shows `workers-ai`.
+
+Automatic puts Workers AI right after the main model. To make it the main
+model, remove `ATLAS_CHAT_BASE_URL` and `ATLAS_CHAT_MODEL` (the route is then
+`workers-ai → groq → openai` for whichever keys exist), or pick "Cloudflare
+Workers AI" in the chat's model menu. The token is sent only to
+`https://api.cloudflare.com/client/v4/accounts/<account>/ai/v1/`.
+
 ### Your own model as the main chat model (Ollama)
 
 Hosted chat can use a model on your own machine instead of Groq, with Groq and
