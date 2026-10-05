@@ -50,6 +50,12 @@ export default defineConfig(async ({ command }) => {
           },
         ]
       : [],
+    // One inference governor per provider quota scope: reservations every
+    // isolate shares (docs/PROGRAM.md Phase 1.2). SQLite-backed.
+    durable_objects: {
+      bindings: [{ name: "INFERENCE_GOVERNOR", class_name: "InferenceGovernorObject" }],
+    },
+    migrations: [{ tag: "v1-inference-governor", new_sqlite_classes: ["InferenceGovernorObject"] }],
     r2_buckets: r2
       ? [
           {

@@ -1,6 +1,6 @@
 import { MAX_STEPS, planMission } from "../../../../local-control/src/agent/team/planner.mjs";
 import { parseJsonReply } from "../../../../local-control/src/agent/team/model.mjs";
-import { callModel, converse, inferenceDiagnostic } from "./agent-loop.mjs";
+import { MAX_ATTEMPTS_PER_STEP, callModel, converse, inferenceDiagnostic } from "./agent-loop.mjs";
 import { asData, instantToolDefinitions } from "./instant-tools.mjs";
 import { replyText } from "./model-endpoint.mjs";
 
@@ -110,7 +110,7 @@ export function plannerClient(endpoint, fetcher = fetch, sleep = undefined) {
     async *stream({ messages, maxOutputTokens = 1500 }) {
       let maxTokens = maxOutputTokens;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const response = await callModel(endpoint, messages, { stream: false, tools: null, fetcher, maxTokens, sleep });
+        const response = await callModel(endpoint, messages, { stream: false, tools: null, fetcher, maxTokens, sleep, latencyClass: "TASK_CRITICAL", attempts: [{ used: 0, max: MAX_ATTEMPTS_PER_STEP }] });
         if (!response.ok) throw Object.assign(new Error(`The model endpoint answered ${response.status}.`), { code: "MODEL_UNAVAILABLE" });
         let payload = null;
         try { payload = await response.json(); } catch { /* treated as empty below */ }
