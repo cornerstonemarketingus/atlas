@@ -123,6 +123,7 @@ jobs:
             ATLAS_CHAT_MODEL \
             ATLAS_MODEL_API_KEY \
             ATLAS_CHAT_FALLBACK_MODEL \
+            GROQ_API_KEY \
             OPENAI_API_KEY \
             ATLAS_TAVILY_API_KEY \
             ATLAS_ALLOWED_REPOSITORIES \
