@@ -1,6 +1,6 @@
 import { TASK_TOOL, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } from "./instant-tools.mjs";
-import { completionsUrl, replyText } from "./model-endpoint.mjs";
+import { completionsUrl, providerKind, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
 import { classifyHttpFailure, classifyThrown, estimateRequestTokens } from "../../../../../packages/atlas-inference/src/index.mjs";
 
@@ -199,6 +199,8 @@ const TRANSIENT_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504, 520,
 
 /** Which model actually answered a response, when the fallback was used. */
 const answeredBy = new WeakMap();
+/** Which provider (base URL) answered, when a cross-provider fallback did. */
+const answeredVia = new WeakMap();
 
 function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, reasoningEffort }) {
   return fetcher(completionsUrl(endpoint.baseUrl), {
@@ -395,6 +397,7 @@ export async function callModel(endpoint, turns, options) {
   }
   await response?.body?.cancel().catch(() => {});
   if (!answeredBy.has(fallback)) answeredBy.set(fallback, next.model);
+  if (!answeredVia.has(fallback)) answeredVia.set(fallback, next.baseUrl);
   return fallback;
 }
 
@@ -455,6 +458,7 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
   }
   const model = answeredBy.get(response) ?? endpoint.model;
   const fallbackUsed = model !== endpoint.model;
+  const provider = providerKind(answeredVia.get(response) ?? endpoint.baseUrl);
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     return { ok: false, status: response.status, retryAfterMs: soonestReset(trail) ?? retryAfterMs(response.headers, body), limitCategory: response.status === 429 ? rateLimitDetails(body).category : null, model, fallbackUsed, refusals: trail };
@@ -474,7 +478,7 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
       finishReason: typeof choice?.finish_reason === "string" ? choice.finish_reason : null,
       hadReasoning: typeof thought === "string" && thought.length > 0,
       usage: usageSummary(payload?.usage), noChoices: payload !== null && !choice,
-      invalid: payload === null, model, fallbackUsed, status: response.status,
+      invalid: payload === null, model, provider, fallbackUsed, status: response.status,
     };
   }
   const parser = createDeltaParser();
@@ -499,7 +503,7 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
   take(parser.finish(decoder.decode()));
   return {
     ok: true, text, calls: parser.toolCalls, toolsDropped, finishReason: parser.finishReason,
-    hadReasoning: parser.sawReasoning, usage: usageSummary(parser.usage), invalid: false, model, fallbackUsed, status: response.status,
+    hadReasoning: parser.sawReasoning, usage: usageSummary(parser.usage), invalid: false, model, provider, fallbackUsed, status: response.status,
   };
 }
 
@@ -604,7 +608,7 @@ function limitReason(result) {
  *   agentId?: string,
  *   sleep?: (ms: number) => Promise<void>,
  * }} options
- * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[], finalization?: { status: string, reason: string, completedSteps: number, failedSteps: number } } | { error: string, status: number }>}
+ * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[], finalization?: { status: string, reason: string, completedSteps: number, failedSteps: number }, servedBy?: { provider: string, model: string } } | { error: string, status: number }>}
  */
 export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause = sleep }) {
   // Child agents get their own, narrower tool list and no task starting; the lead gets everything.
@@ -626,6 +630,8 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   // What the most recent model response said in words. An answer is only
   // final when the last thing the model did was write one.
   let lastText = "";
+  // Which provider kind and model wrote the latest words of the reply.
+  let servedBy = null;
   // Why tool work stopped before the model finished, if it did.
   let failure = "";
   let fatal = null;
@@ -719,6 +725,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     if (round === 0 && waitBudget < SYNTHESIS_WAIT_BUDGET_MS) emit("tool", { id: "capacity", label: "Model capacity available again", state: "done", ...tag });
     if (result.toolsDropped) toolsSupported = false;
     lastText = result.text;
+    if (result.text.trim()) servedBy = { provider: result.provider, model: result.model };
     const calls = result.calls
       .filter((call) => typeof call?.function?.name === "string" && call.function.name)
       .map((call, index) => ({
@@ -839,6 +846,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       if (result.ok && result.text.trim()) {
         emit("tool", { id: progressId, label: "Answer written", state: "done", ...tag });
         lastText = result.text;
+        servedBy = { provider: result.provider, model: result.model };
         return;
       }
       inferenceDiagnostic(result.ok ? "inference.empty_response" : "inference.retry", { ...describe(result, "synthesis"), attempt, reasoningEffort: reasoningEffort ?? null });
@@ -897,6 +905,6 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     emit("delta", { text: addition });
   }
 
-  const finish = (reply) => (unfinished ? { reply, steps, finalization: unfinished } : { reply, steps });
+  const finish = (reply) => ({ reply, steps, ...(unfinished ? { finalization: unfinished } : {}), ...(servedBy ? { servedBy } : {}) });
   return finish(text.trim());
 }

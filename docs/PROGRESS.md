@@ -312,3 +312,10 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 - #225 merged as ac54793c20a85d591d0556c765fdd9ef15cd3e47 after every required check passed in CI 37349187763, including Windows local-control and real Genesis coder/browser verification. The local terminal-timeout baseline failure did not recur in required CI; its assertion was not changed.
 - Seven new recovery tests and the local-control e2e journey passed. Durable mission restoration now respects provider cooldown, reduced concurrency, retry policy and backoff while retaining completed child evidence and budgets. Explicit operator resume and cancellation safety are preserved.
 - This is a local-control source release, not proof that an already-running installed companion has updated. No hosted model-backed completion or internal tool-message checkpoint/resume claim is made. Next: preserve a specific interrupted agent's execution state without replaying completed consequential tools, through the existing kernel/task persistence boundary.
+
+## 2026-10-05 hosted chat says which provider served each reply
+
+- Nothing showed whether the owner's own model (Ollama behind the gateway and Tailscale Funnel) was actually answering hosted chat, or whether Groq/OpenAI were: secret values cannot be read, and replies did not say. Now `GET /api/setup/status` reports `optional.chat.route` as provider kinds (`self-hosted`, `groq`, `openai`; never addresses or keys), and every chat reply (JSON and the streaming `done` event) carries `servedBy: { provider, model }` for the words it ends with (the deepest fallback is credited). "Verify hosted Atlas" prints the route and who wrote each reply.
+- Evidence: web lint and typecheck clean; 413 web tests pass (route kinds, providerKind, servedBy for the self-hosted model, for Groq when the machine is off, for OpenAI when both are down); runner and local script tests 63/63.
+- Next: after the deploy, run "Verify hosted Atlas" in `chat` mode; the route line confirms whether the owner's model is the main one and which provider answered.
+

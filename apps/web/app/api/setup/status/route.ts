@@ -4,6 +4,7 @@ import { taskStorageReadiness } from "../../tasks/storage-readiness.mjs";
 import { githubOAuthConfiguration } from "../../auth/github-oauth.mjs";
 import { stripeConfiguration } from "../../billing/stripe.mjs";
 import { chatReadiness, resolveChatModel } from "../../chat/model-endpoint.mjs";
+import { chatRoute } from "../../chat/providers.mjs";
 import { governorReadiness } from "../../inference/governor-client.mjs";
 import { workerEnv } from "../../inference/worker-env.mjs";
 import { createInstallationToken, githubAppConfiguration } from "../../tasks/github-app.mjs";
@@ -83,6 +84,6 @@ export async function GET(request: Request) {
     completedSteps,
     totalSteps: steps.length,
     steps,
-    optional: { stripeConfigured: stripe.configured, chat: chatReadiness(process.env), inferenceGovernor: await governorReadiness(resolveChatModel(process.env), workerEnv) },
+    optional: { stripeConfigured: stripe.configured, chat: { ...chatReadiness(process.env), route: chatRoute(process.env) }, inferenceGovernor: await governorReadiness(resolveChatModel(process.env), workerEnv) },
   }, { headers: { "cache-control": "no-store" } });
 }

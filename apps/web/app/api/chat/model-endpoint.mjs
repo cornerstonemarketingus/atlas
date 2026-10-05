@@ -57,6 +57,16 @@ function modelPoolFor(environment, model, fallback) {
   return [...new Set([model, ...extra, ...(fallback ? [fallback] : [])])].slice(0, MAX_POOL_MODELS);
 }
 
+/**
+ * What kind of provider an endpoint is, for the owner to see which one served
+ * a reply: never the address (a self-hosted one names the owner's machine).
+ */
+export function providerKind(baseUrl) {
+  let origin;
+  try { origin = new URL(baseUrl).origin; } catch { return "unknown"; }
+  return origin === "https://api.groq.com" ? "groq" : origin === "https://api.openai.com" ? "openai" : "self-hosted";
+}
+
 /** @returns {{ configured: boolean, reason?: string, baseUrl?: string, model?: string, apiKey?: string|null, fallbackModel?: string|null, models?: string[] }} */
 export function resolveChatModel(environment = process.env) {
   const baseUrl = (environment.ATLAS_CHAT_BASE_URL || "").trim();
