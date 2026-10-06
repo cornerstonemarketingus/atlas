@@ -23,6 +23,19 @@ import path from "node:path";
 /** Request fields forwarded to the model server; anything else is dropped. */
 const FORWARDED = ["model", "messages", "stream", "stream_options", "tools", "tool_choice", "parallel_tool_calls", "temperature", "top_p", "max_tokens", "max_completion_tokens", "stop", "seed", "response_format", "reasoning_effort"];
 
+async function boundedErrorText(result, limit = 8192) {
+  const chunks = [];
+  let size = 0;
+  if (!result.body) return "";
+  for await (const chunk of result.body) {
+    const part = Buffer.from(chunk).subarray(0, limit - size);
+    chunks.push(part);
+    size += part.length;
+    if (size >= limit) break;
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 export function createGateway({
   token,
   model = null,
@@ -38,6 +51,7 @@ export function createGateway({
   generationTimeoutMs = 600_000,
   healthTimeoutMs = 1500,
   defaultReasoningEffort = null,
+  capacityCooldownMs = 60_000,
 }) {
   const upstreamUrl = new URL(upstream);
   if (upstreamUrl.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(upstreamUrl.hostname) || upstreamUrl.username || upstreamUrl.password || upstreamUrl.search || upstreamUrl.hash || upstreamUrl.pathname !== "/") throw new Error("Gateway upstream must be a bare loopback HTTP origin");
@@ -45,8 +59,10 @@ export function createGateway({
   if (!token || token.length < 32 || allowed.size === 0) throw new Error("A model and a 32+ character gateway token are required");
   if ([...allowed].some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,127}$/u.test(name))) throw new Error("Invalid gateway model name");
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("concurrency must be a whole number of at least 1");
+  if (!Number.isInteger(capacityCooldownMs) || capacityCooldownMs < 1) throw new Error("capacityCooldownMs must be a positive whole number");
   const expected = Buffer.from(`Bearer ${token}`);
   let active = 0;
+  let capacityUnavailableUntil = 0;
   const waiting = [];
 
   const release = () => {
@@ -83,6 +99,7 @@ export function createGateway({
     const supplied = Buffer.from(request.headers.authorization || "");
     if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return reply(401, "Authentication required");
     if (request.method === "GET" && request.url === "/v1/health") {
+      if (Date.now() < capacityUnavailableUntil) return reply(503, "Local model is over capacity: insufficient memory.", { "retry-after": String(Math.ceil((capacityUnavailableUntil - Date.now()) / 1000)) });
       try {
         const result = await fetcher(`${upstreamUrl.origin}/v1/models`, { signal: AbortSignal.timeout(healthTimeoutMs), redirect: "error" });
         const data = await result.json();
@@ -126,14 +143,19 @@ export function createGateway({
     const cancel = () => controller.abort();
     response.once("close", cancel);
     try {
+      if (Date.now() < capacityUnavailableUntil) return reply(503, "Local model is over capacity: insufficient memory.", { "retry-after": String(Math.ceil((capacityUnavailableUntil - Date.now()) / 1000)) });
       const result = await fetcher(`${upstream}/v1/chat/completions`, {
         method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, redirect: "error", body: JSON.stringify(forwarded),
       });
       if (!result.ok) {
+        const text = await boundedErrorText(result).catch(() => "");
+        if (result.status >= 500 && /out of memory|requires more (?:system |gpu )?memory|insufficient (?:system |gpu )?memory|not enough (?:system |gpu )?memory|cuda.*alloc/iu.test(text)) {
+          capacityUnavailableUntil = Date.now() + capacityCooldownMs;
+          return reply(503, "Local model is over capacity: insufficient memory.", { "retry-after": String(Math.ceil(capacityCooldownMs / 1000)) });
+        }
         // The model server's 4xx (an unsupported tool call, a bad request) goes
         // back as it is, so Atlas can adapt; a server failure is not detailed.
         if (result.status >= 400 && result.status < 500) {
-          const text = await result.text().catch(() => "");
           response.writeHead(result.status, { "content-type": "application/json", "cache-control": "no-store" });
           return response.end(text || JSON.stringify({ error: { message: "Local model refused the request" } }));
         }

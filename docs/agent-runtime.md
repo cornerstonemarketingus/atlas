@@ -229,6 +229,11 @@ user's DPAPI/Keychain/keyring vault, not the model plan, API status or logs.
 Request size, output size, generation time, concurrency and queue waits are
 bounded. Authenticated `/v1/health` checks model availability in 1.5 seconds;
 it is not proof that a future large generation will fit in memory.
+Recognized Ollama memory-allocation failures become sanitized capacity responses
+with a one-minute cooldown, so the existing governor can choose a permitted
+fallback and repeated requests do not keep trying to load an oversized model.
+Upstream error bodies are bounded; model prompts and internal failure details
+are not included in the generated capacity message.
 
 **Connect hosted Atlas** checks Tailscale authentication and enables Funnel only
 for the authenticated inference gateway. It refuses to replace an existing
