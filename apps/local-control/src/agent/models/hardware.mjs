@@ -1,4 +1,5 @@
-import { arch, availableParallelism, cpus, freemem, platform, totalmem } from "node:os";
+import { arch, availableParallelism, cpus, freemem, platform, release, totalmem } from "node:os";
+import { statfs } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -22,7 +23,7 @@ async function runCommand(command, args) {
  * `freeMemoryGiB` is reported so the UI can warn when other programs already
  * hold the memory a model would need.
  */
-export async function detectHardware({ runCommandImpl = runCommand, os = { platform: platform(), arch: arch(), totalmem: totalmem(), freemem: freemem() } } = {}) {
+export async function detectHardware({ runCommandImpl = runCommand, diskPath = process.cwd(), os = { platform: platform(), arch: arch(), totalmem: totalmem(), freemem: freemem() } } = {}) {
   const cpuCount = typeof availableParallelism === "function" ? availableParallelism() : cpus().length;
   const totalMemoryGiB = roundGiB(os.totalmem);
   const unifiedMemory = os.platform === "darwin" && os.arch === "arm64";
@@ -36,10 +37,17 @@ export async function detectHardware({ runCommandImpl = runCommand, os = { platf
     }
   }
   const discreteMemory = gpus.reduce((largest, gpu) => Math.max(largest, gpu.memoryGiB), 0);
+  let freeDiskGiB = null;
+  try { const disk = await statfs(diskPath); freeDiskGiB = Math.floor(disk.bavail * disk.bsize / 1024 ** 3); } catch { /* unknown is not permission to install */ }
   return {
+    platform: os.platform,
+    arch: os.arch,
+    osVersion: release(),
+    cpuName: cpus()[0]?.model ?? "Unknown CPU",
+    freeDiskGiB,
     cpuCount: Math.max(1, cpuCount),
     totalMemoryGiB,
-    freeMemoryGiB: Math.max(0, Math.round(os.freemem / 1024 ** 3)),
+    freeMemoryGiB: Math.max(0, Math.floor(os.freemem / 1024 ** 3 * 10) / 10),
     gpus,
     unifiedMemory,
     accelerator: discreteMemory ? gpus[0].vendor : unifiedMemory ? "apple" : "cpu",

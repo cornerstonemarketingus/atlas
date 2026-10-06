@@ -35,13 +35,11 @@ Write-Host "Staging the Atlas payload..."
 Remove-Item -Recurse -Force $staging, $artifacts -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $staging, $artifacts -Force | Out-Null
 
-foreach ($part in @("apps\local-control", "apps\windows-companion", "scripts\windows", "scripts\local", "SOVEREIGN-MODE.md")) {
-  $source = Join-Path $repository $part
-  if (-not (Test-Path $source)) { throw "Missing expected payload: $part" }
-  $destination = Join-Path $staging $part
-  New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
-  Copy-Item $source $destination -Recurse -Force
-}
+& npm --prefix (Join-Path $repository 'packages\atlas-cli') run build
+if ($LASTEXITCODE -ne 0) { throw 'The release coding runner must compile before packaging.' }
+& node (Join-Path $repository 'scripts\release\stage-local.mjs') --output $staging
+if ($LASTEXITCODE -ne 0) { throw 'Atlas runtime payload could not be staged.' }
+Copy-Item -LiteralPath (Join-Path $repository 'SOVEREIGN-MODE.md') -Destination $staging
 
 # node_modules is deliberately excluded: the local control plane has no
 # third-party runtime dependencies, and shipping a companion's node_modules

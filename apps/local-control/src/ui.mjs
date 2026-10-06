@@ -155,10 +155,12 @@ export const LOCAL_UI_HTML = `<!doctype html>
  </section>
  <section class="view" data-view="models" hidden aria-labelledby="models-heading">
   <div class="section-title"><div><p class="eyebrow">RUNS ON THIS COMPUTER</p><h2 id="models-heading">Models</h2></div><button type="button" class="secondary" id="models-refresh">Refresh</button></div>
-  <p class="hint">Atlas runs open models on this machine: pick one, install it, and Atlas starts the local model server, loads the model with a context length that fits your memory, and routes easy work to fast models and hard work to strong ones. Sizes are estimates for 4-bit quantized models.</p>
+  <div class="panel"><h3>Free Local AI</h3><p>Run an AI coding model on your own computer. No per-message AI provider charges while using your local model. Your computer uses electricity. Cloud fallback is off until you choose to enable it.</p><p>Atlas checks your computer, recommends a model, downloads it and tests a secure connection.</p><div id="free-local-status" role="status" aria-live="polite">Check this computer to get started.</div><p id="free-local-connection" class="hint"></p><label for="free-local-fallback"><input type="checkbox" id="free-local-fallback"> Use configured cloud AI if this computer is offline (provider charges may apply)</label><label for="free-local-choice">Choose your experience</label><select id="free-local-choice"><option value="balanced">Recommended — balance of quality and speed</option><option value="lightweight">Faster</option><option value="best">Higher quality</option></select><div class="actions"><button type="button" id="free-local-setup">Set up free AI</button><button type="button" class="secondary" id="free-local-use" hidden>Use Free AI</button><button type="button" class="secondary" id="free-local-connect">Connect hosted Atlas</button><button type="button" class="secondary" id="free-local-startup">Start automatically on Windows</button><button type="button" class="secondary" id="free-local-no-startup">Disable automatic startup</button></div><p class="hint">This setup connects the local Atlas app. Connecting hosted Atlas is a separate secure pairing step.</p></div>
+  <p id="free-local-startup-notice" class="hint" role="status" aria-live="polite"></p>
+  <details><summary>Advanced models and diagnostics</summary><p class="hint">Atlas runs open models on this machine: pick one, install it, and Atlas starts the local model server, loads the model with a context length that fits your memory, and routes easy work to fast models and hard work to strong ones. Sizes are estimates for 4-bit quantized models.</p>
   <div class="panel"><div class="task-top"><h3>This machine</h3><span id="models-runtime-state"></span></div><div id="models-machine"><p class="empty">Unlock this tab to load models.</p></div><div class="actions"><button type="button" id="models-start">Start model server</button><button type="button" class="secondary" id="models-stop">Stop</button></div><p id="models-notice" class="hint" role="status" aria-live="polite"></p></div>
   <div class="panel"><div class="task-top"><h3>Recommended for this machine</h3><button type="button" id="models-apply">Use this plan</button></div><div id="models-plan"></div></div>
-  <section aria-labelledby="models-catalog-heading"><h3 id="models-catalog-heading">Catalog</h3><div id="models-catalog" class="list"></div></section>
+  <section aria-labelledby="models-catalog-heading"><h3 id="models-catalog-heading">Catalog</h3><div id="models-catalog" class="list"></div></section></details>
  </section>
  <section class="view" data-view="families" hidden aria-labelledby="families-heading">
   <div class="hero"><h2 id="families-heading">Agent families</h2><p class="lede">Atlas works as an organization. Executives commission work, specialists do it, and peer organizations help when asked. Authority only narrows as work is handed down, and every hand-off is recorded.</p></div>
@@ -607,6 +609,11 @@ async function loadModels(){
  try{
   const o=modelsOverview=await getJson('/v1/models/hosting');
   const h=o.hardware,r=o.runtime;
+  const f=o.freeLocal;
+  $('#free-local-use').hidden=!f?.online;
+  $('#free-local-fallback').checked=f?.cloudFallback===true;
+  $('#free-local-connection').textContent=f?.connection?.state!=='disconnected'?f?.connection?.message||'':'Connecting hosted Atlas requires secure device authorization.';
+  if(f){const c=f.choices[$('#free-local-choice').value];$('#free-local-status').textContent=(f.selected?(f.online?'Local AI online: ':'Local AI offline: ')+f.selected.tag+'. ':'')+(f.job.state==='failed'?f.job.message:f.job.step)+(c?' Recommended model: '+c.tag+' · about '+gib(c.downloadGB)+' download.':'');$('#free-local-setup').disabled=f.job.state==='running';$('#free-local-setup').textContent=f.job.state==='failed'?'Retry setup':f.job.state==='ready'?'Test and reconnect':'Set up free AI'}
   $('#models-runtime-state').innerHTML=pill(r.reachable?'running':'stopped')+(r.managed?' <span class="chip">started by Atlas</span>':'')+(r.version?' <span class="chip">Ollama '+esc(r.version)+'</span>':'');
   machine.innerHTML='<dl class="kv"><dt>Runs models on</dt><dd>'+esc(h.accelerator==='cpu'?'CPU ('+h.cpuCount+' cores)':h.accelerator==='apple'?'Apple Silicon GPU (unified memory)':(h.gpus||[]).map(g=>g.name+' · '+g.memoryGiB+' GB').join(', '))+'</dd><dt>Memory for models</dt><dd>'+esc(String(h.usableModelMemoryGiB))+' GB of '+esc(String(h.totalMemoryGiB))+' GB ('+esc(String(h.freeMemoryGiB??'?'))+' GB free now)</dd><dt>Loaded</dt><dd>'+esc((r.loaded||[]).map(m=>m.tag+(m.context?' · '+m.context+' ctx':'')+(m.memoryGB?' · '+m.memoryGB+' GB':'')).join(', ')||'nothing')+'</dd></dl>'+(r.binary==='missing'?'<div class="error"><strong>No local model runtime is installed.</strong><p>Install Ollama from <a href="'+esc(r.installGuide)+'" target="_blank" rel="noopener">ollama.com/download</a>, then press Start model server. Atlas manages it from there.</p></div>':'')+((r.jobs||[]).filter(j=>j.state==='running').map(j=>'<p class="hint">Installing '+esc(j.tag)+': '+esc(j.status)+'</p><progress max="100" value="'+esc(String(j.percent||0))+'"></progress>').join(''))+((r.jobs||[]).filter(j=>j.state==='failed').slice(-2).map(j=>'<p class="hint">'+esc(j.tag)+' failed: '+esc(j.status)+'</p>').join(''));
   const rec=o.recommended,applied=o.applied;
@@ -620,15 +627,23 @@ async function loadModels(){
  }catch(error){machine.innerHTML=problem(error)}
 }
 async function modelAction(action,body,pending){
- const notice=$('#models-notice');notice.textContent=pending;
+ const notice=$(action==='startup'?'#free-local-startup-notice':action==='setup'?'#free-local-status':'#models-notice');notice.textContent=pending;
  try{const result=await sendJson('/v1/models/hosting/'+action,'POST',body);notice.textContent=action==='warm'?result.loaded+' is loaded with a '+result.context+'-token context.':action==='install'?'Downloading '+result.job.tag+'. Progress appears above.':action==='plan'?'Atlas now uses '+result.applied.coder.tag+' for coding.':action==='server'?(result.stopped===false?'Atlas did not start this server, so it left it running.':result.stopped?'Stopped.':result.started?'Started the model server.':'The model server is already running.'):pending}
- catch(error){notice.textContent=error.message+(error.unblock?' '+error.unblock:'')}
+ catch(error){notice.textContent=error.message+(error.unblock?' '+error.unblock:'');return}
+ if(action==='startup')notice.textContent=body.enabled?'Atlas will start after Windows sign-in.':'Automatic startup is disabled.';
  loadModels();
 }
 $('#models-start').onclick=()=>modelAction('server',{action:'start'},'Starting the model server…');
 $('#models-stop').onclick=()=>modelAction('server',{action:'stop'},'Stopping…');
 $('#models-apply').onclick=()=>modelAction('plan',{},'Applying…');
 $('#models-refresh').onclick=()=>loadModels();
+$('#free-local-setup').onclick=()=>modelAction('setup',{choice:$('#free-local-choice').value},'Checking computer…');
+$('#free-local-choice').onchange=()=>loadModels();
+$('#free-local-use').onclick=()=>{const selected=modelsOverview?.freeLocal?.selected;if(selected){q('#session-model').innerHTML='<option>'+esc(selected.tag)+'</option>';q('#session-executor').value='conversation';location.hash='#/home'}};
+$('#free-local-connect').onclick=async()=>{try{const c=await sendJson('/v1/models/hosting/connect','POST',{});$('#free-local-status').textContent=c.message}catch(error){$('#free-local-status').textContent=error.message}};
+$('#free-local-startup').onclick=()=>modelAction('startup',{enabled:true},'Enabling startup after Windows sign-in…');
+$('#free-local-no-startup').onclick=()=>modelAction('startup',{enabled:false},'Disabling automatic startup…');
+$('#free-local-fallback').onchange=async e=>{const enabled=e.target.checked;if(enabled&&!confirm('Allow Atlas to use your configured cloud providers when local AI is unavailable? Their usage charges may apply.')){e.target.checked=false;return}try{const result=await sendJson('/v1/models/hosting/fallback','POST',{enabled});$('#free-local-status').textContent=result.message}catch(error){e.target.checked=!enabled;$('#free-local-status').textContent=error.message}};
 
 /* Remote access: customer-managed VPN or HTTPS proxy, and device pairing. */
 if(pairFromLink)$('#pair-code-input').value=pairFromLink;

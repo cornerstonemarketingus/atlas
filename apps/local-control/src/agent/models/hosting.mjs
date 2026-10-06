@@ -31,14 +31,21 @@ export class ModelPlanStore {
     if (!existsSync(this.path)) return null;
     try {
       const plan = JSON.parse(readFileSync(this.path, "utf8"));
-      return plan && typeof plan === "object" && plan.coder?.tag ? plan : null;
+      if (!plan || typeof plan !== "object" || !plan.coder?.tag) return null;
+      for (const role of ROLES) {
+        if (!plan[role]) continue;
+        assertModelTag(plan[role].tag);
+        if (!Number.isInteger(plan[role].context) || plan[role].context < 2048 || plan[role].context > 131072) return null;
+      }
+      if (plan.freeLocal && typeof plan.cloudFallback !== "boolean") return null;
+      return plan;
     } catch {
       return null;
     }
   }
 
   write(plan) {
-    const clean = { appliedAt: new Date().toISOString() };
+    const clean = { appliedAt: new Date().toISOString(), ...(plan.freeLocal === true ? { freeLocal: true, cloudFallback: plan.cloudFallback === true } : {}) };
     for (const role of ROLES) {
       const entry = plan[role];
       if (!entry) continue;
@@ -47,6 +54,11 @@ export class ModelPlanStore {
       clean[role] = { tag, context };
     }
     if (!clean.coder) throw new ModelManagerError("INVALID_PLAN", "A plan needs at least a coder model.");
+    if (clean.freeLocal && plan.capabilities) clean.capabilities = {
+      toolCalls: plan.capabilities.toolCalls === true, structuredOutput: plan.capabilities.structuredOutput === true,
+      codingAgent: plan.capabilities.codingAgent === true,
+      vision: false, contextTokens: clean.coder.context,
+    };
     mkdirSync(dirname(this.path), { recursive: true });
     writeFileSync(`${this.path}.tmp`, `${JSON.stringify(clean, null, 2)}\n`);
     renameSync(`${this.path}.tmp`, this.path);
@@ -56,7 +68,7 @@ export class ModelPlanStore {
 
 const STATUS = { INVALID_MODEL: 400, INVALID_PLAN: 400, NO_RUNTIME: 409, START_FAILED: 502, PULL_FAILED: 502, REMOVE_FAILED: 409, WARM_FAILED: 502, NOT_LOOPBACK: 400 };
 
-export function createModelHostingRoutes({ manager, planStore, detectHardware, parseBody, send }) {
+export function createModelHostingRoutes({ manager, planStore, detectHardware, freeLocal = null, parseBody, send }) {
   let hardwareCache = null;
   const hardware = async () => {
     if (!hardwareCache || Date.now() - hardwareCache.at > 60_000) hardwareCache = { at: Date.now(), value: await detectHardware() };
@@ -73,6 +85,7 @@ export function createModelHostingRoutes({ manager, planStore, detectHardware, p
       recommended: planModels(machine, installedTags),
       recommendedInstalled: planModels(machine, installedTags, { preferInstalled: true }),
       applied: planStore.read(),
+      freeLocal: freeLocal ? await freeLocal.overview() : null,
     };
   }
 
@@ -85,6 +98,20 @@ export function createModelHostingRoutes({ manager, planStore, detectHardware, p
       if (identity.role !== "admin") return send(response, 403, { message: "Owner access required.", unblock: "Use the local owner token." });
       const body = await parseBody(request, response); if (!body) return true;
       switch (url.pathname) {
+        case "/v1/models/hosting/setup":
+          if (!freeLocal) return send(response, 503, { message: "Guided setup unavailable." });
+          return send(response, 202, { job: freeLocal.start(body.choice ?? "balanced") });
+        case "/v1/models/hosting/startup":
+          if (!freeLocal) return send(response, 503, { message: "Guided setup unavailable." });
+          if (typeof body.enabled !== "boolean") return send(response, 400, { message: "Choose whether startup is enabled." });
+          return send(response, 200, await freeLocal.startup(body.enabled));
+        case "/v1/models/hosting/connect":
+          if (!freeLocal) return send(response, 503, { message: "Guided setup unavailable." });
+          return send(response, 200, await freeLocal.connectHosted());
+        case "/v1/models/hosting/fallback":
+          if (!freeLocal) return send(response, 503, { message: "Guided setup unavailable." });
+          if (typeof body.enabled !== "boolean") return send(response, 400, { message: "Choose whether fallback is enabled." });
+          return send(response, 200, freeLocal.setFallback(body.enabled));
         case "/v1/models/hosting/server":
           if (body.action === "stop") return send(response, 200, manager.stopServer());
           return send(response, 200, await manager.ensureServer({ contextLength: Number(body.context) || 16_384 }));

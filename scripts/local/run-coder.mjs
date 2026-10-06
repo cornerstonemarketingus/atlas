@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,7 +54,7 @@ if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && ["127.0
 const modelsUrl = new URL(`${endpoint.pathname.replace(/\/$/u, "")}/models`, endpoint.origin);
 let response;
 try {
-  response = await fetch(modelsUrl, { signal: AbortSignal.timeout(5_000) });
+  response = await fetch(modelsUrl, { headers: { authorization: `Bearer ${process.env.ATLAS_LOCAL_MODEL_KEY ?? "local-only-no-credential"}` }, redirect: "error", signal: AbortSignal.timeout(5_000) });
 } catch {
   throw new Error(`No self-hosted model server answered at ${modelsUrl}. Start Ollama before running Atlas.`);
 }
@@ -62,8 +62,12 @@ if (!response.ok) throw new Error(`The self-hosted model server returned HTTP ${
 
 const cliDirectory = join(atlasRoot, "packages", "atlas-cli");
 const cli = join(cliDirectory, "dist", "src", "cli.js");
-const build = spawnSync("npm", ["run", "build"], { cwd: cliDirectory, stdio: "inherit", shell: process.platform === "win32" });
-if (build.error || build.status !== 0) process.exit(build.status ?? 1);
+// Releases contain the compiled runner. Building belongs to the release/dev
+// boundary, not every user's coding turn or guided verification.
+if (!existsSync(cli)) {
+  const build = spawnSync("npm", ["run", "build"], { cwd: cliDirectory, stdio: "inherit", shell: process.platform === "win32" });
+  if (build.error || build.status !== 0) process.exit(build.status ?? 1);
+}
 
 mkdirSync(dirname(auditLog), { recursive: true });
 const args = [
@@ -83,7 +87,7 @@ console.log(`Atlas local-only run\nModel: ${model}\nRepository: ${resolve(reposi
 const run = spawnSync(process.execPath, args, {
   cwd: atlasRoot,
   stdio: "inherit",
-  env: safeEnvironment({ ATLAS_LOCAL_MODEL_KEY: "local-only-no-credential" }),
+  env: safeEnvironment({ ATLAS_LOCAL_MODEL_KEY: process.env.ATLAS_LOCAL_MODEL_KEY ?? "local-only-no-credential" }),
   timeout: 18_000_000,
 });
 if (run.error) throw run.error;

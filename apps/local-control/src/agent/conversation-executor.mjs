@@ -99,7 +99,7 @@ export function createConversationExecutor({
 
         let fitted;
         try {
-          fitted = fit(messages, { contextWindow, contextSource, maxOutputTokens, model: session.model, reservedCharacters: toolCharacters }, emit);
+          fitted = fit(messages, { contextWindow: typeof contextWindow === "function" ? contextWindow(session) : contextWindow, contextSource, maxOutputTokens, model: session.model, reservedCharacters: toolCharacters }, emit);
         } catch (error) {
           // Refused out loud. Sending this would have made the server drop the
           // start of the conversation without telling anyone.
@@ -127,6 +127,7 @@ export function createConversationExecutor({
           budget.record({ inputTokens: estimateTokens(measure(fitted)) });
           for await (const chunk of client.stream({
             model: session.model,
+            onRoute: (route) => emit(statusEvent(`${route.failedOver ? "Local AI is unavailable; " : ""}Using ${route.provider ?? "configured"} AI: ${route.model}.${route.paid ? " Cloud provider charges may apply." : ""}`)),
             messages: fitted.map(toWireMessage),
             tools,
             maxOutputTokens,

@@ -6,6 +6,28 @@ import { createGateway } from "./model-gateway.mjs";
 const token = "test-only-".repeat(5);
 const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
 
+test("upstream confinement rejects remote hosts, URL credentials and redirects", () => {
+  for (const upstream of ["http://example.com", "https://127.0.0.1", "http://user:secret@127.0.0.1", "http://127.0.0.1/path", "http://127.0.0.1?target=x"]) {
+    assert.throws(() => createGateway({ token, model: "test-model", upstream }), /loopback/);
+  }
+});
+
+test("authenticated health checks detect missing models and offline runtime", async (t) => {
+  let mode = "online";
+  const { base } = await serve(t, { fetcher: async () => {
+    if (mode === "offline") throw new Error("offline");
+    return Response.json({ data: mode === "missing" ? [] : [{ id: "test-model" }] });
+  } });
+  assert.equal((await fetch(`${base}/v1/health`)).status, 401);
+  assert.equal((await fetch(`${base}/v1/health`, { headers })).status, 200);
+  mode = "missing";
+  assert.equal((await fetch(`${base}/v1/health`, { headers })).status, 503);
+  mode = "offline";
+  assert.equal((await fetch(`${base}/v1/health`, { headers })).status, 503);
+  mode = "online";
+  assert.equal((await fetch(`${base}/v1/health`, { headers })).status, 200);
+});
+
 async function serve(t, options) {
   const server = createGateway({ token, model: "test-model", ...options });
   server.listen(0, "127.0.0.1"); await once(server, "listening");

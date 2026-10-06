@@ -28,6 +28,7 @@ import { AutomationService, AutomationStore } from "./platform/automations/servi
 import { detectHardware } from "./agent/models/hardware.mjs";
 import { ModelManager } from "./agent/models/manager.mjs";
 import { ModelPlanStore } from "./agent/models/hosting.mjs";
+import { FreeLocalSetup } from "./agent/models/free-local.mjs";
 import { discoverModelServers } from "./agent/models/discovery.mjs";
 import { recommendModels } from "./agent/models/recommend.mjs";
 import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/router.mjs";
@@ -93,7 +94,7 @@ if (ownerToken.created) console.log(`Created the owner token for ${owner.user} (
 const license = loadLicense();
 // One model client (routed, with fallback) and one tool registry serve both
 // conversations and agent missions, so policy and approvals are identical.
-const modelClient = createRoutedClient({
+const configuredModelClient = createRoutedClient({
   routes: parseRoutes(process.env.ATLAS_MODEL_ROUTES ?? "[]"),
   task: "planning",
   createClient: (route) => createModelClient({ baseUrl: route.endpoint }),
@@ -103,9 +104,13 @@ const modelClient = createRoutedClient({
 // Models → Install → Run: Atlas manages a loopback model server and the applied model plan.
 const modelManager = new ModelManager({ log: (line) => store.audit("model.hosting", line) });
 const modelPlan = new ModelPlanStore(join(dataDirectory, "model-plan.json"));
+const freeLocal = new FreeLocalSetup({ manager: modelManager, planStore: modelPlan, vault, detectHardware });
+const modelClient = freeLocal.client(configuredModelClient, ({ provider, model, paid, failedOver }) => store.audit("model.route", `${provider}/${model} served a model turn${failedOver ? " after local AI failed" : ""}; ${paid ? "cloud provider charges may apply" : "no AI provider charge"}`));
+freeLocal.resume();
 // "Atlas, improve yourself": only when running from a git checkout of Atlas itself.
 const selfImprove = createDaemonSelfImprovement({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan });
 const toolRegistry = buildToolRegistry();
+freeLocal.tools = toolRegistry.toModelTools();
 const authorizedToolExecutor = buildAuthorizedToolExecutor(toolRegistry);
 const toolApprovals = {
   // One-time and digest-bound: spending an approval consumes it, and it
@@ -243,7 +248,7 @@ const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, 
 const server = createLocalControlServer({
   store,
   token,
-  runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
+  runTask: runConfiguredCoder,
   license,
   runtime,
   missionService,
@@ -268,7 +273,7 @@ const server = createLocalControlServer({
   automations,
   world,
   goals,
-  modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
+  modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware, freeLocal },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
   transcriber: buildTranscriber(),
@@ -300,7 +305,7 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
     model,
     environment: { kind: "local", repository },
   }, async () => {
-    result = await runIsolatedLocalCoder(
+    result = await runConfiguredCoder(
       { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: child.objective, model },
       { dataDirectory, signal },
     );
@@ -320,6 +325,7 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
 }
 
 function shutdown() {
+  freeLocal.close().catch(() => {});
   modelManager.stopServer();
   genesisPreviews.stopAll().catch(() => {});
   server.close(async () => {
@@ -346,11 +352,17 @@ process.on("SIGTERM", shutdown);
  * this machine has been given a token for it — the runtime works, and every
  * acceptance test passes, with the remote executor absent entirely.
  */
+async function runConfiguredCoder(task, options = {}) {
+  const modelConfiguration = await freeLocal.coderConfiguration();
+  return runIsolatedLocalCoder(task, { dataDirectory, ...options, modelConfiguration });
+}
+
 function buildExecutors() {
   const executors = {
-    local: createLocalExecutor({ dataDirectory }),
+    local: createLocalExecutor({ dataDirectory, runCoder: runConfiguredCoder }),
     conversation: createConversationExecutor({
       client: modelClient,
+      contextWindow: () => modelPlan.read()?.freeLocal ? modelPlan.read().coder.context : 32768,
       registry: toolRegistry,
       approvals: toolApprovals,
       kernel,
