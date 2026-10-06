@@ -48,6 +48,16 @@ console.log(`Setup: ${status.overall} (${status.completedSteps}/${status.totalSt
 // Provider kinds only (self-hosted, groq, openai): never addresses or keys.
 const route = Array.isArray(status.optional?.chat?.route) ? status.optional.chat.route.map(String) : [];
 if (route.length) console.log(`Chat route: ${route.join(" → ")}`);
+// Provider credential diagnosis (categories and statuses only; never a credential).
+if (route.includes("workers-ai")) {
+  const diagnosis = await api("/api/setup/providers").catch((error) => ({ error: String(error?.message ?? error).slice(0, 200) }));
+  const health = diagnosis.providers?.workersAI;
+  if (health) {
+    console.log(`Workers AI: credential ${health.credential}, account ${health.account}, validation ${health.validation ?? "-"}, token ${health.tokenKind ?? "-"}, Workers AI ${health.workersAI ?? "-"}, inference ${health.inference ?? "-"} → ${health.category}`);
+    console.log(`Workers AI HTTP: ${JSON.stringify(health.http ?? {})}${health.providerErrorCodes?.length ? ` codes ${health.providerErrorCodes.join(",")}` : ""}`);
+    if (health.recommendedAction) console.log(`Workers AI action: ${health.recommendedAction}`);
+  } else console.log(`Workers AI diagnosis unavailable: ${diagnosis.error ?? "no result"}`);
+}
 // An unauthenticated identity header must not grant access on workers.dev.
 const forged = await fetch(`${base}/api/tasks`, { headers: { "oai-authenticated-user-id": "operator" } });
 if (forged.status !== 401) throw new Error("Untrusted identity header was accepted");
