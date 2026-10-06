@@ -44,7 +44,7 @@ export async function POST(request: Request) {
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
   const selection = body.provider ?? "auto";
-  if (typeof selection !== "string" || !["auto", "configured", "openai"].includes(selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
+  if (typeof selection !== "string" || !["auto", "configured", "workers-ai", "openai"].includes(selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
   const resolved = resolveChatProvider(process.env, selection);
   if (!resolved.configured) {
     return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
@@ -113,7 +113,7 @@ export async function POST(request: Request) {
   }
 
   // `finalization` (metadata only) says the reply is the saved work because no model could write the answer.
-  return Response.json({ conversationId, stored, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+  return Response.json({ conversationId, stored, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.servedBy ? { servedBy: outcome.servedBy } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
 }
 
 /** A GitHub credential for the read-only chat tools: the GitHub App's installation token when configured, else the platform token. Fetched once per request, only if a tool needs it. */
@@ -243,7 +243,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
           await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, userId)));
         } catch { persisted = false; }
       }
-      emit("done", { conversationId, stored: persisted, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+      emit("done", { conversationId, stored: persisted, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.servedBy ? { servedBy: outcome.servedBy } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
       controller.close();
     },
   });

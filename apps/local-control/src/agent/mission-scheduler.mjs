@@ -171,6 +171,7 @@ export class MissionScheduler {
       plan: snapshot.plan,
       execute,
       maxConcurrency: snapshot.maxConcurrency,
+      maxRateLimitRetries: snapshot.maxRateLimitRetries,
       onStateChange,
       clock,
       setTimer,
@@ -180,6 +181,8 @@ export class MissionScheduler {
     scheduler.#reason = snapshot.reason ?? (snapshot.status === "running" ? "Atlas restarted while child agents were running." : null);
     scheduler.#startedAt = snapshot.startedAt ?? null;
     scheduler.#completedAt = snapshot.completedAt ?? null;
+    scheduler.#batch = new AdaptiveBatchSize({ max: snapshot.maxConcurrency, initial: snapshot.throttle?.batchSize ?? snapshot.maxConcurrency });
+    scheduler.#consecutiveLimits = snapshot.throttle?.consecutiveLimits ?? 0;
     for (const saved of snapshot.children) {
       const child = scheduler.#children.get(saved.id);
       child.state = saved.state === "running" ? "interrupted" : saved.state;
@@ -193,6 +196,8 @@ export class MissionScheduler {
         ? { code: "INTERRUPTED", message: "Atlas restarted while this child was running." }
         : jsonValue(saved.error ?? null, `Saved error for '${saved.id}'`);
     }
+    const waitingUntil = Date.parse(snapshot.throttle?.waitingUntil ?? "");
+    if (!TERMINAL_MISSION_STATES.has(scheduler.#status) && waitingUntil > scheduler.#clock()) scheduler.#throttleUntil(waitingUntil);
     return scheduler;
   }
 
@@ -250,7 +255,8 @@ export class MissionScheduler {
     if (this.#status !== "running") return this.snapshot();
     this.#status = "interrupted";
     this.#reason = String(reason);
-    this.#clearThrottle();
+    // Pausing execution does not reset the provider's quota window. The
+    // timer may expire while paused, but #pump still requires running state.
     for (const controller of this.#controllers.values()) {
       controller.abort(new MissionPausedError(this.#reason));
     }
@@ -358,8 +364,10 @@ export class MissionScheduler {
       schemaVersion: 1,
       plan: this.#plan,
       maxConcurrency: this.#maxConcurrency,
+      maxRateLimitRetries: this.#maxRateLimitRetries,
       throttle: {
         batchSize: this.#batch.current,
+        consecutiveLimits: this.#consecutiveLimits,
         waitingUntil: this.#throttledUntil === null ? null : new Date(this.#throttledUntil).toISOString(),
       },
       status: this.#status,
@@ -663,6 +671,13 @@ function validateSnapshot(snapshot) {
     throw new MissionPlanError("INVALID_SNAPSHOT", "Unsupported or malformed mission snapshot.");
   }
   const plan = normalizeMissionPlan(snapshot.plan);
+  const throttle = snapshot.throttle;
+  if ((snapshot.maxRateLimitRetries !== undefined && (!Number.isSafeInteger(snapshot.maxRateLimitRetries) || snapshot.maxRateLimitRetries < 0))
+    || (throttle?.batchSize !== undefined && (!Number.isSafeInteger(throttle.batchSize) || throttle.batchSize < 1 || throttle.batchSize > snapshot.maxConcurrency))
+    || (throttle?.consecutiveLimits !== undefined && (!Number.isSafeInteger(throttle.consecutiveLimits) || throttle.consecutiveLimits < 0))
+    || (throttle?.waitingUntil != null && (typeof throttle.waitingUntil !== "string" || !Number.isFinite(Date.parse(throttle.waitingUntil))))) {
+    throw new MissionPlanError("INVALID_SNAPSHOT", "Mission snapshot contains invalid provider recovery state.");
+  }
   if (snapshot.children.length !== plan.children.length) throw new MissionPlanError("INVALID_SNAPSHOT", "Mission snapshot child count does not match its plan.");
   const ids = new Set(plan.children.map((child) => child.id));
   for (const child of snapshot.children) {

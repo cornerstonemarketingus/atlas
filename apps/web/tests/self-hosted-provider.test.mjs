@@ -102,3 +102,27 @@ test("an empty final answer walks the whole route: self-hosted, Groq, OpenAI", a
   // Tool round and the empty turn on the local model, its second synthesis try, then Groq, then OpenAI.
   assert.deepEqual(models, ["qwen3:14b", "qwen3:14b", "qwen3:14b", "qwen3:14b", "openai/gpt-oss-120b", "gpt-5.4-mini"]);
 });
+
+test("the route and the provider that served a reply are reported as kinds, never addresses or keys", async () => {
+  const { chatRoute } = await import("../app/api/chat/providers.mjs");
+  const { providerKind } = await import("../app/api/chat/model-endpoint.mjs");
+  assert.deepEqual(chatRoute(env), ["self-hosted", "groq", "openai"]);
+  assert.deepEqual(chatRoute({ ...env, GROQ_API_KEY: "" }), ["self-hosted", "openai"]);
+  assert.deepEqual(chatRoute({ ...env, ATLAS_CHAT_BASE_URL: "https://api.groq.com/openai/v1", ATLAS_MODEL_API_KEY: "" }), ["groq", "openai"]);
+  assert.deepEqual(chatRoute({}), []);
+  assert.equal(providerKind("not a url"), "unknown");
+  assert.doesNotMatch(JSON.stringify(chatRoute(env)), /owner\.test|secret|token/u);
+
+  const ask = (fetcher) => converse({
+    endpoint: resolveChatProvider(env), turns: [{ role: "system", content: "sys" }, ...turns],
+    toolContext: { environment: {}, allowlist: new Set(), githubToken: async () => undefined, fetcher },
+    defaultRepository: "cornerstonemarketingus/atlas", userMessage: "hello", startTasks: async () => [], stream: false, emit: () => {}, fetcher, sleep: async () => {},
+  });
+  const local = await ask(async () => ok("from my machine"));
+  assert.deepEqual(local.servedBy, { provider: "self-hosted", model: "qwen3:14b" });
+  const offline = await ask(async (url) => (String(url).startsWith("https://models.owner.test/") ? new Response("", { status: 530 }) : ok("from groq")));
+  assert.equal(offline.reply, "from groq");
+  assert.deepEqual(offline.servedBy, { provider: "groq", model: "openai/gpt-oss-120b" });
+  const both = await ask(async (url) => (String(url).startsWith("https://api.openai.com/") ? ok("from openai") : new Response("", { status: 530 })));
+  assert.deepEqual(both.servedBy, { provider: "openai", model: "gpt-5.4-mini" }, "the deepest fallback is credited, not the first");
+});

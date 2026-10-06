@@ -23,7 +23,7 @@
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1", "[::1]"];
 /** Hosted providers answer within a minute; anything else is a model the owner runs, which may take longer. */
-const HOSTED_ORIGINS = new Set(["https://api.groq.com", "https://api.openai.com"]);
+const HOSTED_ORIGINS = new Set(["https://api.groq.com", "https://api.openai.com", "https://api.cloudflare.com"]);
 const SELF_HOSTED_TIMEOUT_MS = 300_000;
 
 /**
@@ -55,6 +55,16 @@ export const MAX_POOL_MODELS = 8;
 function modelPoolFor(environment, model, fallback) {
   const extra = (environment.ATLAS_CHAT_MODELS || "").split(/[\s,]+/u).filter((name) => MODEL_NAME.test(name));
   return [...new Set([model, ...extra, ...(fallback ? [fallback] : [])])].slice(0, MAX_POOL_MODELS);
+}
+
+/**
+ * What kind of provider an endpoint is, for the owner to see which one served
+ * a reply: never the address (a self-hosted one names the owner's machine).
+ */
+export function providerKind(baseUrl) {
+  let origin;
+  try { origin = new URL(baseUrl).origin; } catch { return "unknown"; }
+  return origin === "https://api.groq.com" ? "groq" : origin === "https://api.openai.com" ? "openai" : origin === "https://api.cloudflare.com" ? "workers-ai" : "self-hosted";
 }
 
 /** @returns {{ configured: boolean, reason?: string, baseUrl?: string, model?: string, apiKey?: string|null, fallbackModel?: string|null, models?: string[] }} */
