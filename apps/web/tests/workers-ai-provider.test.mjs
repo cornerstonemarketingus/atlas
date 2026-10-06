@@ -70,3 +70,20 @@ test("a reply written by Workers AI says so", async () => {
   assert.equal(outcome.reply, "Hello from Cloudflare.");
   assert.deepEqual(outcome.servedBy, { provider: "workers-ai", model: "@cf/openai/gpt-oss-120b" });
 });
+
+// Production (2026-10-06): with Workers AI configured, hosted chat answered only
+// "The model endpoint answered 401." — no way to tell which provider refused.
+test("a rejected credential names the provider that rejected it, so the owner knows which key to fix", async () => {
+  const env = { ...workersOnly, ATLAS_CHAT_BASE_URL: "https://api.groq.com/openai/v1", ATLAS_CHAT_MODEL: "big", GROQ_API_KEY: "groq-secret", ATLAS_CHAT_FALLBACK_MODEL: "" };
+  const tooLarge = () => new Response(JSON.stringify({ error: { message: "Request too large for model on tokens per minute (TPM): Limit 8000, Requested 9500" } }), { status: 429 });
+  const fetcher = async (url) => (String(url).startsWith("https://api.cloudflare.com/") ? new Response(JSON.stringify({ errors: [{ message: "private provider text" }] }), { status: 401 }) : tooLarge());
+  const failed = await converse({
+    endpoint: resolveChatProvider(env), turns: [{ role: "system", content: "sys" }, ...turns],
+    toolContext: { environment: {}, allowlist: new Set(), githubToken: async () => undefined, fetcher },
+    defaultRepository: "cornerstonemarketingus/atlas", userMessage: "hello", startTasks: async () => [], stream: false, emit: () => {}, fetcher, sleep: async () => {},
+  });
+  assert.equal(failed.status, 502, "a refused credential is not a rate limit");
+  assert.match(failed.error, /@cf\/openai\/gpt-oss-120b \(api\.cloudflare\.com\) rejected Atlas's credential \(401\)/u);
+  assert.match(failed.error, /big \(api\.groq\.com\) refused a request larger than its per-minute token allowance/u);
+  assert.doesNotMatch(failed.error, /private provider text|cf-workers-ai-token|groq-secret/u);
+});

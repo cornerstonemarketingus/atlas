@@ -327,3 +327,9 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 - Evidence: web lint and typecheck clean; 417 web tests pass (4 new: configuration and URL safety, routes, Groq "too large" → Workers AI with its own token and plain OpenAI-compatible body, `servedBy`); workflow check passes; runner and local script tests 63/63. Not yet verified live: needs the owner's token, then a deploy and the `chat` check.
 - Setup: `docs/HOSTED-VERIFICATION.md` ("No Groq, no Ollama: Cloudflare Workers AI").
 
+## 2026-10-06 Workers AI configured; a rejected credential now names its provider
+
+- Owner added `ATLAS_WORKERS_AI_TOKEN` and deployed. Live "Verify hosted Atlas" (`chat`, run 37489979783): `Chat route: groq → workers-ai → openai` (Workers AI recognized), but non-streaming "stopped early" and streaming ended "The model endpoint answered 401." Groq refuses Atlas-size requests as too large, so the route reaches Workers AI, which most likely rejected the token; the message could not say which provider answered 401, because only "not now" refusals were recorded.
+- Now 401/403 (credential), 402 (billing) and 404 (unknown model or address) refusals are recorded too, and the error names the provider and model with a fixed reason ("rejected Atlas's credential (401): check that provider's key and its permissions"), never provider text or keys; a lone server error keeps its short message. "Verify hosted Atlas" prints chat's own error message for a failed `/api/chat` request.
+- Evidence: web lint and typecheck clean; 418 web tests pass (new: Groq "too large" then Workers AI 401 names both, leaks neither provider text nor keys); runner and local script tests 63/63.
+

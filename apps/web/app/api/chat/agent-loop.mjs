@@ -313,6 +313,9 @@ async function sendWithRateLimitRetry(endpoint, turns, options) {
       if (category === "billing") options.billingBlocked?.add(endpoint.baseUrl);
       // Who refused and why, in fixed categories only (never provider text).
       options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: response.status, category, retryAfterMs: response.status === 429 ? retryAfterMs(response.headers, body) : null });
+    } else if ([401, 402, 403, 404].includes(response.status)) {
+      // A refusal that waiting cannot fix: say which provider, so the owner knows which key or setting to check.
+      options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: response.status, category: response.status === 404 ? "not_found" : response.status === 402 ? "billing" : "credential", retryAfterMs: null });
     }
     return response;
   };
@@ -579,9 +582,18 @@ export function describeRefusals(refusals = []) {
   for (const entry of refusals) latest.set(`${entry.host} ${entry.model}`, entry);
   return [...latest.values()].map((entry) => `${entry.model} (${entry.host}) ${
     entry.category === "billing" ? "has no API credits or reached a billing limit"
+      : entry.category === "credential" ? `rejected Atlas's credential (${entry.status}): check that provider's key and its permissions`
+      : entry.category === "not_found" ? "does not know this model or address (404)"
       : entry.category === "input_too_large" ? "refused a request larger than its per-minute token allowance"
         : entry.status === 429 ? `is rate-limited${Number.isFinite(entry.retryAfterMs) ? ` for about ${roughly(entry.retryAfterMs)}` : ""}`
           : `answered ${entry.status}`}`).join("; ");
+}
+
+/** The refusal detail when it adds something to the status: several providers, or a reason beyond "unavailable". */
+function statusDetail(result) {
+  const refusals = result.refusals ?? [];
+  const informative = new Set(refusals.map((entry) => `${entry.host} ${entry.model}`)).size > 1 || refusals.some((entry) => entry.category !== "unavailable");
+  return informative ? describeRefusals(refusals) : "";
 }
 
 function limitReason(result) {
@@ -701,7 +713,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     if (!result.ok) {
       const message = result.limitCategory === "billing" ? "The provider has no available API credits or has reached a billing limit. Use a configured free/local provider; waiting will not restore credit." : result.status === 429
         ? `The model provider's rate limit was reached (429)${describeRefusals(result.refusals) ? `: ${describeRefusals(result.refusals)}` : ""}. Wait and ask again, or set a higher-limit model or ATLAS_CHAT_FALLBACK_MODEL.`
-        : `The model endpoint answered ${result.status}.`;
+        : `The model endpoint answered ${result.status}${statusDetail(result) ? `: ${statusDetail(result)}` : ""}.`;
       inferenceDiagnostic(result.status === 429 ? "inference.rate_limited" : "inference.failed", describe(result, round));
       const wait = Math.max(1_000, result.retryAfterMs ?? 2_000);
       if (round === 0 && result.limitCategory !== "billing" && result.limitCategory !== "input_too_large" && TRANSIENT_STATUSES.has(result.status) && wait <= waitBudget && wait <= MAX_CAPACITY_WAIT_MS && firstCallRetries < FIRST_CALL_RETRIES) {
@@ -888,7 +900,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         continue;
       }
       if (result.limitCategory === "billing") { reason = "the provider has no available API credits or has reached a billing limit; use a configured free/local provider."; break; }
-      if (!TRANSIENT_STATUSES.has(result.status)) { reason = `the model endpoint answered ${result.status}.`; break; }
+      if (!TRANSIENT_STATUSES.has(result.status)) { reason = `the model endpoint answered ${result.status}${statusDetail(result) ? ` (${statusDetail(result)})` : ""}.`; break; }
       reason = result.status === 429 ? limitReason(result) : `the model endpoint answered ${result.status}.`;
       const wait = Math.max(1_000, result.retryAfterMs ?? 2_000);
       if (attempt === SYNTHESIS_ATTEMPTS - 1 || wait > waitBudget || wait > MAX_CAPACITY_WAIT_MS) break;
