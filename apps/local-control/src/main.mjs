@@ -52,6 +52,10 @@ import { registerCommunicationsTools } from "./agent/tools/communications-tools.
 import { registerWorkflowTools } from "./agent/tools/workflow-tools.mjs";
 import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.mjs";
 import { createCredentialVault } from "./agent/credential-vault.mjs";
+import { CAPABILITIES, CredentialBroker, CredentialStore } from "./agent/credentials/broker.mjs";
+import { createAccountRoutes } from "./agent/credentials/routes.mjs";
+import { cloudflareValidator, githubValidator } from "./agent/credentials/validators.mjs";
+import { createRedactor, hostSecretValues } from "./platform/terminal/redaction.mjs";
 import { openInBrowser, ownerAccount, resolveOwnerToken, signInUrl } from "./identity/owner.mjs";
 import { RemoteAccess } from "./remote/access.mjs";
 import { ACTIVE_STATES, GenesisService, GenesisStore } from "./platform/genesis/index.mjs";
@@ -84,6 +88,33 @@ const outbox = new OutboxDispatcher({ store: platformStore, onError: (error) => 
 outbox.subscribe("*", (event) => platformStream.publish(event));
 outbox.start();
 const vault = createCredentialVault({ filePath: join(dataDirectory, "credentials.vault.json") });
+// Credential Broker: agents request capabilities; values stay in the vault and
+// reach only the adapter that makes the call. Approvals use the same
+// digest-bound, single-use approvals as every other consequential action.
+const credentialStore = new CredentialStore(join(dataDirectory, "credentials.sqlite"));
+const credentialBroker = new CredentialBroker({
+  store: credentialStore,
+  vault,
+  approvals: {
+    check: (digest) => store.consumeApprovedDigest(digest),
+    request: ({ digest, capability, summary, riskLevel }) => store.createApproval({ capability, summary, actionDigest: digest, riskLevel }),
+  },
+  redact: (text) => redactSecrets(text),
+});
+const hostSecrets = hostSecretValues();
+/** Every tool output, error and broker result passes this: host secrets, credentials the broker has used, and known token shapes. */
+function redactSecrets(text) {
+  return createRedactor({ knownSecrets: [...hostSecrets, ...credentialBroker.knownSecrets()] })(text).text;
+}
+const accountRoutes = createAccountRoutes({
+  broker: credentialBroker,
+  capabilities: CAPABILITIES,
+  validators: {
+    github: () => githubValidator(),
+    cloudflare: (account) => cloudflareValidator({ accountId: /^[0-9a-f]{32}$/u.test(account) ? account : null }),
+  },
+  send: (response, status, value) => { response.setHeader("content-type", "application/json; charset=utf-8"); response.writeHead(status); response.end(JSON.stringify(value)); return true; },
+});
 // Local identity: the OS account that runs Atlas owns it; its token lives in that account's vault.
 const owner = ownerAccount();
 const ownerToken = await resolveOwnerToken({ dataDirectory, vault, log: (line) => console.log(line) });
@@ -242,6 +273,7 @@ const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
 const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, "remote-access.json") });
 const server = createLocalControlServer({
   store,
+  accountRoutes,
   token,
   runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
   license,
@@ -372,6 +404,8 @@ function buildExecutors() {
  */
 function buildToolRegistry() {
   const registry = new ToolRegistry({
+    // Redaction at the tool boundary: no tool output or error reaches the model unscrubbed.
+    redact: (text) => redactSecrets(text),
     // Adaptive autonomy (Track B8) wraps the owner's policy: it only tightens
     // it (level 4 asks with a second confirmation, level 5 is refused).
     policy: withAutonomy(createLegacyPolicyBridge({
