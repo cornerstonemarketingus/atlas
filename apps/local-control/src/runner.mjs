@@ -7,13 +7,15 @@ import { safeEnvironment } from "./agent/tools/process.mjs";
 
 const atlasRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
-export function localCoderEnvironment() {
-  return safeEnvironment({ ATLAS_LOCAL_MODEL_KEY: "local-only-no-credential" });
+export function localCoderEnvironment(configuration) {
+  return safeEnvironment({ ATLAS_LOCAL_MODEL_KEY: configuration?.apiKey ?? "local-only-no-credential" });
 }
 
 export function runLocalCoder(task, options = {}) {
   const script = resolve(atlasRoot, "scripts", "local", "run-coder.mjs");
-  const args = [script, "--repository", task.repository, "--objective", task.objective, "--model", task.model];
+  const configuration = options.modelConfiguration;
+  const args = [script, "--repository", task.repository, "--objective", task.objective, "--model", configuration?.model ?? task.model];
+  if (configuration) args.push("--base-url", configuration.baseUrl, "--context-window", String(configuration.context));
   if (options.verifyDir) args.push("--verify-dir", options.verifyDir);
   const { signal } = options;
   if (signal?.aborted) return Promise.resolve({ ok: false, cancelled: true, message: "Cancelled before the coder started." });
@@ -22,7 +24,7 @@ export function runLocalCoder(task, options = {}) {
       cwd: atlasRoot,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: localCoderEnvironment(),
+      env: localCoderEnvironment(configuration),
     });
     let summary = "";
     let cancelled = false;
@@ -46,7 +48,7 @@ export function runLocalCoder(task, options = {}) {
  * capture, leaving the operator's checkout untouched — can be tested without
  * standing up a model server.
  */
-export async function runIsolatedLocalCoder(task, { dataDirectory, verifyDir, signal, runCoder = runLocalCoder } = {}) {
+export async function runIsolatedLocalCoder(task, { dataDirectory, verifyDir, signal, modelConfiguration, runCoder = runLocalCoder } = {}) {
   if (!dataDirectory) throw new Error("A local data directory is required for isolated runs.");
   const worktrees = join(dataDirectory, "worktrees");
   const patches = join(dataDirectory, "patches");
@@ -60,7 +62,7 @@ export async function runIsolatedLocalCoder(task, { dataDirectory, verifyDir, si
   const add = await capture("git", ["-C", repository, "worktree", "add", "--detach", worktree, "HEAD"]);
   if (!add.ok) return { ok: false, message: `Could not create an isolated worktree: ${add.stderr.trim()}` };
 
-  const result = await runCoder({ ...task, repository: worktree }, { verifyDir, signal });
+  const result = await runCoder({ ...task, repository: worktree }, { verifyDir, signal, modelConfiguration });
   // The diff is captured even for a cancelled run: partial work in the
   // worktree is still the operator's, and a patch they can read is the
   // difference between "Atlas stopped" and "Atlas stopped and lost it".

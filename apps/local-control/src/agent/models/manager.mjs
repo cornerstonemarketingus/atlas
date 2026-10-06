@@ -19,9 +19,9 @@ import { catalogEntry } from "./catalog.mjs";
  * Model names are checked against a strict pattern (catalog or custom), so a
  * request can never smuggle anything else into the API call.
  *
- * Not done here: downloading the runtime itself. When no binary exists the
- * status says so and links the official installer; an Atlas-bundled engine
- * (llama.cpp) is the next step.
+ * The guided setup can install the official Windows runtime through winget;
+ * supported installers on other platforms and an Atlas-bundled engine remain
+ * extension points. No administrator/security policy is bypassed.
  */
 
 export const OLLAMA_URL = "http://127.0.0.1:11434";
@@ -83,6 +83,8 @@ export class ModelManager {
     this.log = log;
     this.now = now;
     this.child = null;
+    this.starting = null;
+    this.runtimeInstaller = null;
     this.jobs = new Map();
   }
 
@@ -121,6 +123,12 @@ export class ModelManager {
 
   /** Makes sure a server answers on loopback, starting one if Atlas can. */
   async ensureServer({ contextLength = 16_384, waitMs = 20_000 } = {}) {
+    if (this.starting) return this.starting;
+    this.starting = this.#startServer({ contextLength, waitMs });
+    try { return await this.starting; } finally { this.starting = null; }
+  }
+
+  async #startServer({ contextLength, waitMs }) {
     if (await this.reachable()) return { started: false };
     const binary = this.findBinary();
     if (!binary) throw new ModelManagerError("NO_RUNTIME", `No local model runtime is installed. Install Ollama from ${INSTALL_GUIDE}, then press Start again.`);
@@ -130,6 +138,7 @@ export class ModelManager {
       env: { ...process.env, OLLAMA_HOST: host, OLLAMA_CONTEXT_LENGTH: String(contextLength) },
     });
     this.child.on?.("exit", () => { this.child = null; });
+    this.child.on?.("error", () => { this.child = null; });
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
       if (await this.reachable()) { this.log(`Started the local model server (${host}, context ${contextLength}).`); return { started: true }; }
@@ -137,6 +146,19 @@ export class ModelManager {
     }
     this.stopServer();
     throw new ModelManagerError("START_FAILED", "The local model server did not start. Try running `ollama serve` yourself to see why.");
+  }
+
+  /** Fixed package ID, no shell or user-controlled installer arguments. UAC stays with Windows. */
+  async installRuntime() {
+    if (this.findBinary()) return { installed: true };
+    if (process.platform !== "win32") throw new ModelManagerError("NO_RUNTIME", `Install the official local runtime from ${INSTALL_GUIDE}, then retry setup.`);
+    if (this.runtimeInstaller) return this.runtimeInstaller;
+    this.runtimeInstaller = new Promise((resolve, reject) => {
+      const child = this.spawn("winget.exe", ["install", "--id", "Ollama.Ollama", "--exact", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], { shell: false, windowsHide: true, stdio: "ignore" });
+      child.once("error", () => reject(new ModelManagerError("NO_RUNTIME", "Windows Package Manager could not start. Install Ollama from its official download page, then retry.")));
+      child.once("close", (code) => code === 0 ? resolve({ installed: true }) : reject(new ModelManagerError("NO_RUNTIME", "Windows did not install local AI. Approve the official Ollama installer when Windows asks, then retry.")));
+    });
+    try { return await this.runtimeInstaller; } finally { this.runtimeInstaller = null; }
   }
 
   /** Stops only a server Atlas started. */

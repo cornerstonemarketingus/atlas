@@ -168,3 +168,117 @@ Run them with:
 ```
 cd apps/local-control && npm test
 ```
+
+## Free Local AI guided setup
+
+Open **Models → Free Local AI → Set up free AI** in the local Atlas console.
+Choose Recommended, Faster, or Higher quality. Atlas checks hardware and disk,
+starts or installs the runtime, downloads a model, checks available memory,
+loads its configured context, creates a credential in the existing OS vault,
+and verifies streaming and agent capabilities through the authenticated gateway.
+It also runs Atlas's production coding loop against a disposable repository
+and checks that the requested repair actually happened; an exit code alone
+does not qualify a model. Probe code never executes model-authored JavaScript
+inside the daemon.
+The selected local model is applied only after verification. Failed downloads,
+insufficient RAM, empty responses and failed tool-call probes remain failures.
+The advanced model catalog retains Install, Remove and Run controls.
+
+No per-message AI provider charges apply to local inference. Electricity and
+hardware have costs. This initial local setup has **cloud fallback off**; an
+owner can explicitly enable the configured fallback after a charge notice.
+Existing configured routing continues
+when no Free Local AI plan is applied. The local-only preference overrides the
+conversation/team client, identifies the actual local model in the audit, and
+fails promptly if the runtime is unreachable. Requests beyond the served
+context are refused rather than silently truncated. The existing coding
+executor receives the selected model, context and authenticated gateway;
+its key goes only through the allowlisted child environment, never command
+arguments or test-script environments. Coding runs require a measured repair
+capability and remain local-only. This does not wire the runner to the hosted
+Durable Object governor.
+
+### Ownership and extension points
+
+`agent/models/free-local.mjs` orchestrates the existing `ModelManager`,
+`ModelPlanStore`, hardware catalog, credential vault, capability registry and
+streaming model client. It is not another provider router. Runtime adapters
+used by the setup expose `status`, `reachable`, `ensureServer`, `installRuntime`,
+`install`, `warm` and `remove`; Ollama is the current implementation. Another
+OpenAI-compatible runtime can implement those operations and inject its gateway
+factory without changing the onboarding UI. Native inference, MLX, llama.cpp,
+vLLM and LM Studio are extension targets, not shipped installers.
+
+The catalog is the only source of recommendation model names. Estimates include
+weights, quantization assumptions and context-dependent KV cache. Qwen3 small
+entries use published Q4_K_M download sizes; the default CPU recommendation
+keeps a smaller context and reserves at least 3 GiB of total system RAM for
+other applications. Installation requires known free disk space with staging
+headroom. Actual free RAM is checked again before loading; installed models
+are not evidence that a model fits. Recommendations and relative quality/speed
+scores are estimates, not a guarantee of agent reliability. Setup measures
+tool formatting, JSON output, an actual coding repair and recall at approximately 1,024 tokens; that
+short recall probe does not verify the whole configured context window.
+
+### Security and connectivity
+
+The gateway binds to loopback, compares a 256-bit random bearer credential in
+constant time, restricts model names and upstreams, refuses redirects and never
+exposes Ollama pull/delete/create endpoints. Credentials stay in the current
+user's DPAPI/Keychain/keyring vault, not the model plan, API status or logs.
+Request size, output size, generation time, concurrency and queue waits are
+bounded. Authenticated `/v1/health` checks model availability in 1.5 seconds;
+it is not proof that a future large generation will fit in memory.
+Recognized Ollama memory-allocation failures become sanitized capacity responses
+with a one-minute cooldown, so the existing governor can choose a permitted
+fallback and repeated requests do not keep trying to load an oversized model.
+Upstream error bodies are bounded; model prompts and internal failure details
+are not included in the generated capacity message.
+
+**Connect hosted Atlas** checks Tailscale authentication and enables Funnel only
+for the authenticated inference gateway. It refuses to replace an existing
+private Serve listener, derives the HTTPS hostname from the client, and tests
+authenticated HTTPS with redirects disabled. The private device-pairing
+transport in `remote/access.mjs` remains private. Funnel installation/sign-in
+and policy authorization are human boundaries. A verified public gateway is
+not a registered hosted provider: the UI distinguishes those states.
+
+Hosted per-user registration and revocation are still
+required before this is a complete hosted onboarding feature. The current
+Worker uses deployment-scoped model credentials. Do not publish another user's
+gateway as a deployment-wide default or share one user's vault with another.
+Until that registration exists, advanced single-owner deployment setup is in
+`HOSTED-VERIFICATION.md`. Local fallback defaults off. Enabling it uses the
+existing configured router only before a response starts; authentication,
+invalid input, cancellation and mid-stream failures do not trigger fallback.
+Status events and the audit identify the actual serving model and warn when
+cloud provider charges may apply. No automatic difficult-task paid escalation
+is implemented by this setup.
+
+### Startup and troubleshooting
+
+On Windows, **Start automatically on Windows** registers a limited task for
+the current user at sign-in. It stores no password, ignores duplicate instances
+and launches the existing Atlas supervisor with crash backoff and rotating logs. Task Scheduler also retries a failed supervisor up to three times. Windows installer payloads include the compiled coding CLI, shared contracts and inference package, without requiring development dependencies. The plan is restored and
+reverified on daemon startup. It does not run before Windows sign-in. Other
+platforms currently use their normal user service manager; installers for them
+are not implemented. **Disable automatic startup** removes only this task.
+Older plans without the current measured coding-repair capability require
+setup again rather than silently restoring a model that only passed tool formatting.
+
+- Computer/runtime offline: retry after starting the computer or runtime. No
+  cloud call is made for an applied local-only plan.
+- Low memory: close other applications or choose Faster. Avoid treating swap
+  success as a comfortable memory fit.
+- Failed agent test: choose another model. A vendor's declared tool support
+  does not establish that Atlas's tool loop works reliably.
+- Context too large: shorten the conversation or use a larger context/model.
+  A small local model need not replace every Atlas workflow.
+- Secure helper needs sign-in/authorization: follow the exact action shown,
+  then retry Connect hosted Atlas. Never forward Ollama port 11434.
+
+Developer verification: `node scripts/local/verify-free-local.mjs <model> --coder` uses
+real Ollama, a temporary authenticated gateway and the production Atlas client.
+It prints metadata and pass/fail probes, never credentials or model reasoning.
+`node scripts/local/dogfood-free-local.mjs --setup` invokes the actual local
+setup API using the owner's OS vault without printing its token.

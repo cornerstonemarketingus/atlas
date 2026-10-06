@@ -32,5 +32,5 @@ if (-not $SkipModelCheck) {
 Set-Location -LiteralPath $controlPath
 # Signs the browser in as this Windows account: the owner token stays in DPAPI and goes to the page in the URL fragment.
 $env:ATLAS_OPEN_BROWSER = "1"
-& node "src\main.mjs"
+& node (Join-Path $atlasRoot 'scripts\windows\Start-AtlasSupervised.mjs')
 

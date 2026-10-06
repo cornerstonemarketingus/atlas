@@ -23,9 +23,16 @@ const RUNTIME_OVERHEAD = 1.07;
 export const MEMORY_HEADROOM = 0.85;
 export const CONTEXT_STEPS = Object.freeze([32_768, 16_384, 8_192]);
 
-const model = (tag, family, parametersB, extra) => ({ tag, family, parametersB, activeB: parametersB, tools: true, vision: false, ...extra });
+const model = (tag, family, parametersB, extra) => ({ tag, family, parametersB, activeB: parametersB, tools: true, vision: false,
+  quantization: "Q4_K_M estimate",
+  fixedWeightsGiB: extra.downloadGB / 1.074 * RUNTIME_OVERHEAD,
+  ...extra });
 
 export const CATALOG = Object.freeze([
+  // ollama.com/library/qwen3:4b: Q4_K_M, 2.5 GB; 36 layers × 8 KV heads × 128 × K/V × fp16.
+  model("qwen3:4b", "qwen3", 4.02, { downloadGB: 2.5, kvKiBPerToken: 144, nativeContext: 262144, coding: 4.5, reasoning: 4.5, setupContext: 8192, reasoningEffort: "none" }),
+  model("qwen3:0.6b", "qwen3", 0.752, { downloadGB: 0.523, fixedWeightsGiB: 0.523 / 1.074 * 1.07, kvKiBPerToken: 56, nativeContext: 32768, coding: 1.5, reasoning: 1.5, setupContext: 8192, reasoningEffort: "none" }),
+  model("qwen3:1.7b", "qwen3", 2.03, { downloadGB: 1.4, fixedWeightsGiB: 1.4 / 1.074, kvKiBPerToken: 112, nativeContext: 32768, coding: 3, reasoning: 3, setupContext: 4096, reasoningEffort: "none" }),
   model("qwen2.5-coder:1.5b", "qwen2.5", 1.5, { downloadGB: 1.0, kvKiBPerToken: 28, nativeContext: 32_768, coding: 2, reasoning: 1.5 }),
   model("qwen2.5-coder:3b", "qwen2.5", 3, { downloadGB: 1.9, kvKiBPerToken: 36, nativeContext: 32_768, coding: 3, reasoning: 2.5 }),
   model("qwen2.5-coder:7b", "qwen2.5", 7, { downloadGB: 4.7, kvKiBPerToken: 56, nativeContext: 32_768, coding: 5, reasoning: 4 }),
@@ -62,12 +69,29 @@ export function relativeSpeed(entry, hardware) {
 
 /** The largest standard context (≤ the model's own) that fits, or null when even 8k does not. */
 export function fittingContext(entry, hardware) {
-  const budget = hardware.usableModelMemoryGiB * MEMORY_HEADROOM;
+  const budget = Math.min(hardware.usableModelMemoryGiB * MEMORY_HEADROOM,
+    hardware.gpus?.length ? Infinity : Math.max(0, hardware.totalMemoryGiB - 3));
   for (const context of CONTEXT_STEPS) {
     if (context > entry.nativeContext) continue;
     if (memoryRequiredGiB(entry, context) <= budget) return context;
   }
   return null;
+}
+
+/** Single-model onboarding choices. Runtime preflight checks free memory again. */
+export function freeLocalChoices(hardware, installedTags = []) {
+  const pool = assessCatalog(hardware, installedTags).filter((entry) => entry.fits && entry.tools && !entry.vision
+    && (entry.installed || (Number.isFinite(hardware.freeDiskGiB) && hardware.freeDiskGiB >= entry.downloadGB * 1.2 + 1)));
+  const quality = [...pool].sort((a, b) => b.coding - a.coding);
+  const fast = [...pool].sort((a, b) => b.speed - a.speed);
+  const compact = (entry) => {
+    if (!entry) return null;
+    const needed = Math.max(entry.setupContext ?? 8192, hardware.requiredContextTokens ?? 0);
+    const context = [4096, 8192, 16384, 32768].find((size) => size >= needed && size <= entry.nativeContext);
+    return context ? { ...entry, context, memoryGiB: memoryRequiredGiB(entry, context) } : null;
+  };
+  const balanced = quality.map(compact).find((entry) => entry && entry.coding >= 3 && entry.memoryGiB <= Math.max(1, hardware.usableModelMemoryGiB * (hardware.accelerator === "cpu" ? 0.35 : 0.4))) ?? null;
+  return { best: compact(quality[0]), balanced: compact(balanced), lightweight: compact(fast[0]) };
 }
 
 /** Every catalog model with whether and how it fits this machine. */

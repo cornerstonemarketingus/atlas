@@ -23,6 +23,19 @@ import path from "node:path";
 /** Request fields forwarded to the model server; anything else is dropped. */
 const FORWARDED = ["model", "messages", "stream", "stream_options", "tools", "tool_choice", "parallel_tool_calls", "temperature", "top_p", "max_tokens", "max_completion_tokens", "stop", "seed", "response_format", "reasoning_effort"];
 
+async function boundedErrorText(result, limit = 8192) {
+  const chunks = [];
+  let size = 0;
+  if (!result.body) return "";
+  for await (const chunk of result.body) {
+    const part = Buffer.from(chunk).subarray(0, limit - size);
+    chunks.push(part);
+    size += part.length;
+    if (size >= limit) break;
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 export function createGateway({
   token,
   model = null,
@@ -36,12 +49,20 @@ export function createGateway({
   maxMessages = 400,
   maxTokens = 8192,
   generationTimeoutMs = 600_000,
+  healthTimeoutMs = 1500,
+  defaultReasoningEffort = null,
+  capacityCooldownMs = 60_000,
 }) {
+  const upstreamUrl = new URL(upstream);
+  if (upstreamUrl.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(upstreamUrl.hostname) || upstreamUrl.username || upstreamUrl.password || upstreamUrl.search || upstreamUrl.hash || upstreamUrl.pathname !== "/") throw new Error("Gateway upstream must be a bare loopback HTTP origin");
   const allowed = new Set(String(models ?? model ?? "").split(",").map((name) => name.trim()).filter(Boolean));
   if (!token || token.length < 32 || allowed.size === 0) throw new Error("A model and a 32+ character gateway token are required");
+  if ([...allowed].some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,127}$/u.test(name))) throw new Error("Invalid gateway model name");
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("concurrency must be a whole number of at least 1");
+  if (!Number.isInteger(capacityCooldownMs) || capacityCooldownMs < 1) throw new Error("capacityCooldownMs must be a positive whole number");
   const expected = Buffer.from(`Bearer ${token}`);
   let active = 0;
+  let capacityUnavailableUntil = 0;
   const waiting = [];
 
   const release = () => {
@@ -58,10 +79,10 @@ export function createGateway({
   /** Resolves true with a generation slot, or false when the wait ran out or the caller left. */
   const acquire = (response) => {
     if (active < concurrency) { active += 1; return Promise.resolve(true); }
-    if (waiting.length >= queueLimit) return Promise.resolve(false);
+    if (waiting.filter((entry) => !entry.settled).length >= queueLimit) return Promise.resolve(false);
     return new Promise((resolve) => {
       const entry = { resolve, settled: false, timer: null };
-      const give = () => { if (!entry.settled) { entry.settled = true; clearTimeout(entry.timer); resolve(false); } };
+      const give = () => { if (!entry.settled) { entry.settled = true; clearTimeout(entry.timer); const index = waiting.indexOf(entry); if (index >= 0) waiting.splice(index, 1); resolve(false); } };
       entry.timer = setTimeout(give, queueWaitMs);
       // The response, not the request: a request's "close" fires once its body is read.
       response.once("close", give);
@@ -77,6 +98,16 @@ export function createGateway({
     };
     const supplied = Buffer.from(request.headers.authorization || "");
     if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return reply(401, "Authentication required");
+    if (request.method === "GET" && request.url === "/v1/health") {
+      if (Date.now() < capacityUnavailableUntil) return reply(503, "Local model is over capacity: insufficient memory.", { "retry-after": String(Math.ceil((capacityUnavailableUntil - Date.now()) / 1000)) });
+      try {
+        const result = await fetcher(`${upstreamUrl.origin}/v1/models`, { signal: AbortSignal.timeout(healthTimeoutMs), redirect: "error" });
+        const data = await result.json();
+        if (!result.ok || !data.data?.some((entry) => allowed.has(entry.id))) return reply(503, "Local model unavailable");
+        response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+        return response.end(JSON.stringify({ online: true, provider: "local", models: [...allowed] }));
+      } catch { return reply(503, "Local AI computer offline"); }
+    }
     if (request.method === "GET" && request.url === "/v1/models") {
       response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       return response.end(JSON.stringify({ object: "list", data: [...allowed].map((id) => ({ id, object: "model", owned_by: "local" })) }));
@@ -101,6 +132,7 @@ export function createGateway({
     }
     if (forwarded.max_tokens === undefined && forwarded.max_completion_tokens === undefined) forwarded.max_tokens = maxTokens;
     forwarded.stream = body.stream === true;
+    if (forwarded.reasoning_effort === undefined && defaultReasoningEffort) forwarded.reasoning_effort = defaultReasoningEffort;
 
     if (!(await acquire(response))) {
       if (response.destroyed) return undefined;
@@ -111,24 +143,34 @@ export function createGateway({
     const cancel = () => controller.abort();
     response.once("close", cancel);
     try {
+      if (Date.now() < capacityUnavailableUntil) return reply(503, "Local model is over capacity: insufficient memory.", { "retry-after": String(Math.ceil((capacityUnavailableUntil - Date.now()) / 1000)) });
       const result = await fetcher(`${upstream}/v1/chat/completions`, {
-        method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify(forwarded),
+        method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, redirect: "error", body: JSON.stringify(forwarded),
       });
       if (!result.ok) {
+        const text = await boundedErrorText(result).catch(() => "");
+        if (result.status >= 500 && /out of memory|requires more (?:system |gpu )?memory|insufficient (?:system |gpu )?memory|not enough (?:system |gpu )?memory|cuda.*alloc/iu.test(text)) {
+          capacityUnavailableUntil = Date.now() + capacityCooldownMs;
+          return reply(503, "Local model is over capacity: insufficient memory.", { "retry-after": String(Math.ceil(capacityCooldownMs / 1000)) });
+        }
         // The model server's 4xx (an unsupported tool call, a bad request) goes
         // back as it is, so Atlas can adapt; a server failure is not detailed.
         if (result.status >= 400 && result.status < 500) {
-          const text = await result.text().catch(() => "");
           response.writeHead(result.status, { "content-type": "application/json", "cache-control": "no-store" });
           return response.end(text || JSON.stringify({ error: { message: "Local model refused the request" } }));
         }
         return reply(502, "Local model request failed");
       }
       const streaming = (result.headers.get("content-type") ?? "").includes("text/event-stream");
-      response.writeHead(200, { "content-type": streaming ? "text/event-stream" : "application/json", "cache-control": "no-store", ...(streaming ? { "x-accel-buffering": "no" } : {}) });
+      response.writeHead(200, { "content-type": streaming ? "text/event-stream" : "application/json", "cache-control": "no-store", "x-atlas-provider": "local", "x-atlas-model": body.model, ...(streaming ? { "x-accel-buffering": "no" } : {}) });
       if (!result.body) return response.end();
       for await (const chunk of Readable.fromWeb(result.body)) {
-        if (!response.write(chunk)) await new Promise((resolve) => response.once("drain", resolve));
+        if (response.destroyed) break;
+        if (!response.write(chunk)) await new Promise((resolve) => {
+          const done = () => { response.off("drain", done); response.off("close", done); resolve(); };
+          response.once("drain", done);
+          response.once("close", done);
+        });
       }
       return response.end();
     } catch {

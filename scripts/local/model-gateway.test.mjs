@@ -2,9 +2,33 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createGateway } from "./model-gateway.mjs";
+import http from "node:http";
+import { classifyHttpFailure } from "../../packages/atlas-inference/src/errors.mjs";
 
 const token = "test-only-".repeat(5);
 const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+
+test("upstream confinement rejects remote hosts, URL credentials and redirects", () => {
+  for (const upstream of ["http://example.com", "https://127.0.0.1", "http://user:secret@127.0.0.1", "http://127.0.0.1/path", "http://127.0.0.1?target=x"]) {
+    assert.throws(() => createGateway({ token, model: "test-model", upstream }), /loopback/);
+  }
+});
+
+test("authenticated health checks detect missing models and offline runtime", async (t) => {
+  let mode = "online";
+  const { base } = await serve(t, { fetcher: async () => {
+    if (mode === "offline") throw new Error("offline");
+    return Response.json({ data: mode === "missing" ? [] : [{ id: "test-model" }] });
+  } });
+  assert.equal((await fetch(`${base}/v1/health`)).status, 401);
+  assert.equal((await fetch(`${base}/v1/health`, { headers })).status, 200);
+  mode = "missing";
+  assert.equal((await fetch(`${base}/v1/health`, { headers })).status, 503);
+  mode = "offline";
+  assert.equal((await fetch(`${base}/v1/health`, { headers })).status, 503);
+  mode = "online";
+  assert.equal((await fetch(`${base}/v1/health`, { headers })).status, 200);
+});
 
 async function serve(t, options) {
   const server = createGateway({ token, model: "test-model", ...options });
@@ -142,4 +166,30 @@ test("the gateway refuses to start without a strong token or a model", () => {
   assert.throws(() => createGateway({ token: "short", model: "m" }), /32\+ character/u);
   assert.throws(() => createGateway({ token, models: " , " }), /A model/u);
   assert.throws(() => createGateway({ token, model: "m", concurrency: 0 }), /concurrency/u);
+});
+
+test("real upstream memory failures become governed capacity errors without retry storms or leaked detail", async (t) => {
+  let calls = 0;
+  let exhausted = true;
+  const model = http.createServer((request, response) => {
+    calls += 1;
+    response.writeHead(exhausted ? 500 : 200, { "content-type": "application/json" });
+    response.end(JSON.stringify(exhausted ? { error: "model requires more system memory than is available; PRIVATE_UPSTREAM_DETAIL" } : { choices: [{ message: { content: "recovered" } }] }));
+  });
+  model.listen(0, "127.0.0.1"); await once(model, "listening");
+  t.after(() => { model.closeAllConnections(); model.close(); });
+  const { base, chat } = await serve(t, { upstream: `http://127.0.0.1:${model.address().port}`, capacityCooldownMs: 1000 });
+  const first = await chat({});
+  const body = await first.text();
+  assert.equal(first.status, 503);
+  assert.equal(classifyHttpFailure({ status: first.status, body, headers: first.headers }).kind, "CAPACITY");
+  assert.equal(first.headers.get("retry-after"), "1");
+  assert.doesNotMatch(body, /PRIVATE_UPSTREAM_DETAIL/u);
+  assert.equal((await chat({})).status, 503);
+  assert.equal((await fetch(`${base}/v1/health`, { headers })).status, 503);
+  assert.equal(calls, 1, "requests during memory cooldown never reload the model");
+  exhausted = false;
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  assert.equal((await chat({})).status, 200);
+  assert.equal(calls, 2, "normal inference recovers after cooldown");
 });

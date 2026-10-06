@@ -30,7 +30,7 @@ export function createRoutedClient({ routes = [], task = "planning", createClien
         let started = false;
         try {
           for await (const chunk of createClient(route).stream({ ...request, model: route.model })) {
-            if (!started) { started = true; onRoute(route, { failedOver: failures.length > 0 }); }
+            if (!started) { started = true; onRoute(route, { failedOver: failures.length > 0 }); request.onRoute?.({ model: route.model, endpoint: new URL(route.endpoint).origin }, { failedOver: failures.length > 0 }); }
             yield chunk;
           }
           return;
