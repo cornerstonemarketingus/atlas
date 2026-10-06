@@ -45,7 +45,7 @@ export async function POST(request: Request) {
   // question that was never sent anywhere is worse than no thread.
   const selection = body.provider ?? "auto";
   if (typeof selection !== "string" || !["auto", "configured", "workers-ai", "openai"].includes(selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
-  const resolved = resolveChatProvider(process.env, selection);
+  const resolved = resolveChatProvider(process.env, selection, { ai: (workerEnv as { AI?: unknown }).AI });
   if (!resolved.configured) {
     return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
   }
@@ -258,6 +258,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-  const endpoint = resolveChatProvider(process.env);
-  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null, providers: chatProviderChoices(process.env) }, { headers: { "cache-control": "no-store" } });
+  const bindings = { ai: (workerEnv as { AI?: unknown }).AI };
+  const endpoint = resolveChatProvider(process.env, "auto", bindings);
+  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null, providers: chatProviderChoices(process.env, bindings) }, { headers: { "cache-control": "no-store" } });
 }

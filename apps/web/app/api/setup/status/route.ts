@@ -84,6 +84,6 @@ export async function GET(request: Request) {
     completedSteps,
     totalSteps: steps.length,
     steps,
-    optional: { stripeConfigured: stripe.configured, chat: { ...chatReadiness(process.env), route: chatRoute(process.env) }, inferenceGovernor: await governorReadiness(resolveChatModel(process.env), workerEnv) },
+    optional: { stripeConfigured: stripe.configured, chat: { ...chatReadiness(process.env), route: chatRoute(process.env, { ai: (workerEnv as { AI?: unknown }).AI }) }, inferenceGovernor: await governorReadiness(resolveChatModel(process.env), workerEnv) },
   }, { headers: { "cache-control": "no-store" } });
 }

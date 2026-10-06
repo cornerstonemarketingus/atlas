@@ -57,6 +57,8 @@ if (route.includes("workers-ai")) {
     console.log(`Workers AI HTTP: ${JSON.stringify(health.http ?? {})}${health.providerErrorCodes?.length ? ` codes ${health.providerErrorCodes.join(",")}` : ""}`);
     if (health.recommendedAction) console.log(`Workers AI action: ${health.recommendedAction}`);
   } else console.log(`Workers AI diagnosis unavailable: ${diagnosis.error ?? "no result"}`);
+  const binding = diagnosis.providers?.workersAIBinding;
+  if (binding) console.log(`Workers AI binding: ${binding.binding}${binding.model ? `, model ${binding.model}` : ""}, inference ${binding.inference ?? "-"}${binding.http ? ` (HTTP ${binding.http.inference})` : ""} → ${binding.category}`);
 }
 // An unauthenticated identity header must not grant access on workers.dev.
 const forged = await fetch(`${base}/api/tasks`, { headers: { "oai-authenticated-user-id": "operator" } });
