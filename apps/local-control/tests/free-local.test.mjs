@@ -8,6 +8,7 @@ import { freeLocalChoices } from "../src/agent/models/catalog.mjs";
 import { ModelPlanStore } from "../src/agent/models/hosting.mjs";
 import { createGateway } from "../../../scripts/local/model-gateway.mjs";
 import { localCoderEnvironment } from "../src/runner.mjs";
+import { contextModelTag } from "../src/agent/models/manager.mjs";
 
 const hardware = { totalMemoryGiB: 8, usableModelMemoryGiB: 8, freeMemoryGiB: 5, freeDiskGiB: 30, accelerator: "cpu", gpus: [] };
 function capableReply(_url, init) {
@@ -24,8 +25,10 @@ function fixture(t, overrides = {}) {
   const planStore = new ModelPlanStore(join(dir, "plan.json"));
   const values = new Map();
   let online = true;
-  const manager = { status: async () => ({ reachable: online, installed: [{ tag: "qwen3:1.7b" }], loaded: [] }),
-    ensureServer: async () => {}, warm: async () => {}, reachable: async () => online };
+  let loaded = [];
+  const manager = { status: async () => ({ reachable: online, installed: [{ tag: "qwen3:1.7b" }], loaded }),
+    prepareContextModel: async (tag, context) => contextModelTag(tag, context),
+    ensureServer: async () => {}, warm: async (tag, context) => { loaded = [{ tag, context }]; }, reachable: async () => online };
   const setup = new FreeLocalSetup({ manager, planStore, vault: { get: async (key) => values.get(key) ?? null, set: async (key, value) => values.set(key, value) },
     detectHardware: async () => hardware, port: 0, codingProbe: async () => ({ passed: true }), gatewayFactory: (options) => createGateway({ ...options, fetcher: async (...args) => capableReply(...args) }), ...overrides });
   t.after(() => setup.close());
@@ -67,7 +70,7 @@ test("local-only activation identifies the serving model and never calls paid fa
   const result = [];
   for await (const event of client.stream(request)) result.push(event);
   assert.equal(result[0].delta, "READY");
-  assert.deepEqual(served, { provider: "local", model: "qwen3:1.7b", paid: false });
+  assert.deepEqual(served, { provider: "local", model: contextModelTag("qwen3:1.7b", 4096), paid: false });
   offline();
   await assert.rejects(async () => { for await (const event of client.stream(request)) void event; }, /offline/);
   assert.equal(paidCalls, 0);
@@ -77,7 +80,7 @@ test("coding executor receives the selected context and authenticated gateway on
   const { setup, values, offline } = fixture(t);
   setup.start(); await setup.promise;
   const configuration = await setup.coderConfiguration();
-  assert.equal(configuration.model, "qwen3:1.7b");
+  assert.equal(configuration.model, contextModelTag("qwen3:1.7b", 4096));
   assert.equal(configuration.context, 4096);
   assert.equal(new URL(configuration.baseUrl).hostname, "127.0.0.1");
   assert.equal(localCoderEnvironment(configuration).ATLAS_LOCAL_MODEL_KEY, values.get("FREE_LOCAL_GATEWAY_KEY"));
@@ -111,6 +114,16 @@ test("persisted plans fail closed on malicious names or malformed fallback polic
   assert.equal(planStore.read(), null);
   writeFileSync(planStore.path, JSON.stringify({ freeLocal: true, cloudFallback: "yes", coder: { tag: "qwen2.5-coder:1.5b", context: 8192 } }));
   assert.equal(planStore.read(), null);
+});
+
+test("a runtime that silently changes context cannot activate a plan", async (t) => {
+  const { setup, manager, planStore } = fixture(t);
+  const status = manager.status;
+  manager.status = async () => { const current = await status(); return { ...current, loaded: current.loaded.map((entry) => ({ ...entry, context: 16384 })) }; };
+  setup.start(); await setup.promise;
+  assert.equal(setup.job.code, "CAPABILITY_FAILED");
+  assert.equal(planStore.read(), null);
+  assert.equal(setup.gateway, null);
 });
 
 test("explicit fallback preference survives persistence and identifies the actual cloud model", async (t) => {

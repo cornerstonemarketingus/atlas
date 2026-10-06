@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
 import { catalogEntry } from "./catalog.mjs";
+import { createHash } from "node:crypto";
 
 /**
  * Atlas-managed local model hosting: Models → Install → Run, without the
@@ -39,6 +40,17 @@ export class ModelManagerError extends Error {
 export function assertModelTag(tag) {
   if (typeof tag !== "string" || !TAG.test(tag)) throw new ModelManagerError("INVALID_MODEL", "Model names look like 'qwen2.5-coder:7b'.");
   return tag;
+}
+
+/** Ollama's OpenAI API honors model parameters, not a request context field.
+ * Derived manifests reuse installed weights and leave the original tag intact.
+ */
+export function contextModelTag(tag, context) {
+  assertModelTag(tag);
+  if (!Number.isInteger(context) || context < 2048 || context > 131072) throw new ModelManagerError("INVALID_PLAN", "Context must be a whole number between 2048 and 131072.");
+  const source = tag.replace(/[^a-z0-9.-]/gu, "-").slice(0, 20);
+  const hash = createHash("sha256").update(tag).digest("hex").slice(0, 8);
+  return `atlas-${source}-${hash}-ctx${context}:latest`;
 }
 
 /** Where an `ollama` executable might be, in order. */
@@ -210,10 +222,29 @@ export class ModelManager {
 
   async remove(tag) {
     assertModelTag(tag);
+    // Remove only manifests that exactly match Atlas's derivation for this
+    // source. They share its weight blobs, so leaving one pins the download.
+    const installed = (await this.status()).installed;
+    for (const entry of installed) {
+      const context = Number(/-ctx(\d+):latest$/u.exec(entry.tag)?.[1]);
+      if (!Number.isInteger(context) || context < 2048 || context > 131072 || entry.tag !== contextModelTag(tag, context)) continue;
+      const derived = await this.#api("/api/delete", { method: "DELETE", body: JSON.stringify({ model: entry.tag }) });
+      if (!derived.ok && derived.status !== 404) throw new ModelManagerError("REMOVE_FAILED", "Could not remove this model's Atlas memory settings.");
+    }
     const response = await this.#api("/api/delete", { method: "DELETE", body: JSON.stringify({ model: tag }) });
     if (!response.ok) throw new ModelManagerError("REMOVE_FAILED", response.status === 404 ? `${tag} is not installed.` : `The model server answered ${response.status}.`);
     this.log(`Removed ${tag}.`);
     return { removed: tag };
+  }
+
+  /** Runtime-adapter boundary: return a model whose /v1 requests use this context. */
+  async prepareContextModel(tag, context) {
+    const runtimeTag = contextModelTag(tag, context);
+    const response = await this.#api("/api/create", { method: "POST", body: JSON.stringify({ model: runtimeTag, from: tag, parameters: { num_ctx: context, temperature: 0 }, stream: false }) }, 60_000);
+    if (!response.ok) throw new ModelManagerError("WARM_FAILED", "Could not prepare the model's memory settings.");
+    const result = await response.json();
+    if (result.status !== "success" || result.error) throw new ModelManagerError("WARM_FAILED", "The runtime did not confirm the model's memory settings.");
+    return runtimeTag;
   }
 
   /** Loads a model with a context length and keeps it warm for 30 minutes. */

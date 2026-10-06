@@ -59,7 +59,7 @@ export class FreeLocalSetup {
     const apiKey = await this.vault.get("FREE_LOCAL_GATEWAY_KEY");
     if (!apiKey || !this.gateway || !await this.manager.reachable()) throw new ModelRequestError("MODEL_UNREACHABLE", "Local AI is offline. Retry setup before starting a coding run.");
     if (!plan.capabilities?.codingAgent) throw new ModelRequestError("MODEL_INVALID_INPUT", "This model has not passed the actual coding agent repair test.");
-    return { model: plan.coder.tag, context: plan.coder.context, apiKey, baseUrl: `http://127.0.0.1:${this.gateway.address().port}/v1/` };
+    return { model: plan.coder.runtimeTag ?? plan.coder.tag, context: plan.coder.context, apiKey, baseUrl: `http://127.0.0.1:${this.gateway.address().port}/v1/` };
   }
 
   /** Inference-only Funnel; never publish the daemon or Ollama management port. */
@@ -148,7 +148,8 @@ export class FreeLocalSetup {
     const reclaimable = runtime.loaded.reduce((sum, entry) => sum + (entry.memoryGB ?? 0) / 1.074, 0);
     if (hardware.accelerator === "cpu" && hardware.freeMemoryGiB + reclaimable < selected.memoryGiB + 0.5) throw new ModelManagerError("INSUFFICIENT_MEMORY", `Close other applications and retry. This model needs about ${selected.memoryGiB} GB plus working memory.`);
     this.job.step = "Loading model";
-    await this.manager.warm(selected.tag, selected.context);
+    const runtimeTag = await this.manager.prepareContextModel(selected.tag, selected.context);
+    await this.manager.warm(runtimeTag, selected.context);
     this.job.step = "Securing connection";
     await this.close();
     let credential = await this.vault.get("FREE_LOCAL_GATEWAY_KEY");
@@ -156,7 +157,7 @@ export class FreeLocalSetup {
       credential = randomBytes(32).toString("base64url");
       await this.vault.set("FREE_LOCAL_GATEWAY_KEY", credential);
     }
-    const gateway = this.gatewayFactory({ token: credential, model: selected.tag, maxTokens: 2048, queueWaitMs: 1500, queueLimit: 2, defaultReasoningEffort: selected.reasoningEffort });
+    const gateway = this.gatewayFactory({ token: credential, model: runtimeTag, maxTokens: 2048, queueWaitMs: 1500, queueLimit: 2, defaultReasoningEffort: selected.reasoningEffort });
     gateway.listen(this.port, "127.0.0.1");
     try { await once(gateway, "listening"); } catch { gateway.close(); throw new ModelManagerError("START_FAILED", "The secure local AI connection could not start. Another Atlas instance may already be running."); }
     this.gateway = gateway;
@@ -165,25 +166,27 @@ export class FreeLocalSetup {
       const client = createModelClient({ baseUrl: `http://127.0.0.1:${gateway.address().port}/v1/`, apiKey: credential });
       let text = "";
       const started = Date.now();
-      for await (const event of client.stream({ model: selected.tag, messages: [{ role: "user", content: "Reply with the word READY. No tool call is needed." }], tools: this.tools, maxOutputTokens: 32, signal: AbortSignal.timeout(120000) })) {
+      for await (const event of client.stream({ model: runtimeTag, messages: [{ role: "user", content: "Reply with the word READY. No tool call is needed." }], tools: this.tools, maxOutputTokens: 32, signal: AbortSignal.timeout(120000) })) {
         if (event.type === "text") text += event.delta;
       }
       if (!text.trim()) throw new ModelManagerError("WARM_FAILED", "The model returned no text. Setup is not complete.");
       this.job.step = "Testing coding agent capabilities";
       const registry = new ModelCapabilityRegistry();
-      const id = `ollama:${selected.tag}`;
-      registry.register({ id, provider: "ollama", model: selected.tag, endpoint: "http://127.0.0.1:11434", local: true,
+      const id = `ollama:${runtimeTag}`;
+      registry.register({ id, provider: "ollama", model: runtimeTag, endpoint: "http://127.0.0.1:11434", local: true,
         capabilities: { contextTokens: selected.context, toolCalls: false, structuredOutput: false, vision: false }, costPerMTokIn: 0, costPerMTokOut: 0 });
       const bounded = { stream: (request) => client.stream({ ...request, maxOutputTokens: 128, signal: AbortSignal.timeout(120000) }) };
-      const measured = await runCapabilitySuite(bounded, id, { registry, model: selected.tag, contextSizes: [1024] });
+      const measured = await runCapabilitySuite(bounded, id, { registry, model: runtimeTag, contextSizes: [1024] });
       if (!measured.measured.capabilities.toolCalls) throw new ModelManagerError("CAPABILITY_FAILED", "This model did not pass Atlas's agent tool test. Try another model; cloud AI was not used.");
       this.job.step = "Verifying a real coding repair";
-      const coding = await this.codingProbe({ model: selected.tag, context: selected.context, baseUrl: `http://127.0.0.1:${gateway.address().port}/v1/`, apiKey: credential });
+      const coding = await this.codingProbe({ model: runtimeTag, context: selected.context, baseUrl: `http://127.0.0.1:${gateway.address().port}/v1/`, apiKey: credential });
       if (!coding.passed) throw new ModelManagerError("CAPABILITY_FAILED", "This model did not complete Atlas's coding repair. Try a higher-quality model; cloud AI was not used.");
       measured.measured.capabilities.codingAgent = true;
       const cloudFallback = this.planStore.read()?.cloudFallback === true;
-      this.planStore.write({ coder: { tag: selected.tag, context: selected.context }, fast: { tag: selected.tag, context: selected.context }, freeLocal: true, cloudFallback, capabilities: measured.measured.capabilities });
-      this.job = { state: "ready", step: "Your free AI is ready", model: selected.tag, latencyMs: Date.now() - started, provider: "local", cloudFallback, capabilities: measured.measured.capabilities };
+      const loaded = (await this.manager.status()).loaded.find((entry) => entry.tag === runtimeTag);
+      if (loaded?.context !== selected.context) throw new ModelManagerError("CAPABILITY_FAILED", "The runtime did not keep the selected memory settings. Local AI has not been activated.");
+      this.planStore.write({ coder: { tag: selected.tag, runtimeTag, context: selected.context }, fast: { tag: selected.tag, runtimeTag, context: selected.context }, freeLocal: true, cloudFallback, capabilities: measured.measured.capabilities });
+      this.job = { state: "ready", step: "Your free AI is ready", model: selected.tag, runtimeTag, latencyMs: Date.now() - started, provider: "local", cloudFallback, capabilities: measured.measured.capabilities };
     } catch (error) { await this.close(); throw error; }
   }
 
@@ -211,8 +214,8 @@ export class FreeLocalSetup {
           const credential = await setup.vault.get("FREE_LOCAL_GATEWAY_KEY");
           if (!setup.gateway || !credential) throw new ModelRequestError("MODEL_UNREACHABLE", "Reconnect Free Local AI from Models.");
           const client = createModelClient({ baseUrl: `http://127.0.0.1:${setup.gateway.address().port}/v1/`, apiKey: credential });
-          for await (const chunk of client.stream({ ...request, model: plan.coder.tag })) {
-            if (!started) { started = true; const route = { provider: "local", model: plan.coder.tag, paid: false }; onRoute(route); request.onRoute?.(route); }
+          for await (const chunk of client.stream({ ...request, model: plan.coder.runtimeTag ?? plan.coder.tag })) {
+            if (!started) { started = true; const route = { provider: "local", model: plan.coder.runtimeTag ?? plan.coder.tag, paid: false }; onRoute(route); request.onRoute?.(route); }
             yield chunk;
           }
         } catch (error) {

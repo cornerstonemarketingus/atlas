@@ -25,7 +25,7 @@ for (let attempt = 0; attempt < 420; attempt += 1) {
 console.log(JSON.stringify({ online: status.online, selected: status.selected, job: status.job, cloudFallback: status.cloudFallback }));
 if (status.job.state !== "ready") process.exitCode = 2;
 if (process.argv.includes("--coder") && status.online) {
-  const coding = await probeCodingAgent({ model: status.selected.tag, context: status.selected.context, baseUrl: "http://127.0.0.1:11435/v1/", apiKey: await vault.get("FREE_LOCAL_GATEWAY_KEY") });
+  const coding = await probeCodingAgent({ model: status.selected.runtimeTag ?? status.selected.tag, context: status.selected.context, baseUrl: "http://127.0.0.1:11435/v1/", apiKey: await vault.get("FREE_LOCAL_GATEWAY_KEY") });
   console.log(JSON.stringify({ test: "atlas-coding-loop", model: status.selected.tag, ...coding }));
   if (!coding.passed) process.exitCode = 2;
 }

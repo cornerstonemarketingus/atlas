@@ -204,7 +204,7 @@ Durable Object governor.
 `ModelPlanStore`, hardware catalog, credential vault, capability registry and
 streaming model client. It is not another provider router. Runtime adapters
 used by the setup expose `status`, `reachable`, `ensureServer`, `installRuntime`,
-`install`, `warm` and `remove`; Ollama is the current implementation. Another
+`install`, `prepareContextModel`, `warm` and `remove`; Ollama is the current implementation. Another
 OpenAI-compatible runtime can implement those operations and inject its gateway
 factory without changing the onboarding UI. Native inference, MLX, llama.cpp,
 vLLM and LM Studio are extension targets, not shipped installers.
@@ -219,6 +219,15 @@ are not evidence that a model fits. Recommendations and relative quality/speed
 scores are estimates, not a guarantee of agent reliability. Setup measures
 tool formatting, JSON output, an actual coding repair and recall at approximately 1,024 tokens; that
 short recall probe does not verify the whole configured context window.
+
+Ollama's OpenAI-compatible API cannot set the context window in a request.
+Atlas therefore creates a deterministic derived model manifest with `num_ctx`
+and zero default sampling temperature for repeatable coding behavior,
+reusing the downloaded weights and preserving the original model. Chat and
+coding use that manifest; setup checks the runtime's actual loaded context
+before activation. Removing a source also removes only its matching Atlas
+manifests so they do not retain the weights. See the
+[Ollama compatibility documentation](https://docs.ollama.com/api/openai-compatibility).
 
 ### Security and connectivity
 

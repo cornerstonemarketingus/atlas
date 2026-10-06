@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { assessCatalog, catalogEntry, planModels } from "./catalog.mjs";
-import { ModelManagerError, assertModelTag } from "./manager.mjs";
+import { ModelManagerError, assertModelTag, contextModelTag } from "./manager.mjs";
 
 /**
  * Models → Install → Run: the daemon side of native model hosting.
@@ -36,6 +36,7 @@ export class ModelPlanStore {
         if (!plan[role]) continue;
         assertModelTag(plan[role].tag);
         if (!Number.isInteger(plan[role].context) || plan[role].context < 2048 || plan[role].context > 131072) return null;
+        if (plan[role].runtimeTag && plan[role].runtimeTag !== contextModelTag(plan[role].tag, plan[role].context)) return null;
       }
       if (plan.freeLocal && typeof plan.cloudFallback !== "boolean") return null;
       return plan;
@@ -52,6 +53,10 @@ export class ModelPlanStore {
       const tag = assertModelTag(typeof entry === "string" ? entry : entry.tag);
       const context = Math.max(2_048, Math.min(131_072, Number(entry.context) || catalogEntry(tag)?.nativeContext || 16_384));
       clean[role] = { tag, context };
+      if (entry.runtimeTag) {
+        if (entry.runtimeTag !== contextModelTag(tag, context)) throw new ModelManagerError("INVALID_PLAN", "The runtime model does not match this plan.");
+        clean[role].runtimeTag = entry.runtimeTag;
+      }
     }
     if (!clean.coder) throw new ModelManagerError("INVALID_PLAN", "A plan needs at least a coder model.");
     if (clean.freeLocal && plan.capabilities) clean.capabilities = {

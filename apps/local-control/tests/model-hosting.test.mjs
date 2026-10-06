@@ -7,12 +7,45 @@ import { CATALOG, assessCatalog, catalogEntry, fittingContext, memoryRequiredGiB
 import { classifyDifficulty, modelForDifficulty } from "../src/agent/models/difficulty.mjs";
 import { detectHardware, parseRocm } from "../src/agent/models/hardware.mjs";
 import { ModelPlanStore, createModelHostingRoutes } from "../src/agent/models/hosting.mjs";
-import { ModelManager, ModelManagerError, assertModelTag, ollamaCandidates, pullProgress } from "../src/agent/models/manager.mjs";
+import { ModelManager, ModelManagerError, assertModelTag, contextModelTag, ollamaCandidates, pullProgress } from "../src/agent/models/manager.mjs";
 
 const cpu16 = { cpuCount: 8, totalMemoryGiB: 16, gpus: [], unifiedMemory: false, usableModelMemoryGiB: 16 };
 const cpu8 = { cpuCount: 4, totalMemoryGiB: 8, gpus: [], unifiedMemory: false, usableModelMemoryGiB: 8 };
 const gpu24 = { cpuCount: 16, totalMemoryGiB: 64, gpus: [{ vendor: "nvidia", name: "RTX 4090", memoryGiB: 24 }], unifiedMemory: false, usableModelMemoryGiB: 24 };
 const mac64 = { cpuCount: 12, totalMemoryGiB: 64, gpus: [], unifiedMemory: true, usableModelMemoryGiB: 48 };
+
+test("the runtime prepares a derived model so OpenAI requests honor context without replacing source weights", async () => {
+  let submitted;
+  const manager = new ModelManager({ fetchImpl: async (url, init) => {
+    assert.equal(url, "http://127.0.0.1:11434/api/create");
+    submitted = JSON.parse(init.body);
+    return Response.json({ status: "success" });
+  } });
+  const tag = await manager.prepareContextModel("qwen3:1.7b", 8192);
+  assert.equal(tag, contextModelTag("qwen3:1.7b", 8192));
+  assert.notEqual(tag, "qwen3:1.7b");
+  assert.deepEqual(submitted, { model: tag, from: "qwen3:1.7b", parameters: { num_ctx: 8192, temperature: 0 }, stream: false });
+  assert.notEqual(contextModelTag("qwen3:1.7b", 4096), tag);
+  assert.throws(() => contextModelTag("bad;command", 8192));
+  assert.throws(() => contextModelTag("qwen3:1.7b", 8192.5));
+  const failed = new ModelManager({ fetchImpl: async () => Response.json({ error: "failed" }, { status: 500 }) });
+  await assert.rejects(failed.prepareContextModel("qwen3:1.7b", 8192), /memory settings/);
+});
+
+test("removing a source removes only its exact Atlas context manifests", async () => {
+  const removed = [];
+  const source = "qwen3:1.7b";
+  const alias = contextModelTag(source, 8192);
+  const manager = new ModelManager({ fetchImpl: async (url, init) => {
+    if (url.endsWith("/api/version")) return Response.json({ version: "test" });
+    if (url.endsWith("/api/tags")) return Response.json({ models: [source, alias, contextModelTag("qwen3:4b", 8192), "atlas-user-ctx8192:latest"].map(name => ({ name })) });
+    if (url.endsWith("/api/ps")) return Response.json({ models: [] });
+    if (url.endsWith("/api/delete")) { removed.push(JSON.parse(init.body).model); return Response.json({}); }
+    throw new Error("Unexpected runtime request");
+  }, findBinary: () => null });
+  await manager.remove(source);
+  assert.deepEqual(removed, [alias, source]);
+});
 
 test("memory estimates grow with parameters and context", () => {
   const seven = catalogEntry("qwen2.5-coder:7b");
