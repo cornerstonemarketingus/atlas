@@ -185,6 +185,8 @@ export const LOCAL_UI_HTML = `<!doctype html>
 
  <section class="view" data-view="connections" hidden aria-labelledby="connections-heading">
   <div class="hero"><h2 id="connections-heading">Connections</h2><p class="lede">Models, tool servers and phones connected to this Atlas.</p></div>
+  <div class="panel"><div class="section-title"><h3>Accounts</h3><label>Approval mode <select id="accounts-mode" aria-label="Approval mode"><option value="SAFE">Safe: ask before external changes</option><option value="BALANCED">Balanced: ask for new or sensitive access</option><option value="AUTONOMOUS">Autonomous: act within granted capabilities</option></select></label></div><p class="hint">Agents ask for a capability (for example cloudflare.ai.run); the credential stays in this computer's vault and is used only for the approved action. Production, money and secrets always ask you, in every mode.</p><div id="accounts-list" class="list"><p class="empty">Unlock to see accounts.</p></div>
+   <details class="more"><summary>Connect an account</summary><form id="account-form" class="stack"><label>Provider <select id="account-provider"><option>github</option><option>cloudflare</option><option>vercel</option><option>google</option></select></label><label>Account (GitHub login, Cloudflare account id, …) <input id="account-name" required maxlength="200"></label><label>Environment <input id="account-env" value="production" maxlength="40"></label><label>Type <select id="account-type"><option>API_TOKEN</option><option>API_KEY</option><option>OAUTH_ACCESS_TOKEN</option><option>SERVICE_ACCOUNT</option></select></label><label>Vault name <input id="account-ref" required pattern="[A-Z][A-Z0-9_]{2,63}" placeholder="CLOUDFLARE_WORKERS_AI_TOKEN"></label><label>Capabilities (comma separated) <input id="account-caps" placeholder="cloudflare.ai.run"></label><label>Credential <input id="account-secret" type="password" autocomplete="off" required></label><button type="submit">Connect</button></form></details></div>
   <div class="panel"><h3>Models</h3><div id="models-health" class="list"><p class="empty">Unlock to check models.</p></div></div>
   <div class="panel"><h3>Tool servers (MCP)</h3><p class="hint">Configured with ATLAS_MCP_SERVERS. A new server's tools are denied until you allow its capability here. Tool descriptions that look like instructions are blocked, and every result is treated as untrusted data.</p><div id="mcp-list" class="list"><p class="empty">No tool servers configured.</p></div></div>
   <div class="panel"><div class="section-title"><h3>Phones</h3><button class="secondary" id="pair">Pair a phone</button></div><p id="pair-code" role="status"></p><div id="devices" class="list"><p class="empty">No paired phones.</p></div></div>
@@ -966,7 +968,20 @@ async function loadKnowledge(){
 }
 
 /* ---- Connections ---- */
+async function loadAccounts(){
+ const box=$('#accounts-list');
+ try{
+  const {accounts,mode}=await getJson('/v1/accounts');
+  $('#accounts-mode').value=mode;
+  box.innerHTML=accounts.length?accounts.map(a=>'<div class="card"><div class="task-top"><h4>'+esc(a.provider)+' · '+esc(a.account)+' <span class="chip">'+esc(a.environment)+'</span></h4>'+pill(a.status)+'</div><p>'+esc(a.capabilities.join(', ')||'No capabilities granted.')+'</p><p class="hint">'+esc(a.type)+(a.expiresAt?' · expires '+when(a.expiresAt):'')+(a.lastUsedAt?' · last used '+when(a.lastUsedAt):' · not used yet')+(a.lastValidation?' · last check '+esc(a.lastValidation.category):'')+'</p><div class="actions"><button type="button" class="secondary" data-account-check="'+esc(a.id)+'">Check</button><button type="button" class="secondary" data-account-revoke="'+esc(a.id)+'">Revoke</button></div></div>').join(''):'<p class="empty">No accounts connected.</p>';
+  box.querySelectorAll('[data-account-check]').forEach(b=>b.onclick=async()=>{try{const r=await sendJson('/v1/accounts/'+b.dataset.accountCheck+'/validate','POST',{});setNotice('Check: '+(r.account.lastValidation?.category||'done'))}catch(error){setNotice(error.message)}loadAccounts()});
+  box.querySelectorAll('[data-account-revoke]').forEach(b=>b.onclick=async()=>{if(!confirm('Revoke this account and delete its credential from the vault?'))return;try{await getJson('/v1/accounts/'+b.dataset.accountRevoke,{method:'DELETE'})}catch(error){setNotice(error.message)}loadAccounts()});
+ }catch(error){box.innerHTML=problem(error)}
+}
+$('#accounts-mode').onchange=async e=>{try{await sendJson('/v1/accounts/mode','PUT',{mode:e.target.value});setNotice('Approval mode: '+e.target.value)}catch(error){setNotice(error.message)}};
+$('#account-form').onsubmit=async e=>{e.preventDefault();const secret=$('#account-secret');try{await sendJson('/v1/accounts','POST',{provider:$('#account-provider').value,account:$('#account-name').value,environment:$('#account-env').value||'production',type:$('#account-type').value,vaultRef:$('#account-ref').value,capabilities:$('#account-caps').value.split(',').map(x=>x.trim()).filter(Boolean),secret:secret.value});setNotice('Connected; the credential is in the vault.')}catch(error){setNotice(error.message)}secret.value='';loadAccounts()};
 async function loadConnections(){
+ loadAccounts();
  const modelsBox=$('#models-health'),mcpBox=$('#mcp-list');
  getJson('/v1/models/health').then(h=>{
   const servers=(h.servers||[]).map(s=>'<div class="card"><div class="task-top"><h4>'+esc(s.kind)+' on '+esc(s.location)+'</h4>'+pill('connected')+'</div><p>'+esc((s.models||[]).map(m=>m.name||m).join(', ')||'No models installed.')+'</p></div>').join('');

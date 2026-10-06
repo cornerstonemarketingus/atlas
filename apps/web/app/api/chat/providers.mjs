@@ -1,4 +1,5 @@
 import { providerKind, resolveChatModel } from "./model-endpoint.mjs";
+import { workersAIBindingModel } from "./workers-ai-binding.mjs";
 
 // Dedicated credentials only ever travel to this fixed OpenAI API origin.
 export function openAIModel(environment = process.env) {
@@ -52,7 +53,12 @@ function chain(providers) {
 }
 
 /** Only server-owned provider IDs may be selected, never client endpoints or keys. */
-export function resolveChatProvider(environment = process.env, selection = "auto") {
+/**
+ * `bindings.ai` is the Worker's Workers AI binding: when present it is the
+ * Workers AI provider (no token, always this account), ahead of the
+ * token-based REST endpoint.
+ */
+export function resolveChatProvider(environment = process.env, selection = "auto", bindings = {}) {
   const openai = openAIModel(environment);
   const primary = resolveChatModel(environment);
   if (primary.configured && new URL(primary.baseUrl).origin === "https://api.openai.com" && openai && !primary.apiKey) primary.apiKey = openai.apiKey;
@@ -63,10 +69,10 @@ export function resolveChatProvider(environment = process.env, selection = "auto
     // discard the already configured recovery route. Never cycle to OpenAI again.
     return { ...openai, ...(!fallbackDisabled && primary.configured && new URL(primary.baseUrl).origin !== "https://api.openai.com" ? { providerFallback: primary } : {}) };
   }
-  const workers = workersAIModel(environment);
+  const workers = workersAIBindingModel(bindings, environment) ?? workersAIModel(environment);
   const configured = primary.configured ? primary : null;
   if (selection === "workers-ai") {
-    if (!workers) return { configured: false, reason: "Workers AI is not configured. Add ATLAS_WORKERS_AI_TOKEN and CLOUDFLARE_ACCOUNT_ID to the Atlas Worker." };
+    if (!workers) return { configured: false, reason: "Workers AI is not configured: the Worker has no AI binding and no ATLAS_WORKERS_AI_TOKEN." };
     return fallbackDisabled ? workers : chain([workers, configured, groqModel(environment), openai]);
   }
   if (!["auto", "configured"].includes(selection)) return { configured: false, reason: "Unknown model provider." };
@@ -83,17 +89,17 @@ export function resolveChatProvider(environment = process.env, selection = "auto
 }
 
 /** Automatic's route as provider kinds ("self-hosted", "workers-ai", "groq", "openai"), never addresses or keys. */
-export function chatRoute(environment = process.env) {
+export function chatRoute(environment = process.env, bindings = {}) {
   const kinds = [];
-  for (let provider = resolveChatProvider(environment); provider?.configured && kinds.length < 5; provider = provider.providerFallback) kinds.push(providerKind(provider.baseUrl));
+  for (let provider = resolveChatProvider(environment, "auto", bindings); provider?.configured && kinds.length < 5; provider = provider.providerFallback) kinds.push(providerKind(provider.baseUrl));
   return kinds;
 }
 
-export function chatProviderChoices(environment = process.env) {
+export function chatProviderChoices(environment = process.env, bindings = {}) {
   return [
-    { id: "auto", label: "Automatic", available: resolveChatProvider(environment).configured },
+    { id: "auto", label: "Automatic", available: resolveChatProvider(environment, "auto", bindings).configured },
     { id: "configured", label: "Configured provider", available: resolveChatModel(environment).configured },
-    { id: "workers-ai", label: "Cloudflare Workers AI", available: Boolean(workersAIModel(environment)) },
+    { id: "workers-ai", label: "Cloudflare Workers AI", available: Boolean(workersAIBindingModel(bindings, environment) ?? workersAIModel(environment)) },
     { id: "openai", label: "OpenAI · GPT-5.4 mini", available: Boolean(openAIModel(environment)), paid: true },
   ];
 }

@@ -203,7 +203,8 @@ const answeredBy = new WeakMap();
 const answeredVia = new WeakMap();
 
 function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, reasoningEffort }) {
-  return fetcher(completionsUrl(endpoint.baseUrl), {
+  // A provider reached through a Worker binding brings its own transport; everything else is HTTP.
+  return (endpoint.transport ?? fetcher)(completionsUrl(endpoint.baseUrl), {
     method: "POST",
     signal: AbortSignal.timeout(endpoint.timeoutMs ?? REQUEST_TIMEOUT_MS),
     headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
