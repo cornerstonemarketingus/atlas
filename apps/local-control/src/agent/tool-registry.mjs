@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createRedactor, hostSecretValues, redactStructured } from "../platform/terminal/redaction.mjs";
 
 /**
  * A provider-neutral tool registry with capability-based policy.
@@ -127,6 +128,7 @@ function requireDeclaration(definition) {
   if (!Number.isFinite(definition.maxOutputCharacters) || definition.maxOutputCharacters <= 0) problems.push("a positive maxOutputCharacters");
   if (typeof definition.requiresApproval !== "boolean") problems.push("an explicit requiresApproval");
   if (typeof definition.execute !== "function") problems.push("an execute function");
+  if (definition.credentials !== undefined && (!Array.isArray(definition.credentials) || definition.credentials.some((name) => typeof name !== "string" || !/^[A-Z][A-Z0-9_]{2,63}$/u.test(name)))) problems.push("credential references containing only uppercase names");
   if (problems.length > 0) {
     throw new ToolError("INCOMPLETE_DECLARATION", `Tool '${definition.name ?? "(unnamed)"}' must declare ${problems.join(", ")}.`);
   }
@@ -161,7 +163,13 @@ export class ToolRegistry {
   }
 
   has(name) { return this.#tools.has(name); }
-  get(name) { return this.#tools.get(name) ?? null; }
+  get(name) {
+    const tool = this.#tools.get(name);
+    if (!tool) return null;
+    // This closure is for the platform adapter, after its authorized executor
+    // has checked policy/approval. Values are never added to the definition.
+    return { ...tool, executeAuthorized: (request) => this.#executeAuthorized(tool, request) };
+  }
   list() {
     return [...this.#tools.values()].map((tool) => ({
       name: tool.name,
@@ -181,6 +189,43 @@ export class ToolRegistry {
     }));
   }
 
+  async #executeAuthorized(tool, { input, context = {}, signal, digest }) {
+    const credentials = Object.create(null);
+    let missingReference = null;
+    try {
+      for (const reference of tool.credentials) {
+        const value = await this.#secrets(reference, { ...context, capability: tool.capability });
+        if (typeof value !== "string" || value.length === 0) { missingReference = reference; throw new ToolError("MISSING_CREDENTIAL", "Credential is missing."); }
+        credentials[reference] = value;
+      }
+    } catch (error) {
+      for (const name of Object.keys(credentials)) delete credentials[name];
+      throw new ToolError(missingReference ? "MISSING_CREDENTIAL" : "CREDENTIAL_UNAVAILABLE", missingReference ? `This tool needs the credential '${missingReference}', which is not configured.` : "The credential vault could not resolve this tool's declared credentials.");
+    }
+    const values = Object.values(credentials).sort((a, b) => b.length - a.length);
+    const patterns = createRedactor({ knownSecrets: [...values, ...hostSecretValues()] });
+    const redact = (text) => {
+      // Exact matches include short passwords; vendor-pattern rules retain
+      // their existing minimum length to avoid hiding ordinary source text.
+      for (const value of values) text = text.split(value).join("[redacted:known-secret]");
+      return this.#redact(patterns(text).text);
+    };
+    try {
+      if (signal?.aborted) throw new ToolError("TOOL_CANCELLED", "The tool was cancelled before execution.");
+      context.assertAuthorized?.();
+      const output = await tool.execute({ input, credentials, signal, context, digest });
+      const safe = redactStructured(output, redact);
+      const text = typeof safe === "string" ? safe : JSON.stringify(safe ?? null);
+      return text.length > tool.maxOutputCharacters ? `${text.slice(0, tool.maxOutputCharacters)}\n…[output truncated at ${tool.maxOutputCharacters} characters]` : safe;
+    } catch (error) {
+      const safe = new ToolError(typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(error.code) && redact(error.code) === error.code ? error.code : "TOOL_FAILED", redact(error instanceof Error ? error.message : "The tool failed."));
+      safe.retryable = error?.retryable === true;
+      throw safe;
+    } finally {
+      for (const name of Object.keys(credentials)) delete credentials[name];
+    }
+  }
+
   /**
    * Validates, checks policy, and runs one tool call.
    *
@@ -198,7 +243,13 @@ export class ToolRegistry {
       input = validateAgainstSchema(tool.inputSchema, parsed);
     } catch (error) {
       const message = error instanceof ToolError ? error.message : `Arguments for '${name}' are not valid JSON.`;
-      return { status: "rejected", code: "INVALID_INPUT", message };
+      return { status: "rejected", code: "INVALID_INPUT", message: this.#redact(createRedactor({ knownSecrets: hostSecretValues() })(message).text) };
+    }
+
+    const inputRedactor = createRedactor({ knownSecrets: hostSecretValues() });
+    const safeInput = redactStructured(input, text => this.#redact(inputRedactor(text).text));
+    if (JSON.stringify(safeInput) !== JSON.stringify(input)) {
+      return { status: "rejected", code: "PLAINTEXT_CREDENTIAL", message: "Tool arguments must reference credentials rather than include secret values.", input: safeInput };
     }
 
     // A policy answers "allow" | "ask" | "deny", or { decision, autonomy } when
@@ -225,23 +276,17 @@ export class ToolRegistry {
       }
     }
 
-    const credentials = {};
-    for (const reference of tool.credentials) {
-      const value = await this.#secrets(reference);
-      if (value === null || value === undefined) {
-        return { status: "rejected", code: "MISSING_CREDENTIAL", message: `This tool needs the credential '${reference}', which is not configured on this machine.`, input };
-      }
-      credentials[reference] = value;
-    }
-
     const attempts = tool.retries + 1;
     let lastError = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const controller = new AbortController();
+      const attemptSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
       try {
-        const output = await withTimeout(tool.execute({ input, credentials, signal, context, digest }), tool.timeoutMs, signal, name);
+        const output = await withTimeout(this.#executeAuthorized(tool, { input, signal: attemptSignal, context, digest }), tool.timeoutMs, attemptSignal, name, controller);
         return { status: "completed", output: this.#bound(tool, output), digest, input };
       } catch (error) {
         lastError = error;
+        if (["MISSING_CREDENTIAL", "CREDENTIAL_UNAVAILABLE"].includes(error?.code)) return { status: "rejected", code: error.code, message: error.message, input };
         // An input or authorization failure will fail identically next time;
         // only genuinely transient failures are worth another attempt.
         if (error?.code === "INVALID_INPUT" || error?.code === "NOT_AUTHORIZED" || attempt === attempts) break;
@@ -266,10 +311,11 @@ export class ToolRegistry {
   }
 }
 
-function withTimeout(promise, timeoutMs, signal, name) {
+function withTimeout(promise, timeoutMs, signal, name, controller) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       const error = new ToolError("TOOL_TIMEOUT", `Tool '${name}' exceeded its ${timeoutMs}ms timeout.`);
+      controller.abort(error);
       reject(error);
     }, timeoutMs);
     const onAbort = () => { clearTimeout(timer); reject(signal?.reason ?? new ToolError("TOOL_CANCELLED", `Tool '${name}' was cancelled.`)); };

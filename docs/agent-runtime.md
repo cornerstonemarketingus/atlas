@@ -157,6 +157,48 @@ than pretending the feature is missing.
 
 ## Tests
 
+### Credential and approval boundary
+
+Platform tools adapted from the agent registry resolve only their declared
+vault references, after capability policy and approval succeed. Values enter
+the trusted adapter transiently, never its model definition. The adapter's
+output and errors are scrubbed using the resolved values before returning to
+the executor; structured results retain their shape. The executor also
+redacts credential fields, cookies, known host secrets and secret patterns
+before durable tool records and model-visible results. Plaintext credentials
+in tool arguments are refused. This protects the tool boundary, not arbitrary
+artifact contents or every independent logging subsystem.
+
+Approvals bind tenant, task, principal, agent, tool, arguments and trusted
+runtime context. A runtime can supply repository, revision and context version
+through `approvalContext`; callers and model arguments cannot substitute them.
+Without that wiring those optional fields are null. Expiration and single-use
+consumption are checked atomically in SQLite and authorization is checked again
+after asynchronous credential lookup. Cancellation, expiry and timeout during
+lookup prevent a late external action. Existing persisted approvals can resume
+after restart with the same binding; changed context requires new approval.
+
+Upgrade behavior is deliberately conservative: old action receipts lack the
+new context binding. Their presence returns `LEGACY_ACTION_RECEIPT` rather than
+silently repeating a mutation. Review the prior outcome and create a new action
+when appropriate. Pending approvals using the older digest require reapproval.
+
+The existing encrypted vault remains the storage boundary. Connection metadata,
+account/scope health, credential leases and approval modes belong to the
+credential broker workstream; these changes do not create a second vault or
+claim that every existing adapter uses broker leases. Next integration work is
+to bind authenticated actions to broker connection/account metadata, extend
+redaction to artifact ingestion, and wire durable authorization checkpoints to
+the existing paired-device approval routes. OAuth refresh, identity-field
+disclosure, mobile push and autonomous signup remain separate implementation
+steps with mandatory MFA, consent and payment checkpoints.
+
+`approval-boundary.test.mjs` and `credential-boundary.test.mjs` exercise real
+SQLite persistence, concurrent consumption, restart, expired authorization,
+capability denial, delayed vault resolution and an authenticated loopback HTTP
+service. The HTTP test verifies that a bearer reaches the service only after
+approval and cannot be echoed into model-visible or durable results.
+
 `apps/local-control/tests/agent-runtime.test.mjs`,
 `agent-http.test.mjs`, and `agent-worktree.test.mjs` — 31 tests covering
 success, timeout, cancellation, denial, retry, restart recovery, lease

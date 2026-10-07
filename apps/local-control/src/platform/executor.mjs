@@ -5,12 +5,12 @@ import {
   defineTool,
   digest,
   executionResultSchema,
-  idempotencyKey,
   newId,
   policyDecisionSchema,
   validateSchema,
 } from "../../../../packages/atlas-contracts/src/index.mjs";
 import { TaskBudget, TaskBudgetExceededError } from "./budget.mjs";
+import { createRedactor, hostSecretValues, redactStructured } from "./terminal/redaction.mjs";
 
 /**
  * The single door every platform tool call walks through.
@@ -45,7 +45,8 @@ function isPlainObject(value) {
 /** Tool errors cross the boundary as `{ code, message, retryable }` — never a stack trace. */
 export function sanitizeToolError(error) {
   const rawMessage = typeof error?.message === "string" ? error.message : String(error ?? "Tool failed.");
-  const message = rawMessage.split("\n")[0].replace(/\s+at\s+\S+\s*\(.*$/u, "").slice(0, 500) || "Tool failed.";
+  const safeMessage = createRedactor({ knownSecrets: hostSecretValues() })(rawMessage).text;
+  const message = safeMessage.split("\n")[0].replace(/\s+at\s+\S+\s*\(.*$/u, "").slice(0, 500) || "Tool failed.";
   const code = typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(error.code) ? error.code : "TOOL_ERROR";
   return { code, message, retryable: error?.retryable === true };
 }
@@ -77,14 +78,21 @@ export class AuthorizedToolExecutor {
   #tools = new Map();
   #defaultTimeoutMs;
   #approvalTtlMs;
+  #approvalContext;
+  #redact;
 
-  constructor({ store, policy, clock = () => new Date(), defaultTimeoutMs = DEFAULT_TIMEOUT_MS, approvalTtlMs = DEFAULT_APPROVAL_TTL_MS }) {
+  constructor({ store, policy, clock = () => new Date(), defaultTimeoutMs = DEFAULT_TIMEOUT_MS, approvalTtlMs = DEFAULT_APPROVAL_TTL_MS,
+    approvalContext = ({ task }) => ({ repository: task?.repository ?? null, revision: task?.baseRevision ?? task?.revision ?? null, version: task?.contextVersion ?? null }), knownSecrets = [] }) {
     if (!store || !policy) throw new ExecutorError("MISCONFIGURED", "The executor needs a store and a policy engine.");
     this.#store = store;
     this.#policy = policy;
     this.#clock = clock;
     this.#defaultTimeoutMs = defaultTimeoutMs;
     this.#approvalTtlMs = approvalTtlMs;
+    // Only trusted runtime wiring supplies repository/revision context; model
+    // arguments and invoke callers cannot substitute it.
+    this.#approvalContext = approvalContext;
+    this.#redact = createRedactor({ knownSecrets: [...knownSecrets, ...hostSecretValues()] });
   }
 
   register(definition, { timeoutMs = this.#defaultTimeoutMs } = {}) {
@@ -110,16 +118,25 @@ export class AuthorizedToolExecutor {
     const registered = this.#tools.get(toolName);
     if (!registered) throw new ExecutorError("UNKNOWN_TOOL", `There is no tool named '${toolName}'.`);
     if (!isPlainObject(input)) throw new ExecutorError("INVALID_INPUT", "Tool input must be an object.");
+    // Refuse secrets before input is recorded, hashed, audited or executed.
+    // Credentials must enter through declared vault references instead.
+    const safeInput = this.#scrub(input);
+    const plaintextCredential = JSON.stringify(safeInput) !== JSON.stringify(input);
+    input = safeInput;
     const { tool, timeoutMs } = registered;
     const { correlationId } = task;
-    const key = idempotencyKey({ tenantId, taskId, tool: tool.name, input });
+    const binding = this.#binding({ tenantId, taskId, task, userId, agentId });
+    const key = digest({ version: 2, tenantId, taskId, tool: tool.name, input, binding });
     const actor = { tenantId, userId, agentId, taskId, correlationId };
 
     const prior = store.getIdempotency(tenantId, key);
-    if (prior?.status === "succeeded") {
-      return { status: "succeeded", replayed: true, toolCallId: prior.toolCallId, result: prior.result };
+    // Older receipts lack principal and trusted-context binding. Never forget
+    // them on upgrade and silently repeat an external mutation.
+    const legacyPrior = store.getIdempotency(tenantId, digest({ tenantId, taskId, tool: tool.name, input }));
+    if (!plaintextCredential && prior?.status === "succeeded") {
+      return { status: "succeeded", replayed: true, toolCallId: prior.toolCallId, result: this.#scrub(prior.result) };
     }
-    if (prior?.status === "in_flight") {
+    if (!plaintextCredential && prior?.status === "in_flight") {
       return this.#outcome("in_flight", prior.toolCallId, {
         error: { code: "DUPLICATE_IN_FLIGHT", message: "The same action is already running.", retryable: true },
       });
@@ -134,6 +151,7 @@ export class AuthorizedToolExecutor {
       if (!approval) approvalProblem = "approval does not exist in this tenant";
       else if (approval.taskId !== taskId) approvalProblem = "approval belongs to a different task";
       else if (approval.tool !== tool.name || approval.actionDigest !== key) approvalProblem = "approval was granted for a different action";
+      else if (approval.requestedBy !== userId) approvalProblem = "approval belongs to a different principal";
       else if (approval.status !== "approved") approvalProblem = `approval is '${approval.status}', not approved`;
       else if (approval.consumedBy) approvalProblem = "approval has already been used";
       else {
@@ -151,15 +169,39 @@ export class AuthorizedToolExecutor {
       return record;
     });
 
+    if (plaintextCredential) {
+      const decision = this.#denial({ tenantId, userId, agentId, taskId, tool }, ["Plaintext credentials are forbidden in tool arguments."]);
+      store.transaction(() => {
+        store.recordPolicyDecision(decision, { toolCallId: call.id, correlationId });
+        store.updateToolCall(tenantId, call.id, { policyDecisionId: decision.id });
+        this.#emit(actor, "tool_call.decided", { toolCallId: call.id, tool: tool.name, decisionId: decision.id, effect: decision.effect, reasons: decision.reasons, policyVersion: decision.policyVersion });
+      });
+      return { ...this.#finish(actor, call.id, "denied", {
+        error: { code: "PLAINTEXT_CREDENTIAL", message: "Tool arguments must reference credentials rather than include secret values.", retryable: false },
+      }), decision };
+    }
+
+    if (legacyPrior) {
+      const decision = this.#denial({ tenantId, userId, agentId, taskId, tool }, ["An earlier authorization format already recorded this action."]);
+      store.transaction(() => {
+        store.recordPolicyDecision(decision, { toolCallId: call.id, correlationId });
+        store.updateToolCall(tenantId, call.id, { policyDecisionId: decision.id });
+        this.#emit(actor, "tool_call.decided", { toolCallId: call.id, tool: tool.name, decisionId: decision.id, effect: decision.effect, reasons: decision.reasons, policyVersion: decision.policyVersion });
+      });
+      return { ...this.#finish(actor, call.id, "denied", {
+        error: { code: "LEGACY_ACTION_RECEIPT", message: "This action has a receipt from an earlier authorization format. Review its outcome before starting a new action.", retryable: false },
+      }), decision };
+    }
+
     const inputErrors = validateSchema(tool.inputSchema, input, "input");
     if (inputErrors.length > 0) {
       const error = { code: "INVALID_INPUT", message: inputErrors.map((e) => `${e.path} ${e.message}`).join("; ").slice(0, 500), retryable: false };
       return this.#finish(actor, call.id, "failed", { error });
     }
 
-    const decision = approvalProblem
+    const decision = this.#scrub(approvalProblem
       ? this.#denial({ tenantId, userId, agentId, taskId, tool }, [approvalProblem])
-      : this.#policy.evaluate({ tenantId, userId, agentId, taskId, tool, input, grantedPermissions, approval: approvalContext });
+      : this.#policy.evaluate({ tenantId, userId, agentId, taskId, tool, input, grantedPermissions, approval: approvalContext }));
     store.transaction(() => {
       store.recordPolicyDecision(decision, { toolCallId: call.id, correlationId });
       store.updateToolCall(tenantId, call.id, { policyDecisionId: decision.id });
@@ -205,9 +247,11 @@ export class AuthorizedToolExecutor {
       return { ...this.#finish(actor, call.id, "failed", { error: { code: "BUDGET_EXCEEDED", message: error.message, retryable: false } }), decision };
     }
 
-    if (approvalContext && !store.consumeApproval(tenantId, approvalContext.id, call.id)) {
+    const currentTask = store.getTask(tenantId, taskId);
+    const currentBinding = this.#binding({ tenantId, taskId, task: currentTask, userId, agentId });
+    if (currentTask?.status !== "running" || digest(binding) !== digest(currentBinding) || (approvalContext && !store.consumeApproval(tenantId, approvalContext.id, call.id, { taskId, tool: tool.name, actionDigest: key, requestedBy: userId }))) {
       store.releaseIdempotency(tenantId, key);
-      const error = { code: "POLICY_DENIED", message: "approval has already been used", retryable: false };
+      const error = { code: "POLICY_DENIED", message: "action context changed, or approval expired or has already been used", retryable: false };
       return { ...this.#finish(actor, call.id, "denied", { error }), decision };
     }
 
@@ -218,7 +262,23 @@ export class AuthorizedToolExecutor {
     const started = performance.now();
     let outcome;
     try {
-      const value = await runWithTimeout(tool, input, { correlationId, taskId, tenantId, toolCallId: call.id }, limitMs);
+      // Adapters may await vault access after the approval is consumed. They
+      // recheck this trusted gate immediately before the external action,
+      // without consuming a second approval or exposing request arguments.
+      const assertAuthorized = () => {
+        const current = store.getTask(tenantId, taskId);
+        if (current?.status !== "running" || digest(binding) !== digest(this.#binding({ tenantId, taskId, task: current, userId, agentId }))) {
+          throw new ExecutorError("POLICY_DENIED", "The task or trusted action context changed before execution.");
+        }
+        if (approvalContext) {
+          const approval = store.getApproval(tenantId, approvalContext.id);
+          if (approval?.status !== "approved" || approval.consumedBy !== call.id || approval.taskId !== taskId
+            || approval.tool !== tool.name || approval.actionDigest !== key || approval.requestedBy !== userId) {
+            throw new ExecutorError("POLICY_DENIED", "The action approval expired or no longer authorizes this call.");
+          }
+        }
+      };
+      const value = await runWithTimeout(tool, input, { correlationId, taskId, tenantId, userId, agentId, toolCallId: call.id, assertAuthorized }, limitMs);
       const wrapped = isPlainObject(value) && "output" in value ? value : { output: value };
       outcome = {
         ok: true,
@@ -260,7 +320,28 @@ export class AuthorizedToolExecutor {
     }, "policy decision");
   }
 
+  #scrub(value) {
+    return redactStructured(value, this.#redact);
+  }
+
+  #binding({ tenantId, taskId, task, userId, agentId }) {
+    const trusted = this.#approvalContext({ tenantId, taskId, task });
+    if (!isPlainObject(trusted) || ![Object.prototype, null].includes(Object.getPrototypeOf(trusted))) throw new ExecutorError("MISCONFIGURED", "Trusted approval context must be a synchronous plain object.");
+    // Task lifecycle versions advance while waiting for approval. Bind the
+    // trusted work context instead, so waiting/resuming does not revoke an
+    // otherwise unchanged action.
+    const binding = { userId, agentId, contextVersion: trusted.version ?? null, repository: trusted.repository ?? null, revision: trusted.revision ?? null };
+    if (binding.contextVersion !== null && typeof binding.contextVersion !== "string" && !Number.isSafeInteger(binding.contextVersion)) throw new ExecutorError("MISCONFIGURED", "Trusted context version must be a string or integer.");
+    for (const value of [binding.repository, binding.revision]) {
+      if (value !== null && (typeof value !== "string" || value.length > 4096)) throw new ExecutorError("MISCONFIGURED", "Trusted repository and revision must be bounded strings.");
+    }
+    return binding;
+  }
+
   #outcome(status, toolCallId, { output = undefined, error = null, evidence = undefined, usage = undefined }) {
+    output = this.#scrub(output);
+    error = this.#scrub(error);
+    evidence = this.#scrub(evidence);
     const result = assertSchema(executionResultSchema, {
       schemaVersion: SCHEMA_VERSION,
       ok: status === "succeeded",
@@ -275,6 +356,9 @@ export class AuthorizedToolExecutor {
 
   /** Persists the terminal tool-call state and its completion event together. */
   #finish(actor, toolCallId, status, { output = undefined, error = null, evidence = undefined, usage = undefined, durationMs = undefined }) {
+    output = this.#scrub(output);
+    error = this.#scrub(error);
+    evidence = this.#scrub(evidence);
     const envelope = this.#outcome(status, toolCallId, { output, error, evidence, usage });
     this.#store.transaction(() => {
       this.#store.updateToolCall(actor.tenantId, toolCallId, {
@@ -286,7 +370,7 @@ export class AuthorizedToolExecutor {
   }
 
   #emit({ tenantId, userId, agentId, taskId, correlationId }, type, payload) {
-    this.#store.appendEvent({ type, tenantId, correlationId, taskId, userId, agentId, payload });
+    this.#store.appendEvent({ type, tenantId, correlationId, taskId, userId, agentId, payload: this.#scrub(payload) });
   }
 }
 
@@ -302,7 +386,14 @@ async function runWithTimeout(tool, input, context, limitMs) {
   });
   try {
     // The race stops waiting even for a tool that ignores its abort signal.
-    return await Promise.race([Promise.resolve().then(() => tool.execute(input, { ...context, signal: controller.signal })), timeout]);
+    const assertAuthorized = () => {
+      if (controller.signal.aborted) throw controller.signal.reason;
+      context.assertAuthorized?.();
+    };
+    return await Promise.race([Promise.resolve().then(() => {
+      assertAuthorized();
+      return tool.execute(input, { ...context, signal: controller.signal, assertAuthorized });
+    }), timeout]);
   } finally {
     clearTimeout(timer);
   }
