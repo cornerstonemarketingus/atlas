@@ -20,6 +20,7 @@ export class DesktopSession {
   #evidenceDir;
   #maxActions;
   #appAllowlist;
+  #control;
   #log = [];
 
   /**
@@ -28,8 +29,9 @@ export class DesktopSession {
    * @param {(request: {action, risk}) => Promise<void>} options.approve resolves when approved, throws when refused
    * @param {() => Promise<void>|void} [options.isActive] throws when the task was cancelled
    * @param {string|null} [options.evidenceDir] where screenshots are written; null keeps digests only
+   * @param {object|null} [options.control] the shared operator control (pause, take over, cancel, intent journal)
    */
-  constructor({ driver, approve, isActive = () => {}, evidenceDir = null, maxActions = 60, appAllowlist } = {}) {
+  constructor({ driver, approve, isActive = () => {}, evidenceDir = null, maxActions = 60, appAllowlist, control = null } = {}) {
     if (!driver) throw new TypeError("driver is required.");
     if (typeof approve !== "function") throw new TypeError("approve is required.");
     this.#driver = driver;
@@ -38,6 +40,7 @@ export class DesktopSession {
     this.#evidenceDir = evidenceDir;
     this.#maxActions = maxActions;
     this.#appAllowlist = appAllowlist;
+    this.#control = control;
   }
 
   get log() { return structuredClone(this.#log); }
@@ -56,6 +59,7 @@ export class DesktopSession {
 
   /** What the planner sees: windows, the focused window, and its accessibility tree where the OS has one. */
   async observe() {
+    this.#control?.guard({ kind: "read" });
     const [windows, inspected] = await Promise.all([this.#driver.windows(), this.#driver.inspect()]);
     return { windows: windows.slice(0, 40), focused: inspected.window, tree: inspected.tree ?? [], geometry: inspected.geometry ?? null };
   }
@@ -66,6 +70,7 @@ export class DesktopSession {
    */
   async perform(proposed) {
     await this.#isActive();
+    this.#control?.guard({ kind: "act" });
     if (this.#log.length >= this.#maxActions) {
       throw new DesktopError("STEP_LIMIT", `This task reached its ${this.#maxActions}-action safety limit.`, { blocked: "BLOCKED_BY_BUDGET", unblock: "Start a new task with a narrower goal, or raise the limit." });
     }
@@ -78,22 +83,34 @@ export class DesktopSession {
       entry.outcome = "denied";
       throw new DesktopError("ACTION_DENIED", `Refused: ${risk.reason}.`, { blocked: "BLOCKED_BY_POLICY", unblock: "Do this step yourself if it is really needed." });
     }
+    let intentId = null;
     if (risk.decision === "ask") {
+      this.#control?.setApprovalPending(true);
       try { await this.#approve({ action, risk, window: active.title }); }
       catch (error) { entry.outcome = "rejected"; throw error; }
+      finally { this.#control?.setApprovalPending(false); }
       entry.approved = true;
     }
     await this.#isActive();
+    // An approval can arrive after the owner paused or took over; it is not spent while they have control.
+    this.#control?.guard({ kind: "act" });
+    if (risk.decision === "ask" && this.#control) {
+      intentId = this.#control.intent({ digest: createHash("sha256").update(JSON.stringify(action)).digest("hex"), summary: `${risk.reason}`, actionClass: risk.class });
+    }
     const changes = !["read", "navigate"].includes(risk.class) || action.type === "focus_window";
     const before = changes ? await this.#evidence("before").catch(() => null) : null;
     let result;
     try {
-      result = await this.#execute(action);
+      result = this.#control ? await this.#control.run(action.type, () => this.#execute(action)) : await this.#execute(action);
     } catch (error) {
       entry.outcome = "failed";
       entry.error = error instanceof Error ? error.message : String(error);
+      if (intentId) this.#control.outcome({ intentId, ok: false, uncertain: true });
+      this.#control?.milestone({ kind: action.type, risk: risk.class, outcome: "failed" });
       throw error;
     }
+    if (intentId) this.#control.outcome({ intentId, ok: true });
+    this.#control?.milestone({ kind: action.type, risk: risk.class, outcome: "done" });
     const after = changes || action.type === "desktop_screenshot" ? await this.#evidence(action.type === "desktop_screenshot" ? "screen" : "after").catch(() => null) : null;
     entry.outcome = "done";
     entry.evidence = [before, after].filter(Boolean).map(({ digest, bytes, path }) => ({ digest, bytes, path }));

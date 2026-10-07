@@ -28,12 +28,15 @@ export function createOperatorSession({
   page,
   approvals = null,
   screenshots = null,
+  // Pause, take over, cancel and the consequential-action journal (see control.mjs). Optional: without it the
+  // session behaves as before.
+  control = null,
   now = () => Date.now(),
   maxSnapshotCharacters = 28_000,
 }) {
   if (!page) throw new OperatorError("NO_PAGE", "A page adapter is required.");
 
-  let lastSnapshot = { refs: new Map(), text: "", takenAtMs: 0, url: "" };
+  let lastSnapshot = { refs: new Map(), text: "", takenAtMs: 0, url: "", epoch: control?.epoch ?? 0 };
   const receipts = [];
 
   /** Re-reads the page whenever the reference table may be stale. */
@@ -63,11 +66,17 @@ export function createOperatorSession({
       text,
       takenAtMs: now(),
       url,
+      epoch: control?.epoch ?? 0,
     };
+    control?.setSite(url);
     return lastSnapshot;
   }
 
   function resolve(ref) {
+    // The owner may have changed anything while they had control: nothing seen before the hand-back is trusted.
+    if (control && lastSnapshot.epoch !== control.epoch) {
+      throw new OperatorError("STALE_REFERENCE", `Control was handed back since the last snapshot, so '${ref}' may no longer exist. Take a new snapshot first.`);
+    }
     const element = lastSnapshot.refs.get(ref);
     if (!element) {
       // A stale reference after a navigation or a popup is the normal case,
@@ -84,11 +93,13 @@ export function createOperatorSession({
    * action on this exact page.
    */
   async function gate({ action, element, signal }) {
+    control?.guard({ kind: "act" });
     const wall = detectHumanRequired(lastSnapshot.text);
     if (wall.blocked) {
+      control?.block({ reason: wall.reason });
       throw new OperatorError(
         "HUMAN_REQUIRED",
-        `Atlas stopped: this page is showing ${wall.reason}. Take over in the browser window, then tell Atlas to continue. Evidence: ${wall.evidence}`,
+        `Atlas stopped: this page is showing ${wall.reason}. Atlas is now waiting for you: take over from the Computer page (or your phone), finish the step yourself, then hand control back. Evidence: ${wall.evidence}`,
       );
     }
 
@@ -100,9 +111,13 @@ export function createOperatorSession({
       .update(JSON.stringify({ type: action.type, ref: action.ref ?? null, name: element?.name ?? null, url: lastSnapshot.url, text: action.text ?? null, path: action.path ?? null }))
       .digest("hex");
     const summary = describeForApproval({ classification, url: lastSnapshot.url, intent: action.intent });
-    const granted = approvals ? await approvals.request({ digest, summary, classification, url: lastSnapshot.url, signal }) : false;
+    control?.setApprovalPending(true);
+    let granted;
+    try { granted = approvals ? await approvals.request({ digest, summary, classification, url: lastSnapshot.url, signal }) : false; } finally { control?.setApprovalPending(false); }
     if (!granted) throw new OperatorError("APPROVAL_REQUIRED", `The operator has not approved this action.\n${summary}`);
-    return { ...classification, digest };
+    // An approval can arrive after the owner paused or took over. The action then does not run; the approval was single-use, so Atlas asks again after the owner resumes.
+    control?.guard({ kind: "act" });
+    return { ...classification, digest, summary };
   }
 
   /**
@@ -133,20 +148,46 @@ export function createOperatorSession({
     return receipt;
   }
 
+  /**
+   * Runs the page operation of one action. A consequential action is journaled
+   * as an intent first and an outcome after; if the page operation throws part-way
+   * the action is recorded as uncertain (it may have taken effect), so Atlas
+   * never repeats it on a guess.
+   */
+  async function act(label, classification, operation) {
+    if (!control) return operation();
+    const intentId = classification.requiresApproval
+      ? control.intent({ digest: classification.digest, summary: classification.summary ?? label, actionClass: classification.actionClass })
+      : null;
+    try {
+      const result = await control.run(label, operation);
+      if (intentId) control.outcome({ intentId, ok: true, changed: result?.receipt?.changed ?? null });
+      control.milestone({ kind: label, risk: classification.actionClass, outcome: result?.receipt ? (result.receipt.changed ? "changed the page" : "no change") : "done", url: result?.receipt?.url ?? lastSnapshot.url });
+      return result;
+    } catch (error) {
+      if (intentId) control.outcome({ intentId, ok: false, uncertain: true });
+      control.milestone({ kind: label, risk: classification.actionClass, outcome: "failed", url: lastSnapshot.url });
+      throw error;
+    }
+  }
+
   return {
     receipts,
     lastUrl: () => lastSnapshot.url,
 
     async navigate({ url, signal }) {
       const before = lastSnapshot;
-      await gate({ action: { type: "navigate", url }, signal });
-      await page.goto({ url, signal });
-      const snapshot = await refresh({ signal });
-      await recordEvidence({ action: { type: "navigate" }, classification: { actionClass: "navigate", requiresApproval: false }, before, signal });
-      return { url: snapshot.url, title: await page.title().catch(() => null) };
+      const classification = await gate({ action: { type: "navigate", url }, signal });
+      return act("navigate", classification, async () => {
+        await page.goto({ url, signal });
+        const snapshot = await refresh({ signal });
+        const receipt = await recordEvidence({ action: { type: "navigate" }, classification: { actionClass: "navigate", requiresApproval: false }, before, signal });
+        return { url: snapshot.url, title: await page.title().catch(() => null), receipt };
+      });
     },
 
     async snapshot({ signal }) {
+      control?.guard({ kind: "read" });
       const snapshot = await refresh({ signal });
       const wall = detectHumanRequired(snapshot.text);
       const header = wall.blocked
@@ -162,47 +203,56 @@ export function createOperatorSession({
       const before = lastSnapshot;
       const element = resolve(ref);
       const classification = await gate({ action: { type: submit ? "submit" : "click", ref, intent, name: element.name }, element, signal });
-      await page.click({ ref, signal });
-      const receipt = await recordEvidence({ action: { type: "click" }, classification, before, signal });
-      return {
-        summary: receipt.changed
-          ? `Clicked "${element.name}". The page changed; now at ${receipt.url}.`
-          // Said plainly rather than reported as success.
-          : `Clicked "${element.name}", but nothing on the page changed. The action may not have taken effect.`,
-        receipt,
-      };
+      return act("click", classification, async () => {
+        await page.click({ ref, signal });
+        const receipt = await recordEvidence({ action: { type: "click" }, classification, before, signal });
+        return {
+          summary: receipt.changed
+            ? `Clicked "${element.name}". The page changed; now at ${receipt.url}.`
+            // Said plainly rather than reported as success.
+            : `Clicked "${element.name}", but nothing on the page changed. The action may not have taken effect.`,
+          receipt,
+        };
+      });
     },
 
     async type({ ref, text, submit = false, signal }) {
       const before = lastSnapshot;
       const element = resolve(ref);
       const classification = await gate({ action: { type: "fill", ref, label: element.name, text, submit }, element, signal });
-      await page.fill({ ref, text, signal });
-      if (submit) await page.press({ ref, key: "Enter", signal });
-      const receipt = await recordEvidence({ action: { type: "fill" }, classification, before, signal });
-      return { summary: `Typed ${text.length} characters into "${element.name}".`, receipt };
+      return act("type", classification, async () => {
+        await page.fill({ ref, text, signal });
+        if (submit) await page.press({ ref, key: "Enter", signal });
+        const receipt = await recordEvidence({ action: { type: "fill" }, classification, before, signal });
+        return { summary: `Typed ${text.length} characters into "${element.name}".`, receipt };
+      });
     },
 
     async upload({ ref, path, signal }) {
       const before = lastSnapshot;
       const element = resolve(ref);
       const classification = await gate({ action: { type: "upload", ref, path, name: element.name }, element, signal });
-      await page.setInputFiles({ ref, path, signal });
-      const receipt = await recordEvidence({ action: { type: "upload" }, classification, before, signal });
-      return { summary: `Attached ${path} to "${element.name}".`, receipt };
+      return act("upload", classification, async () => {
+        await page.setInputFiles({ ref, path, signal });
+        const receipt = await recordEvidence({ action: { type: "upload" }, classification, before, signal });
+        return { summary: `Attached ${path} to "${element.name}".`, receipt };
+      });
     },
 
     async download({ ref, toPath = null, signal }) {
       const before = lastSnapshot;
       const element = resolve(ref);
       const classification = await gate({ action: { type: "download", ref, name: element.name }, element, signal });
-      const saved = await page.download({ ref, toPath, signal });
-      const receipt = await recordEvidence({ action: { type: "download" }, classification, before, signal });
-      return { summary: `Downloaded to ${saved?.path ?? toPath ?? "the workspace"}.`, path: saved?.path ?? toPath, receipt };
+      return act("download", classification, async () => {
+        const saved = await page.download({ ref, toPath, signal });
+        const receipt = await recordEvidence({ action: { type: "download" }, classification, before, signal });
+        return { summary: `Downloaded to ${saved?.path ?? toPath ?? "the workspace"}.`, path: saved?.path ?? toPath, receipt };
+      });
     },
 
     /** Reads named fields out of the snapshot. Page text is data, not instructions. */
     async extract({ fields, signal }) {
+      control?.guard({ kind: "read" });
       const snapshot = await refresh({ signal });
       const out = {};
       for (const field of fields) {
@@ -218,6 +268,7 @@ export function createOperatorSession({
       if (typeof page.focusApplication !== "function") {
         throw new OperatorError("NO_WINDOW_CONTROL", "This companion cannot switch applications; it drives a browser only.");
       }
+      control?.guard({ kind: "act" });
       const focused = await page.focusApplication({ name, signal });
       // The reference table belongs to the previous window.
       lastSnapshot = { refs: new Map(), text: "", takenAtMs: now(), url: "" };

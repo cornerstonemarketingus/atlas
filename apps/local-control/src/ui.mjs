@@ -168,6 +168,11 @@ export const LOCAL_UI_HTML = `<!doctype html>
 
  <section class="view" data-view="computer" hidden aria-labelledby="computer-heading">
   <div class="hero"><h2 id="computer-heading">Computer</h2><p class="lede">What agents may do on this machine. Each capability is set to allow, ask or deny. Ask means Atlas stops and waits for you, for that exact action, every time. On a machine without a supported browser or desktop, those tools refuse with a reason instead of pretending.</p></div>
+  <section class="panel" id="operator-panel" aria-labelledby="operator-heading"><div class="task-top"><h3 id="operator-heading">Atlas on your computer</h3><span id="operator-state"></span></div>
+   <p id="operator-line" class="hint">Atlas is not operating the computer right now.</p><div class="actions" id="operator-actions"></div><div id="operator-uncertain"></div>
+   <details class="more"><summary>Recent steps</summary><div id="operator-milestones" class="list"><p class="empty">Nothing yet.</p></div></details>
+   <p id="operator-notice" class="hint" role="status" aria-live="polite"></p>
+   <p class="hint">Pause stops Atlas before its next step. Take over when you want to use the computer yourself: Atlas will not touch it, and will look at the page again before it acts once you hand control back. Steps show where Atlas is working and how risky each was, never what it typed.</p></section>
   <div id="computer-tools" class="list"><p class="empty">Unlock to load tools.</p></div>
  </section>
 
@@ -732,7 +737,7 @@ function refreshView(){
 }
 
 /* ---- Command center: every running thing, with per-lane control. ---- */
-const COMMAND_KINDS={goal:'Goal (sleeps between events)',suggestion:'Suggestion',automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
+const COMMAND_KINDS={goal:'Goal (sleeps between events)',operator:'Computer operation',suggestion:'Suggestion',automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
 const COMMAND_BUCKETS={attention:'Needs you',running:'Running',waiting:'Waiting',done:'Recently finished'};
 function commandButtons(actions,key){return (actions||[]).map((a,i)=>'<button type="button" class="'+(a.name==='cancel'?'ghost':'secondary')+'" data-command="'+esc(key)+'" data-index="'+i+'">'+esc(a.label)+'</button>').join('')}
 /* A lane's kernel run, step by step: what it set out to do, the capabilities it had, each action, and the check. */
@@ -840,6 +845,27 @@ $('#automation-form').onsubmit=async e=>{e.preventDefault();const notice=$('#aut
  loadAutomations().catch(()=>{})};
 $('#automations-refresh').onclick=()=>loadAutomations();
 
+/* ---- Operator control: what Atlas is doing on this computer, and pause / take over / cancel ---- */
+const OP_ACTIONS={running:[['pause','Pause'],['takeover','Take over'],['cancel','Cancel']],paused:[['resume','Resume'],['takeover','Take over'],['cancel','Cancel']],taken_over:[['handback','Hand back to Atlas'],['cancel','Cancel']],blocked:[['takeover','Take over'],['cancel','Cancel']],interrupted:[['takeover','Take over to check'],['cancel','Cancel']],cancelled:[['begin','Let Atlas operate again']],idle:[]};
+const opAttr=v=>esc(v).replaceAll('"','&quot;');
+async function loadOperator(){
+ let s;try{s=(await getJson('/v1/operator')).status}catch(error){return}
+ $('#operator-state').innerHTML=pill(s.state);
+ const bits=[];if(s.site)bits.push(esc(s.site));if(s.currentAction)bits.push('doing '+esc(s.currentAction.type));if(s.approvalPending)bits.push('waiting for your approval');if(s.state==='running')bits.push(Math.round(s.elapsedMs/1000)+' s');
+ $('#operator-line').innerHTML=s.state==='idle'?'Atlas is not operating the computer right now.':(bits.join(' · ')||esc(s.lastReason||''))+(s.state!=='running'&&s.lastActor?' · set by '+esc(s.lastActor):'')+(s.state==='blocked'&&s.lastReason?' · '+esc(s.lastReason):'');
+ $('#operator-actions').innerHTML=(OP_ACTIONS[s.state]||[]).map(a=>'<button type="button" class="'+(a[0]==='cancel'?'ghost':'secondary')+'" data-op="'+a[0]+'">'+esc(a[1])+'</button>').join('');
+ $('#operator-uncertain').innerHTML=(s.uncertain||[]).map(u=>'<article class="card"><p>'+esc(u.summary)+'</p><p class="hint">Atlas stopped before it could check whether this happened, so it will not do it again on a guess. Look at the computer, then say which.</p><div class="actions"><button type="button" data-ack="'+opAttr(u.id)+'" data-verdict="happened">It happened</button><button type="button" class="secondary" data-ack="'+opAttr(u.id)+'" data-verdict="did_not_happen">It did not happen</button></div></article>').join('');
+ $('#operator-milestones').innerHTML=(s.milestones||[]).length?s.milestones.slice().reverse().map(m=>'<div class="meta"><span>'+esc(m.kind)+'</span><span>'+esc(m.host||'')+'</span><span>'+esc(m.risk||'')+'</span><span>'+esc(m.outcome)+'</span><time>'+when(m.at)+'</time></div>').join(''):'<p class="empty">Nothing yet.</p>';
+ if(s.auditWarning)$('#operator-notice').textContent=s.auditWarning;
+}
+$('#operator-panel').onclick=async e=>{const b=e.target.closest('button');if(!b)return;const notice=$('#operator-notice');notice.textContent='';
+ try{
+  if(b.dataset.op){if(b.dataset.op==='cancel'&&!confirm('Cancel what Atlas is doing on the computer? It stays stopped until you let it operate again.'))return;await sendJson('/v1/operator/'+b.dataset.op,'POST',{})}
+  else if(b.dataset.ack)await sendJson('/v1/operator/intents/'+encodeURIComponent(b.dataset.ack)+'/acknowledge','POST',{verdict:b.dataset.verdict});
+ }catch(error){notice.textContent=error.message}
+ loadOperator().catch(()=>{})};
+setInterval(()=>{if(currentView==='computer'&&isUnlocked()&&!document.hidden)loadOperator().catch(()=>{})},2000);
+
 /* ---- Home ---- */
 async function loadBadge(){
  const {approvals}=await getJson('/v1/approvals');const pending=approvals.filter(a=>a.status==='pending');
@@ -926,6 +952,7 @@ async function setPolicy(capability,decision){
 const policySelect=(capability,decision)=>'<select data-policy="'+esc(capability)+'" aria-label="Policy for '+esc(capability)+'">'+['allow','ask','deny'].map(d=>'<option'+(d===decision?' selected':'')+'>'+d+'</option>').join('')+'</select>';
 function bindPolicies(root,after){root.querySelectorAll('[data-policy]').forEach(s=>s.onchange=async()=>{await setPolicy(s.dataset.policy,s.value);after()})}
 async function loadComputer(){
+ loadOperator().catch(()=>{});
  const box=$('#computer-tools');
  try{
   const [{tools},{suggestions}]=await Promise.all([getJson('/v1/tools'),getJson('/v1/autonomy').catch(()=>({suggestions:[]}))]);

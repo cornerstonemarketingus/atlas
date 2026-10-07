@@ -52,6 +52,7 @@ import { registerCommunicationsTools } from "./agent/tools/communications-tools.
 import { registerWorkflowTools } from "./agent/tools/workflow-tools.mjs";
 import { registerInfrastructureTools } from "./agent/tools/infrastructure-tools.mjs";
 import { createCredentialVault } from "./agent/credential-vault.mjs";
+import { createFileJournal, createOperatorControl } from "../../windows-companion/src/operator/control.mjs";
 import { openInBrowser, ownerAccount, resolveOwnerToken, signInUrl } from "./identity/owner.mjs";
 import { RemoteAccess } from "./remote/access.mjs";
 import { ACTIVE_STATES, GenesisService, GenesisStore } from "./platform/genesis/index.mjs";
@@ -91,6 +92,12 @@ const token = ownerToken.token;
 if (ownerToken.created) console.log(`Created the owner token for ${owner.user} (stored in ${ownerToken.storage === "file" ? join(dataDirectory, "local-token") : `the ${ownerToken.storage} vault`}). Sign in with: node scripts/local/open-atlas.mjs`);
 
 const license = loadLicense();
+// One control for everything that operates this computer (browser and desktop): pause, take over, hand back, cancel,
+// and a journal of consequential actions that survives a restart. Its receipts are mirrored into the audit log.
+const operatorControl = createOperatorControl({
+  journal: createFileJournal(join(dataDirectory, "operator", "journal.jsonl")),
+  audit: (category, summary) => store.audit(category, summary),
+});
 // One model client (routed, with fallback) and one tool registry serve both
 // conversations and agent missions, so policy and approvals are identical.
 const modelClient = createRoutedClient({
@@ -268,9 +275,10 @@ const server = createLocalControlServer({
   automations,
   world,
   goals,
+  operator: operatorControl,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
-  platformServices: { family: innovation.registry, memory },
+  platformServices: { family: innovation.registry, memory, onEmergencyStop: ({ actor }) => ({ operator: operatorControl.cancel({ actor, reason: "emergency stop" }).status.state }) },
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
@@ -457,6 +465,7 @@ async function buildBrowserSession() {
   });
   return createOperatorSession({
     page,
+    control: operatorControl,
     // Screenshots are written to the operator's disk. Sending one anywhere is
     // a separate, approval-bound decision.
     screenshots: createLocalScreenshotStore(join(dataDirectory, "screenshots")),
@@ -512,6 +521,7 @@ async function buildDesktopSession() {
   ]);
   return new DesktopSession({
     driver: createDesktopDriver(),
+    control: operatorControl,
     evidenceDir: join(dataDirectory, "screenshots", "desktop"),
     approve: async ({ action, risk, window }) => {
       const digest = createHash("sha256").update(JSON.stringify(action)).digest("hex");

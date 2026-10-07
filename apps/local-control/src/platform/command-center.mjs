@@ -27,9 +27,10 @@ const DONE_LIMIT = 20;
 /**
  * @param {{ missions?: object[], genesisProjects?: object[], tasks?: object[], selfImprove?: object | null, now?: number }} sources
  */
-export function buildCommandCenter({ missions = [], genesisProjects = [], tasks = [], selfImprove = null, automations = [], goals = [], now = Date.now() } = {}) {
+export function buildCommandCenter({ missions = [], genesisProjects = [], tasks = [], selfImprove = null, automations = [], goals = [], operator = null, now = Date.now() } = {}) {
   const items = [
     ...goals.map(goalItem),
+    ...operatorItems(operator),
     ...automations.filter((automation) => !automation.enabled && automation.consecutiveFailures > 0).map(automationItem),
     ...suggestionItems(missions, automations),
     ...missions.map(missionItem),
@@ -193,6 +194,41 @@ function goalItem(goal) {
   };
 }
 
+/**
+ * What Atlas is doing on the computer, and the controls that fit the state it
+ * is in (pause, take over, hand back, cancel). A run that needs the owner
+ * (a wall only a person can pass, a restart mid-operation, an action that may
+ * or may not have happened) is "attention"; the owner's own pause is "waiting".
+ */
+function operatorItems(operator) {
+  if (!operator || (operator.state === "idle" && !operator.uncertain?.length)) return [];
+  const control = (name, label) => ({ name, label, method: "POST", path: `/v1/operator/${name === "handBack" ? "handback" : name}`, body: {} });
+  const uncertain = operator.uncertain ?? [];
+  const byState = {
+    running: { bucket: "running", actions: [control("pause", "Pause"), control("takeover", "Take over"), control("cancel", "Cancel")] },
+    paused: { bucket: "waiting", actions: [control("resume", "Resume"), control("takeover", "Take over"), control("cancel", "Cancel")] },
+    taken_over: { bucket: "waiting", actions: [control("handBack", "Hand back to Atlas"), control("cancel", "Cancel")] },
+    blocked: { bucket: "attention", actions: [control("takeover", "Take over"), control("cancel", "Cancel")] },
+    interrupted: { bucket: "attention", actions: [control("takeover", "Take over to check"), control("cancel", "Cancel")] },
+    cancelled: { bucket: "done", actions: [control("begin", "Let Atlas operate again")] },
+    idle: { bucket: "done", actions: [] },
+  };
+  const shape = byState[operator.state] ?? byState.idle;
+  const where = operator.site ? ` on ${operator.site}` : "";
+  const detail = uncertain.length
+    ? `${uncertain.length} action${uncertain.length === 1 ? "" : "s"} may or may not have happened; check, then confirm in the Computer page: ${uncertain[0].summary}`
+    : operator.state === "running" ? `${operator.currentAction ? `${operator.currentAction.type}${where}` : `Working${where}`}${operator.approvalPending ? ", waiting for your approval" : ""}.`
+      : operator.state === "paused" ? `Paused by ${operator.lastActor}${where}.`
+        : operator.state === "taken_over" ? `${operator.lastActor} has control${where}. Hand control back when you are done.`
+          : operator.state === "blocked" ? `Stopped${where}: ${operator.lastReason ?? "a step only a person can complete"}. Take over, finish it, then hand back.`
+            : operator.state === "interrupted" ? "Atlas restarted while operating. Check the computer, then hand control back." : operator.lastReason ?? null;
+  return [{
+    kind: "operator", id: "operator", title: "Atlas on your computer", state: operator.state,
+    bucket: uncertain.length && shape.bucket !== "attention" ? "attention" : shape.bucket,
+    updatedAt: operator.since ?? null, link: "#/computer", detail, progress: null, lanes: [], actions: shape.actions,
+  }];
+}
+
 /** Only automations that paused themselves need the owner here; their runs show as missions. */
 function automationItem(automation) {
   const base = `/v1/automations/${encodeURIComponent(automation.id)}`;
@@ -274,7 +310,7 @@ function latest(values) {
 }
 
 /** GET /v1/command-center — any authenticated caller; every action goes through its own owner-only route. */
-export function createCommandCenterRoutes({ missionService = null, genesis = null, store = null, selfImprove = null, automations = null, goals = null, send }) {
+export function createCommandCenterRoutes({ missionService = null, genesis = null, store = null, selfImprove = null, automations = null, goals = null, operator = null, send }) {
   return function handle(request, response) {
     if (request.method !== "GET" || new URL(request.url ?? "/", "http://local.atlas").pathname !== "/v1/command-center") return false;
     const read = (fn, fallback) => { try { return fn() ?? fallback; } catch { return fallback; } };
@@ -285,6 +321,7 @@ export function createCommandCenterRoutes({ missionService = null, genesis = nul
       selfImprove: read(() => selfImprove?.status(), null),
       automations: read(() => automations?.list(), []),
       goals: read(() => goals?.list(), []),
+      operator: read(() => operator?.status(), null),
     }));
   };
 }
