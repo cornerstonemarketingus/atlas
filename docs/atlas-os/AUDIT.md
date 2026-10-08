@@ -1,5 +1,162 @@
 # Atlas OS — Phase 0 repository audit
 
+## Current audit: 2026-10-08, main `2f44d0f`
+
+This section supersedes the historical inventory below. It is a source and
+boundary audit, not a completion percentage. `lc/` means
+`apps/local-control/src/`; `web/` means `apps/web/`.
+All requested root handoffs and `docs/{PROGRAM,ROADMAP,TODO-MAP,PROGRESS}.md`
+were consulted. `PROGRAM.md` is actually `docs/PROGRAM.md`. Older handoffs
+describe September deployments and do not establish the current runtime state.
+The latest 30 main commits, 29 open PRs, recently merged PRs, open issues,
+CI/deploy runs, and secret/variable names were inspected. No secret values
+were retrieved. The operator's dirty checkout was preserved; this audit uses
+an isolated worktree at the main revision above.
+
+### A/B. Architecture and existing capabilities
+
+| Subsystem | Actual status | Runtime wiring and evidence | Limit of the evidence |
+|---|---|---|---|
+| Hosted control plane | IMPLEMENTED AND VERIFIED | `web/worker/index.ts`, `web/app/api/{tasks,auth,setup}`, D1 `web/db/schema.ts`; main CI 37852481688 and deploy 37852481696 passed | Does not make local missions cloud-native |
+| Hosted basic AI chat | IMPLEMENTED AND VERIFIED | `web/app/api/chat/{route.ts,agent-loop.mjs,providers.mjs}`; hosted run 37852689322 answered and persisted both modes: Groq non-streaming, Workers AI streaming | Basic reply success does not prove every multi-round tool workflow; #241 owns continuation repair |
+| Inference governor | IMPLEMENTED AND VERIFIED | `packages/atlas-inference/src/*`, `web/worker/inference-governor*.mjs`, `web/app/api/inference/governor-client.mjs`, `web/vite.config.ts` migration `v1-inference-governor`; `inference-chaos`, `chat-governed-send`, package tests, main CI | Shared Worker quota scope; CLI/Actions model calls have no authenticated ledger path |
+| Provider diversity | PARTIALLY IMPLEMENTED | Hosted Groq/OpenAI/Workers AI/self-hosted OpenAI-compatible routing; CLI `src/infrastructure/{groq,anthropic}-model-provider.ts`; local `lc/agent/models/{router,routed-client,manager}.mjs` | Anthropic is not a hosted-chat choice. Account existence is not live provider success. Workers AI native binding is still #233/#240 |
+| Autonomous coder | IMPLEMENTED AND VERIFIED | `packages/atlas-cli/src/agent/verified-coder-session.ts`, `.github/workflows/atlas-coder.yml`, `scripts/runner/run-task.mjs`, `lc/runner.mjs`; CLI and runner CI, Genesis real coder/browser gate | CI uses scripted models for some journeys; current full hosted edit/test/PR recovery still needs a model-backed release journey |
+| Local durable sessions/missions | IMPLEMENTED AND VERIFIED | `lc/agent/{runtime,session-store,mission-scheduler,mission-service}.mjs`; real SQLite restart/approval/cancel journey and `mission-throttle-recovery` tests | Restart restores interrupted work for explicit resume, not universal tool-level replay or automatic cloud migration |
+| Unified kernel and Command Center | PARTIALLY IMPLEMENTED | `lc/agent/kernel/*`, team step executor, Genesis kernel traces, `lc/platform/command-center.mjs`, `/v1/command-center` UI | Hosted chat and CLI remain separate callers. A normalized local dashboard is not a durable hosted agent fleet |
+| Automations and goals | IMPLEMENTED AND VERIFIED | `lc/platform/automations`, goals, main watcher/service wiring; automation/goal tests and main CI | The daemon must run; GitHub's scheduled coder is independently cloud hosted |
+| Self-improvement | BROKEN at approval integrity boundary | `lc/platform/self-improve/{loop,service,runtime}.mjs`, main and server wiring; loop records head/base, service merges branch name | Branch movement after review can merge unreviewed changes. Raw coder/error logs also need a separate redaction slice |
+| Genesis local app creation | IMPLEMENTED AND VERIFIED | `lc/platform/genesis/{service,executor,coder,preview,inspector,publish}.mjs`, shared auth/files/secrets/jobs/queue templates; main CI real Git/coder/Chromium/template journeys | Scripted model in CI; preview readiness is not production deployment verification |
+| Genesis hosted/visual editing | PARTIALLY IMPLEMENTED | Hosted `web/app/api/genesis/projects/route.ts` persists planned requirements; #181 contains picker/source-mapped static text editing | Hosted route does not enqueue or run Genesis builds. No verified hosted visual editing/deploy lifecycle |
+| Browser and computer control | PARTIALLY IMPLEMENTED | `apps/browser-worker/src/*`, Windows companion, hosted atomic claims/leases and action approvals; package tests and Windows CI | Local companion requires PC online. Takeover/re-observation work remains #237. Cloud executor deliberately unavailable |
+| Free Local AI | PARTIALLY IMPLEMENTED | Main local model manager/Ollama/gateway; #230 guided setup, hardware registry, qualified coding probes | This PC's 0.6B model failed real coding repair; 1.7B requires more available RAM. Hosted per-user registration/revocation remains unfinished |
+| Credentials/approvals | PARTIALLY IMPLEMENTED | OS-backed `lc/agent/credential-vault.mjs`, policy tools, hosted conditional one-time approval consumption, revocable identity/device sessions | Broker #233 and execution-boundary hardening #235 are not on main. Raw credentials must not be assumed capability-scoped everywhere |
+| Replay/evaluation | PARTIALLY IMPLEMENTED | Existing coder/Genesis validation and benchmarks; #236 durable manifests/replay/eval release gate | Open PR and library tests are not a released end-to-end cloud replay capability |
+| Knowledge graph/memory | PARTIALLY IMPLEMENTED | CLI repository maps, `lc/agent/kernel/{world-state,repo-graph}.mjs`, scoped family memory/team wiring and tests | Cross-organization graph is an initial slice; hosted memory UI remains #97 |
+| MCP and skills | PARTIALLY IMPLEMENTED | `lc/platform/mcp/daemon-bridge.mjs` loaded from main; real stdio/HTTP policy tests | Signed skill libraries have no daemon construction or installation API; marketplace/gap-to-reviewed-install loop absent |
+| Mobile | PARTIALLY IMPLEMENTED | Local pairing/revocation, mobile bridge/secure-storage helper tests, responsive hosted UI | `mobile/www/index.html` is a placeholder; bootstrap/push helpers lack production entry point. #61 needs physical-device validation |
+| Billing/tenancy/retention | PARTIALLY IMPLEMENTED | Tenant-scoped D1 routes, session revocation, deletion and Stripe handlers with tests | Billing tokens are missing in repository metadata; hosted browser metering helpers are unwired. Atomic monthly cap is #203 |
+
+### C. Disconnected or deliberately unavailable infrastructure
+
+- `lc/platform/skills/*`: registry/proposals/signed packages/knowledge exchange
+  are exported and unit-tested; no runtime construction outside that directory.
+  Do not advertise installation or agent privilege expansion as shipped.
+- `createHostedBrowserService` / `createCloudflareBrowserProvider`: test callers
+  exist, no production executor claims hosted browser tasks.
+  `web/app/api/computer/browser-plan.mjs` explicitly marks the executor unavailable
+  and fails closed rather than queuing fictional work.
+- `web/app/api/billing/hosted-usage.mjs`: metering helper is only called in tests;
+  its allowance values differ from the actual route. Wiring requires one shared
+  source of allowance truth and a real executor, not merely changing the flag.
+- `mobile` bootstrap/push/deep-link helpers have tests but the native web entry
+  does not load them. Local pairing is a separate, working capability.
+- `src/atlas_agent` is the historical Python prototype, not the canonical runtime.
+- Hosted Genesis requirements rows have no dispatcher into local or cloud Genesis.
+
+### D. Open PR reconciliation
+
+Green means the recorded head passed checks, not that it is deployed or current
+against main. `UNKNOWN` mergeability is not a clean result. Preserve distinct
+work and coordinate with owners before replacing it.
+
+| PRs | Recommended disposition | Reason / required next gate |
+|---|---|---|
+| #129–#133, #158, #160 | Superseded in substance; close only after owner diff review | #224 ported contracts, ledger, circuits, registry, fingerprints and chat wiring while preserving newer main logic. Do not merge the historical loop again |
+| #233 + stacked #240 | Repair/reconcile onto current main, protected review, deploy, live chat gate | #233 now conflicts; #240 CI green. Preserve #239 model choices and #241 continuation recovery. Native cancellation bounds waiting, not guaranteed physical compute cancellation |
+| #241 | Released after independent review and all 13 CI checks | Merged as 17570ff; deploy 37858362540 passed. Hosted tool-chat gate 37858630572 is the remaining live check |
+| #235 | Review after validation; remove draft when review-ready | All 13 CI jobs green. Complements broker rather than replacing it; protected credential/redaction/approval changes |
+| #236 | Review/merge after integration validation | Replay/evaluation CI green; align capture at real runtime boundary and verify side-effect-free replay |
+| #237 | Repair validation before merge | Windows local-control check is cancelled, not passed; require complete checks and takeover re-observation/crash journey |
+| #230 | Keep draft, repair/rebase and finish runtime gates | Current head has only Vercel checks. Guided local qualification correctly rejects this PC's weak model; hosted tenant activation not finished |
+| #223 | Review, rebase if needed, then merge after validation | Opportunity scout has green CI, but is lower priority than foundation/cloud blockers; earlier detailed review remains relevant |
+| #207 | Rebase and review unique persistent-cache work | Main #205 provides request-scoped verified reuse, not necessarily this PR's cross-turn cache. Preserve tenant/principal/SHA isolation; #208 snapshot claim remains active |
+| #191 | Reconcile, then supersede duplicated portions after review | Conflicts; #192/#193 fixed task storage and #239 preserves unsaved chat. Retain any distinct safe diagnostics |
+| #200 | Repair failing CLI check, rebase | Adds local/health/billing behavior; current head's CLI check failed. Do not overwrite current retry/provider contracts |
+| #202 | Reconcile conflict with kernel-era verifier | Keep untrusted tool logs as data; preserve any unique injection regression before closing |
+| #203 | Rebase/validate and protected billing review | Atomic monthly limit fixes a real concurrent usage race; use real SQLite/conditional D1 tests |
+| #181 | Rebase and verify scoped visual editor | Existing static text slice, not generic layout editing; do not create a second picker |
+| #178 | Reconcile with #228/#232/#239 and #240 | Preserve distinct explicit provider selection in release gate, avoid duplicate smoke mechanisms |
+| #61, #69, #77 | Rebase/repair; protected review where applicable | Mobile bootstrap, hosted rate limits, strict CSP. Old Vercel statuses do not validate current security/runtime boundaries |
+| #97, #98, #101, #105 | Rebase and isolate remaining unique slices | Hosted memory, CI-aware tools, Genesis repo creation, default browser. Old drafts span changed entry points; do not blindly merge |
+
+### E/F. Production blockers and PC-off operation
+
+The PC can be off for hosted Worker chat and GitHub-managed coding. D1 task
+history/result/activity are external and independent of a browser tab. Actions
+provides ephemeral repository checkout/dependencies/filesystem/CLI execution,
+logs and artifacts. This is reusable cloud execution, not a persistent cloud
+desktop. Closing the client does not cancel an already-dispatched Actions run.
+
+Local SQLite missions, automations, Genesis workers, Ollama and the Windows
+companion stop when the host stops. There is no hosted worker consuming those
+local stores, unified lease/checkpoint protocol across both planes, tenant-scoped
+cloud browser executor, or cloud Genesis dispatcher. A phone controls existing
+hosted routes; native helpers do not supply compute. No GPU fleet is necessary
+for the first cloud slice: use the deployed hosted models and ephemeral workers.
+
+Remaining inference gaps: CLI and hosted chat do not share quotas; main lacks
+durable reconnectable chat jobs; chat HTTP disconnect is not propagated into
+the model/tool loop. Existing response-body cancellation tests prove governor
+release at that boundary, not at the browser request boundary. The native
+adapter fixes in #240 do not by themselves close this outer disconnect gap.
+
+GitHub secret names show chat/Groq/OpenAI/Workers AI/GitHub/OAuth/session/operator
+and Cloudflare deployment settings present. Stripe and Anthropic are absent.
+Presence is not validity or correct account scope. Hosted diagnosis in run
+37852689322 reports Workers AI valid/permitted and HTTP 200 inference; basic
+chat served by Groq and Workers AI. Worker runtime secrets are copied during
+deployment, not read from GitHub at request time. No values were inspected.
+
+### G. Prioritized implementation queue
+
+| Priority / slice | Reuse and exact modules | Dependencies / acceptance / tests | Risk / owner intervention |
+|---|---|---|---|
+| P0 reviewed self-improvement source approval (selected now) | `lc/platform/self-improve/{service,loop}.mjs`, existing service tests and Git wrapper | Reproduce branch movement; reject stale head/base at preflight; merge immutable reviewed head without hooks; serialize approve/reject in the daemon; real Git and authenticated route tests | High integrity boundary; protected review before merge |
+| P0 finish owned inference repairs | #233/#240/#241; `web/app/api/chat/*`, existing governor and smoke | Preserve main model menu; tool call→tool result→final answer both modes; safe failure category; queued/streaming disconnect cancellation and zero leaked reservations | High; owners coordinate overlapping loop/routes and binding review |
+| P0 share runner quota admission | Existing governor DO and CLI retry/fallback; authenticated provider-neutral runner admission endpoint | #127 owner; short-lived scoped credential, bounded idempotent reservation/release; real concurrent runner+Worker test, no overspend | High protected auth; review and deployment needed |
+| P0 self-improvement log redaction (separate slice) | Existing terminal redactor, service output/status boundary | Mask exact host/broker values before storage, chunk-split and error tests; preserve readable progress | High secrets boundary; coordinate #235 redactor and protected review |
+| P1 first real cloud execution continuation | Actions executor, task D1/result/activity, local session/mission contracts | Durable checkpoint reference + lease heartbeat, idempotent retry/cancel, PC-off coding journey and crash without repeating consequential tools | High; tenant/credential review, no expensive GPU provisioning |
+| P1 hosted browser execution | Existing browser provider/service/egress guard, task claims/approvals, billing helper | Scoped lease/session, shared quota truth, crash/cancel cleanup, remote takeover re-observe, real browser test with PC off | High; #105/#69/#237 coordination, configured browser service/budget |
+| P1 broker and onboarding | #233/#235, vault/policy, repository setup and model choices | Capability-scoped adapters, wrong-account/revoke tests, ordinary-user account→repository→task→verified result | High protected; owner consent only for new scopes/checkpoints |
+| P1 eval/replay release gate | #236, real traces and independent verifiers | No live side effects on replay; verified benchmark delta on routing/coding changes, rollback evidence | Medium/high; protected policy review |
+| P2 Genesis visual/cloud build | #181, local Genesis executor/templates and hosted project rows | Single dispatcher to approved executor, preview source map/edit/retest/deploy health, preserve independent checks | High deployments; scope and deployment credentials approved |
+| P2 mobile/skills integration | #61/#237, paired devices, signed skills registry, MCP policy | Physical-device approval resume; installed signed skill visible only after digest-bound authorization; revoke and no self-grant | High privileges; human checkpoints retained |
+
+### H. Immediate slice
+
+The chosen unclaimed repair is exact-revision self-improvement approval. It
+uses the current loop's accepted `head`/`base` evidence and the existing owner
+API; no new executor, broker or TODO is introduced. Real Git regressions failed before the repair: moved source/base approvals did
+not reject, repository hooks executed, and inherited signing broke approval.
+The service now merges the immutable accepted commit, rejects stale source/base
+and missing revision evidence, serializes decisions within the daemon, uses the
+existing hook-free Git commit configuration, and compare-deletes branch refs.
+The existing owner API returns actionable HTTP 409 errors and persists reviewed
+head/base receipts. No new approval system or UI is introduced.
+
+Validation: all 21 affected service/loop tests passed; the full local-control
+suite exited successfully; the real HTTP/SQLite journey passed approval, deny,
+pause/resume/cancel, process restart and persisted mission recovery. Regression
+coverage includes authenticated daemon requests, device denial, one-time
+decisions, durable receipts, moved branches, hooks and signing configuration.
+Syntax checks and diff whitespace validation passed. Protected review remains
+the release boundary.
+
+The repair is scoped to one daemon's approval path. It is not a cross-process
+transaction over an operator's Git checkout: external checkout/commit activity
+can race the destination preflight. A crash after Git merges but before the
+decision receipt persists fails closed on the changed base at retry, rather
+than replaying the merge, but still needs manual reconciliation of the receipt.
+Durable cross-process approval leases and atomic destination compare-and-swap
+belong in the existing task/approval architecture in a subsequent slice.
+
+## Historical audit: 2026-09-24
+
+The rest of this file is historical evidence, not current runtime claims.
+In particular its old statements about no Durable Objects, no desktop control,
+and absent automations are superseded by the current inventory above.
+
 Audit date: 2026-09-24. Branch `claude/atlas-implementation-eah694`, base commit
 `4ce465e` ("Add versioned dependency-free Atlas platform contracts").
 
