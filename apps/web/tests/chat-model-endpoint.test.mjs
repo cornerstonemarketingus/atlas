@@ -1,6 +1,48 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { completionsUrl, replyText, resolveChatModel, threadTitle } from "../app/api/chat/model-endpoint.mjs";
+import { completionsUrl, replyText, resolveChatModel, threadTitle, chatModelOptions, selectChatModel, publicChatModels, chatRequestBody } from "../app/api/chat/model-endpoint.mjs";
+
+test("local thinking control reaches the model without modifying hosted defaults", () => {
+  const messages = [{ role: "user", content: "Hello" }];
+  const profiles = JSON.stringify([{ id: "local", model: "qwen3:0.6b", baseUrl: "http://localhost:11434/v1", reasoningEffort: "none" }]);
+  const endpoint = selectChatModel({ ATLAS_CHAT_PROFILES: profiles }, "local");
+  assert.equal(chatRequestBody(endpoint, messages).reasoning_effort, "none");
+  assert.equal(chatRequestBody({ model: "hosted" }, messages).reasoning_effort, undefined);
+  assert.equal(chatRequestBody(endpoint, messages).messages, messages);
+});
+
+test("offers allowed models and rejects client-supplied endpoints or unknown ids", () => {
+  const env = { ATLAS_CHAT_BASE_URL: "http://localhost:11434/v1", ATLAS_CHAT_MODEL: "qwen3:0.6b", ATLAS_CHAT_MODELS: "qwen3:1.7b,qwen3:4b,qwen3:0.6b" };
+  assert.equal(chatModelOptions(env).options.length, 3);
+  assert.equal(selectChatModel(env).model, "qwen3:0.6b");
+  assert.equal(selectChatModel(env, "qwen3:4b").model, "qwen3:4b");
+  for (const id of ["https://attacker.example/v1", "unknown", null, {}]) {
+    assert.equal(selectChatModel(env, id).invalidSelection, true);
+  }
+});
+
+test("profile credentials stay isolated and never appear in the public catalog", () => {
+  const env = { HOSTED_KEY: "private-secret", ATLAS_MODEL_API_KEY: "unrelated-secret", ATLAS_CHAT_PROFILES: JSON.stringify([
+    { id: "local", model: "qwen3:0.6b", baseUrl: "http://localhost:11434/v1", label: "Local fast" },
+    { id: "hosted", model: "hosted-model", baseUrl: "https://model.example/v1", apiKeyEnv: "HOSTED_KEY" },
+  ]) };
+  assert.equal(selectChatModel(env, "local").apiKey, null);
+  assert.equal(selectChatModel(env, "hosted").apiKey, "private-secret");
+  assert.deepEqual(publicChatModels(env), { configured: true, reason: null, defaultModel: "local", models: [
+    { id: "local", model: "qwen3:0.6b", label: "Local fast" },
+    { id: "hosted", model: "hosted-model", label: "hosted-model" },
+  ] });
+});
+
+test("invalid profile configuration fails closed", () => {
+  for (const profiles of ["not-json", "{}", "[]", '[null]', JSON.stringify([
+    { id: "x", model: "m", baseUrl: "https://a.example/v1" },
+    { id: "x", model: "m", baseUrl: "https://b.example/v1" },
+  ]), JSON.stringify([{ id: "x", model: "m", baseUrl: "http://remote.example/v1" }]),
+  JSON.stringify([{ id: "x", model: "m", baseUrl: "https://a.example/v1", apiKeyEnv: "MISSING_KEY" }])]) {
+    assert.equal(publicChatModels({ ATLAS_CHAT_PROFILES: profiles }).configured, false);
+  }
+});
 
 test("a provider fallback key never leaks to a different model host", () => {
   const env = { ATLAS_CHAT_MODEL: "model", GROQ_API_KEY: "provider-secret" };

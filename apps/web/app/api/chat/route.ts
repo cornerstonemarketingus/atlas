@@ -3,7 +3,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
-import { completionsUrl, replyText, resolveChatModel, threadTitle } from "./model-endpoint.mjs";
+import { completionsUrl, replyText, selectChatModel, publicChatModels, threadTitle, chatRequestBody } from "./model-endpoint.mjs";
 
 /** How much of a thread is replayed to the model. Enough for continuity, bounded so a long thread cannot grow a request without limit. */
 const HISTORY_TURNS = 20;
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
 
-  let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown };
+  let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown; modelId?: unknown };
   try { body = await request.json() as typeof body; } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
 
   const message = typeof body.message === "string" ? body.message.trim().slice(0, MAX_MESSAGE) : "";
@@ -32,16 +32,17 @@ export async function POST(request: Request) {
 
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
-  const endpoint = resolveChatModel(process.env);
+  const endpoint = selectChatModel(process.env, body.modelId);
   if (!endpoint.configured) {
-    return Response.json({ message: endpoint.reason, needsModelEndpoint: true }, { status: 503 });
+    return Response.json({ message: endpoint.reason, needsModelEndpoint: !endpoint.invalidSelection }, { status: endpoint.invalidSelection ? 400 : 503 });
   }
 
-  const db = getDb();
+  let db: ReturnType<typeof getDb> | undefined;
   const now = new Date().toISOString();
   let history: { role: string; content: string }[] = [];
   let stored = true;
   try {
+    db = getDb();
     await db.insert(conversations)
       .values({ id: conversationId, requestedBy: account.userId, title: threadTitle(message), repository, branch, createdAt: now, updatedAt: now })
       .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now } });
@@ -69,7 +70,7 @@ export async function POST(request: Request) {
       method: "POST",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: { "content-type": "application/json", ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
-      body: JSON.stringify({ model: endpoint.model, messages: turns, stream: false, temperature: 0.2, max_tokens: 1200 }),
+      body: JSON.stringify(chatRequestBody(endpoint, turns)),
     });
     if (!response.ok) {
       // The status is the actionable part; the body can contain the prompt
@@ -87,14 +88,14 @@ export async function POST(request: Request) {
 
   const replyId = randomUUID();
   const replyAt = new Date().toISOString();
-  if (stored) {
+  if (stored && db) {
     try {
       await db.insert(conversationMessages).values({ id: replyId, conversationId, requestedBy: account.userId, role: "assistant", content: reply, createdAt: replyAt });
       await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, account.userId)));
     } catch { stored = false; }
   }
 
-  return Response.json({ conversationId, stored, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+  return Response.json({ conversationId, stored, modelId: endpoint.id, reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
 }
 
 /**
@@ -105,6 +106,5 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-  const endpoint = resolveChatModel(process.env);
-  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null }, { headers: { "cache-control": "no-store" } });
+  return Response.json(publicChatModels(process.env), { headers: { "cache-control": "no-store" } });
 }

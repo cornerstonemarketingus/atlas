@@ -73,6 +73,8 @@ jobs:
           # configured in both places.
           ATLAS_CHAT_BASE_URL: ${{ secrets.ATLAS_CHAT_BASE_URL }}
           ATLAS_CHAT_MODEL: ${{ secrets.ATLAS_CHAT_MODEL }}
+          ATLAS_CHAT_MODELS: ${{ secrets.ATLAS_CHAT_MODELS }}
+          ATLAS_CHAT_PROFILES: ${{ secrets.ATLAS_CHAT_PROFILES }}
           ATLAS_MODEL_API_KEY: ${{ secrets.ATLAS_MODEL_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           # Billing
@@ -103,7 +105,10 @@ jobs:
             ATLAS_OWNER_GITHUB_LOGINS \
             ATLAS_CHAT_BASE_URL \
             ATLAS_CHAT_MODEL \
+            ATLAS_CHAT_MODELS \
+            ATLAS_CHAT_PROFILES \
             ATLAS_MODEL_API_KEY \
+            GROQ_API_KEY \
             ATLAS_STRIPE_SECRET_KEY \
             ATLAS_STRIPE_WEBHOOK_SECRET \
             ATLAS_STRIPE_PRICE_PRO \

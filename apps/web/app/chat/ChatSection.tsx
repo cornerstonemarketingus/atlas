@@ -9,6 +9,7 @@ import { ThreadRail, useThreads } from "../ThreadRail.js";
 type Message = { id: string; role: string; content: string; createdAt: string };
 type Task = { taskId: string; objective: string; mode: string; status?: string; repository?: string; branch?: string; run?: { url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
 type Detail = { messages?: Message[]; tasks?: Task[] };
+type ModelStatus = { configured: boolean; reason: string | null; models?: { id: string; label: string; model: string }[]; defaultModel?: string | null };
 
 const STARTERS = [
   { title: "Review my project", prompt: "Review my project and tell me what I should improve first." },
@@ -48,7 +49,9 @@ export function ChatSection() {
   const [repository, setRepository] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(PROJECT_STORAGE_KEY) ?? "");
   const [branch, setBranch] = useState("main");
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [ready, setReady] = useState<{ configured: boolean; reason: string | null } | null>(null);
+  const [ready, setReady] = useState<ModelStatus | null>(null);
+  const [modelId, setModelId] = useState("");
+  const [stored, setStored] = useState(true);
   const [version, setVersion] = useState(0);
   const { threads, close } = useThreads(version);
   const endRef = useRef<HTMLDivElement>(null);
@@ -57,8 +60,13 @@ export function ChatSection() {
     let active = true;
     void fetch("/api/chat", { cache: "no-store" })
       .then((response) => (response.status === 401 ? (window.location.href = "/", null) : response.ok ? response.json() : null))
-      .then((value) => { if (active && value) setReady(value as { configured: boolean; reason: string | null }); })
-      .catch(() => undefined);
+      .then((value: ModelStatus | null) => {
+        if (!active) return;
+        if (!value) { setReady({ configured: false, reason: "Could not check model configuration. Reload to retry." }); return; }
+        setReady(value);
+        setModelId(value.defaultModel ?? "");
+      })
+      .catch(() => { if (active) setReady({ configured: false, reason: "Could not reach chat. Reload to retry." }); });
     return () => { active = false; };
   }, []);
 
@@ -92,6 +100,7 @@ export function ChatSection() {
   }, []);
 
   async function openThread(id: string) {
+    setStored(true);
     setConversationId(id);
     setNotice("");
     try {
@@ -120,10 +129,10 @@ export function ChatSection() {
     }
   }
 
-  function startNew() { setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); }
+  function startNew() { setStored(true); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); }
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || !stored || sending) return;
     let active = true;
     const refresh = async () => {
       try {
@@ -138,7 +147,7 @@ export function ChatSection() {
     void refresh();
     const timer = setInterval(() => { void refresh(); }, 12_000);
     return () => { active = false; clearInterval(timer); };
-  }, [conversationId]);
+  }, [conversationId, stored, sending]);
 
   async function send(event: FormEvent) {
     event.preventDefault();
@@ -166,15 +175,19 @@ export function ChatSection() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text }),
+        body: JSON.stringify({ conversationId, message: text, ...(modelId ? { modelId } : {}) }),
       });
-      const result = await response.json() as { conversationId?: string; reply?: Message; message?: string; needsModelEndpoint?: boolean };
+      const result = await response.json() as { conversationId?: string; reply?: Message; message?: string; needsModelEndpoint?: boolean; stored?: boolean };
       if (!response.ok) {
         setNotice(result.message ?? "Atlas could not answer.");
         if (result.needsModelEndpoint) setReady({ configured: false, reason: result.message ?? null });
         return;
       }
       if (result.conversationId) setConversationId(result.conversationId);
+      if (result.stored === false) {
+        setStored(false);
+        setNotice("This reply could not be saved. Keep this chat open to retain it; later replies may not remember earlier turns.");
+      }
       if (result.reply) setMessages((items) => [...items, result.reply!]);
       setVersion((value) => value + 1);
     } catch {
@@ -194,7 +207,7 @@ export function ChatSection() {
     section="chat"
     rail={<ThreadRail threads={threads} activeId={conversationId} newLabel="New chat" emptyLabel="Nothing yet. Ask Atlas anything."
       onNew={startNew} onOpen={(id) => void openThread(id)} onClose={(id) => void close(id).then((done) => { if (done && id === conversationId) startNew(); })} />}
-    headerContext={<span className="context-chip">{ready === null ? "Checking model…" : ready.configured ? "Model connected" : "No model endpoint"}</span>}
+    headerContext={<span className="context-chip">{ready === null ? "Checking model…" : ready.configured ? "Model configured" : "No model endpoint"}</span>}
   >
     <div className="section-scroll">
       {messages.length === 0 ? <div className="section-empty">
@@ -224,7 +237,13 @@ export function ChatSection() {
         onChange={(event) => setDraft(event.target.value)}
       placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything, or describe what you want to get done…"} />
       <div className="composer-actions">
-        <div><span className="composer-hint">Enter sends · Shift+Enter for a new line</span></div>
+        <div>
+          {!!ready?.models?.length && <label>Model {" "}<select aria-label="Chat model" value={modelId} disabled={sending}
+            onChange={(event) => setModelId(event.target.value)}>
+            {ready.models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+          </select></label>}
+          <span className="composer-hint"> Enter sends · Shift+Enter for a new line</span>
+        </div>
         <button className="send" disabled={sending || !draft.trim()}>{sending ? "…" : "↑"}</button>
       </div>
       {notice && <p className="composer-notice" role="status">{notice}</p>}

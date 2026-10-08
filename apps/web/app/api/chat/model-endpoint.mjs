@@ -56,7 +56,60 @@ export function resolveChatModel(environment = process.env) {
 
 /** The absolute chat-completions URL for a resolved endpoint. */
 export function completionsUrl(baseUrl) {
-  return new URL("chat/completions", baseUrl).toString();
+  return new URL("chat/completions", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+}
+
+/** Server-owned choices. Browser requests select an id, never a URL or key. */
+export function chatModelOptions(environment = process.env) {
+  if (environment.ATLAS_CHAT_PROFILES) {
+    let profiles;
+    try { profiles = JSON.parse(environment.ATLAS_CHAT_PROFILES); }
+    catch { return { options: [], reason: "ATLAS_CHAT_PROFILES must be a JSON array." }; }
+    if (!Array.isArray(profiles) || !profiles.length || profiles.length > 20) {
+      return { options: [], reason: "Configure between 1 and 20 chat profiles." };
+    }
+    const options = [];
+    for (const profile of profiles) {
+      if (!profile || typeof profile.id !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/u.test(profile.id)
+        || options.some((option) => option.id === profile.id)
+        || typeof profile.model !== "string" || typeof profile.baseUrl !== "string"
+        || (profile.reasoningEffort !== undefined && !["none", "low", "medium", "high"].includes(profile.reasoningEffort))
+        || (profile.apiKeyEnv !== undefined && (typeof profile.apiKeyEnv !== "string" || !/^[A-Z][A-Z0-9_]*$/u.test(profile.apiKeyEnv)))) {
+        return { options: [], reason: "Chat profiles need unique ids, model names, valid endpoints, and optional API key variable names." };
+      }
+      const endpoint = resolveChatModel({
+        ATLAS_CHAT_BASE_URL: profile.baseUrl, ATLAS_CHAT_MODEL: profile.model,
+        ATLAS_MODEL_API_KEY: profile.apiKeyEnv ? environment[profile.apiKeyEnv] : "",
+      });
+      if (!endpoint.configured) return { options: [], reason: endpoint.reason };
+      if (profile.apiKeyEnv && !endpoint.apiKey) return { options: [], reason: `Set the API key variable for chat profile ${profile.id}.` };
+      options.push({ ...endpoint, id: profile.id, label: typeof profile.label === "string" ? profile.label.slice(0, 100) : profile.model, reasoningEffort: profile.reasoningEffort });
+    }
+    return { options, reason: null };
+  }
+  const endpoint = resolveChatModel(environment);
+  if (!endpoint.configured) return { options: [], reason: endpoint.reason };
+  const models = [...new Set([endpoint.model, ...(environment.ATLAS_CHAT_MODELS || "").split(",").map((name) => name.trim()).filter(Boolean)])].slice(0, 20);
+  return { options: models.map((model) => ({ ...endpoint, model, id: model, label: model })), reason: null };
+}
+
+/** @returns {{ configured: boolean, reason?: string|null, invalidSelection?: boolean, id?: string, label?: string, baseUrl?: string, model?: string, apiKey?: string|null, reasoningEffort?: string }} */
+export function selectChatModel(environment = process.env, id) {
+  const { options, reason } = chatModelOptions(environment);
+  if (!options.length) return { configured: false, reason };
+  const selected = id === undefined ? options[0] : options.find((option) => option.id === id);
+  return selected ?? { configured: false, reason: "Choose a configured chat model.", invalidSelection: true };
+}
+
+/** Safe to return to clients: never includes credentials or endpoint URLs. */
+export function publicChatModels(environment = process.env) {
+  const { options, reason } = chatModelOptions(environment);
+  return { configured: options.length > 0, reason, models: options.map(({ id, label, model }) => ({ id, label, model })), defaultModel: options[0]?.id ?? null };
+}
+
+export function chatRequestBody(endpoint, messages, maxTokens = 1200) {
+  return { model: endpoint.model, messages, stream: false, temperature: 0.2, max_tokens: maxTokens,
+    ...(endpoint.reasoningEffort ? { reasoning_effort: endpoint.reasoningEffort } : {}) };
 }
 
 /**
