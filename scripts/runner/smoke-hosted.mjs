@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { inferenceFailureMetadata } from "../../apps/web/app/api/chat/agent-loop.mjs";
 // Overridable only to exercise this script against a local stand-in; the workflow never sets it.
 const base = process.env.ATLAS_SMOKE_BASE_URL || "https://atlas-web.cornerstonemarketingus.workers.dev";
 const headers = { authorization: `Bearer ${process.env.ATLAS_OPERATOR_TOKEN}`, "content-type": "application/json" };
@@ -27,6 +28,7 @@ async function streamChat(message) {
   const decoder = new TextDecoder();
   let buffer = "";
   let outcome = null;
+  let inferenceFailure = null;
   for await (const chunk of response.body) {
     buffer += decoder.decode(chunk, { stream: true });
     let boundary;
@@ -36,10 +38,18 @@ async function streamChat(message) {
       const type = /^event: (.+)$/mu.exec(block)?.[1]?.trim();
       const data = block.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("");
       if (type === "done") outcome = JSON.parse(data);
-      if (type === "error") outcome = { error: String(JSON.parse(data)?.message ?? "unknown error").slice(0, 300) };
+      if (type === "inference_failure") {
+        const failure = JSON.parse(data);
+        inferenceFailure = inferenceFailureMetadata({ ...failure, kind: failure.category }, failure.round);
+      }
+      if (type === "error") {
+        const error = JSON.parse(data);
+        outcome = { error: String(error?.message ?? "unknown error").slice(0, 300) };
+        if (error.inferenceFailure) inferenceFailure = inferenceFailureMetadata({ ...error.inferenceFailure, kind: error.inferenceFailure.category }, error.inferenceFailure.round);
+      }
     }
   }
-  return outcome ?? { error: "the stream ended without a reply or an error" };
+  return outcome ? { ...outcome, ...(inferenceFailure ? { inferenceFailure } : {}) } : { error: "the stream ended without a reply or an error", ...(inferenceFailure ? { inferenceFailure } : {}) };
 }
 
 const mode = process.env.ATLAS_SMOKE_MODE || "inspect";
@@ -78,16 +88,19 @@ if (mode === "chat") {
     if (!outcome.stored) problems.push("reply not persisted");
     if (outcome.finalization) problems.push(`no model wrote the answer (${outcome.finalization.reason})`);
     if (/_Stopped early:/u.test(content)) problems.push("stopped early");
+    if (outcome.inferenceFailure) problems.push("model request failed");
     evidence[label] = {
       conversationId: outcome.conversationId, replyChars: content.length, stored: Boolean(outcome.stored),
       steps: (outcome.steps ?? []).map((step) => ({ label: String(step.label).slice(0, 120), ok: Boolean(step.ok) })),
       ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.error ? { error: outcome.error } : {}),
       ...(outcome.servedBy ? { servedBy: { provider: String(outcome.servedBy.provider), model: String(outcome.servedBy.model).slice(0, 120) } } : {}),
+      ...(outcome.inferenceFailure ? { inferenceFailure: inferenceFailureMetadata({ ...outcome.inferenceFailure, kind: outcome.inferenceFailure.category }, outcome.inferenceFailure.round) } : {}),
       passed: problems.length === 0 && !outcome.error,
     };
     const verdict = outcome.error ? `error: ${outcome.error}` : problems.length ? problems.join("; ") : "answered and stored";
     const served = evidence[label].servedBy ? `, written by ${evidence[label].servedBy.provider} ${evidence[label].servedBy.model}` : "";
     console.log(`${label}: ${verdict} (${content.length} chars, ${evidence[label].steps.length} tool steps${served})`);
+    if (evidence[label].inferenceFailure) console.log(`${label} inference failure: ${JSON.stringify(evidence[label].inferenceFailure)}`);
   };
 
   judge("nonStreaming", await api("/api/chat", { message }));

@@ -107,7 +107,10 @@ test("model failures become an actionable error", async () => {
   const failing = () => new Response("secret prompt echoed", { status: 500 });
   const { fetcher, requests } = scripted([failing, failing, failing]);
   const waits = [];
-  assert.deepEqual(await run(fetcher, { sleep: async (ms) => { waits.push(ms); } }).promise, { error: "The model endpoint answered 500.", status: 502 });
+  assert.deepEqual(await run(fetcher, { sleep: async (ms) => { waits.push(ms); } }).promise, {
+    error: "The model endpoint answered 500.", status: 502,
+    inferenceFailure: { status: 500, provider: "self-hosted", model: "m", category: "SERVER_ERROR", round: 0 },
+  });
   // A 5xx is retried a bounded number of times, never looped on.
   assert.equal(requests.length, 3);
   assert.equal(waits.length, 2);

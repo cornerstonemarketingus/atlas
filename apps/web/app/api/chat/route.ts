@@ -99,7 +99,7 @@ export async function POST(request: Request) {
   }
 
   const outcome = await converse({ ...loop, stream: false, emit: () => {} });
-  if ("error" in outcome) return Response.json({ message: outcome.error, conversationId }, { status: outcome.status });
+  if ("error" in outcome) return Response.json({ message: outcome.error, ...(outcome.inferenceFailure ? { inferenceFailure: outcome.inferenceFailure } : {}), conversationId }, { status: outcome.status });
   const reply = outcome.reply;
   if (!reply) return Response.json({ message: "The model endpoint returned an empty reply.", conversationId }, { status: 502 });
 
@@ -113,7 +113,7 @@ export async function POST(request: Request) {
   }
 
   // `finalization` (metadata only) says the reply is the saved work because no model could write the answer.
-  return Response.json({ conversationId, stored, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.servedBy ? { servedBy: outcome.servedBy } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+  return Response.json({ conversationId, stored, steps: outcome.steps, ...(outcome.inferenceFailure ? { inferenceFailure: outcome.inferenceFailure } : {}), ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.servedBy ? { servedBy: outcome.servedBy } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
 }
 
 /** A GitHub credential for the read-only chat tools: the GitHub App's installation token when configured, else the platform token. Fetched once per request, only if a tool needs it. */
@@ -224,7 +224,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
       emit("meta", { conversationId });
       const outcome = await converse({ ...loop, stream: true, emit });
       if ("error" in outcome) {
-        emit("error", { message: outcome.error });
+        emit("error", { message: outcome.error, ...(outcome.inferenceFailure ? { inferenceFailure: outcome.inferenceFailure } : {}) });
         controller.close();
         return;
       }
@@ -243,7 +243,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
           await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, userId)));
         } catch { persisted = false; }
       }
-      emit("done", { conversationId, stored: persisted, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.servedBy ? { servedBy: outcome.servedBy } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+      emit("done", { conversationId, stored: persisted, steps: outcome.steps, ...(outcome.inferenceFailure ? { inferenceFailure: outcome.inferenceFailure } : {}), ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.servedBy ? { servedBy: outcome.servedBy } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
       controller.close();
     },
   });
