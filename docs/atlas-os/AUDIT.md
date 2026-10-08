@@ -64,7 +64,7 @@ work and coordinate with owners before replacing it.
 |---|---|---|
 | #129–#133, #158, #160 | Superseded in substance; close only after owner diff review | #224 ported contracts, ledger, circuits, registry, fingerprints and chat wiring while preserving newer main logic. Do not merge the historical loop again |
 | #233 + stacked #240 | Repair/reconcile onto current main, protected review, deploy, live chat gate | #233 now conflicts; #240 CI green. Preserve #239 model choices and #241 continuation recovery. Native cancellation bounds waiting, not guaranteed physical compute cancellation |
-| #241 | Released after independent review and all 13 CI checks | Merged as 17570ff; deploy 37858362540 passed. Hosted tool-chat gate 37858630572 is the remaining live check |
+| #241 | Released after independent review and all 13 CI checks | Merged as 17570ff; deploy 37858362540 passed. Hosted tool-chat gate 37858630572 passed both modes using Workers AI gpt-oss-120b, with answers stored and no early stop |
 | #235 | Review after validation; remove draft when review-ready | All 13 CI jobs green. Complements broker rather than replacing it; protected credential/redaction/approval changes |
 | #236 | Review/merge after integration validation | Replay/evaluation CI green; align capture at real runtime boundary and verify side-effect-free replay |
 | #237 | Repair validation before merge | Windows local-control check is cancelled, not passed; require complete checks and takeover re-observation/crash journey |
@@ -140,7 +140,7 @@ suite exited successfully; the real HTTP/SQLite journey passed approval, deny,
 pause/resume/cancel, process restart and persisted mission recovery. Regression
 coverage includes authenticated daemon requests, device denial, one-time
 decisions, durable receipts, moved branches, hooks and signing configuration.
-Syntax checks and diff whitespace validation passed. Protected review remains
+Syntax checks and diff whitespace validation passed. PR #243 contains this repair. Protected review remains
 the release boundary.
 
 The repair is scoped to one daemon's approval path. It is not a cross-process
