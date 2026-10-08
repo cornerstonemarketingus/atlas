@@ -203,6 +203,11 @@ const answeredBy = new WeakMap();
 const answeredVia = new WeakMap();
 
 function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, reasoningEffort }) {
+  // Small local Qwen models can exhaust the reply budget on reasoning alone.
+  // Keep hosted and larger models' reasoning behavior unchanged.
+  const url = new URL(endpoint.baseUrl);
+  const localQwen = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && /^qwen3:(0\.6b|1\.7b)$/iu.test(endpoint.model);
+  reasoningEffort ??= localQwen ? "none" : undefined;
   return fetcher(completionsUrl(endpoint.baseUrl), {
     method: "POST",
     signal: AbortSignal.timeout(endpoint.timeoutMs ?? REQUEST_TIMEOUT_MS),

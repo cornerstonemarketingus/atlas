@@ -61,6 +61,7 @@ export function ChatSection() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [ready, setReady] = useState<{ configured: boolean; reason: string | null; providers?: { id: string; label: string; available: boolean; paid?: boolean }[] } | null>(null);
   const [provider, setProvider] = useState("auto");
+  const [stored, setStored] = useState(true);
   const [version, setVersion] = useState(0);
   const { threads, close } = useThreads(version);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
@@ -138,6 +139,7 @@ export function ChatSection() {
   }, []);
 
   async function openThread(id: string) {
+    setStored(true);
     setConversationId(id);
     setNotice("");
     try {
@@ -166,10 +168,10 @@ export function ChatSection() {
     }
   }
 
-  function startNew() { abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
+  function startNew() { setStored(true); abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || !stored || sending) return;
     let active = true;
     const refresh = async () => {
       try {
@@ -184,7 +186,7 @@ export function ChatSection() {
     void refresh();
     const timer = setInterval(() => { void refresh(); }, 5_000);
     return () => { active = false; clearInterval(timer); };
-  }, [conversationId]);
+  }, [conversationId, stored, sending]);
 
   function showLocal(text: string) {
     setMessages((items) => [...items, { id: `local-${Date.now()}`, role: "user", content: text, createdAt: new Date().toISOString() }]);
@@ -246,7 +248,7 @@ export function ChatSection() {
         const { value, done } = await reader.read();
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
+          const data = item.data as { conversationId?: string; stored?: boolean; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
           if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
           else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
@@ -268,6 +270,10 @@ export function ChatSection() {
           }
           else if (item.type === "error") { setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `✕ ${data?.message ?? "the reply failed"}` }); }
           else if (item.type === "done" && data?.reply) {
+            if (data.stored === false) {
+              setStored(false);
+              setNotice("This reply could not be saved. Keep this chat open to retain it; later replies may not remember earlier turns.");
+            }
             const reply = data.reply;
             if (thought) setThoughts((items) => ({ ...items, [reply.id]: thought }));
             if (steps.length) setStepLogs((items) => ({ ...items, [reply.id]: steps }));
