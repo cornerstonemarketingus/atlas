@@ -72,3 +72,24 @@ rest lands in. Code + tests + live verification outrank this page.
    (CAPTCHA, MFA, passkeys, payment, legal consent) as `WAITING_FOR_USER`.
 6. **Hosted parity**: the Worker gets the same broker model over D1 with
    encrypted values (today it uses Worker secrets per variable).
+
+## Workers AI transport and release verification
+
+The native Worker AI binding stays within the deployed account and uses no
+bearer token. Its adapter enforces caller cancellation and a 60-second wait
+limit; cancellation stops Atlas waiting, but native inference may continue if
+Cloudflare cannot cancel the underlying computation. Health checks have a
+five-second limit and require actual text or a valid tool call, rather than
+accepting HTTP 200 alone.
+
+Native server-sent events are normalized incrementally with downstream
+cancellation and bounded frame sizes. The default Llama model advertises its
+documented 24,000-token context; custom overrides need measured capabilities.
+Model documentation: https://developers.cloudflare.com/workers-ai/models/llama-3.3-70b-instruct-fp8-fast/
+
+A permanent model refusal after tool work records only HTTP status, provider
+kind, registry-shaped model name, error category and round. Chat JSON and SSE
+carry that metadata into the hosted verification artifact. Provider error text,
+credentials and request content are excluded. A passing basic chat test does
+not establish multi-round tool compatibility: the release gate must complete
+its tool step and final answer in both streaming and non-streaming modes.

@@ -2,7 +2,16 @@ import { TASK_TOOL, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } from "./instant-tools.mjs";
 import { completionsUrl, providerKind, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
-import { classifyHttpFailure, classifyThrown, estimateRequestTokens } from "../../../../../packages/atlas-inference/src/index.mjs";
+import { classifyHttpFailure, classifyThrown, estimateRequestTokens, InferenceErrorKind } from "../../../../../packages/atlas-inference/src/index.mjs";
+
+/** Only registry-shaped metadata may cross the failure diagnostic boundary. */
+export function inferenceFailureMetadata(result, round) {
+  const provider = ["groq", "openai", "workers-ai", "self-hosted"].includes(result.provider) ? result.provider : "unknown";
+  const model = typeof result.model === "string" && /^[\w.:/@+-]{1,128}$/u.test(result.model) ? result.model : "unknown";
+  const status = Number.isInteger(result.status) && result.status >= 100 && result.status <= 599 ? result.status : null;
+  const category = Object.values(InferenceErrorKind).includes(result.kind) ? result.kind : "UNKNOWN";
+  return { status, provider, model, category, round: Number.isInteger(round) && round >= 0 && round <= 100 ? round : null };
+}
 
 /**
  * The agent loop behind one chat reply.
@@ -203,7 +212,11 @@ const answeredBy = new WeakMap();
 const answeredVia = new WeakMap();
 
 function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, reasoningEffort }) {
-  // A provider reached through a Worker binding brings its own transport; everything else is HTTP.
+  // Small local Qwen models can exhaust the reply budget on reasoning alone.
+  // Keep hosted and larger models' reasoning behavior unchanged.
+  const url = new URL(endpoint.baseUrl);
+  const localQwen = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && /^qwen3:(0\.6b|1\.7b)$/iu.test(endpoint.model);
+  reasoningEffort ??= localQwen ? "none" : undefined;
   return (endpoint.transport ?? fetcher)(completionsUrl(endpoint.baseUrl), {
     method: "POST",
     signal: AbortSignal.timeout(endpoint.timeoutMs ?? REQUEST_TIMEOUT_MS),
@@ -465,7 +478,7 @@ async function modelStep({ endpoint, turns, tools, stream, emit, toolChoice, fet
   const provider = providerKind(answeredVia.get(response) ?? endpoint.baseUrl);
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    return { ok: false, status: response.status, retryAfterMs: soonestReset(trail) ?? retryAfterMs(response.headers, body), limitCategory: response.status === 429 ? rateLimitDetails(body).category : null, model, fallbackUsed, refusals: trail };
+    return { ok: false, status: response.status, kind: classifyHttpFailure({ status: response.status, body, headers: response.headers }).kind, provider, retryAfterMs: soonestReset(trail) ?? retryAfterMs(response.headers, body), limitCategory: response.status === 429 ? rateLimitDetails(body).category : null, model, fallbackUsed, refusals: trail };
   }
   if (!stream || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
     // Not streaming, or a server that ignored stream:true: the whole reply at once.
@@ -621,7 +634,7 @@ function limitReason(result) {
  *   agentId?: string,
  *   sleep?: (ms: number) => Promise<void>,
  * }} options
- * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[], finalization?: { status: string, reason: string, completedSteps: number, failedSteps: number }, servedBy?: { provider: string, model: string } } | { error: string, status: number }>}
+ * @returns {Promise<{ reply: string, steps: { label: string, ok: boolean }[], finalization?: { status: string, reason: string, completedSteps: number, failedSteps: number }, servedBy?: { provider: string, model: string }, inferenceFailure?: ReturnType<typeof inferenceFailureMetadata> } | { error: string, status: number, inferenceFailure?: ReturnType<typeof inferenceFailureMetadata> }>}
  */
 export async function converse({ endpoint, turns, toolContext, defaultRepository = "", userMessage = "", startTasks = async () => [], stream, emit, fetcher = fetch, tools: toolOverride, handlers = {}, allowTasks = true, maxRounds = MAX_TOOL_STEPS, maxTokens = MAX_REPLY_TOKENS, agentId, sleep: pause = sleep }) {
   // Child agents get their own, narrower tool list and no task starting; the lead gets everything.
@@ -648,6 +661,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   // Why tool work stopped before the model finished, if it did.
   let failure = "";
   let fatal = null;
+  let inferenceFailure = null;
   // The last HTTP 200 that carried nothing, so synthesis can answer its cause rather than repeat it.
   let lastEmpty = null;
   // Set when no model could write the answer: the reply is the saved work, and callers can tell.
@@ -728,11 +742,15 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         round -= 1;
         continue;
       }
-      if (round === 0) return { error: message, status: result.status === 429 ? 429 : 502 };
-      // Work is already done. A transient refusal goes to final synthesis,
-      // which waits and retries; a configuration error would only fail again.
-      if (TRANSIENT_STATUSES.has(result.status)) failure = result.status === 429 ? limitReason(result) : `the model endpoint answered ${result.status}.`;
-      else fatal = message;
+      if (round === 0) return { error: message, status: result.status === 429 ? 429 : 502, inferenceFailure: inferenceFailureMetadata(result, round) };
+      // Recover rejected tool transcripts through bounded tool-free synthesis.
+      // Authentication refusals remain terminal and retain safe diagnostics.
+      if (TRANSIENT_STATUSES.has(result.status) || result.status === 400 || result.status === 422) failure = result.status === 429 ? limitReason(result) : `the model endpoint answered ${result.status}.`;
+      else {
+        fatal = message;
+        inferenceFailure = inferenceFailureMetadata(result, round);
+        emit("inference_failure", inferenceFailure);
+      }
       break;
     }
     if (round === 0 && waitBudget < SYNTHESIS_WAIT_BUDGET_MS) emit("tool", { id: "capacity", label: "Model capacity available again", state: "done", ...tag });
@@ -803,6 +821,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   }
 
   if (fatal) {
+    unfinished = { status: "incomplete", reason: fatal, completedSteps: steps.filter((step) => step.ok).length, failedSteps: steps.filter((step) => !step.ok).length };
     const note = `${text.trim() ? "\n\n" : ""}_Stopped early: ${fatal}_`;
     text += note;
     emit("delta", { text: note });
@@ -918,6 +937,6 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     emit("delta", { text: addition });
   }
 
-  const finish = (reply) => ({ reply, steps, ...(unfinished ? { finalization: unfinished } : {}), ...(servedBy ? { servedBy } : {}) });
+  const finish = (reply) => ({ reply, steps, ...(unfinished ? { finalization: unfinished } : {}), ...(servedBy ? { servedBy } : {}), ...(inferenceFailure ? { inferenceFailure } : {}) });
   return finish(text.trim());
 }

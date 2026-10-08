@@ -96,3 +96,121 @@ test("the binding's health is a real inference, reported as categories", async (
   assert.equal(limited.category, "PROVIDER_RATE_LIMIT");
   assert.equal(limited.http.inference, 429);
 });
+
+test("an already aborted request never invokes AI and a deadline bounds an uncooperative binding", async () => {
+  let runs = 0;
+  const transport = workersAIBindingTransport({ run: async () => { runs += 1; return new Promise(() => {}); } }, { timeoutMs: 15 });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(transport(BINDING_BASE_URL, { signal: controller.signal, body: "{}" }), { name: "AbortError" });
+  assert.equal(runs, 0);
+  // AbortSignal.timeout timers are unref'ed in Node. Hold the test alive while
+  // the unresolved fake proves the adapter itself stops waiting.
+  const keepAlive = setTimeout(() => {}, 500);
+  try { await assert.rejects(transport(BINDING_BASE_URL, { body: "{}" }), { name: "TimeoutError" }); }
+  finally { clearTimeout(keepAlive); }
+  assert.equal(runs, 1);
+});
+
+test("caller cancellation wins before completion and late streams are cancelled", async () => {
+  let resolve;
+  let cancelled = false;
+  const ai = { run: () => new Promise((done) => { resolve = done; }) };
+  const controller = new AbortController();
+  const request = workersAIBindingTransport(ai)(BINDING_BASE_URL, { signal: controller.signal, body: "{}" });
+  await Promise.resolve();
+  controller.abort();
+  await assert.rejects(request, { name: "AbortError" });
+  resolve(new ReadableStream({ cancel() { cancelled = true; } }));
+  await new Promise((done) => setImmediate(done));
+  assert.equal(cancelled, true);
+});
+
+test("native SSE delivers its first delta before generation completes, preserving tools and usage", async () => {
+  let upstream;
+  let inputs;
+  const ai = { run: async (_model, body) => { inputs = body; return new ReadableStream({ start(controller) { upstream = controller; } }); } };
+  const response = await workersAIBindingTransport(ai)(BINDING_BASE_URL, { body: JSON.stringify({ model: "m", stream: true, messages: [] }) });
+  assert.equal(inputs.stream, true);
+  const reader = response.body.getReader();
+  const encoder = new TextEncoder();
+  upstream.enqueue(encoder.encode('data: {"response":"First"}\n\n'));
+  const first = await reader.read();
+  assert.match(new TextDecoder().decode(first.value), /"content":"First"/u);
+  assert.equal(first.done, false);
+  upstream.enqueue(encoder.encode('data: {"tool_calls":[{"name":"read_web_page","arguments":{"url":"https://example.com"}}]}\n\ndata: {"usage":{"prompt_tokens":4,"completion_tokens":2}}\n\ndata: [DONE]\n\n'));
+  upstream.close();
+  let rest = "";
+  for (;;) { const next = await reader.read(); if (next.done) break; rest += new TextDecoder().decode(next.value); }
+  assert.match(rest, /"name":"read_web_page"/u);
+  assert.match(rest, /"prompt_tokens":4/u);
+  assert.match(rest, /"finish_reason":"tool_calls"/u);
+  assert.equal((rest.match(/\[DONE\]/gu) ?? []).length, 1);
+});
+
+test("native streaming cancellation closes the upstream and does not leak provider errors", async () => {
+  let cancelled = false;
+  const controller = new AbortController();
+  const ai = { run: async () => new ReadableStream({ cancel() { cancelled = true; } }) };
+  const response = await workersAIBindingTransport(ai)(BINDING_BASE_URL, { signal: controller.signal, body: JSON.stringify({ stream: true }) });
+  const reading = response.body.getReader().read();
+  controller.abort();
+  await assert.rejects(reading, { name: "AbortError" });
+  assert.equal(cancelled, true);
+  const bad = workersAIBindingTransport({ run: async () => new ReadableStream({ start(stream) { stream.enqueue(new TextEncoder().encode('data: {"error":"SECRET-PROMPT"}\n\n')); stream.close(); } }) });
+  const failed = await bad(BINDING_BASE_URL, { body: JSON.stringify({ stream: true }) });
+  await assert.rejects(failed.text(), (error) => !error.message.includes("SECRET-PROMPT"));
+});
+
+test("native tool schemas are translated and unsupported forced choices are refused", async () => {
+  const ai = fakeAI([{ response: "done" }, { response: "done" }]);
+  const transport = workersAIBindingTransport(ai);
+  const tools = [{ type: "function", function: { name: "read_web_page", parameters: { type: "object" } } }];
+  await transport(BINDING_BASE_URL, { body: JSON.stringify({ model: "m", messages: [], tools, tool_choice: "none" }) });
+  assert.equal(ai.runs[0].inputs.tools, undefined);
+  assert.equal(ai.runs[0].inputs.tool_choice, undefined);
+  const choice = { type: "function", function: { name: "read_web_page" } };
+  assert.equal((await transport(BINDING_BASE_URL, { body: JSON.stringify({ model: "m", messages: [], tools, tool_choice: choice }) })).status, 400);
+  assert.equal((await transport(BINDING_BASE_URL, { body: JSON.stringify({ model: "m", messages: [], tools, tool_choice: "required" }) })).status, 400);
+  assert.equal(ai.runs.length, 1, "unsupported choices never invoke the model");
+  await transport(BINDING_BASE_URL, { body: JSON.stringify({ model: "m", messages: [], tools, tool_choice: "auto" }) });
+  assert.deepEqual(ai.runs[1].inputs.tools, [{ name: "read_web_page", parameters: { type: "object" } }]);
+  const flat = fakeAI([{ response: "done" }]);
+  await workersAIBindingTransport(flat)(BINDING_BASE_URL, { body: JSON.stringify({ model: "m", messages: [], tools: [{ name: "f", description: "Read", parameters: { type: "object" } }] }) });
+  assert.deepEqual(flat.runs[0].inputs.tools, [{ name: "f", description: "Read", parameters: { type: "object" } }]);
+});
+
+test("health rejects empty completions and malformed calls and only known model context is advertised", async () => {
+  for (const result of [{ response: "" }, { response: "   " }, { choices: [] }, { tool_calls: [{ name: "f", arguments: "not-json" }] }]) {
+    assert.equal((await workersAIBindingHealth({ ai: fakeAI([result]) })).inference, "failed");
+  }
+  assert.equal((await workersAIBindingHealth({ ai: fakeAI([{ tool_calls: [{ name: "f", arguments: {} }] }]) })).inference, "ok");
+  assert.equal(workersAIBindingModel({ ai: fakeAI([]) }).capabilities.contextTokens, 24000);
+  assert.equal(workersAIBindingModel({ ai: fakeAI([]) }, { ATLAS_WORKERS_AI_MODEL: "custom" }).capabilities.contextTokens, undefined);
+});
+
+test("fragmented UTF-8 and OpenAI tool argument fragments survive native streaming", async () => {
+  const text = 'data: {"choices":[{"index":0,"delta":{"content":"café"}}]}\r\n\r\n'
+    + 'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-a","function":{"name":"read_web_page","arguments":"{\\"url\\":"}}]}}]}\n\n'
+    + 'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"https://example.com\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n'
+    + 'data: [DONE]\n\n';
+  const bytes = new TextEncoder().encode(text);
+  const ai = { run: async () => new ReadableStream({ start(controller) { for (const byte of bytes) controller.enqueue(Uint8Array.of(byte)); controller.close(); } }) };
+  const response = await workersAIBindingTransport(ai)(BINDING_BASE_URL, { body: JSON.stringify({ stream: true }) });
+  const body = await response.text();
+  assert.match(body, /café/u);
+  const events = body.split("\n\n").filter((frame) => frame.startsWith("data: {")).map((frame) => JSON.parse(frame.slice(6)));
+  const fragments = events.flatMap((event) => event.choices ?? []).flatMap((choice) => choice.delta?.tool_calls ?? []);
+  assert.equal(fragments[0].id, "call-a");
+  assert.deepEqual(JSON.parse(fragments.map((call) => call.function.arguments).join("")), { url: "https://example.com" });
+  assert.equal((body.match(/"finish_reason"/gu) ?? []).length, 1);
+});
+
+test("upstream read failures are sanitized and consumer cancellation propagates", async () => {
+  const failed = await workersAIBindingTransport({ run: async () => new ReadableStream({ start(controller) { controller.error(new Error("SECRET-PROMPT")); } }) })(BINDING_BASE_URL, { body: JSON.stringify({ stream: true }) });
+  await assert.rejects(failed.text(), (error) => error.message === "Workers AI streaming request failed.");
+  let cancelled = false;
+  const response = await workersAIBindingTransport({ run: async () => new ReadableStream({ cancel() { cancelled = true; } }) })(BINDING_BASE_URL, { body: JSON.stringify({ stream: true }) });
+  await response.body.cancel();
+  assert.equal(cancelled, true);
+});
