@@ -55,6 +55,12 @@ function chain(providers) {
 export function resolveChatProvider(environment = process.env, selection = "auto") {
   const openai = openAIModel(environment);
   const primary = resolveChatModel(environment);
+  if (typeof selection === "string" && selection.startsWith("configured:")) {
+    const model = selection.slice("configured:".length);
+    if (!primary.configured || !primary.models.includes(model)) return { configured: false, reason: "Choose a configured model." };
+    // An explicit model choice stays on that model; Automatic retains the pool.
+    return { ...primary, model, models: [model], fallbackModel: null };
+  }
   if (primary.configured && new URL(primary.baseUrl).origin === "https://api.openai.com" && openai && !primary.apiKey) primary.apiKey = openai.apiKey;
   const fallbackDisabled = (environment.ATLAS_CHAT_FALLBACK_MODEL || "").trim().toLowerCase() === "none";
   if (selection === "openai") {
@@ -93,6 +99,7 @@ export function chatProviderChoices(environment = process.env) {
   return [
     { id: "auto", label: "Automatic", available: resolveChatProvider(environment).configured },
     { id: "configured", label: "Configured provider", available: resolveChatModel(environment).configured },
+    ...(resolveChatModel(environment).models ?? []).map((model) => ({ id: `configured:${model}`, label: `Configured · ${model}`, available: true })),
     { id: "workers-ai", label: "Cloudflare Workers AI", available: Boolean(workersAIModel(environment)) },
     { id: "openai", label: "OpenAI · GPT-5.4 mini", available: Boolean(openAIModel(environment)), paid: true },
   ];

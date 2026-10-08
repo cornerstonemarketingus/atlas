@@ -1,5 +1,27 @@
 # Running Atlas on your own model
 
+## Free local web chat choices
+
+With Ollama running and the models installed, run from the repository root:
+
+```powershell
+node scripts/local/setup-chat.mjs --configure
+cd apps/web
+npm run dev
+```
+
+Setup checks real replies from installed Qwen 0.6B, Qwen 1.7B, and Qwen
+Coder 1.5B, then writes verified choices to ignored `apps/web/.dev.vars`.
+The chat's Model menu lists each configured model. Selecting one pins the
+reply to that model; Automatic retains the model pool and provider recovery.
+Local Ollama needs no provider account or API key and uses your PC's resources.
+Small local Qwen models disable reasoning so the reply budget reaches the answer.
+
+Set `ATLAS_CHAT_BASE_URL`, `ATLAS_CHAT_MODEL`, and comma-separated
+`ATLAS_CHAT_MODELS` for manual setup. A deployed Worker cannot reach your PC's
+localhost: use the existing authenticated model gateway and HTTPS tunnel for
+hosted self-hosted chat, or an already configured hosted provider.
+
 Atlas can drive a model you host instead of a vendor API. The agent's client is
 an ordinary OpenAI chat-completions client, so anything that speaks that
 protocol works: vLLM, Ollama, llama.cpp's server, TGI, LM Studio, or a rented

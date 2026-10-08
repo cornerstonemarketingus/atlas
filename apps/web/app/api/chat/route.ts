@@ -44,7 +44,7 @@ export async function POST(request: Request) {
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
   const selection = body.provider ?? "auto";
-  if (typeof selection !== "string" || !["auto", "configured", "workers-ai", "openai"].includes(selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
+  if (typeof selection !== "string" || !chatProviderChoices(process.env).some((choice) => choice.id === selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
   const resolved = resolveChatProvider(process.env, selection);
   if (!resolved.configured) {
     return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
@@ -52,13 +52,14 @@ export async function POST(request: Request) {
   // Every model call reserves through the provider scope's quota ledger (Phase 1.2); none when unbound.
   const endpoint = await governChain(resolved, workerEnv);
 
-  const db = getDb();
+  let db: ReturnType<typeof getDb> | undefined;
   const now = new Date().toISOString();
   let history: { role: string; content: string }[] = [];
   let memory = "";
   let stored = true;
   let allowlist = new Set<string>();
   try {
+    db = getDb();
     // Tenancy (#71): threads belong to the caller's tenant; an id owned by another tenant or principal is never written to.
     const tenant = await resolveTenantContext(request, account, getD1());
     if (!tenant || !(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) throw new Error("Conversation is not writable in this workspace.");
@@ -105,7 +106,7 @@ export async function POST(request: Request) {
 
   const replyId = randomUUID();
   const replyAt = new Date().toISOString();
-  if (stored) {
+  if (stored && db) {
     try {
       await db.insert(conversationMessages).values({ id: replyId, conversationId, requestedBy: account.userId, role: "assistant", content: reply, createdAt: replyAt });
       await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, account.userId)));
@@ -213,7 +214,7 @@ async function startRequestedTasks(request: Request, { requests, errors }: TaskR
  */
 function streamReply({ conversationId, stored, db, userId, ...loop }: {
   endpoint: Endpoint; turns: ChatTurn[]; toolContext: ToolContext; conversationId: string; stored: boolean;
-  db: ReturnType<typeof getDb>; userId: string; defaultRepository: string; userMessage: string;
+  db: ReturnType<typeof getDb> | undefined; userId: string; defaultRepository: string; userMessage: string;
   startTasks: (calls: TaskRequests) => Promise<string[]>;
   tools: object[]; handlers: Parameters<typeof converse>[0]["handlers"];
 }) {
@@ -237,7 +238,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
       const replyId = randomUUID();
       const replyAt = new Date().toISOString();
       let persisted = stored;
-      if (persisted) {
+      if (persisted && db) {
         try {
           await db.insert(conversationMessages).values({ id: replyId, conversationId, requestedBy: userId, role: "assistant", content: reply, createdAt: replyAt });
           await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, userId)));
