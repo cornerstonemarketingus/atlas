@@ -59,6 +59,13 @@ export function createGateway({
   if (!token || token.length < 32 || allowed.size === 0) throw new Error("A model and a 32+ character gateway token are required");
   if ([...allowed].some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,127}$/u.test(name))) throw new Error("Invalid gateway model name");
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("concurrency must be a whole number of at least 1");
+  if (!Number.isInteger(queueLimit) || queueLimit < 0) throw new Error("queueLimit must be a non-negative whole number");
+  for (const [name, value] of Object.entries({ queueWaitMs, maxBodyBytes, maxMessages, maxTokens, generationTimeoutMs, healthTimeoutMs })) {
+    if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive safe whole number`);
+  }
+  for (const [name, value] of Object.entries({ queueWaitMs, generationTimeoutMs, healthTimeoutMs, capacityCooldownMs })) {
+    if (value > 2_147_483_647) throw new Error(`${name} exceeds the supported timer duration`);
+  }
   if (!Number.isInteger(capacityCooldownMs) || capacityCooldownMs < 1) throw new Error("capacityCooldownMs must be a positive whole number");
   const expected = Buffer.from(`Bearer ${token}`);
   let active = 0;

@@ -9,6 +9,20 @@ import { classifyHttpFailure } from "../../packages/atlas-inference/src/errors.m
 const token = "test-only-".repeat(5);
 const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
 
+test("invalid resource limits fail at startup instead of disabling memory and timeout protection", () => {
+  for (const name of ["queueWaitMs", "maxBodyBytes", "maxMessages", "maxTokens", "generationTimeoutMs", "healthTimeoutMs"]) {
+    for (const value of [0, -1, NaN, Infinity, 1.5, "1000"]) {
+      assert.throws(() => createGateway({ token, model: "test-model", [name]: value }), new RegExp(name));
+    }
+  }
+  for (const name of ["queueWaitMs", "generationTimeoutMs", "healthTimeoutMs", "capacityCooldownMs"]) {
+    assert.throws(() => createGateway({ token, model: "test-model", [name]: 2_147_483_648 }), new RegExp(name));
+  }
+  assert.throws(() => createGateway({ token, model: "test-model", queueLimit: -1 }), /queueLimit/);
+  const server = createGateway({ token, model: "test-model", queueLimit: 0 });
+  server.close();
+});
+
 test("a disconnected partial upload does not crash the gateway or invoke inference", async (t) => {
   let calls = 0;
   const { base, chat } = await serve(t, { fetcher: async () => { calls += 1; return Response.json({ choices: [{ message: { content: "ready" } }] }); } });
