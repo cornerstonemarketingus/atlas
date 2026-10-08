@@ -6,7 +6,7 @@ const tool = { type: "function", function: { name: "read_fixture", description: 
 const endpoint = { baseUrl: "https://model.test/v1/", apiKey: "SECRET_SENTINEL", model: "fixture-model" };
 const toolReply = { choices: [{ message: { content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "read_fixture", arguments: "{}" } }] }, finish_reason: "tool_calls" }] };
 
-for (const stream of [false, true]) for (const [status, category] of [[400, "UNKNOWN"], [401, "AUTHENTICATION"], [403, "PERMISSION"], [404, "MODEL_NOT_FOUND"]]) {
+for (const stream of [false, true]) for (const [status, category] of [[401, "AUTHENTICATION"], [403, "PERMISSION"], [404, "MODEL_NOT_FOUND"]]) {
   test(`permanent failure after a completed tool is actionable and redacted (${status}, stream=${stream})`, async () => {
     let calls = 0;
     let executed = 0;

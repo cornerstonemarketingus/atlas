@@ -212,7 +212,11 @@ const answeredBy = new WeakMap();
 const answeredVia = new WeakMap();
 
 function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetcher, maxTokens = MAX_REPLY_TOKENS, reasoningEffort }) {
-  // A provider reached through a Worker binding brings its own transport; everything else is HTTP.
+  // Small local Qwen models can exhaust the reply budget on reasoning alone.
+  // Keep hosted and larger models' reasoning behavior unchanged.
+  const url = new URL(endpoint.baseUrl);
+  const localQwen = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && /^qwen3:(0\.6b|1\.7b)$/iu.test(endpoint.model);
+  reasoningEffort ??= localQwen ? "none" : undefined;
   return (endpoint.transport ?? fetcher)(completionsUrl(endpoint.baseUrl), {
     method: "POST",
     signal: AbortSignal.timeout(endpoint.timeoutMs ?? REQUEST_TIMEOUT_MS),
@@ -739,9 +743,9 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         continue;
       }
       if (round === 0) return { error: message, status: result.status === 429 ? 429 : 502, inferenceFailure: inferenceFailureMetadata(result, round) };
-      // Work is already done. A transient refusal goes to final synthesis,
-      // which waits and retries; a configuration error would only fail again.
-      if (TRANSIENT_STATUSES.has(result.status)) failure = result.status === 429 ? limitReason(result) : `the model endpoint answered ${result.status}.`;
+      // Recover rejected tool transcripts through bounded tool-free synthesis.
+      // Authentication refusals remain terminal and retain safe diagnostics.
+      if (TRANSIENT_STATUSES.has(result.status) || result.status === 400 || result.status === 422) failure = result.status === 429 ? limitReason(result) : `the model endpoint answered ${result.status}.`;
       else {
         fatal = message;
         inferenceFailure = inferenceFailureMetadata(result, round);
@@ -817,6 +821,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   }
 
   if (fatal) {
+    unfinished = { status: "incomplete", reason: fatal, completedSteps: steps.filter((step) => step.ok).length, failedSteps: steps.filter((step) => !step.ok).length };
     const note = `${text.trim() ? "\n\n" : ""}_Stopped early: ${fatal}_`;
     text += note;
     emit("delta", { text: note });
