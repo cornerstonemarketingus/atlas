@@ -3,10 +3,27 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createGateway } from "./model-gateway.mjs";
 import http from "node:http";
+import { connect } from "node:net";
 import { classifyHttpFailure } from "../../packages/atlas-inference/src/errors.mjs";
 
 const token = "test-only-".repeat(5);
 const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+
+test("a disconnected partial upload does not crash the gateway or invoke inference", async (t) => {
+  let calls = 0;
+  const { base, chat } = await serve(t, { fetcher: async () => { calls += 1; return Response.json({ choices: [{ message: { content: "ready" } }] }); } });
+  const socket = connect(Number(new URL(base).port), "127.0.0.1");
+  await once(socket, "connect");
+  socket.write(`POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer ${token}\r\nContent-Length: 1000\r\nContent-Type: application/json\r\n\r\n{"model":`);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  socket.destroy();
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(calls, 0);
+  const result = await chat({});
+  assert.equal(result.status, 200);
+  assert.equal((await result.json()).choices[0].message.content, "ready");
+  assert.equal(calls, 1);
+});
 
 test("upstream confinement rejects remote hosts, URL credentials and redirects", () => {
   for (const upstream of ["http://example.com", "https://127.0.0.1", "http://user:secret@127.0.0.1", "http://127.0.0.1/path", "http://127.0.0.1?target=x"]) {

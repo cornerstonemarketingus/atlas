@@ -116,10 +116,17 @@ export function createGateway({
 
     let size = 0;
     const chunks = [];
-    for await (const chunk of request) {
-      size += chunk.length;
-      if (size > maxBodyBytes) return reply(413, "Request too large");
-      chunks.push(chunk);
+    try {
+      for await (const chunk of request) {
+        size += chunk.length;
+        if (size > maxBodyBytes) return reply(413, "Request too large");
+        chunks.push(chunk);
+      }
+    } catch {
+      // A client can disconnect midway through its upload. The async HTTP
+      // handler must consume that rejection rather than terminate the gateway.
+      if (response.destroyed) return;
+      return reply(400, "Incomplete request body");
     }
     let body;
     try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return reply(400, "Invalid JSON"); }
