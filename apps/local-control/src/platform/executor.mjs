@@ -43,11 +43,12 @@ function isPlainObject(value) {
 }
 
 /** Tool errors cross the boundary as `{ code, message, retryable }` — never a stack trace. */
-export function sanitizeToolError(error) {
+export function sanitizeToolError(error, { knownSecrets = [] } = {}) {
+  const redact = createRedactor({ knownSecrets: [...knownSecrets, ...hostSecretValues()] });
   const rawMessage = typeof error?.message === "string" ? error.message : String(error ?? "Tool failed.");
-  const safeMessage = createRedactor({ knownSecrets: hostSecretValues() })(rawMessage).text;
+  const safeMessage = redact(rawMessage).text;
   const message = safeMessage.split("\n")[0].replace(/\s+at\s+\S+\s*\(.*$/u, "").slice(0, 500) || "Tool failed.";
-  const code = typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(error.code) ? error.code : "TOOL_ERROR";
+  const code = typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(error.code) && redact(error.code).text === error.code ? error.code : "TOOL_ERROR";
   return { code, message, retryable: error?.retryable === true };
 }
 
@@ -407,7 +408,7 @@ async function runWithTimeout(tool, input, context, limitMs) {
  * structured evidence object. A passing check with no evidence, or evidence
  * that is bare prose, is a rejection: "looks good" is not verification.
  */
-export async function verifyArtifact(store, { tenantId, artifactId, check }) {
+export async function verifyArtifact(store, { tenantId, artifactId, check, knownSecrets = [] }) {
   if (typeof check !== "function") throw new ExecutorError("INVALID_CHECK", "verifyArtifact needs a check function.");
   const artifact = store.getArtifact(tenantId, artifactId);
   if (!artifact) throw new ExecutorError("NOT_FOUND", "No such artifact in this tenant.");
@@ -431,7 +432,8 @@ export async function verifyArtifact(store, { tenantId, artifactId, check }) {
       evidence = [{ check: "content_digest", ok: true, contentDigest: artifact.contentDigest }, ...jsonSafe(items)];
     }
   } catch (error) {
-    evidence = [{ check: "check_error", ok: false, error: sanitizeToolError(error) }];
+    evidence = [{ check: "check_error", ok: false, error: sanitizeToolError(error, { knownSecrets }) }];
   }
-  return store.markArtifactVerified(tenantId, artifactId, { verified, evidence });
+  const safeEvidence = redactStructured(evidence, createRedactor({ knownSecrets: [...knownSecrets, ...hostSecretValues()] }));
+  return store.markArtifactVerified(tenantId, artifactId, { verified, evidence: safeEvidence });
 }

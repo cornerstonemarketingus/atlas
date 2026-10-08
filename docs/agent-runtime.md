@@ -169,6 +169,11 @@ before durable tool records and model-visible results. Plaintext credentials
 in tool arguments are refused. This protects the tool boundary, not arbitrary
 artifact contents or every independent logging subsystem.
 
+Artifact verification evidence is also scrubbed before persistence, including
+sensitive fields and credential-bearing error codes. Trusted verifiers can
+supply `knownSecrets` for exact-value redaction; submitted artifact contents
+remain a separate ingestion boundary.
+
 Approvals bind tenant, task, principal, agent, tool, arguments and trusted
 runtime context. A runtime can supply repository, revision and context version
 through `approvalContext`; callers and model arguments cannot substitute them.
