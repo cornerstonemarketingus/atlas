@@ -4,7 +4,9 @@ import { converse } from "../app/api/chat/agent-loop.mjs";
 
 const tool = { type: "function", function: { name: "lookup", description: "Read evidence", parameters: { type: "object", properties: {} } } };
 const endpoint = { baseUrl: "https://model.example/v1", model: "test-model" };
-const completion = message => Response.json({ choices: [{ message, finish_reason: "stop" }] });
+const completion = (message, stream) => stream
+  ? new Response("data: " + JSON.stringify({ choices: [{ delta: message }] }) + "\n\ndata: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
+  : Response.json({ choices: [{ message, finish_reason: "stop" }] });
 
 for (const stream of [false, true]) {
   for (const status of [400, 422]) {
@@ -18,11 +20,11 @@ for (const stream of [false, true]) {
         fetcher: async (_url, options) => {
           const body = JSON.parse(options.body);
           requests.push(body);
-          if (requests.length === 1) return completion({ content: null, tool_calls: [{ id: "lookup-1", type: "function", function: { name: "lookup", arguments: "{}" } }] });
+          if (requests.length === 1) return completion({ content: null, tool_calls: [{ id: "lookup-1", type: "function", function: { name: "lookup", arguments: "{}" } }] }, stream);
           if (body.messages.some(turn => turn.role === "tool")) return Response.json({ error: { message: "Unsupported tool transcript" } }, { status });
           assert.equal(body.tools, undefined);
           assert.ok(JSON.stringify(body.messages).includes("Verified result: example evidence."));
-          return completion({ content: "The evidence confirms the example." });
+          return completion({ content: "The evidence confirms the example." }, stream);
         },
       });
       assert.equal(result.reply, "The evidence confirms the example.");
@@ -39,7 +41,7 @@ for (const stream of [false, true]) {
         endpoint, turns: [{ role: "user", content: "Read evidence." }], stream, emit: () => {}, allowTasks: false,
         tools: [tool], handlers: { lookup: async () => ({ ok: true, label: "Read evidence", content: "Evidence" }) },
         fetcher: async () => ++calls === 1
-          ? completion({ content: null, tool_calls: [{ id: "lookup-1", type: "function", function: { name: "lookup", arguments: "{}" } }] })
+          ? completion({ content: null, tool_calls: [{ id: "lookup-1", type: "function", function: { name: "lookup", arguments: "{}" } }] }, stream)
           : Response.json({ error: { message: "Credential refused" } }, { status }),
       });
       assert.equal(calls, 2);
