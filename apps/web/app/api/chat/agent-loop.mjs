@@ -733,9 +733,11 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
         continue;
       }
       if (round === 0) return { error: message, status: result.status === 429 ? 429 : 502 };
-      // Work is already done. A transient refusal goes to final synthesis,
-      // which waits and retries; a configuration error would only fail again.
-      if (TRANSIENT_STATUSES.has(result.status)) failure = result.status === 429 ? limitReason(result) : `the model endpoint answered ${result.status}.`;
+      // A provider may reject the tool transcript even after accepting the
+      // original request. Synthesis uses the original turns and quoted results,
+      // without tool messages or definitions, so 400/422 can recover there.
+      // Credential/configuration refusals still stop without another call.
+      if (TRANSIENT_STATUSES.has(result.status) || result.status === 400 || result.status === 422) failure = result.status === 429 ? limitReason(result) : `the model endpoint answered ${result.status}.`;
       else fatal = message;
       break;
     }
@@ -807,6 +809,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   }
 
   if (fatal) {
+    unfinished = { status: "incomplete", reason: fatal, completedSteps: steps.filter((step) => step.ok).length, failedSteps: steps.filter((step) => !step.ok).length };
     const note = `${text.trim() ? "\n\n" : ""}_Stopped early: ${fatal}_`;
     text += note;
     emit("delta", { text: note });
