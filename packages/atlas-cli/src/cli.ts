@@ -52,6 +52,7 @@ import { COMPACT_CODER_MODEL_TOOLS, REPOSITORY_READ_ONLY_MODEL_TOOLS } from "./m
 import { RepositoryTreeBuilder } from "./infrastructure/repository-tree-builder.js";
 import { renderTreeJson, renderTreeText } from "./presentation/tree-renderers.js";
 import { BoundedCommandRunner } from "./infrastructure/bounded-command-runner.js";
+import { ContainerValidationProfileRunner } from "./infrastructure/container-validation-runner.js";
 import { GhCliRepositoryHost } from "./infrastructure/gh-cli-repository-host.js";
 import { executeGitHubCommand } from "./cli-github.js";
 import { executeRedactCommand, readStandardInput } from "./cli-redact.js";
@@ -82,7 +83,7 @@ const USAGE = `Usage:
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N]
-       [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]
+       [--verify-timeout-ms N] [--verify-package-manager <name>] [--verify-container <absolute-runtime-path>] [--audit-log <path>] [--format text|json]
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
 
 export async function main(args: readonly string[]): Promise<number> {
@@ -756,7 +757,17 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   // handing it GROQ_API_KEY, ATLAS_GITHUB_TOKEN or the operator token would
   // turn "run the tests" into credential exfiltration. Only what a build
   // genuinely needs is passed through.
-  const validationRunner = new SafeValidationProfileRunner(
+  const containerRuntime = args.includes("--verify-container") ? readRequiredOption(args, "--verify-container") : undefined;
+  if (containerRuntime === null) return 2;
+  if (containerRuntime !== undefined && args.includes("--no-verify")) {
+    console.error("--verify-container cannot be combined with --no-verify.");
+    return 2;
+  }
+  // Construction probes Docker before the first model call; isolation failures
+  // never downgrade to host execution or consume the model budget.
+  const validationRunner = containerRuntime !== undefined
+    ? await ContainerValidationProfileRunner.create({ repositoryRoot: summary.root, runtime: containerRuntime, packageManager, timeoutMs: verifyTimeoutMs, installDependencies: true })
+    : new SafeValidationProfileRunner(
     new BoundedCommandRunner({
       repositoryRoot: summary.root,
       allowedExecutables: [packageManager],
