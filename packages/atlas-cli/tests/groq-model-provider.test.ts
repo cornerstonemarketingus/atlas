@@ -65,6 +65,33 @@ test("classifies rate limits and server errors as retryable", async () => {
     error instanceof ModelProviderError && error.retryable);
 });
 
+test("classifies a billing-exhausted 429 separately from a transient rate limit", async () => {
+  const body = JSON.stringify({ error: { message: "You exceeded your current quota, please check your plan and billing details.", code: "insufficient_quota" } });
+  const provider = new GroqModelProvider({
+    apiKey: "key",
+    models: [model],
+    fetchImplementation: fakeFetch(() => new Response(body, { status: 429 })),
+  });
+  await assert.rejects(provider.complete(request), (error: unknown) => {
+    assert.ok(error instanceof ModelProviderError);
+    assert.equal(error.code, "billing-exhausted");
+    assert.equal(error.retryable, false);
+    assert.equal(error.retryAfterMs, undefined, "billing exhaustion never suggests a wait");
+    return true;
+  });
+});
+
+test("does not mistake Groq's daily-quota wording for billing exhaustion", async () => {
+  const body = JSON.stringify({ error: { message: "Rate limit reached for model on requests per day (RPD): Limit 1000, Used 1000. Please try again in 8h32m.", code: "rate_limit_exceeded" } });
+  const provider = new GroqModelProvider({
+    apiKey: "key",
+    models: [model],
+    fetchImplementation: fakeFetch(() => new Response(body, { status: 429 })),
+  });
+  await assert.rejects(provider.complete(request), (error: unknown) =>
+    error instanceof ModelProviderError && error.code === "rate-limit" && error.retryable);
+});
+
 test("rejects malformed JSON and oversized responses", async () => {
   const malformed = new GroqModelProvider({
     apiKey: "key",

@@ -7,6 +7,8 @@ export class JsonHttpTransportError extends Error {
     public readonly kind: "network" | "status" | "invalid-json" | "limit" | "cancelled",
     public readonly statusCode?: number,
     options?: { readonly cause?: unknown },
+    /** Raw response body, when one was read (`kind === "status"` only). Lets a caller tell a billing-exhausted error apart from a transient one without a second request. */
+    public readonly body?: string,
   ) {
     super(message, options);
     this.name = "JsonHttpTransportError";
@@ -86,7 +88,8 @@ export class BoundedJsonHttpTransport {
         response.on("end", () => {
           const status = response.statusCode ?? 0;
           if (status < 200 || status >= 300) {
-            finish(new JsonHttpTransportError(`Model endpoint returned HTTP ${status}`, "status", status));
+            const text = Buffer.concat(chunks).toString("utf8");
+            finish(new JsonHttpTransportError(`Model endpoint returned HTTP ${status}`, "status", status, undefined, text));
             return;
           }
           try { finish(undefined, JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown); }

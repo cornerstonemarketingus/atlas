@@ -51,6 +51,27 @@ test("normalizes malformed responses and HTTP failures", async () => {
   await assert.rejects(failing.complete(request), (error: unknown) => error instanceof ModelProviderError && error.retryable);
 });
 
+test("classifies a billing-exhausted 429 from a local proxy fronting a billed upstream", async () => {
+  const endpoint = await serve((_request, response) => {
+    response.statusCode = 429;
+    response.end(JSON.stringify({ error: { message: "You exceeded your current quota, please check your plan and billing details.", code: "insufficient_quota" } }));
+  });
+  const provider = new LocalOpenAiCompatibleModelProvider({ endpoint, models: [model] });
+  await assert.rejects(provider.complete(request), (error: unknown) => {
+    assert.ok(error instanceof ModelProviderError);
+    assert.equal(error.code, "billing-exhausted");
+    assert.equal(error.retryable, false);
+    return true;
+  });
+});
+
+test("a plain 429 with no billing wording stays a retryable rate limit", async () => {
+  const endpoint = await serve((_request, response) => { response.statusCode = 429; response.end("slow down"); });
+  const provider = new LocalOpenAiCompatibleModelProvider({ endpoint, models: [model] });
+  await assert.rejects(provider.complete(request), (error: unknown) =>
+    error instanceof ModelProviderError && error.code === "rate-limit" && error.retryable);
+});
+
 test("supports cancellation and response size bounds", async () => {
   const slowEndpoint = await serve((_request, response) => setTimeout(() => response.end("{}"), 500));
   const provider = new LocalOpenAiCompatibleModelProvider({ endpoint: slowEndpoint, models: [model] });

@@ -39,7 +39,10 @@ export class FallbackModelProvider implements ModelProvider {
       } catch (error: unknown) {
         if (!(error instanceof ModelProviderError)) throw error;
         failures.push(`${route.provider.metadata.id}/${route.model}: ${error.code}`);
-        const mayFallback = error.retryable || error.code === "model-unavailable" || isCapacityFailure(error);
+        // Billing exhaustion is never retryable on the route that hit it, but
+        // the next configured route (a different account, or a local model)
+        // may still work, so it falls forward exactly like model-unavailable.
+        const mayFallback = error.retryable || error.code === "model-unavailable" || error.code === "billing-exhausted" || isCapacityFailure(error);
         if (!mayFallback || index === this.#routes.length - 1) {
           throw new ModelProviderError({
             message: `${error.message}${failures.length > 1 ? ` (routes tried: ${failures.join(", ")})` : ""}`,
