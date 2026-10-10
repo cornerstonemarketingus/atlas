@@ -17,7 +17,7 @@ export default function AboutPage() {
     </section>
     <section className="about-body">
       <div>
-        <h2>The opportunity</h2>
+        <h2>Why Atlas exists</h2>
         <p>Starting and growing a business means coordinating software, a website, customer workflows and daily operations. Atlas is building toward one continuous mission: plan, build, verify, launch, operate and improve.</p>
         <p>The software foundations work today. The broader goal is complete business launch and growth, with full applications, ongoing search engine optimization (SEO), generative engine optimization (GEO) and measurable operational feedback.</p>
         <h2>What works today</h2>
