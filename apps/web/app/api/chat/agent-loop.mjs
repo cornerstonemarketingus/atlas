@@ -553,13 +553,14 @@ export function synthesisMessage({ objective, steps, toolResults, partial, failu
 }
 
 /** When every attempt at a final answer failed: the work, in words, so it is never lost. */
-function workSummary({ steps, failure }) {
+function workSummary({ steps, failure, toolFailures = [] }) {
   const done = steps.filter((step) => step.ok).map((step) => `- ${step.label}`);
   const failed = steps.filter((step) => !step.ok).map((step) => `- ${step.label}`);
   return [
     "I could not reach a model to write up the answer, so here is the work as it stands.",
     done.length ? `What I completed:\n${done.join("\n")}` : "",
     failed.length ? `What did not work:\n${failed.join("\n")}` : "",
+    toolFailures.length ? `Required action:\n${[...new Set(toolFailures)].join("\n")}` : "",
     failure ? `Why it stopped: ${failure}` : "",
     "These results are saved in this conversation. Ask me to continue and I will pick up from here.",
   ].filter(Boolean).join("\n\n");
@@ -642,6 +643,10 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   const synthesisAttempts = { used: 0, max: MAX_ATTEMPTS_PER_STEP * 2 };
   const steps = [];
   const toolResults = [];
+  const failedLookups = new Map();
+  const toolFailures = [];
+  let githubBlocked = null;
+  const quotaBlocked = new Map();
   let text = "";
   let toolsSupported = true;
   // What the most recent model response said in words. An answer is only
@@ -786,6 +791,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     if (instant.length === 0 || round === maxRounds) break;
     working.push({ role: "assistant", content: result.text || null, tool_calls: calls });
     let used = 0;
+    let hadToolFailure = false;
     for (const call of calls) {
       if (!runnable(call.function.name)) {
         working.push({ role: "tool", tool_call_id: call.id, content: `You cannot use '${call.function.name}'. Use an offered tool or report what you found instead.` });
@@ -798,19 +804,46 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       used += 1;
       const handler = handlers[call.function.name];
       emit("tool", { id: call.id, label: handler ? handler.pending ?? `Running ${call.function.name.replaceAll("_", " ")}…` : pendingLabel(call), state: "running", ...tag });
-      const outcome = handler ? await handler(call, { emit }) : await runInstantTool(call, toolContext);
+      // Only read-only instant lookups are deduplicated. Never automatically
+      // retry a custom handler: it may have performed consequential work.
+      let fingerprint;
+      if (!handler) {
+        let args;
+        try { args = JSON.parse(call.function.arguments); } catch { args = call.function.arguments; }
+        fingerprint = `${call.function.name}:${JSON.stringify(args, args && typeof args === "object" ? Object.keys(args).sort() : undefined)}`;
+      }
+      const repositoryLookup = ["search_repository_code", "read_repository_file"].includes(call.function.name);
+      // Search and Contents have separate GitHub quota buckets. A search
+      // quota failure must not block a direct read using the core bucket.
+      const connectionBlocked = repositoryLookup && (githubBlocked || quotaBlocked.get(call.function.name));
+      let outcome = connectionBlocked || (fingerprint && failedLookups.get(fingerprint));
+      if (outcome) outcome = { ...outcome, label: connectionBlocked ? `${call.function.name} blocked by GitHub ${outcome.error.category}` : `Repeated failed ${call.function.name} skipped`, content: `${outcome.content}\n${connectionBlocked ? "GitHub repository calls are blocked for this reply by the connection or quota failure." : "This identical failed request was not sent again."} Correct its parameters or use another available tool; continue the original user task.` };
+      else {
+        try { outcome = handler ? await handler(call, { emit }) : await runInstantTool(call, toolContext); }
+        catch { outcome = { ok: false, label: `${call.function.name} failed`, content: `${call.function.name} failed unexpectedly. Its completion is unconfirmed. Continue with other safe tools; do not repeat a potentially consequential operation.` }; }
+        if (!outcome.ok && fingerprint) failedLookups.set(fingerprint, outcome);
+        if (!outcome.ok && repositoryLookup && ["authentication", "integration_unavailable"].includes(outcome.error?.category)) githubBlocked = outcome;
+        if (!outcome.ok && repositoryLookup && outcome.error?.category === "quota") quotaBlocked.set(call.function.name, outcome);
+      }
+      if (!outcome.ok && outcome.error) {
+        const error = outcome.error;
+        toolFailures.push(`${call.function.name}: ${error.cause ?? error.category}. ${error.action ?? "Check the connection or correct the parameters before continuing."}`);
+      }
       emit("tool", { id: call.id, label: outcome.label, state: outcome.ok ? "done" : "failed", ...tag, ...(outcome.preview ? { preview: outcome.preview } : {}) });
       steps.push({ label: outcome.label, ok: outcome.ok });
       toolResults.push(`${outcome.label}\n${outcome.content}`);
       working.push({ role: "tool", tool_call_id: call.id, content: outcome.content });
+      if (!outcome.ok) hadToolFailure = true;
     }
+    if (hadToolFailure) working.push({ role: "user", content: "A tool operation failed, not the entire task. Continue toward the original request: correct invalid parameters, use a different available tool or already retrieved evidence. Do not repeat an identical failed call, bypass permissions, or retry an exhausted quota. If no safe recovery remains, identify the failed operation, known cause and required action. Never claim an operation succeeded without a successful result." });
     // Everything the model asked for ran; it has not written its answer yet.
     lastText = "";
   }
 
   if (fatal) {
     unfinished = { status: "incomplete", reason: fatal, completedSteps: steps.filter((step) => step.ok).length, failedSteps: steps.filter((step) => !step.ok).length };
-    const note = `${text.trim() ? "\n\n" : ""}_Stopped early: ${fatal}_`;
+    const details = toolFailures.length ? `\n\nUnresolved tool operation:\n${[...new Set(toolFailures)].join("\n")}` : "";
+    const note = `${text.trim() ? "\n\n" : ""}_Stopped early: ${fatal}_${details}`;
     text += note;
     emit("delta", { text: note });
   } else if (failure || !lastText.trim()) {
@@ -919,12 +952,18 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     // Every attempt failed. The completed work is still the answer's substance; say so plainly.
     emit("tool", { id: progressId, label: "Could not reach a model to write the answer", state: "failed", ...tag });
     unfinished = { status: "incomplete", reason, completedSteps: steps.filter((step) => step.ok).length, failedSteps: steps.filter((step) => !step.ok).length };
-    const summary = workSummary({ steps, failure: reason });
+    const summary = workSummary({ steps, failure: reason, toolFailures });
     const addition = `${text.trim() ? "\n\n" : ""}${summary}`;
     text += addition;
     emit("delta", { text: addition });
   }
 
+  if (!unfinished && toolFailures.length && !steps.some(step => step.ok)) {
+    const reason = [...new Set(toolFailures)].join("\n");
+    unfinished = { status: "incomplete", reason, completedSteps: 0, failedSteps: steps.length };
+    const note = `\n\nUnresolved tool operation:\n${reason}`;
+    text += note; emit("delta", { text: note });
+  }
   const finish = (reply) => ({ reply, steps, ...(unfinished ? { finalization: unfinished } : {}), ...(servedBy ? { servedBy } : {}) });
   return finish(text.trim());
 }
