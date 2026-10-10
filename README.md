@@ -1,211 +1,133 @@
-# Atlas
+# Atlas — Build it. Run it. Grow it.
 
-Atlas is an AI-native software engineering platform under incremental
-development. The current release is a safe, local-first TypeScript CLI that can
-inspect another Git repository and produce a deterministic structured summary.
+**An autonomous operating system for building software and scaling digital work.**
 
-## Current release
+Atlas brings app creation, software engineering, computer control and persistent
+automation into one workspace. Give it a goal: it can plan the work, build and
+test supported websites and applications, inspect the result in a browser,
+coordinate parallel agents and publish through approved integrations.
 
-The canonical implementation lives in [`packages/atlas-cli`](packages/atlas-cli).
-The hosted control plane lives in [`apps/web`](apps/web) and provides a private,
-authenticated task-intake surface for approval-gated autonomous changes.
+The ambition is larger: **turn an idea into a complete business, then keep
+improving its software, operations and discoverability.** Atlas is building
+toward a continuous launch-and-growth workflow spanning websites, full
+applications, SEO, generative engine optimization (GEO), customer workflows and
+recurring operations. The software-building foundations are implemented;
+complete business operation and continuous SEO/GEO growth remain roadmap work.
 
-Requirements:
+## Why it matters
 
-- Node.js 20 or newer
-- Git on `PATH` for repository metadata and ignore-rule support
-- PowerShell 7 or Windows PowerShell 5.1
+Businesses repeatedly pay the coordination cost between ideas, developers,
+websites, marketing tools and day-to-day operations. Atlas aims to compress that
+cycle in one persistent system: **goal → build → verify → launch → operate →
+improve**. A successful workflow can become an automation; verified outcomes
+can inform future model choices; approved software improvements can expand what
+Atlas can do next.
 
-From the repository root:
+The investment thesis is a platform for repeatable digital execution, with
+expansion from software creation into ongoing business operations. Its
+differentiation rests on customer-owned compute and credentials, a shared agent
+runtime, evidence-backed verification and policy-controlled autonomy. Commercial
+advantage and business-growth outcomes still require measured validation.
 
-```powershell
-Set-Location .\packages\atlas-cli
-npm install
-npm test
-npm run build
-node .\dist\src\cli.js inspect C:\path\to\repository
-node .\dist\src\cli.js inspect C:\path\to\repository --format json
-node .\dist\src\cli.js tree C:\path\to\repository --max-depth 4
-node .\dist\src\cli.js search C:\path\to\repository "search text"
-node .\dist\src\cli.js symbols C:\path\to\repository --query Service
-node .\dist\src\cli.js references C:\path\to\repository Service
-node .\dist\src\cli.js read C:\path\to\repository src\service.ts --start-line 20 --end-line 60
-node .\dist\src\cli.js chat C:\path\to\repository "Explain the architecture" `
-  --endpoint http://127.0.0.1:1234/v1/chat/completions `
-  --model local-model
-```
+## What Atlas can do today
 
-See the [CLI documentation](packages/atlas-cli/README.md) for its output schema,
-safety boundaries, and local linking instructions. Development status and
-ordered next assignments are tracked in [`TODO.md`](TODO.md).
+| Capability | Implemented scope |
+| --- | --- |
+| **Create websites and apps** | Project Genesis plans and builds business websites, CRUD apps, dashboards and REST APIs from supported templates, with coder-driven extensions and change requests. |
+| **Build functional backends** | Generated local apps include sign-in/sessions, storage, per-app secrets, scheduled jobs and a durable background queue. |
+| **Verify and repair** | Run project checks, attempt bounded repairs, open live previews, inspect desktop/phone layouts and critical workflows, and optionally use a vision model for review. |
+| **Launch through integrations** | Approval-bound Git repository publishing/creation and static website deployment to Vercel. Server-backed app hosting remains additional work. |
+| **Establish SEO foundations** | Website titles, descriptions, canonical links, sitemap and robots output. Continuous SEO/GEO measurement and optimization are planned. |
+| **Engineer existing software** | Inspect repositories, make edits, compare baseline and post-change checks, repair regressions and deliver branches, patches or GitHub pull requests. |
+| **Run parallel agents** | Missions, isolated coder lanes, competing versions and a Command Center with controls and execution traces. |
+| **Keep working over time** | Durable sessions, scheduled/webhook/GitHub/file-change automations and bounded goals that sleep and wake on events. |
+| **Operate computers remotely** | Paired Windows browser/computer execution, local desktop drivers, approvals and revocable phone access over customer-managed HTTPS/VPN. |
+| **Own the intelligence** | Local Ollama-compatible models, hardware/context fitting and optional hosted providers, with budgets, routing and provider diagnostics. |
 
-### Implemented
+See [the reconciled todo list](TODO.md) for evidence and remaining work,
+[Genesis](docs/atlas-os/GENESIS.md) for app-builder boundaries, and
+[sovereign mode](SOVEREIGN-MODE.md) for local ownership and remote access.
 
-- Strict TypeScript build
-- PowerShell-compatible local CLI
-- Text and JSON repository summaries
-- Git state, language, manifest, framework, and architecture detection
-- Root and nested Git ignore support
-- Bounded traversal with symlink exclusion
-- Explicit warnings for truncation and recoverable failures
-- Bounded literal filename and content search
-- Bounded TypeScript, JavaScript, and Python symbol indexing
-- Bounded contextual UTF-8 source reads by repository-relative path and line range
-- Normalized repository-relative path and source-location contracts
-- Bounded, ignore-aware directory tree output with text and JSON formats
-- Bounded heuristic declaration/reference discovery
-- Provider-neutral model contracts with an offline deterministic mock provider
-- Runtime validation for untrusted provider data and a bounded read-only planning loop
-- Typed tool-capability policy evaluation without tool execution
-- Capability-enforced read-only tool registry and atomic usage-budget ledger
-- Repository-bound read-only tool adapters and bounded tool-calling orchestrator
-- Deterministic capability-based model registry and provider configuration types
-- Metadata-only session audit events with a bounded append-only in-memory log
-- Loopback-only local model chat with bounded, policy-enforced read tools
-- Persistent JSON Lines audit storage and one-time approval-resume tokens
-- Internal approval-bound create/update primitives with optimistic concurrency
-- Internal no-shell command runner and baseline/post-change validation comparator
-- Fixture coverage for Git, non-Git, unborn, detached-HEAD, ignored, malformed,
-  mixed-language, and unreadable-path cases
+## Autonomy that can grow
 
-### Not implemented yet
+Atlas's agent kernel connects goals, capabilities, environments, policy, budgets,
+memory and explicit world state. Initial slices include repository impact maps,
+risk-based autonomy, event-driven goals and local model selection informed by
+verified run history.
 
-- Model-provider integration
-- Public repository editing and validation workflows (internal approval-bound primitives exist)
-- Branch, commit, pull-request, browser, or multi-agent workflows
-- Public agent-driven code editing, validation execution, and repair workflows
-- Production agent-runner dispatch and hosted GitHub write credentials
+The next capability loop is to identify missing functionality, build a tool or
+skill, independently verify it, obtain installation approval and make it
+available to future missions. Parts exist today; the complete automatic loop
+is still being connected. Self-improvement currently uses bounded changes,
+checks and independent review, with an explicit delivery/merge policy.
 
-## Hosted control plane
+## From software launch to business growth
 
-The web application builds to a Cloudflare Worker-compatible bundle and includes
-deployment metadata for Sites plus a root Vercel descriptor. Task submission is
-authenticated server-side and forwards only to a configured Atlas agent runner.
-GitHub credentials remain server-side; commit mode is approval-required.
+The business roadmap joins product requirements, websites, full apps, approved
+deployment, lead capture, operational integrations and analytics in a shared
+mission. Ongoing SEO work will add crawl/indexability audits, structured data,
+performance monitoring and content refresh. GEO will extend this toward
+evidence-backed content and measured visibility in generative search systems.
 
-Configure `ATLAS_AGENT_DISPATCH_URL` and `ATLAS_AGENT_DISPATCH_TOKEN` as hosted
-secrets. The runner must validate the task ID, repository allowlist, requested
-user, approval, branch, and exact change-set digest before committing.
+These are development objectives. Atlas does not yet demonstrate unattended
+operation of arbitrary businesses, guaranteed search rankings or guaranteed
+revenue. Growth claims will be grounded in repeatable customer outcomes.
 
-For production GitHub access, configure a GitHub App using
-`ATLAS_GITHUB_APP_ID`, `ATLAS_GITHUB_INSTALLATION_ID`,
-`ATLAS_GITHUB_APP_PRIVATE_KEY`, and `ATLAS_GITHUB_APP_SLUG`. Atlas exchanges the
-private key for short-lived installation tokens server-side. A personal token
-remains supported only as a single-operator fallback.
-Coder tasks run on autopilot by default: Atlas opens a pull request and merges
-it itself once every CI check on it passes (`ci-gated`), holding it for review
-if a check fails or its own verification finds a regression. A repository's
-saved merge policy overrides this; `ATLAS_DEFAULT_MERGE_POLICY` changes the
-default (`manual`, `ci-gated` or `none`). The daily self-improvement run uses
-the repository variable `ATLAS_SELF_IMPROVE_MERGE_POLICY` (`ci-gated` by
-default, or `manual`). Merged `apps/web` changes deploy to production
-automatically.
+## Advanced research
 
-Set `ATLAS_ALLOWED_REPOSITORIES` to a comma-separated list of `owner/repository`
-names that may be submitted from the hosted task composer.
+The founder has identified quantum physics as an additional research direction.
+This public-main audit did not locate the underlying quantum/physics work.
+Its implementation status, experiments and results need to be reconciled before
+Atlas can claim a quantum capability or performance advantage. The current
+agent architecture runs on conventional software and model infrastructure.
 
-## Legacy Python prototype
+## Start locally
 
-The root `src/atlas_agent` package is an earlier experimental prototype. It is
-retained temporarily to avoid deleting uncommitted work, but it is not the
-canonical Atlas release and is not integrated with the TypeScript CLI.
-
-Its historical documentation follows.
-
-## Atlas Agent Starter (legacy)
-
-Lightweight local agent scaffold with a command-line interface and pluggable tools.
-
-## Features
-
-- Minimal command router
-- Tool plugin pattern
-- Sample built-in `time` tool
-- Local-only LLM tool backed by your own checkpoint
-- Environment-based runtime configuration
-- Basic automated tests
-
-## Quick Start
-
-1. Create and activate a virtual environment.
-2. Install dependencies:
+Install Node.js, Git and a compatible model runtime. Individual packages declare
+their required Node versions; Genesis uses Node's built-in SQLite support.
 
 ```powershell
-pip install -r requirements.txt
+# From the repository root, start the local control plane
+Set-Location .\apps\local-control
+npm start
 ```
 
-3. Start the agent:
+Follow [sovereign mode](SOVEREIGN-MODE.md) for setup, local identity, model
+configuration, device pairing and remote access. For direct coding:
 
 ```powershell
-python -m atlas_agent.cli
+node scripts/local/run-coder.mjs --repository C:\path\to\project --objective "Fix the failing test and verify the result"
 ```
 
-## Commands
+The [CLI guide](packages/atlas-cli/README.md) covers installation, inspection and
+coding commands. Hosted setup and production checks are documented in
+[HOSTED-VERIFICATION](docs/HOSTED-VERIFICATION.md).
 
-- `help` -> Show command help
-- `tools` -> List loaded tools
-- `run time` -> Return current UTC time
-- `run local-llm <prompt>` -> Generate with your own local model
-- `exit` -> Quit the session
+## Architecture and delivery status
 
-## Build Your Own Local LLM (No External API)
+- [Local control](apps/local-control): durable agent runtime, Genesis,
+  missions, automations, model hosting and local UI.
+- [Coder CLI](packages/atlas-cli): TypeScript repository intelligence,
+  editing, validation and repair.
+- [Web workspace](apps/web): hosted chat, task intake, repository connections,
+  setup and approvals.
+- [Windows companion](apps/windows-companion) and
+  [browser worker](apps/browser-worker): computer/browser execution surfaces.
+- [Inference](packages/atlas-inference) and
+  [contracts](packages/atlas-contracts): shared reliability and domain contracts.
 
-This repository includes an offline training and inference path. It does not call
-OpenAI, Anthropic, or any hosted LLM service.
+Source capabilities, passing CI, a deployed service and an updated customer
+installation are separate evidence levels. Some executor/credential boundaries,
+tool-level recovery, visual editing, native mobile delivery and production
+provider setup remain unfinished. The root Python agent is a legacy prototype;
+current product work lives in the packages and apps above.
 
-1. Install project and local LLM dependencies:
+[Product roadmap](docs/ROADMAP.md) · [Current todo](TODO.md) ·
+[Release evidence](docs/PROGRESS.md) ·
+[Issues](https://github.com/cornerstonemarketingus/atlas/issues)
 
-```powershell
-pip install -r requirements.txt
-pip install -e .[local-llm]
-```
-
-2. Place your training text in `data/corpus.txt` (or another file path).
-3. Train your checkpoint locally:
-
-```powershell
-python -m atlas_agent.local_llm.train --corpus data/corpus.txt --output models/local_llm.pt
-```
-
-For a quick smoke test, use fewer steps:
-
-```powershell
-python -m atlas_agent.local_llm.train --corpus data/corpus.txt --steps 20 --eval-interval 10 --eval-iters 2 --batch-size 4 --block-size 32 --output models/local_llm.pt
-```
-
-You can also use the script entrypoint:
-
-```powershell
-atlas-train-local-llm --corpus data/corpus.txt --output models/local_llm.pt
-```
-
-4. Run the agent and query your model:
-
-```text
-run local-llm Explain our deployment process
-```
-
-Optional environment variable:
-
-- `ATLAS_LOCAL_MODEL_PATH` (default: `models/local_llm.pt`)
-
-Notes:
-
-- Quality depends heavily on dataset quality and size.
-- Minimum data requirement is approximately `2 * (block_size + 2)` characters/tokens.
-- For meaningful results, expand corpus data beyond the starter sample.
-- CPU training works but is slower than CUDA.
-
-## Configuration
-
-Set optional environment variables before launch:
-
-- `ATLAS_AGENT_NAME` (default: `atlas`)
-- `ATLAS_PROMPT_PREFIX` (default: `atlas> `)
-- `ATLAS_LOCAL_MODEL_PATH` (default: `models/local_llm.pt`)
-
-## Run Tests
-
-```powershell
-python -m unittest discover -s tests -v
-```
+**Suggested GitHub About description:**
+Autonomous AI operating system for building websites and apps, operating computers,
+and automating digital work. Local-first agents with remote control and verified
+execution; building toward complete business launch, continuous SEO/GEO growth,
+and reusable capabilities.
