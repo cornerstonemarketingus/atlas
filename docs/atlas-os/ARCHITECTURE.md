@@ -43,6 +43,37 @@ Paths below are relative to the repository root; local `src/` and `platform/` ab
 | Hosted open-weight model / dedicated server routing | PARTIALLY IMPLEMENTED | Live Workers AI inference works without owner's PC. `scripts/local/model-gateway.mjs`, local provider routes and validated OpenAI-compatible URLs support operator-selected servers. Dedicated GPU hosting is not provisioned or qualified; no paid infrastructure added. |
 | New-user onboarding | PARTIALLY IMPLEMENTED | `/setup` UI and `/api/setup/status` explain external config; `/api/setup/providers` diagnoses providers. Existing owner's setup gate passed. Create account → connect independent repo → cloud coding → approvals → verified result needs a fresh-user boundary test and runner generalization. |
 
+## Inference pathway boundary assessment
+
+| Pathway | Existing code to reuse | What is established / what remains |
+|---|---|---|
+| Groq | Hosted `apps/web/app/api/chat/{providers,agent-loop}.mjs`; CLI `packages/atlas-cli/src/infrastructure/groq-model-provider.ts` | Wired, tool/stream/error fixtures and package tests exist. Live route lists Groq but the passing final replies came from Workers AI. A full current Groq-only tool journey is not verified; allowance/context failures must route rather than retry oversized requests. |
+| OpenAI | Hosted `chat/providers.mjs`, generic compatible endpoint transport | Configured fallback key name is present. Hosted response/error/fallback tests are in main CI; current OpenAI-only live coding/chat and available paid balance are not established by the Workers AI gate. CLI's direct provider selector lists Groq/Anthropic, not a first-class OpenAI vendor. |
+| Anthropic | CLI `anthropic-model-provider.ts`, `model/coder-provider-selection.ts` | CLI wired and tested in required atlas-cli CI. No ANTHROPIC_API_KEY in repository secret-name inventory; live execution is BLOCKED BY EXTERNAL CONFIGURATION here. No first-class Anthropic hosted-chat adapter found. |
+| Workers AI | Hosted `chat/{providers,model-endpoint,agent-loop}.mjs` REST compatible path | IMPLEMENTED AND VERIFIED for the stated one-tool-round streaming/non-streaming stored reply gate. Native AI binding transport remains open #233/#240; do not confuse REST streaming success with native cancellation being finished. |
+| Ollama / compatible local server | CLI `local-openai-compatible-model-provider.ts`; local routes; `scripts/local/model-gateway.mjs`; `scripts/local/setup-chat.mjs` | Local compatible path and authenticated forwarding/queue have tests, and local chat choices exist. Installed-model task/tool qualification remains its own gate (#230). A PC-hosted gateway goes offline with the PC. |
+| Customer / dedicated self-hosted endpoint | Generic compatible adapter, validated endpoint URLs, operator-configured model routes | PARTIALLY IMPLEMENTED: HTTPS for remote, loopback HTTP exception, configured credentials and tool/stream transport reused. No dedicated hosted server fleet/health-budget acceptance established. Privacy mode must be exercised across all fallback paths before claiming universal policy-safe routing. |
+
+CLI `RetryingModelProvider` bounds attempts and waits with cancellation;
+`FallbackModelProvider` retries only explicitly configured routes without
+restarting the agent. Their quota/billing taxonomy and pacing differ from the
+Worker's governed transport; #200 is not redundant with #224. Global concurrent
+allowance coordination, failed-attempt cost reconciliation and downstream
+cancellation are not qualified across all providers merely because the ledger
+package tests pass.
+
+Cloud browser source check: `apps/web/app/api/computer/browser-plan.mjs`
+explicitly sets `HOSTED_BROWSER_EXECUTOR_AVAILABLE = false`; the task route
+returns 503 instead of queuing work without a consumer. This is an honest
+missing-executor boundary, not an available cloud browser.
+
+Independent review of #244 found no blocking defect in the supplied sender
+implementation and receiver contract. Limitations: ENOTFOUND may be permanent
+DNS misconfiguration; three attempts remain bounded. External caller cancellation
+is not supported by this callback API (predates the change). Delegated audit
+terminal reads were stalled and interrupted, so the inventory relies on the
+parent's repository reads, fresh local tests and identified CI/live results;
+no independent repository audit or test execution is attributed to those agents.
 ## C. Disconnected or superseded infrastructure
 
 - `agent/child-agents.mjs`: ChildAgentRegistry has no production constructor
