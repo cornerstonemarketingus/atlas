@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { AutomationService, AutomationStore } from "../src/platform/automations/service.mjs";
@@ -35,6 +36,106 @@ async function setup(t, { start = "2026-09-28T09:58:00", fail = false } = {}) {
 
 const coding = { kind: "mission", repository: "/repo", model: "m", tasks: ["Update dependencies"] };
 const MINUTE = 60_000;
+
+test("restart preserves uncertain starts, pauses them for inspection, and never replays their delivery", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-automations-restart-"));
+  const filename = join(directory, "automations.sqlite");
+  let store = new AutomationStore(filename);
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  const missionService = missions();
+  let service = new AutomationService({ store, missionService });
+  const { automation, webhookSecret } = service.create({ name: "Interrupted", trigger: { kind: "webhook" }, action: coding });
+  const linked = service.create({ name: "Known mission", trigger: { kind: "manual" }, action: coding }).automation;
+  const knownRun = await service.runNow(linked.id);
+  // Durable boundary just before the process dies: the mission may have
+  // started, but its identity was never acknowledged to the automation.
+  const uncertainMission = missionService.create({ tasks: ["Already started"] });
+  store.claimRun({ id: "run-interrupted", automationId: automation.id, triggerKind: "webhook", triggerKey: "webhook:original", status: "starting", startedAt: "2026-10-09T01:00:00Z", input: "private trigger data" });
+  store.close();
+  store = new AutomationStore(filename);
+  service = new AutomationService({ store, missionService, clock: () => Date.parse("2026-10-09T02:00:00Z") });
+  const recovered = service.get(automation.id);
+  assert.equal(recovered.lastRun.status, "failed");
+  assert.equal(recovered.lastRun.finishedAt, "2026-10-09T02:00:00.000Z");
+  assert.equal(recovered.lastRun.missionId, null);
+  assert.match(recovered.lastRun.message, /interrupted.*may have started/i);
+  assert.doesNotMatch(recovered.lastRun.message, /private trigger data/);
+  assert.equal(recovered.enabled, false);
+  assert.equal(recovered.recoveryRequired, true);
+  assert.equal(recovered.consecutiveFailures, 1);
+  assert.match(recovered.pausedReason, /inspect.*resume/i);
+  const { buildCommandCenter } = await import("../src/platform/command-center.mjs");
+  const attention = buildCommandCenter({ automations: service.list() }).items.find((item) => item.id === automation.id);
+  assert.equal(attention.bucket, "attention");
+  assert.equal(attention.actions[0].name, "resume", "the existing Command Center exposes recovery");
+  assert.equal(service.get(linked.id).enabled, true);
+  assert.equal(store.run(knownRun.id).status, "running");
+  assert.equal(store.run(knownRun.id).missionId, knownRun.missionId);
+  assert.equal(missionService.get(uncertainMission.id).status, "running", "do not invent or cancel an unknown mission link");
+  assert.equal((await service.deliver(automation.id, webhookSecret, { idempotencyKey: "original" })).status, "duplicate");
+  assert.equal((await service.deliver(automation.id, webhookSecret, { idempotencyKey: "later" })).status, "skipped");
+  assert.equal(missionService.all.size, 2, "startup and redelivery never launch work");
+  assert.equal((await service.runNow(automation.id)).status, "skipped", "even Run now requires explicit recovery resume");
+  service.pause(automation.id);
+  assert.equal(service.get(automation.id).recoveryRequired, true, "ordinary pause cannot clear recovery");
+  // A second restart is idempotent and retains the original evidence.
+  store.close();
+  store = new AutomationStore(filename);
+  service = new AutomationService({ store, missionService });
+  assert.equal(service.get(automation.id).consecutiveFailures, 1);
+  assert.equal(store.run("run-interrupted").finishedAt, recovered.lastRun.finishedAt);
+  service.resume(automation.id);
+  assert.equal(service.get(automation.id).recoveryRequired, false);
+  assert.equal((await service.deliver(automation.id, webhookSecret, { idempotencyKey: "original" })).status, "duplicate");
+  assert.equal((await service.deliver(automation.id, webhookSecret, { idempotencyKey: "next" })).status, "running");
+  assert.equal(missionService.all.size, 3);
+});
+
+test("existing databases migrate recovery state, and failed recovery rolls back the whole transition", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-automations-migrate-"));
+  const filename = join(directory, "automations.sqlite");
+  let store = new AutomationStore(filename);
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  const missionService = missions();
+  const original = new AutomationService({ store, missionService });
+  const { automation } = original.create({ name: "Legacy", trigger: { kind: "manual" }, action: coding });
+  store.claimRun({ id: "run-legacy", automationId: automation.id, triggerKind: "manual", triggerKey: "manual:legacy", status: "starting", startedAt: "2026-10-09T01:00:00Z" });
+  store.close();
+  // Recreate the pre-upgrade schema, then inject a storage failure between
+  // marking the run and pausing the automation.
+  const db = new DatabaseSync(filename);
+  db.exec("ALTER TABLE automations DROP COLUMN recovery_required; CREATE TRIGGER refuse_recovery BEFORE UPDATE ON automations BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END;");
+  db.close();
+  store = new AutomationStore(filename);
+  assert.equal(store.get(automation.id).recoveryRequired, false);
+  assert.throws(() => new AutomationService({ store, missionService }), /injected storage failure/);
+  assert.equal(store.run("run-legacy").status, "starting", "failed pause cannot leave a terminal run and live automation");
+  assert.equal(store.run("run-legacy").finishedAt, null);
+  assert.equal(store.get(automation.id).enabled, true);
+  const repaired = new DatabaseSync(filename);
+  repaired.exec("DROP TRIGGER refuse_recovery");
+  repaired.close();
+  const service = new AutomationService({ store, missionService });
+  assert.equal(service.get(automation.id).recoveryRequired, true);
+  assert.equal(store.run("run-legacy").status, "failed");
+});
+
+test("a delayed live start remains active during ticks and is not treated as a restart", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "atlas-automations-delayed-"));
+  const store = new AutomationStore(join(directory, "automations.sqlite"));
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  let finishStart;
+  const team = { start: () => new Promise((resolve) => { finishStart = resolve; }) };
+  const service = new AutomationService({ store, missionService: missions(), team });
+  const { automation } = service.create({ name: "Slow team", trigger: { kind: "manual" }, action: { kind: "team", goal: "Research" } });
+  const pending = service.runNow(automation.id);
+  await service.tick();
+  assert.equal(service.get(automation.id).lastRun.status, "starting");
+  assert.equal(service.get(automation.id).enabled, true);
+  assert.equal((await service.runNow(automation.id)).status, "skipped");
+  finishStart({ mission: { id: "team-known" } });
+  assert.equal((await pending).missionId, "team-known");
+});
 
 test("a schedule runs once per slot, never twice for the same minute", async (t) => {
   const { service, missionService, advance } = await setup(t);
