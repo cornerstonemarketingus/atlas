@@ -195,3 +195,39 @@ html[data-atlas-theme="light"] .project-switcher select,html[data-atlas-theme="l
  html[data-atlas-theme="system"] .md-code-wrap,html[data-atlas-theme="system"] .md-body .md-code { background: var(--ws-card); border-color: var(--ws-line); }
  html[data-atlas-theme="system"] .suggestion-card>div:last-child { background: var(--ws-panel); border-color: var(--ws-line); }
 }
+
+/* Shared foregrounds keep legacy workspace controls legible in every theme. */
+:root { --ws-on-accent: #080f1e; }
+html[data-atlas-theme="light"] { --ws-on-accent: #fff; }
+@media(prefers-color-scheme:light) {
+  html[data-atlas-theme="system"] { --ws-on-accent: #fff; }
+}
+.atlas-shell :is(.danger-form button, .pair-card form button, .mission-send button, .credential button, .credential-actions .primary, .approval-panel button:not(.quiet)) {
+  background: var(--ws-accent); color: var(--ws-on-accent);
+}
+.atlas-shell .plan-actions .quiet, .atlas-shell .approval-panel .quiet,
+.atlas-shell .credential-actions button:not(.primary) {
+  background: transparent; color: var(--ws-text); border-color: var(--ws-line);
+}
+.atlas-shell .file-entry, .atlas-shell .changed-file,
+.atlas-shell .activity-steps li:not(.failed), .atlas-shell .panel-event,
+.atlas-shell .panel-task p {
+  color: var(--ws-text);
+}
+.atlas-shell .file-entry:hover, .atlas-shell .file-entry.active,
+.atlas-shell .changed-file:hover { background: var(--ws-card); }
+.atlas-shell .activity-steps li.pending, .atlas-shell .activity-steps li small,
+.atlas-shell .agent-title, .atlas-shell .agent-line small, .atlas-shell .agent-tools,
+.atlas-shell .files-group, .atlas-shell .panel-section>small, .atlas-shell .panel-note,
+.atlas-shell .composer-context label, .atlas-shell .composer-context select,
+.atlas-shell .run-summary p, .atlas-shell .check-number, .atlas-shell .status-card small,
+.atlas-shell .workflow-grid small, .atlas-shell .thread-empty,
+.atlas-shell .settings-choice, .atlas-shell .policy-row label,
+.atlas-shell .mission-form label, .atlas-shell .danger-form label,
+.atlas-shell .field-row label, .atlas-shell .pair-card form label {
+  color: var(--ws-muted);
+}
+.atlas-shell .agent-children { border-color: var(--ws-line); }
+.atlas-shell .file-kind:not(.kind-added):not(.kind-removed):not(.kind-modified):not(.kind-changed):not(.kind-renamed):not(.kind-copied) {
+  background: var(--ws-card); color: var(--ws-muted);
+}
