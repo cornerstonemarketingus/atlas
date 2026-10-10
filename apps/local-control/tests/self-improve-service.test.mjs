@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,8 @@ import test from "node:test";
 import { SelfImprovementLoop } from "../src/platform/self-improve/loop.mjs";
 import { resolveCheck, runCheck, assertSafeEndpoint } from "../src/platform/self-improve/runtime.mjs";
 import { SelfImprovementService, createSelfImproveRoutes } from "../src/platform/self-improve/service.mjs";
+import { createLocalControlServer } from "../src/server.mjs";
+import { LocalTaskStore } from "../src/store.mjs";
 
 function sh(cwd, ...args) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
@@ -117,4 +119,159 @@ test("runtime: node and npm run without a shell on every platform; endpoints mus
   assert.throws(() => assertSafeEndpoint("http://models.example.com/v1"), /HTTPS/u);
   assert.throws(() => assertSafeEndpoint("https://user:pw@models.example.com/v1"), /credentials/u);
   assert.ok(assertSafeEndpoint("http://127.0.0.1:11434/v1"));
+});
+
+test("approval refuses a branch changed after its exact revision was verified", async () => {
+  const { root, repository, service } = setup();
+  try {
+    await service.start().promise;
+    const [change] = service.pending();
+    const reviewedHead = change.head;
+    const before = sh(repository, "rev-parse", "HEAD");
+    const tree = sh(repository, "rev-parse", `${reviewedHead}^{tree}`);
+    const replacement = sh(repository, "-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", tree, "-p", reviewedHead, "-m", "Unreviewed replacement");
+    sh(repository, "update-ref", `refs/heads/${change.branch}`, replacement);
+    await assert.rejects(service.approve(change.id), (error) => error.code === "STALE_CHANGE");
+    assert.equal(sh(repository, "rev-parse", "HEAD"), before);
+    assert.equal(sh(repository, "rev-parse", change.branch), replacement);
+    assert.equal(service.decisions().length, 0);
+    assert.equal(service.pending()[0].head, reviewedHead);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("approval refuses a destination changed since verification without merging or recording success", async () => {
+  const { root, repository, service } = setup();
+  try {
+    await service.start().promise;
+    const [change] = service.pending();
+    sh(repository, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-qm", "Owner changed base");
+    const before = sh(repository, "rev-parse", "HEAD");
+    await assert.rejects(service.approve(change.id), (error) => error.code === "STALE_BASE");
+    assert.equal(sh(repository, "rev-parse", "HEAD"), before);
+    assert.equal(service.decisions().length, 0);
+    assert.equal(service.pending().length, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("concurrent approval and rejection cannot execute two decisions for one change", async () => {
+  const { root, repository, service } = setup();
+  let approval;
+  try {
+    await service.start().promise;
+    const [change] = service.pending();
+    approval = service.approve(change.id);
+    await assert.rejects(service.reject(change.id, "Concurrent rejection"), (error) => error.code === "BUSY");
+    assert.throws(() => service.start(), (error) => error.code === "BUSY");
+    const decision = await approval;
+    assert.equal(decision.reviewedHead, change.head);
+    assert.equal(decision.reviewedBase, change.base);
+    assert.equal(sh(repository, "rev-parse", "HEAD^1"), change.base);
+    assert.equal(sh(repository, "rev-parse", "HEAD^2"), change.head);
+    assert.equal(service.decisions().length, 1);
+  } finally { if (approval) await Promise.allSettled([approval]); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a legacy change without a verified head cannot merge and rejection preserves its branch", async () => {
+  const { root, repository, service } = setup();
+  try {
+    await service.start().promise;
+    const [change] = service.pending();
+    const legacy = { ...change };
+    delete legacy.head;
+    writeFileSync(join(root, "ledger.jsonl"), `${JSON.stringify(legacy)}\n`);
+    await assert.rejects(service.approve(change.id), (error) => error.code === "UNVERIFIED_CHANGE");
+    assert.equal(service.decisions().length, 0);
+    const rejected = await service.reject(change.id);
+    assert.equal(rejected.branchRetained, true);
+    assert.equal(sh(repository, "rev-parse", change.branch), change.head);
+    assert.equal(service.pending().length, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("reject records the decision without deleting a moved branch", async () => {
+  const { root, repository, service } = setup();
+  try {
+    await service.start().promise;
+    const [change] = service.pending();
+    const replacement = sh(repository, "-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", `${change.head}^{tree}`, "-p", change.head, "-m", "New work after review");
+    sh(repository, "update-ref", `refs/heads/${change.branch}`, replacement);
+    const decision = await service.reject(change.id, "Discard reviewed proposal only");
+    assert.equal(decision.branchRetained, true);
+    assert.equal(sh(repository, "rev-parse", change.branch), replacement);
+    assert.equal(service.pending().length, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("approved merges do not execute repository hooks", async () => {
+  const { root, repository, service } = setup();
+  try {
+    await service.start().promise;
+    const [change] = service.pending();
+    const hooks = join(root, "untrusted-hooks");
+    mkdirSync(hooks);
+    for (const name of ["pre-merge-commit", "post-merge"]) {
+      writeFileSync(join(hooks, name), `#!/bin/sh\nprintf unsafe > .atlas-${name}-executed\n`, { mode: 0o755 });
+    }
+    sh(repository, "config", "core.hooksPath", hooks);
+    await service.approve(change.id);
+    assert.equal(existsSync(join(repository, ".atlas-pre-merge-commit-executed")), false);
+    assert.equal(existsSync(join(repository, ".atlas-post-merge-executed")), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("approved merges bypass inherited signing configuration without changing it", async () => {
+  const { root, repository, service } = setup();
+  try {
+    await service.start().promise;
+    const [change] = service.pending();
+    sh(repository, "config", "commit.gpgsign", "true");
+    sh(repository, "config", "gpg.program", join(root, "missing-signing-tool"));
+    await service.approve(change.id);
+    assert.equal(sh(repository, "config", "commit.gpgsign"), "true");
+    assert.equal(sh(repository, "rev-parse", "HEAD^2"), change.head);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("real authenticated HTTP refuses stale revisions, approves exact commits and rejects replay after service restart", async () => {
+  const { root, repository, service } = setup();
+  const store = new LocalTaskStore(join(root, "http.sqlite"));
+  const token = "self-improve-test-owner-token-0123456789";
+  const server = createLocalControlServer({ store, token, selfImprove: service, runTask: async () => ({ ok: true }) });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const owner = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  try {
+    await service.start().promise;
+    const [change] = service.pending();
+    const path = `/v1/self-improve/changes/${change.id}/approve`;
+    assert.equal((await fetch(`${base}${path}`, { method: "POST", body: "{}" })).status, 401);
+    const paired = await fetch(`${base}/v1/pair`, { method: "POST", headers: owner });
+    const { code } = await paired.json();
+    const claimed = await fetch(`${base}/v1/pair/claim`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, name: "Test phone" }) });
+    const { deviceToken } = await claimed.json();
+    assert.equal((await fetch(`${base}${path}`, { method: "POST", headers: { authorization: `Bearer ${deviceToken}`, "content-type": "application/json" }, body: "{}" })).status, 403);
+    const replacement = sh(repository, "-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", `${change.head}^{tree}`, "-p", change.head, "-m", "Drifted proposal");
+    sh(repository, "update-ref", `refs/heads/${change.branch}`, replacement);
+    const stale = await fetch(`${base}${path}`, { method: "POST", headers: owner, body: "{}" });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).code, "STALE_CHANGE");
+    assert.equal(service.decisions().length, 0);
+    sh(repository, "update-ref", `refs/heads/${change.branch}`, change.head, replacement);
+    const approved = await fetch(`${base}${path}`, { method: "POST", headers: owner, body: "{}" });
+    assert.equal(approved.status, 200);
+    const { decision } = await approved.json();
+    assert.equal(decision.reviewedHead, change.head);
+    assert.equal(decision.reviewedBase, change.base);
+    assert.equal(decision.branchRetained, false);
+    assert.equal(sh(repository, "rev-parse", "HEAD^2"), change.head);
+    assert.equal((await fetch(`${base}${path}`, { method: "POST", headers: owner, body: "{}" })).status, 404);
+    const restored = new SelfImprovementService({ repository, decisionsPath: join(root, "decisions.jsonl"), createLoop: () => service.loop });
+    assert.equal(restored.pending().length, 0);
+    assert.equal(restored.decisions()[0].reviewedHead, change.head);
+    await assert.rejects(restored.approve(change.id), (error) => error.code === "UNKNOWN_CHANGE");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
