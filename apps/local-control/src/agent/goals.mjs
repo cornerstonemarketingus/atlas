@@ -98,6 +98,12 @@ export class GoalStore {
     return rows.map((row) => JSON.parse(row.body));
   }
 
+  /** Terminal goals retain an unfinished mission stop across daemon restarts. */
+  pendingMissionStops() {
+    return this.#db.prepare("SELECT body FROM goals WHERE state NOT IN ('working', 'sleeping') AND json_extract(body, '$.missionStopPending') = 1").all()
+      .map((row) => JSON.parse(row.body));
+  }
+
   log(goalId, at, kind, detail = {}) {
     const next = this.#db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM goal_log WHERE goal_id = ?").get(goalId).seq;
     this.#db.prepare("INSERT INTO goal_log (goal_id, seq, at, kind, detail) VALUES (?, ?, ?, ?, ?)").run(goalId, next, at, kind, JSON.stringify(detail).slice(0, 8000));
@@ -207,7 +213,7 @@ export class GoalService {
 
   cancel(id) {
     const goal = this.#require(id);
-    if (FINAL.has(goal.state)) return goal;
+    if (FINAL.has(goal.state)) return this.#stopMission(goal);
     return this.#finish(goal, "cancelled", "Cancelled by the owner.");
   }
 
@@ -236,7 +242,8 @@ export class GoalService {
       const brief = { event: event.event, action: event.action, conclusion: event.conclusion, review: event.review, merged: event.merged, sender: event.sender };
       if (goal.until && eventMatches(goal.until, event)) {
         outcomes.push({ goalId: goal.id, outcome: "achieved" });
-        this.#finish({ ...goal, lastEvent: brief }, "achieved", `${event.event}${event.action ? ` ${event.action}` : ""}: the goal's condition is met.`);
+        try { this.#finish({ ...goal, lastEvent: brief }, "achieved", `${event.event}${event.action ? ` ${event.action}` : ""}: the goal's condition is met.`); }
+        catch (error) { if (error.code !== "MISSION_STOP_FAILED") throw error; }
         continue;
       }
       if (!goal.wakeOn.some((condition) => eventMatches(condition, event))) continue;
@@ -248,9 +255,16 @@ export class GoalService {
 
   /** Expiry, mission completion and queued wakes; called on the daemon's tick. */
   tick() {
+    for (const goal of this.#store.pendingMissionStops()) {
+      try { this.#stopMission(goal); } catch { /* intent and failure evidence remain durable; retry next tick */ }
+    }
     const now = this.#clock();
     for (const goal of this.#store.list({ active: true })) {
-      if (Date.parse(goal.expiresAt) <= now) { this.#finish(goal, "expired", "The goal expired before its condition was met."); continue; }
+      if (Date.parse(goal.expiresAt) <= now) {
+        try { this.#finish(goal, "expired", "The goal expired before its condition was met."); }
+        catch (error) { if (error.code !== "MISSION_STOP_FAILED") throw error; }
+        continue;
+      }
       if (goal.state !== "working" || !goal.missionId) continue;
       const mission = this.#missions.get(goal.missionId);
       if (mission && !MISSION_DONE.has(mission.status)) continue;
@@ -293,10 +307,32 @@ export class GoalService {
   }
 
   #finish(goal, state, reason) {
-    const done = { ...goal, state, reason, pendingWake: null, updatedAt: this.#now() };
+    // Persist the terminal state and stop intent before aborting execution.
+    // A process loss or refused control cannot permit a queued wake to restart
+    // this goal; the next tick retries the idempotent mission cancel control.
+    const done = { ...goal, state, reason, pendingWake: null, missionStopPending: Boolean(goal.missionId), updatedAt: this.#now() };
     this.#store.save(done);
     this.#observe(done, state, { reason });
-    return done;
+    return this.#stopMission(done);
+  }
+
+  #stopMission(goal) {
+    if (!goal.missionStopPending) return goal;
+    let mission;
+    try {
+      mission = this.#missions.get(goal.missionId);
+      if (mission && !MISSION_DONE.has(mission.status)) {
+        mission = this.#missions.control(goal.missionId, "cancel");
+        if (!mission || !MISSION_DONE.has(mission.status)) throw new Error("Mission stop was not acknowledged.");
+      }
+    } catch {
+      this.#observe(goal, "mission_stop_failed", { mission: goal.missionId });
+      throw new GoalError("MISSION_STOP_FAILED", "The goal has ended, but its mission stop is pending. Atlas will retry; inspect the mission before starting replacement work.");
+    }
+    const stopped = { ...goal, missionStopPending: false, updatedAt: this.#now() };
+    this.#store.save(stopped);
+    this.#observe(stopped, "mission_stopped", { mission: goal.missionId, outcome: mission?.status ?? "missing" });
+    return stopped;
   }
 }
 
