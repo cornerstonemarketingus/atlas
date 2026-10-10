@@ -4,6 +4,7 @@ import "./globals.css";
 import "./workspace.css";
 import "./atlas-shell.css";
 import "./marketing.css";
+import "./atlas-brand.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -24,7 +25,7 @@ export const metadata: Metadata = {
   },
   manifest: "/manifest.webmanifest",
   applicationName: "Atlas",
-  themeColor: "#171a17",
+  themeColor: "#080f1e",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Atlas" },
   formatDetection: { telephone: false },
   openGraph: {
