@@ -104,10 +104,10 @@ export class ContainerValidationProfileRunner implements ValidationProfileRunner
     });
     try {
       const result = await runner.run({ executable: this.options.runtime, args, ...(command.signal ? { signal: command.signal } : {}) });
-      // Docker reserves these for daemon/image/startup errors, not a test
-      // verdict. Treating them as baseline test failures could "verify" a run
-      // whose baseline and post-change checks never actually executed.
-      if ([125, 126, 127].includes(result.exitCode ?? -1)) throw new SafeCommandError("spawn-failed", "Validation container could not start its command.");
+      // Docker's 125-127 startup errors and signal/resource exits (128+)
+      // cannot certify ordinary assertion results. Equal exhausted baselines
+      // must never make a post-change run look verified.
+      if (result.exitCode !== null && result.exitCode >= 125) throw new SafeCommandError("spawn-failed", "Validation container could not execute a reliable check.");
       return result;
     } finally {
       // Killing the Docker client alone does not kill its container. Also

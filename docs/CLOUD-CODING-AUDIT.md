@@ -88,6 +88,8 @@ The job must fail when Docker is unavailable. It exercises filesystem,
 credential and network isolation plus a scripted-model native coder journey
 that introduces a test regression, reads the real container failure, repairs
 it and produces a verified change without importing test-generated files.
+It also exhausts the real container's memory quota and requires an
+infrastructure-failure receipt rather than baseline assertion evidence.
 The scripted model proves plumbing, not hosted-model coding quality.
 
 The local Windows Docker daemon was unavailable; real-container tests were
@@ -95,9 +97,9 @@ therefore not claimed as passing locally. Exact local/CI results belong in the
 PR and progress entry. This change is not deployed or live-verified.
 
 Local evidence: strict CLI compilation passed; focused isolation tests passed
-11 with two real-container tests skipped; runner/local-script tests passed
+11 with three real-container tests skipped; runner/local-script tests passed
 71/71 after rebasing; all 11 workflows passed the repository checker using Git
-Bash. The final full CLI suite passed 506, failed four and skipped six. All four
+Bash. The final full CLI suite passed 506, failed four and skipped seven. All four
 failures reproduced in the same unmodified tests on a clean main worktree
 (`4f89f19`), 21 passes/four failures across those 25 baseline tests. They are
 Windows diff/file-URL and file-mode issues, not new isolation regressions.

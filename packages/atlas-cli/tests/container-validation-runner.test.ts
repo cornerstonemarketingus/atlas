@@ -148,9 +148,9 @@ test("missing runtime fails closed before commands can run", async (t) => {
   await assert.rejects(ContainerValidationProfileRunner.create({ repositoryRoot: source, runtime: join(source, "missing-docker"), packageManager: "npm", timeoutMs: 1000 }), /not installed|not executable/u);
 });
 
-test("Docker startup errors are infrastructure failures, never baseline test failures", async (t) => {
+test("Docker startup and resource errors are infrastructure failures, never baseline test failures", async (t) => {
   const { source } = await fixture(t);
-  for (const exitCode of [125, 126, 127]) {
+  for (const exitCode of [125, 126, 127, 134, 137, 143]) {
     const { runner } = await fakeRunner(source, async () => ({ ...success, exitCode }));
     const report = await runner.run({ label: "baseline", profiles: [profile] });
     assert.equal(report.observations[0]?.outcome, "execution-failed");
@@ -180,4 +180,15 @@ test("real container prevents host access, credentials, networking and source mu
   const report = await runner.run({ label: "baseline", profiles: [{ ...profile, executable: "node", args: ["check.mjs"] }] });
   assert.equal(report.observations[0]?.outcome, "passed", JSON.stringify(report));
   assert.equal(await readFile(join(source, "source.txt"), "utf8"), "before");
+});
+
+test("real container memory exhaustion is an infrastructure failure, not baseline assertion evidence", { skip: !runtime }, async (t) => {
+  const { source } = await fixture(t);
+  // More than the 2 GiB RAM limit plus Docker's default swap allowance.
+  // Allocations happen only in the container, never in the trusted test worker.
+  await writeFile(join(source, "exhaust.mjs"), "const kept = []; for (let i = 0; i < 192; i++) kept.push(Buffer.alloc(32 * 1024 * 1024, 1));");
+  const runner = await ContainerValidationProfileRunner.create({ repositoryRoot: source, runtime: runtime!, packageManager: "node", timeoutMs: 30_000 });
+  const report = await runner.run({ label: "baseline", profiles: [{ ...profile, executable: "node", args: ["exhaust.mjs"] }] });
+  assert.equal(report.observations[0]?.outcome, "execution-failed", JSON.stringify(report));
+  assert.equal(report.observations[0]?.diagnostics[0]?.code, "command-execution-failed", "the container was killed by its memory quota, not just the timeout");
 });
