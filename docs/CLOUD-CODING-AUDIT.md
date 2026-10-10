@@ -96,11 +96,13 @@ PR and progress entry. This change is not deployed or live-verified.
 
 Local evidence: strict CLI compilation passed; focused isolation tests passed
 11 with two real-container tests skipped; runner/local-script tests passed
-66/66; all 11 workflows passed the repository checker using Git Bash. The
-initial full CLI suite passed 505, failed four and skipped six. All four
+71/71 after rebasing; all 11 workflows passed the repository checker using Git
+Bash. The final full CLI suite passed 506, failed four and skipped six. All four
 failures reproduced in the same unmodified tests on a clean main worktree
 (`4f89f19`), 21 passes/four failures across those 25 baseline tests. They are
 Windows diff/file-URL and file-mode issues, not new isolation regressions.
+Temporarily disabling the hosted-isolation guard made its negative test fail;
+the source was restored and the tests passed again.
 
 ## Limitations and next slice
 
