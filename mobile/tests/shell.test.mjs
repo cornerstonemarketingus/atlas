@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { createSecureStorage, assertNoCredentialsInWebStorage, SecureStorageError, CREDENTIAL_KEYS } from "../src/secure-storage.mjs";
 import { createDeepLinkHandler } from "../src/deep-link-handler.mjs";
+import { createRemoteCompanion } from "../src/remote-companion.mjs";
 import { startShell } from "../src/bridge.mjs";
 import { createDeepLinkSigner } from "../../apps/local-control/src/mobile/deep-links.mjs";
 
@@ -24,6 +25,14 @@ function vaultPlugin() {
 function webStorage(entries) {
   const keys = Object.keys(entries);
   return { length: keys.length, key: (index) => keys[index] ?? null, getItem: (key) => entries[key] ?? null };
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+function requestPath(url) {
+  return new URL(url, "https://atlas.example.invalid").pathname;
 }
 
 test("device credentials go to the platform vault and never to web storage", async () => {
@@ -161,6 +170,166 @@ test("a shell with no biometric hardware reports it instead of pretending", asyn
   const identity = await shell.verifyIdentity({ reason: "Approve" });
   assert.equal(identity.verified, false);
   assert.match(identity.reason, /no biometric hardware/u);
+});
+
+test("the remote companion exposes signed-in session expiry honestly", async () => {
+  const plugin = vaultPlugin();
+  const shell = await startShell({
+    platform: "ios",
+    signer: createDeepLinkSigner({ secret: SECRET }),
+    navigate: async () => {},
+    remote: { webOrigin: "https://atlas.example.invalid" },
+    fetch: async (url) => {
+      const path = requestPath(url);
+      if (path === "/api/computer/tasks") return jsonResponse({ message: "Sign in is required." }, 401);
+      throw new Error(`Unexpected fetch: ${path}`);
+    },
+    plugins: {
+      secureStorage: plugin,
+      push: { requestPermissions: async () => ({ receive: "denied" }) },
+    },
+  });
+
+  const snapshot = await shell.companion.refresh();
+  assert.equal(snapshot.sessions.daemon.state, "unpaired");
+  assert.equal(snapshot.sessions.web.state, "expired");
+  assert.equal(snapshot.sessions.overall.state, "expired");
+});
+
+test("mission refresh keeps the last real data visible while offline and reconnects cleanly", async () => {
+  const plugin = vaultPlugin();
+  await plugin.set({ key: "atlas.device.credential", value: "phone-1" });
+  let offline = false;
+  const teamMission = { id: "team-11111111-1111-1111-1111-111111111111", objective: "Ship safely", status: "running" };
+  const systemMission = { id: "mission_1", objective: "Observe honestly", status: "running" };
+  const companion = createRemoteCompanion({
+    storage: createSecureStorage({ plugin, platform: "ios" }),
+    daemonOrigin: "https://local.atlas.invalid",
+    webOrigin: "https://atlas.example.invalid",
+    fetch: async (url) => {
+      const path = requestPath(url);
+      if (path === "/api/computer/tasks") return jsonResponse({ tasks: [], approvals: [] });
+      if (offline) throw new TypeError("network down");
+      if (path === "/v1/team/missions") return jsonResponse({ missions: [teamMission] });
+      if (path === "/v1/missions") return jsonResponse({ missions: [systemMission] });
+      if (path === "/v1/approvals") return jsonResponse({ approvals: [] });
+      if (path === `/v1/team/missions/${teamMission.id}`) return jsonResponse({ mission: teamMission });
+      throw new Error(`Unexpected fetch: ${path}`);
+    },
+  });
+
+  const first = await companion.refresh();
+  assert.equal(first.sessions.daemon.state, "ready");
+  assert.equal(first.missions.status, "ready");
+  assert.equal(first.missions.items.length, 2);
+
+  const detail = await companion.mission({ id: teamMission.id, source: "team" });
+  assert.equal(detail.ok, true);
+  assert.equal(detail.mission.title, "Ship safely");
+
+  offline = true;
+  const second = await companion.refresh();
+  assert.equal(second.sessions.daemon.state, "offline");
+  assert.equal(second.missions.status, "offline");
+  assert.equal(second.missions.items.length, 2, "the last real mission list stays visible");
+
+  offline = false;
+  const third = await companion.refresh();
+  assert.equal(third.sessions.daemon.state, "ready");
+  assert.equal(third.missions.status, "ready");
+});
+
+test("approval decisions are bound to the exact action and refuse mismatch, expiry, and replay", async () => {
+  const plugin = vaultPlugin();
+  let biometricChecks = 0;
+  const decisions = [];
+  const now = Date.now();
+  const freshExpiry = new Date(now + 5 * 60_000).toISOString();
+  const expiredAt = new Date(now - 1_000).toISOString();
+  const approvals = [
+    { id: randomUUID(), summary: "Send the customer renewal email", actionHash: "a".repeat(64), status: "pending", expiresAt: freshExpiry },
+    { id: randomUUID(), summary: "Delete the production record", actionHash: "b".repeat(64), status: "pending", expiresAt: freshExpiry },
+    { id: randomUUID(), summary: "Publish the stale campaign", actionHash: "c".repeat(64), status: "pending", expiresAt: expiredAt },
+  ];
+  const companion = createRemoteCompanion({
+    storage: createSecureStorage({ plugin, platform: "ios" }),
+    webOrigin: "https://atlas.example.invalid",
+    verifyIdentity: async () => { biometricChecks += 1; return { verified: true, at: now }; },
+    fetch: async (url, init = {}) => {
+      const path = requestPath(url);
+      if (path === "/api/computer/tasks") return jsonResponse({ tasks: [], approvals });
+      if (path.startsWith("/api/computer/approvals/")) {
+        decisions.push({ path, body: JSON.parse(init.body) });
+        return jsonResponse({ decision: JSON.parse(init.body).decision });
+      }
+      throw new Error(`Unexpected fetch: ${path}`);
+    },
+  });
+
+  const snapshot = await companion.refresh();
+  const allow = snapshot.approvals.items[0];
+  const deny = snapshot.approvals.items[1];
+  const expired = snapshot.approvals.items[2];
+
+  const mismatch = await companion.decideApproval({ approval: deny, decision: "deny", actionBinding: allow.actionBinding });
+  assert.equal(mismatch.accepted, false);
+  assert.equal(mismatch.status, "binding-mismatch");
+
+  const approved = await companion.decideApproval({ approval: allow, decision: "allow" });
+  assert.equal(approved.accepted, true);
+  assert.equal(approved.status, "approved");
+
+  const denied = await companion.decideApproval({ approval: deny, decision: "deny" });
+  assert.equal(denied.accepted, true);
+  assert.equal(denied.status, "rejected");
+
+  const replayed = await companion.decideApproval({ approval: allow, decision: "allow" });
+  assert.equal(replayed.accepted, false);
+  assert.equal(replayed.status, "replayed");
+
+  const expiredDecision = await companion.decideApproval({ approval: expired, decision: "allow" });
+  assert.equal(expiredDecision.accepted, false);
+  assert.equal(expiredDecision.status, "expired");
+
+  assert.deepEqual(decisions.map(({ body }) => body.decision), ["approved", "rejected"]);
+  assert.equal(biometricChecks, 1, "high-risk hosted approvals trigger biometric gating before Atlas sends the decision");
+});
+
+test("biometric freshness covers only a short window for sensitive local approvals", async () => {
+  const plugin = vaultPlugin();
+  await plugin.set({ key: "atlas.device.credential", value: "phone-1" });
+  let currentNow = 1_000_000;
+  let biometricChecks = 0;
+  const approvals = [
+    { id: randomUUID(), summary: "Send the welcome email", capability: "communications.send", actionDigest: "digest-1", status: "pending", expiresAt: new Date(currentNow + 60_000).toISOString() },
+    { id: randomUUID(), summary: "Send the invoice", capability: "communications.send", actionDigest: "digest-2", status: "pending", expiresAt: new Date(currentNow + 60_000).toISOString() },
+  ];
+  const companion = createRemoteCompanion({
+    storage: createSecureStorage({ plugin, platform: "ios" }),
+    daemonOrigin: "https://local.atlas.invalid",
+    now: () => currentNow,
+    verifyIdentity: async () => { biometricChecks += 1; return { verified: true, at: currentNow }; },
+    fetch: async (url, init = {}) => {
+      const path = requestPath(url);
+      if (path === "/v1/team/missions") return jsonResponse({ missions: [] });
+      if (path === "/v1/missions") return jsonResponse({ missions: [] });
+      if (path === "/v1/approvals") return jsonResponse({ approvals });
+      if (path.startsWith("/v1/approvals/")) return jsonResponse({ approval: { id: path.split("/")[3], status: JSON.parse(init.body).decision } });
+      if (path === "/api/computer/tasks") return jsonResponse({ tasks: [], approvals: [] });
+      throw new Error(`Unexpected fetch: ${path}`);
+    },
+  });
+
+  const snapshot = await companion.refresh();
+  assert.equal(snapshot.approvals.items.length, 2);
+
+  const first = await companion.decideApproval({ approval: snapshot.approvals.items[0], decision: "allow" });
+  assert.equal(first.accepted, true);
+
+  currentNow += 30_000;
+  const second = await companion.decideApproval({ approval: snapshot.approvals.items[1], decision: "allow" });
+  assert.equal(second.accepted, true);
+  assert.equal(biometricChecks, 1, "the second approval reuses a still-fresh re-authentication");
 });
 
 test("the Capacitor configuration does not weaken transport security", async () => {
