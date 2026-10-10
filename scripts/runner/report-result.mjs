@@ -41,17 +41,53 @@ export function buildResultPayload({ taskId, summary, correlationId }) {
   return withCorrelationId({ taskId, summary }, correlationId);
 }
 
+// Retry only recognized transport failures. Redirect refusal, invalid URLs,
+// TLS/certificate errors and other configuration failures remain terminal.
+const TRANSIENT_TRANSPORT_CODES = new Set([
+  "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND",
+  "ENETUNREACH", "EHOSTUNREACH", "EPIPE", "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT",
+]);
+
+function transientTransportFailure(error) {
+  if (error?.name === "TimeoutError") return true;
+  const cause = error?.cause ?? error;
+  if (TRANSIENT_TRANSPORT_CODES.has(cause?.code)) return true;
+  // Node may report several failed address attempts in one AggregateError.
+  return Array.isArray(cause?.errors) && cause.errors.length > 0
+    && cause.errors.every((failure) => TRANSIENT_TRANSPORT_CODES.has(failure?.code));
+}
+
 export async function deliverResult({ endpoint, token, payload }, fetcher = fetch) {
+  // The receiver's task/run/attempt IDs make an acknowledgement lost after
+  // commit safe to retry. Snapshot the evidence so every attempt is identical.
+  const body = JSON.stringify(payload);
   for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await fetcher(endpoint, {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(20000),
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (response.ok) return { delivered: true };
-    // Manually dispatched maintenance jobs have no hosted conversation.
-    if (response.status === 404) return { delivered: false, reason: 'task-not-found' };
-    if (response.status < 500 || attempt === 2) throw new Error(`Result delivery failed: HTTP ${response.status}`);
+    let response;
+    try {
+      response = await fetcher(endpoint, {
+        method: "POST", redirect: "error", signal: AbortSignal.timeout(20000),
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body,
+      });
+    } catch (error) {
+      if (!transientTransportFailure(error)) {
+        throw new Error("Result delivery failed: request could not be sent.");
+      }
+      if (attempt === 2) {
+        throw new Error("Result delivery failed: transport unavailable after 3 attempts.");
+      }
+    }
+    if (response) {
+      // Only response metadata is needed; release a retry's unused body.
+      try { await response.body?.cancel(); } catch { /* no response text is surfaced */ }
+      if (response.ok) return { delivered: true };
+      // Manually dispatched maintenance jobs have no hosted conversation.
+      if (response.status === 404) return { delivered: false, reason: 'task-not-found' };
+      if (response.status < 500 || attempt === 2) throw new Error(`Result delivery failed: HTTP ${response.status}`);
+    }
+    // Two bounded waits (250ms, 500ms) prevent a tight outage retry loop.
+    await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
   }
 }
 

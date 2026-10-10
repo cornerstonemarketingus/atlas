@@ -1,3 +1,59 @@
+# Atlas OS — production implementation queue — 2026-10-08
+
+This queue supersedes the historical branch checkmarks below. The current
+architecture inventory, existing capabilities, disconnected modules, PR
+reconciliation and runtime evidence are in [ARCHITECTURE.md](ARCHITECTURE.md).
+No completion percentage or duplicate TODO is used. Active claims are respected;
+"owner review" means PROGRAM section 3 / CODEOWNERS, not another approval for
+ordinary reversible engineering work.
+
+## Production implementation queue — 2026-10-08
+
+| Priority / task | Reuse and exact scope | Dependencies | Acceptance and required tests | Risk / owner intervention |
+|---|---|---|---|---|
+| P0: finish credential/approval boundaries (existing #234/#235/#233 owners) | `apps/local-control/src/agent/tool-registry.mjs`, `platform/{executor,adapters,policy}.mjs`, vault and broker | Reconcile broker with adapter execution, owner review | Actual authenticated tool execution refuses expired/wrong-principal/context approval, cannot mint policy privileges, credentials absent from tool/model/receipts, late lookup after cancel cannot execute; SQLite concurrent consume + real HTTP + daemon journey + mutation guards | High; protected owner review required; do not duplicate active implementation |
+| P0: reject unverified/stale self-improvement merges (#242/#243 owner) | `platform/self-improve/service.mjs`, existing candidate/approval stores | Exact verified commit + base digest, required CI | Changed candidate or base refused; only verified candidate promoted; failed reviewer/CI holds; real isolated-worktree tests | High; protected owner review required |
+| P0: native Workers AI streaming/cancel reliability (#238/#240 owner) | `apps/web/app/api/chat/{agent-loop,providers,workers-ai-binding}.mjs`, current governor | Reconcile #233 binding and #241 continuation fixes | Real native SSE text/tools; reader cancel propagates; every reservation released; multi-round selected-provider hosted smoke; existing inference-chaos + provider gates | Medium/high; review owned provider/security changes, deployed provider access required |
+| P1 immediate: recover cloud result callback (#244 claimed here) | `scripts/runner/report-result.mjs`, `report-result.test.mjs`; retain OIDC receiver `apps/web/app/api/tasks/result/route.ts` and stable IDs | Existing idempotent batch receiver; no new deployment service | Real HTTP reset and lost acknowledgement recover with identical bytes and <=3 attempts; retries bounded/backed off; permanent 4xx and redirects do not retry; safe error text; full runner/local suite and independent review | Low/medium; ordinary PR, no added spend or owner setup |
+| P1: shared runner/hosted provider allowance | `packages/atlas-inference/src/`, `apps/web/app/api/inference/`, `worker/inference-governor*.mjs`, CLI provider wrappers | Authenticated rate-limited governor boundary; per-tenant scope and approved credential refs | Concurrent CLI+chat reservations cannot overspend; billing differs from 429; streams/cancel/worker death release or expire; no auth-free public ledger; integration over real transport + mixed-call failure injection | High; protected endpoint review, provider setup for live gate |
+| P1: durable cloud coding continuation, first LOCAL/CLOUD/HYBRID slice | `src/agent/{runtime,session-store,mission-service}.mjs`, `src/agent/kernel/`, `platform/task-store.mjs`, Actions runner and hosted task/event APIs | Security fixes, durable external checkpoint/artifact store and worker identity | One approved cloud repo task persists goal/budget/tool receipts; lease loss kills stale worker; retry resumes completed evidence without rerunning mutation; phone/tab disconnect irrelevant; real worker kill/restart and idempotent-action tests | High; protected credentials/workflow review; owner must choose storage/runner account and budget, no GPU provision |
+| P1: exact cloud dispatch outbox and recovery | `apps/web/app/api/tasks/route.ts`, local transactional outbox patterns, hosted task schema | Durable worker/task contract, idempotent dispatch attempt identity | Persist task before dispatch, reconcile accepted dispatch with failed persistence/ack; no orphaned task or duplicated coder mutation; real D1 transaction + crash/failure injection tests | High; protected tenant/auth review; coordinated migration |
+| P1: atomic paid task caps (#203) and hosted API rate limits (#69) | `apps/web/app/api/billing/plan.mjs`, task usage, existing cap patch; existing D1 rate-limit patch | Current-base rebase; distinguish paid cap from security throttle | Concurrent submissions cannot exceed shared allowance or lose increments; stable Retry-After on hostile burst; account/IP isolation; real SQLite/D1 race tests | High; protected tenant/rate-limit review; Stripe owner setup before paid acceptance |
+| P1: restore cloud browser consumer and takeover (#237/#105) | `apps/browser-worker/src/`, hosted `app/api/computer/`, local operator journal | Worker identity, isolation/egress, lease and artifact store; #237 Windows validation | Queued cloud browser task actually runs without PC; watch/take/handback/resume all authorized; browser continuity; mandatory fresh observation after handback; no profile/secret public endpoints; real Chromium + network + worker crash tests | High; protected egress/approval review and selected cloud host/budget |
+| P2: Genesis visual editor (#74/#181 owner) | `platform/genesis/{preview,service,executor,inspector}.mjs`, existing static-site picker/source edit PR | Rebase existing text vertical slice, secure preview message mapping | Select known source element; edit text through real change request; repair verifies preview desktop/mobile; forged message/path rejected. Then spacing/color/delete/move/component variants separately; actual CLI+Chromium tests | Medium/high; review preview/source confinement; no duplicate template system |
+| P2: hosted Genesis build/deploy | `platform/genesis/`, `agent/infrastructure/`, shared auth/files/secrets/jobs/queue templates | Cloud runtime, scoped deploy credentials, exact approval | Generate -> checks -> preview -> repair -> approved deployment -> production health, artifact and rollback evidence; failure-path integration, not provider stubs alone | High; owner deployment account, review and configured spend |
+| P2: wire signed skills and capability-gap proposals | `platform/skills/{package,skill-registry,proposals,approvals}.mjs`, kernel `capabilities.mjs`, live ToolRegistry and MCP gateway | Exact package-digest approval, independent reviewer and test runner | Missing capability records proposal; signed package tested/reviewed; owner install approval bound to digest; approved tools loaded with narrowed permissions; revoke removes execution access; real daemon load/restart/tamper tests | High; protected skill approval review; explicit installation authorization |
+| P2: evaluation/replay independent release gates (#128/#236 owner) | existing event/audit/replay modules, #236 manifests/benchmarks, Genesis regression scenarios | Stable run provenance, runtime/receipt boundaries | 30–50 real repo tasks graded by actual tests; failed and flaky baseline separated; side-effect-free replay cannot call live tools; reviewer independence; actual trace/eval artifact in release | Medium/high; owner review for protected release workflow changes; explicit model budget |
+| P2: first external user onboarding/mobile (#61) | `/setup`, model diagnosis/settings, repository/tenant routes, `mobile/src/` and secure storage | Generic authorized cloud repository execution, tenant/member UI and revocable scoped identity | Fresh account -> configure model -> independent repo -> choose cloud -> coding -> observe -> exact approval -> verified result, tested on mobile widths and native shell; missing external setup explained truthfully | High; OAuth/GitHub App and optional Stripe owner configuration, native signing accounts |
+
+## Immediate implementation evidence
+
+#244 was selected only after code, open-PR file ownership and active issue
+claims were checked. `report-result.mjs` is the workflow's real callback sender;
+`deliverResult()` currently retries only HTTP 5xx. A fetch connection reset or
+timeout escapes the loop. The receiver already validates signed OIDC run/task
+identity and stores result/message with stable `result:task:run:attempt` IDs in
+an idempotent batch. Reuse that design instead of introducing another queue or
+credential. Baseline callback tests 5/5; runner/local scripts 63/63. Five regressions were
+added first: all five failed against the original sender. The real HTTP fixture
+commits a result then closes the socket before acknowledging it; the fixed sender
+retries identical bytes, and the stable-ID fixture retains one accepted result.
+The D1/OIDC receiver itself is unchanged and is not claimed as a live failure-
+injection deployment test. Real reset exhaustion stops at three requests. Real
+redirect refusal sends no credential to the destination. Timeout and permanent
+4xx/configuration cases, fresh attempt signals and payload snapshots are covered.
+After implementation: callback 10/10; runner/local scripts 68/68; syntax and
+`git diff --check` clean. Guard mutations that disable retry classification or
+re-serialize mutable evidence both fail, and restored focused tests pass. No
+credentials, runner workflow, authorization or privileged infrastructure changed.
+
+The shared `docs/PROGRESS.md` is edited by multiple active PRs. #244 records its
+handoff in this existing queue and its issue/PR until those owners' changes are
+integrated; no overlapping handoff edits are made here.
+
+---
+
+## Historical phased backlog (2026-09-24; retained for provenance)
 # Atlas OS — phased backlog (phases 0–9)
 
 Derived from `AUDIT.md` and `SECURITY-REVIEW.md`. Sizes: **S** ≤1 day,
