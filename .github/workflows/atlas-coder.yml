@@ -86,6 +86,9 @@ jobs:
       ATLAS_MERGE_POLICY: ${{ github.event.inputs.merge_policy }}
       ATLAS_OUTPUT_DIR: ${{ github.workspace }}/atlas-output
       ATLAS_REPOSITORY_ROOT: ${{ github.workspace }}/target
+      # The native coder keeps model/GitHub credentials on the trusted runner.
+      # Target-controlled validation runs only in disposable, offline containers.
+      ATLAS_VERIFY_CONTAINER: /usr/bin/docker
     steps:
       - name: Check out trusted runner policy
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -118,9 +121,10 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Install target validation dependencies
-        working-directory: target/packages/atlas-cli
-        run: npm ci --ignore-scripts
+      - name: Prepare required validation sandbox
+        run: |
+          docker version --format '{{.Server.Version}}'
+          docker pull node:22-bookworm-slim
 
       # Runs a model on the runner itself instead of calling a vendor. Opt-in:
       # with ATLAS_SELF_HOSTED_MODEL unset this step is skipped entirely and

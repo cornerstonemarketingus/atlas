@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
+import { coderValidationArguments } from "./validation-isolation.mjs";
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const outputDirectory = process.env.ATLAS_OUTPUT_DIR;
@@ -174,6 +175,8 @@ if (metadata.mode === "inspect") {
   writeStatus("completed", "Build and test succeeded on the requested branch.");
   console.log("Atlas debug run completed: build and test passed.");
 } else if (metadata.mode === "coder") {
+  // Refuse hosted misconfiguration before any model call or target execution.
+  const validationArguments = coderValidationArguments();
   // The vendor is an operator choice, not a hardcoded one. ATLAS_CODER_PROVIDER
   // is validated here rather than passed through blindly so a typo fails with a
   // clear status instead of a CLI usage error buried in a log, and so this
@@ -222,6 +225,7 @@ if (metadata.mode === "inspect") {
     "--model", model,
     "--format", "json",
   ];
+  codeArgs.push(...validationArguments);
   // A durable, redacted record of what the agent did, uploaded with the run's
   // other artifacts. Written by the CLI, so it goes through the same redactor
   // as everything else the agent emits.

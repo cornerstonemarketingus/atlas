@@ -1,0 +1,47 @@
+name: Cloud validation isolation
+
+on:
+  pull_request:
+    paths:
+      - packages/atlas-cli/**
+      - apps/local-control/src/platform/terminal/container-sandbox.mjs
+      - scripts/runner/run-task.mjs
+      - scripts/runner/validation-isolation*.mjs
+      - .github/workflows/atlas-coder.yml
+      - .github/workflows/cloud-validation.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/atlas-cli/**
+      - apps/local-control/src/platform/terminal/container-sandbox.mjs
+      - scripts/runner/run-task.mjs
+      - scripts/runner/validation-isolation*.mjs
+      - .github/workflows/atlas-coder.yml
+      - .github/workflows/cloud-validation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  isolation:
+    name: Native coder container journey
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Build native coder
+        working-directory: packages/atlas-cli
+        run: npm ci --ignore-scripts && npm run build
+      - name: Prepare validation sandbox
+        run: docker pull node:22-bookworm-slim
+      - name: Verify real isolation and native repair loop
+        working-directory: packages/atlas-cli
+        env:
+          # Required: Docker failure fails this job instead of skipping tests.
+          ATLAS_TEST_CONTAINER_RUNTIME: /usr/bin/docker
+        run: node --test dist/tests/container-*.test.js
