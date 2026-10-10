@@ -120,8 +120,9 @@ test("through the tool registry: allowed work runs and is audited, level 4 asks,
 
   const leak = await registry.invoke({ name: "communications.post", rawArguments: { body: `key sk-${"x".repeat(32)}` }, sessionId: "s", approvals: { check: async () => true } });
   assert.equal(leak.status, "rejected");
-  assert.equal(leak.code, "PROHIBITED");
-  assert.match(leak.message, /will not do this/u);
+  assert.equal(leak.code, "PLAINTEXT_CREDENTIAL", "credential-bearing input is refused before autonomy assessment");
+  assert.match(leak.message, /reference credentials/u);
+  assert.equal(JSON.stringify(leak).includes(`sk-${"x".repeat(32)}`), false);
   assert.deepEqual(ran, ["ls", "rm -rf /srv/data"], "the prohibited send never executed, even with an approval");
 });
 

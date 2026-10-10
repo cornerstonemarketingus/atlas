@@ -300,15 +300,16 @@ test("replay reconstructs the timeline, accounts cost, and redacts secrets", asy
   assert.equal(report.status, "completed");
   assert.deepEqual(report.transitions.map((tr) => tr.to), ["authorized", "queued", "running", "verifying", "completed"]);
   assert.equal(report.toolCalls.length, 2);
-  assert.equal(report.toolCalls[0].decisions[0].effect, "allow");
-  assert.equal(report.cost.toolCalls, 2);
+  assert.equal(report.toolCalls[0].decisions[0].effect, "deny", "plaintext credentials cannot become tool arguments");
+  assert.equal(report.cost.toolCalls, 1);
   assert.equal(report.cost.inputTokens, 300);
-  assert.equal(report.cost.costMicroUsd, 3 * 7 + 2 * 3);
+  assert.equal(report.cost.costMicroUsd, 3 * 7 + 1 * 3);
   assert.deepEqual(report.usage.recomputed, report.usage.recorded);
   assert.ok(report.timeline.some((e) => e.type === "artifact.verified"));
   const serialized = JSON.stringify(report);
   assert.equal(serialized.includes(SECRET), false, "secrets never appear in a replay report");
-  assert.match(serialized, /REDACTED/u);
+  assert.match(serialized, /redacted/iu);
+  assert.equal(JSON.stringify(store.getToolCalls(A, task.id)).includes(SECRET), false, "raw tool inputs are not persisted");
   assert.equal(replayExecution(store, "tenant-b", task.id).found, false, "replay is tenant-scoped");
 });
 
