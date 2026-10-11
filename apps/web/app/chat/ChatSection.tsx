@@ -1,7 +1,9 @@
 "use client";
 import Link from "next/link";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { classifyIntent } from "./intent.mjs";
+import { createScrollFollow } from "./scroll-follow.mjs";
+import "./scroll-follow.css";
 import { MessageBody } from "./MessageBody.js";
 import { TaskActivity } from "./TaskActivity.js";
 import { AgentTree, ToolSteps, WorkPanel, itemFromPreview, type Preview, type AgentNode, type LogLine, type ToolStep, type WorkItem } from "./Workspace.js";
@@ -82,7 +84,13 @@ export function ChatSection() {
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
   const logSerial = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
-  const endRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [scrollFollow] = useState(() => createScrollFollow(() => scrollRef.current));
+  const [following, setFollowing] = useState(true);
+  const touchY = useRef<number | null>(null);
+  const resetFollowing = useCallback(() => { scrollFollow.reset(); setFollowing(true); }, [scrollFollow]);
+  function pauseFollowing() { scrollFollow.pause(); setFollowing(false); }
 
   function addLog(line: Omit<LogLine, "id" | "at">) {
     logSerial.current += 1;
@@ -122,7 +130,14 @@ export function ChatSection() {
     return () => window.removeEventListener(PROJECT_CHANGE_EVENT, update);
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [messages, sending, streaming, suggestion]);
+  useEffect(() => { scrollFollow.contentChanged(); }, [messages, sending, streaming, suggestion, thinking, liveSteps, liveAgents, tasks, scrollFollow]);
+
+  useEffect(() => {
+    const observer = new ResizeObserver(() => scrollFollow.contentChanged());
+    if (contentRef.current) observer.observe(contentRef.current);
+    if (scrollRef.current) observer.observe(scrollRef.current);
+    return () => observer.disconnect();
+  }, [scrollFollow]);
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("conversation");
@@ -131,14 +146,16 @@ export function ChatSection() {
       .then((response) => response.ok ? response.json() : null)
       .then(async (detail: Detail | null) => {
         if (!detail) return;
+        resetFollowing();
         setConversationId(requested);
         setMessages(detail.messages ?? []);
         setTasks(await withLiveTaskStatus(detail.tasks ?? []));
       })
       .catch(() => setNotice("That conversation could not be loaded."));
-  }, []);
+  }, [resetFollowing]);
 
   async function openThread(id: string) {
+    resetFollowing();
     setStored(true);
     setConversationId(id);
     setNotice("");
@@ -168,7 +185,7 @@ export function ChatSection() {
     }
   }
 
-  function startNew() { setStored(true); abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
+  function startNew() { resetFollowing(); setStored(true); abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
 
   useEffect(() => {
     if (!conversationId || !stored || sending) return;
@@ -202,6 +219,7 @@ export function ChatSection() {
     event.preventDefault();
     const text = draft.trim();
     if (!text || sending) return;
+    resetFollowing();
     setDraft("");
     setNotice("");
     const intent = classifyIntent(text, { hasProject: Boolean(repository) });
@@ -363,7 +381,21 @@ export function ChatSection() {
         onClick={() => togglePanel()} title="Show what Atlas is doing: terminal log and files">{panelOpen ? "Hide panel" : `Terminal${items.length ? ` · ${items.length} files` : ""}`}</button>
     </>}
   >
-    <div className="section-scroll">
+    {/* Keyboard focus makes this scrolling region usable without a pointer. */}
+    {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex, jsx-a11y/no-noninteractive-element-interactions */}
+    <div className="section-scroll" ref={scrollRef} role="region" tabIndex={0} aria-label="Chat history"
+      onScroll={() => setFollowing(scrollFollow.onScroll())}
+      onWheel={(event) => { if (event.deltaY < 0) pauseFollowing(); }}
+      onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? null; }}
+      onTouchMove={(event) => {
+        const y = event.touches[0]?.clientY;
+        if (y !== undefined && touchY.current !== null && y > touchY.current) pauseFollowing();
+        touchY.current = y ?? null;
+      }}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) pauseFollowing();
+      }}>
+      <div ref={contentRef}>
       {messages.length === 0 ? <div className="section-empty">
         <div className="empty-mark"><AtlasMark /></div>
         <h1>What do you want to accomplish?</h1>
@@ -400,9 +432,11 @@ export function ChatSection() {
         {tasks.map((task) => <TaskActivity key={task.taskId} task={task} onLog={addLog} onChanges={addItems}
           onOpenFile={(id) => { setSelectedItem(id); setPanelTab("files"); togglePanel(true); }} />)}
       </div>}
-      <div ref={endRef} />
+      </div>
     </div>
     <form className="chat-composer" onSubmit={send}>
+      {!following && <button type="button" className="secondary jump-to-latest"
+        onClick={() => { scrollFollow.jump(); setFollowing(true); }}>↓ Jump to latest</button>}
       {blocked && <p className="composer-blocked">
         Questions need an AI model connection. Project and computer tasks can still start. {ready?.reason} <Link href="/setup">Open Connections →</Link>
       </p>}
