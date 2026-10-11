@@ -1,0 +1,77 @@
+"use client";
+import { useEffect, useState } from "react";
+import { readTaskRequests, requestExplanation } from "./request-inspection-client.mjs";
+import "./request-history.css";
+
+type SavedRequest = {
+  requestKey: string; createdAt: string; state: string; receiptState: string; outcomeStatus: number | null;
+  task: null | { taskId: string; conversationId: string | null; repository: string; branch: string; objective: string; dispatchState: string };
+};
+
+/** Read-only investigation remains reachable without a composer draft or local retry cache. */
+export function RequestHistory({ version = 0 }: { version?: number }) {
+  const [open, setOpen] = useState(false);
+  const [requests, setRequests] = useState<SavedRequest[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [previous, setPrevious] = useState<Array<string | null>>([]);
+  const [notice, setNotice] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const [checking, setChecking] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const body = await readTaskRequests({ cursor, signal: controller.signal });
+        if (active) { setRequests(body.requests); setNextCursor(body.nextCursor); setNotice(""); }
+      } catch {
+        if (active) { setRequests([]); setNextCursor(null); setNotice("Saved requests are unavailable. Try again later."); }
+      }
+      finally { if (active) setLoading(false); }
+    };
+    void load();
+    const timer = setInterval(() => { if (!document.hidden) void load(); }, 12000);
+    return () => { active = false; controller.abort(); clearInterval(timer); };
+  }, [open, cursor, refresh, version]);
+
+  async function check(requestKey: string) {
+    setChecking(requestKey);
+    try {
+      const body = await readTaskRequests({ requestKey });
+      setRequests(items => items.map(item => item.requestKey === requestKey ? body.request : item));
+      setNotice("");
+    } catch {
+      setRequests([]); setNextCursor(null);
+      setNotice("This request is unavailable. Refresh its history to check access and status.");
+    }
+    finally { setChecking(null); }
+  }
+
+  return <details className="request-history" onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary>Saved requests</summary>
+    {open && <div className="request-history-body">
+      <p>Check an earlier request after reconnecting. These checks do not start or bill another task.</p>
+      <button type="button" disabled={loading} onClick={() => setRefresh(value => value + 1)}>Refresh requests</button>
+      {notice && <p role="status">{notice}</p>}
+      {!loading && !notice && requests.length === 0 && <p>No saved requests in this workspace.</p>}
+      {requests.map(request => <article key={request.requestKey}>
+        <h3>{request.task?.objective || `Request ${request.requestKey.slice(0, 8)}`}</h3>
+        <p>{requestExplanation(request)}</p>
+        <small>{request.createdAt} UTC{request.task ? ` · ${request.task.repository} · ${request.task.branch}` : ""}</small>
+        <div className="request-history-actions">
+          <button type="button" disabled={checking !== null} onClick={() => void check(request.requestKey)}>{checking === request.requestKey ? "Checking…" : "Check request"}</button>
+          {request.task?.conversationId && <a href={`/?conversation=${encodeURIComponent(request.task.conversationId)}`}>Open task activity</a>}
+        </div>
+      </article>)}
+      <nav aria-label="Request history pages">
+        <button type="button" disabled={loading || previous.length === 0} onClick={() => { setCursor(previous.at(-1) ?? null); setPrevious(items => items.slice(0, -1)); }}>Newer</button>
+        <button type="button" disabled={loading || !nextCursor} onClick={() => { setPrevious(items => [...items, cursor]); setCursor(nextCursor); }}>Older</button>
+      </nav>
+    </div>}
+  </details>;
+}
