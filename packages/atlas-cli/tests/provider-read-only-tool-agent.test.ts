@@ -171,7 +171,7 @@ test("recovers from an invented tool name by naming the real tools", async () =>
   // the session-level catch, and an entire unattended run was lost to a name
   // the model would have corrected if anything had told it the truth.
   const provider = new MockModelProvider({ metadata, responses: [
-    response("one", [{ type: "tool-call", id: "call-1", name: "repo.inspect", arguments: {} }], "tool-calls"),
+    response("one", [{ type: "tool-call", id: "call-1", name: "unavailable.inspect", arguments: {} }], "tool-calls"),
     response("two", [{ type: "tool-call", id: "call-2", name: tool.name, arguments: {} }], "tool-calls"),
     response("three", [{ type: "text", text: "Atlas is a TypeScript repository." }], "stop"),
   ] });
@@ -286,3 +286,68 @@ test("invalid tool input is corrected on the next turn and remains audited", asy
   assert.equal(payload.code, "INVALID_TOOL_INPUT");
   assert.ok(audit.snapshot().some(event => event.type === "tool.completed" && (event.payload as { errorCode?: string }).errorCode === "INVALID_TOOL_INPUT"));
 });
+
+for (const alias of ["repo.search", "repo_browser.search", "repository_search", "repositorySearch", "repository-search", "Repository.Search", "repo_browser.read_file", "repositoryReadSource"]) {
+  test(`repairs ${alias} at dispatch without a corrective model turn`, async () => {
+    const canonical = /read/iu.test(alias) ? "repository.read_source" : "repository.search";
+    let executions = 0;
+    const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
+    target.register({ name: canonical, description: "Read", risk: "low",
+      validateInput: input => { assert.deepEqual(Object.entries(input as Record<string, unknown>), [["query", "Atlas"]]); return input; },
+      execute: async () => { executions++; return { evidence: "found" }; } });
+    const provider = new MockModelProvider({ metadata, responses: [
+      response("one", [{ type: "tool-call", id: "alias", name: alias, arguments: { query: "Atlas" } }], "tool-calls"),
+      response("two", [{ type: "text", text: "Found evidence." }], "stop"),
+    ] });
+    const audit = new InMemorySessionAuditLog();
+    const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: target,
+      tools: [{ ...tool, name: canonical }], audit, maximumToolCalls: 1, maximumTurns: 2 });
+    const result = await agent.run({ sessionId: "alias", objective: "Read evidence", evidence: [],
+      scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" } });
+    assert.equal(result.status, "completed");
+    assert.equal(executions, 1);
+    assert.equal(result.trace.turns, 2);
+    assert.equal(result.trace.toolCalls, 1);
+    const message = provider.requests[1]?.messages.at(-1);
+    assert.equal(message?.role === "tool" ? message.isError : undefined, false);
+    assert.equal(message?.role === "tool" ? message.toolCallId : undefined, "alias");
+    const entry = audit.snapshot().find(event => event.type === "tool.requested");
+    assert.deepEqual(entry?.payload, { requestId: "alias:model:1", toolCallId: "alias",
+      toolId: canonical, argumentCount: 1, requestedToolId: alias, repair: "automatic" });
+  });
+}
+
+for (const scenario of ["ambiguous", "unoffered", "unoffered-exact", "deny", "ask", "scope"] as const) {
+  test(`alias dispatch preserves ${scenario} boundary`, async () => {
+    let executions = 0;
+    const names = scenario === "ambiguous" ? ["repository.search", "repository_search"] : ["repository.search"];
+    const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: {
+      defaultDecision: scenario === "deny" ? "deny" : scenario === "ask" ? "ask" : "allow", rules: [],
+    } });
+    for (const name of names) target.register({ name, description: "Search", risk: "low",
+      validateInput: input => input, execute: async () => { executions++; return {}; } });
+    const provider = new MockModelProvider({ metadata, responses: [
+      response("one", [{ type: "tool-call", id: "alias", name: scenario === "unoffered-exact" ? "repository.search" : "repo.search", arguments: {} }], "tool-calls"),
+      response("two", [{ type: "text", text: "Could not execute." }], "stop"),
+    ] });
+    const offered = scenario.startsWith("unoffered") ? [] : names.map(name => ({ ...tool, name }));
+    const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: target, tools: offered,
+      audit: new InMemorySessionAuditLog() });
+    const result = await agent.run({ sessionId: "guard", objective: "Search", evidence: [],
+      scope: { kind: "repository", repositoryId: scenario === "scope" ? "other" : "atlas" }, context: { repositoryId: "atlas" } });
+    assert.equal(executions, 0);
+    if (scenario === "deny" || scenario === "scope") {
+      assert.equal(result.status, "failed");
+      assert.equal(provider.requests.length, 1);
+    } else if (scenario === "ask") {
+      assert.equal(result.status, "approval-required");
+      assert.equal(result.status === "approval-required" ? result.toolName : undefined, "repository.search");
+      assert.equal(provider.requests.length, 1);
+    } else {
+      const message = provider.requests[1]?.messages.at(-1);
+      const payload = JSON.parse(message?.content[0]?.type === "text" ? message.content[0].text : "{}");
+      assert.equal(payload.code, "TOOL_NOT_FOUND");
+      assert.deepEqual(payload.availableTools, offered.map(item => item.name));
+    }
+  });
+}
