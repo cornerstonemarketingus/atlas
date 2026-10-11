@@ -36,7 +36,7 @@ repository, task UUID in `display_title`, workflow, trusted `main` branch,
 run assignment cannot authorize cancellation. If no run ID is saved, one
 bounded listing may discover a unique exact match; missing or ambiguous
 matches are refused. Requests cannot supply a repository, credential or run ID.
-The existing activity identity helper now reads `display_title` before `name`:
+The existing activity identity helper and task-list normalization now read `display_title` before `name`:
 GitHub's real API separates a workflow label from its custom run title.
 
 Before the external POST, D1 saves an intent through a tenant/principal-scoped
@@ -64,11 +64,13 @@ private executors, unavailable credentials/audit storage, lost acknowledgements,
 provider refusal and completion races. The ownership guard is mutation-checked.
 
 Executed on 2026-10-10: existing task-result/storage baseline 10/10; final
-web suite 471/471 (11 cancellation tests, including the built HTTP route and
+web suite 472/472 (11 cancellation tests, including the built HTTP route and
 live cancelled-status confirmation); web lint, typecheck, production build,
 and `git diff --check` passed. Removing the principal guard caused the negative
 test to fail; it was restored afterward. GitHub calls in integration tests are
 controlled responses, while the Worker routing and migrated database are real.
+Concurrent dispatches with reversed creation order are regression-tested
+through the actual GitHub normalization and exact task/run matcher.
 
 This does not implement a durable dispatch outbox, worker leases/replacement,
 pause/resume, or orphan sandbox reconciliation. A run not yet visible to GitHub
