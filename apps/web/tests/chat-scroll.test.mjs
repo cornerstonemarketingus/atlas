@@ -9,6 +9,16 @@ function fixture() {
   return { container, calls, follow: createScrollFollow(() => container) };
 }
 
+test("constructing the controller does not read an unmounted DOM ref", () => {
+  let mounted = false;
+  const follow = createScrollFollow(() => {
+    assert.equal(mounted, true);
+    return null;
+  });
+  mounted = true;
+  assert.equal(follow.contentChanged(), false);
+});
+
 test("initial positioning and streamed growth follow the actual container", () => {
   const { container, calls, follow } = fixture();
   follow.contentChanged();

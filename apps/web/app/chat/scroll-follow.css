@@ -1,4 +1,5 @@
-.chat-composer .jump-to-latest {
+.chat-composer .jump-to-latest,
+.atlas-side-panel-bar .jump-to-latest {
   display: block;
   margin: 0 auto 10px;
   padding: 8px 14px;
@@ -9,7 +10,9 @@
   cursor: pointer;
   font: inherit;
 }
-.chat-composer .jump-to-latest:focus-visible {
+.chat-composer .jump-to-latest:focus-visible,
+.atlas-side-panel-bar .jump-to-latest:focus-visible {
   outline: 2px solid var(--ws-accent);
   outline-offset: 2px;
 }
+.atlas-side-panel-bar .jump-to-latest { margin: 0 4px 0 auto; padding: 6px 8px; font-size: 11px; }

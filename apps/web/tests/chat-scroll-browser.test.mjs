@@ -115,6 +115,23 @@ test("real chat preserves desktop/mobile reading position through SSE, polling a
     await jump.waitFor({ state: "hidden" });
     emit("delta", { text: "Follow restored.\n\n".repeat(20) });
     await page.getByText("Follow restored.", { exact: false }).first().waitFor(); await bottom();
+    // The same bug existed in the chat's activity panel; exercise its real
+    // parent-owned log updates, rather than a second synthetic scroll element.
+    for (let i = 0; i < 80; i++) emit("tool", { id: `activity-${i}`, label: `Inspecting evidence ${i}`, state: "done" });
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    const activity = page.getByRole("log", { name: "Activity log" });
+    const activityBottom = () => page.waitForFunction(() => { const e = document.querySelector(".terminal"); return e && e.scrollHeight > e.clientHeight && e.scrollHeight - e.clientHeight - e.scrollTop < 3; });
+    await activityBottom();
+    await activity.evaluate((e) => { e.scrollTop = 100; });
+    const activityJump = page.getByRole("button", { name: "Jump to latest activity", exact: true });
+    await activityJump.waitFor();
+    const activityPosition = await activity.evaluate((e) => e.scrollTop);
+    emit("tool", { id: "activity-new", label: "Newest activity marker", state: "done" });
+    await activity.getByText("✓ Newest activity marker", { exact: true }).waitFor();
+    assert.ok(Math.abs(await activity.evaluate((e) => e.scrollTop) - activityPosition) < 2, "activity updates preserve the panel reader's position");
+    await activityJump.click(); await activityBottom();
+    await page.getByRole("button", { name: "Close panel", exact: true }).click();
+    await bottom();
     await scroll.evaluate((e) => { e.scrollTop = 500; }); await jump.waitFor();
     const beforeCompletion = await scroll.evaluate((e) => e.scrollTop);
     emit("done", { reply: { id: "final", role: "assistant", content: "Completed calculations. ".repeat(100), createdAt: "2030-01-01T00:00:00Z" } });

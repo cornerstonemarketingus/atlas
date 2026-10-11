@@ -7,7 +7,7 @@ export function nearBottom(container, threshold = BOTTOM_THRESHOLD) {
 /** Content updates never re-enable following or scroll the outer page. */
 export function createScrollFollow(containerFor) {
   let following = true;
-  let lastTop = containerFor()?.scrollTop ?? 0;
+  let lastTop = 0;
   let lastMaximum = 0;
   return {
     onScroll() {
