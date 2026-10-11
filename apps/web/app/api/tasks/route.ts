@@ -3,10 +3,11 @@ import { eq, and, desc } from "drizzle-orm";
 import { getD1, getDb } from "../../../db";
 import { conversationWritable, tenantAllowlist } from "../../../db/tenancy.mjs";
 import { NO_TENANT_MESSAGE, resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
-import { conversationMessages, conversations, repositories, runEvents, tasks } from "../../../db/schema";
+import { repositories, tasks } from "../../../db/schema";
 import { checkAndRecordUsage } from "../billing/plan.mjs";
 import { allowedRepositories, defaultMergePolicy, dispatchGitHub, validateTask, workflowForMode } from "./dispatch.mjs";
-import { credentialKind, explainDispatchFailure, explainGitHubAppFailure, explainGitHubFailure } from "./github-diagnosis.mjs";
+import { credentialKind, explainDispatchFailure, explainGitHubAppFailure } from "./github-diagnosis.mjs";
+import { dispatchSavedTask, reconcileDispatchRuns, savedDispatchStatus, saveReconciledDispatch } from "./durable-dispatch.mjs";
 import { createInstallationToken, githubAppConfiguration } from "./github-app.mjs";
 import {
   fetchGitHubJson,
@@ -112,81 +113,23 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   }
 
   const taskId = randomUUID();
-  if (githubToken) {
-    try {
-      const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
-      const response = await dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy, correlationId });
-      if (!response.ok) {
-        const failure = explainDispatchFailure(response, { workflow, repository: task.repository, credential });
-        return Response.json({ ...failure, message: `${failure.message} Nothing was started.` }, { status: 502 });
-      }
-      const recorded = await recordDispatchedTask(account, tenant.tenantId, task, taskId, mergePolicy, conversationId, "managed", correlationId);
-      return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "managed", recorded, mergePolicy }, { status: 202 });
-    } catch {
-      return Response.json({ ...explainGitHubFailure(503), message: "GitHub could not be reached, so nothing was started." }, { status: 502 });
-    }
-  }
   const endpoint = process.env.ATLAS_AGENT_DISPATCH_URL;
   const token = process.env.ATLAS_AGENT_DISPATCH_TOKEN;
-  if (!endpoint || !token) return Response.json({ message: "The autonomous task dispatcher has not been configured." }, { status: 503 });
+  if (!githubToken && (!endpoint || !token)) return Response.json({ message: "The autonomous task dispatcher has not been configured." }, { status: 503 });
+  const runner = githubToken ? "managed" : "private";
+  const identity = { taskId, conversationId, correlationId, runner, mergePolicy };
+  const workflow = workflowForMode(task.mode, { defaultWorkflow: process.env.ATLAS_GITHUB_WORKFLOW, coderWorkflow: process.env.ATLAS_CODER_WORKFLOW });
   try {
-    const response = await fetch(endpoint, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", [CORRELATION_HEADER]: correlationId }, body: JSON.stringify({ taskId, ...task, requestedBy: account.userId, commitMode: "approval-required" }) });
-    if (!response.ok) return Response.json({ message: "The autonomous task dispatcher rejected the task." }, { status: 502 });
-    // Not recorded on purpose: the custom dispatcher produces no GitHub Actions
-    // run, so a row for it could only ever be matched against — and could steal
-    // the run id of — a real Actions dispatch of the same workflow. Custom-runner
-    // deployments get no task history until they report runs of their own.
-    const recorded = await recordDispatchedTask(account, tenant.tenantId, task, taskId, mergePolicy, conversationId, "private", correlationId);
-    return Response.json({ taskId, conversationId, correlationId, status: "dispatched", runner: "private", recorded, mergePolicy }, { status: 202 });
+    const outcome = await dispatchSavedTask(getD1(), { taskId, tenantId: tenant.tenantId, account, task, conversationId, mergePolicy, executionProvider: runner, correlationId }, () => githubToken
+      ? dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy, correlationId })
+      : fetch(endpoint!, { method: "POST", redirect: "error", signal: AbortSignal.timeout(10000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json", [CORRELATION_HEADER]: correlationId }, body: JSON.stringify({ taskId, ...task, requestedBy: account.userId, commitMode: "approval-required" }) }));
+    if (outcome.state === "rejected") {
+      const failure = githubToken ? explainDispatchFailure(outcome.response!, { workflow, repository: task.repository, credential }) : { message: "The autonomous task dispatcher rejected the task." };
+      return Response.json({ ...identity, ...failure, recorded: true, status: "dispatch-rejected", message: `${failure.message} The saved request was not accepted.` }, { status: 502 });
+    }
+    return Response.json({ ...identity, recorded: true, status: outcome.state === "unknown" ? "dispatch-unknown" : "dispatched", ...(outcome.state === "unknown" ? { message: "Your request is saved. Refresh progress to check whether its cloud run started." } : {}) }, { status: 202 });
   } catch {
-    return Response.json({ message: "The autonomous task dispatcher is temporarily unavailable." }, { status: 502 });
-  }
-}
-
-/**
- * Best-effort by design. GitHub has already accepted the dispatch and the user
- * has already been charged a task against their plan by this point, so a D1
- * problem must degrade to "dispatched, but not recorded" rather than reporting
- * failure for a task that is genuinely running. Same posture as the
- * merge-policy lookup above.
- */
-async function recordDispatchedTask(
-  account: { userId: string; dbUserId: number | null },
-  tenantId: number,
-  task: { repository: string; branch: string; mode: string; objective: string },
-  taskId: string,
-  mergePolicy: string,
-  conversationId: string,
-  executionProvider: string,
-  correlationId: string,
-): Promise<boolean> {
-  try {
-    const db = getDb();
-    const now = new Date().toISOString();
-    await db.insert(conversations).values({ id: conversationId, tenantId, requestedBy: account.userId, title: task.objective.slice(0, 72), repository: task.repository, branch: task.branch, createdAt: now, updatedAt: now })
-      .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now, repository: task.repository, branch: task.branch }, setWhere: and(eq(conversations.tenantId, tenantId), eq(conversations.requestedBy, account.userId)) });
-    await db.insert(conversationMessages).values({ id: randomUUID(), conversationId, requestedBy: account.userId, role: "user", content: task.objective, createdAt: now });
-    await db.insert(runEvents).values({ id: randomUUID(), conversationId, taskId, requestedBy: account.userId, kind: "queued", label: "Request received", detail: "Atlas is preparing a private execution workspace.", createdAt: now });
-    await db.insert(tasks).values({
-      taskId,
-      tenantId,
-      userId: account.dbUserId,
-      requestedBy: account.userId,
-      repository: task.repository,
-      branch: task.branch,
-      mode: task.mode,
-      objective: task.objective,
-      mergePolicy,
-      conversationId,
-      executionProvider,
-      correlationId,
-      // Written explicitly rather than left to CURRENT_TIMESTAMP so the run-id
-      // heuristic has an unambiguous, zone-marked dispatch time to match on.
-      createdAt: now,
-    });
-    return true;
-  } catch {
-    return false;
+    return Response.json({ ...identity, message: "The task's saved dispatch intent could not be confirmed. No dispatch was attempted." }, { status: 503 });
   }
 }
 
@@ -255,7 +198,7 @@ export async function GET(request: Request) {
   // task owns a run id it is never re-derived.
   const groups = new Map<string, { repository: string; workflow: string }>();
   for (const row of rows) {
-    if (row.executionProvider !== "managed" || row.githubRunId !== null) continue;
+    if (row.executionProvider !== "managed" || row.githubRunId !== null || ["recorded", "rejected"].includes(row.dispatchState)) continue;
     const workflow = workflowOf(row);
     // JSON rather than a delimiter string: a repository is "owner/name" and a
     // workflow is a filename, so no single separator character is obviously
@@ -275,12 +218,13 @@ export async function GET(request: Request) {
       for (const run of runs) runsById.set(run.id, run);
 
       const groupRows = rows.filter((row) => row.repository === group.repository && workflowOf(row) === group.workflow);
-      const assignments = assignRunsToTasks(
+      const exact = reconcileDispatchRuns(groupRows, Array.isArray(listed) ? listed : [], group.workflow);
+      const assignments = [...exact, ...assignRunsToTasks(
         // Resolved rows are included so their run ids are excluded from the
         // candidate pool — two tasks must never claim the same run.
-        groupRows.map((row) => ({ taskId: row.taskId, createdAt: row.createdAt, workflow: group.workflow, githubRunId: row.githubRunId })),
-        runs.map((run) => ({ ...run, workflow: group.workflow })),
-      );
+        groupRows.filter(row => row.dispatchState === "legacy").map((row) => ({ taskId: row.taskId, createdAt: row.createdAt, workflow: group.workflow, githubRunId: row.githubRunId })),
+        runs.filter(run => !exact.some(assignment => assignment.runId === run.id) && !groupRows.some(row => row.githubRunId === run.id)).map((run) => ({ ...run, workflow: group.workflow })),
+      )];
       for (const assignment of assignments) resolvedRunIds.set(assignment.taskId, assignment.runId);
     }),
   );
@@ -289,9 +233,9 @@ export async function GET(request: Request) {
     try {
       const db = getDb();
       await Promise.all(
-        [...resolvedRunIds].map(([taskId, runId]) =>
-          db.update(tasks).set({ githubRunId: runId }).where(and(eq(tasks.taskId, taskId), eq(tasks.tenantId, tenantId), eq(tasks.requestedBy, account.userId))),
-        ),
+        [...resolvedRunIds].map(([taskId, runId]) => rows.find(row => row.taskId === taskId)?.dispatchState === "legacy"
+          ? db.update(tasks).set({ githubRunId: runId }).where(and(eq(tasks.taskId, taskId), eq(tasks.tenantId, tenantId), eq(tasks.requestedBy, account.userId)))
+          : saveReconciledDispatch(getD1(), { taskId, runId, tenantId, principal: account.userId })),
       );
     } catch {
       // Best effort: the id will simply be re-derived on the next poll.
@@ -361,7 +305,8 @@ function taskView(row: TaskRow, runId: number | null, run: Run | null, pullReque
     objective: row.objective,
     mergePolicy: row.mergePolicy,
     createdAt: row.createdAt,
-    status: row.executionProvider === "private" && run === null ? "dispatched" : taskStatusFromRun(run),
+    status: savedDispatchStatus(row, run) ?? (row.executionProvider === "private" && run === null ? "dispatched" : taskStatusFromRun(run)),
+    dispatchState: row.dispatchState,
     executionProvider: row.executionProvider,
     run: runId === null ? null : { id: runId, url: run?.htmlUrl ?? runUrl(row.repository, runId), status: run?.status ?? null, conclusion: run?.conclusion ?? null },
     pullRequest,

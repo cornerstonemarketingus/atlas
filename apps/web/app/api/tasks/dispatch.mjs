@@ -130,7 +130,7 @@ export async function dispatchGitHub(options, fetcher = fetch) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
-    return await fetcher(request.url, { ...request.init, signal: controller.signal });
+    return await fetcher(request.url, { ...request.init, redirect: "error", signal: controller.signal });
   } finally {
     clearTimeout(timeout);
   }
