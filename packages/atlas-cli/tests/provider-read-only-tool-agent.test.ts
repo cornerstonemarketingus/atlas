@@ -293,7 +293,7 @@ for (const alias of ["repo.search", "repo_browser.search", "repository_search", 
     let executions = 0;
     const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
     target.register({ name: canonical, description: "Read", risk: "low",
-      validateInput: input => { assert.deepEqual(input, { query: "Atlas" }); return input; },
+      validateInput: input => { assert.deepEqual(Object.entries(input as Record<string, unknown>), [["query", "Atlas"]]); return input; },
       execute: async () => { executions++; return { evidence: "found" }; } });
     const provider = new MockModelProvider({ metadata, responses: [
       response("one", [{ type: "tool-call", id: "alias", name: alias, arguments: { query: "Atlas" } }], "tool-calls"),
