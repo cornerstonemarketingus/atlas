@@ -385,10 +385,15 @@ mutation was detected. No real external repository or deployment was created.
 
 Protected credential/publishing boundaries require owner review; do not
 auto-merge. See `docs/HOSTED-PROJECT-CREATION.md` for configuration/limitations.
-Genesis bridge is deployment-operator-only and needs manually configured
-Worker URL/token plus a trusted HTTPS execution node. Automatic approval
-review rejected deployment secret-sync configuration; workflow remains
-unchanged while approval is pending. Existing PR #101 proposes a separate
+Genesis bridge is deployment-operator-only and needs a configured
+Worker URL/token plus a trusted HTTPS execution node. The owner subsequently
+authorized deployment secret synchronization and requested push/merge of
+PR #272. The workflow now maps and uploads configured Genesis connection
+secrets with a parity regression test. No HTTPS node URL is configured and
+credential provisioning has not run: automatic approval review requires
+specific approval to store the existing GitHub OAuth credential in the local
+vault and transfer the existing owner token to GitHub/Cloudflare. The node's
+existing remote-owner opt-in remains required. Existing PR #101 proposes a separate
 hosted seeding implementation; this work reuses the requested local Genesis
 runtime and should be reconciled during review. Other open task-dispatch/UI
 work may require integration conflict resolution. No TODO file was created.

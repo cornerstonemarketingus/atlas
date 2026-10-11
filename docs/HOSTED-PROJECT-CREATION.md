@@ -22,10 +22,15 @@ Cloudflare secret management process:
   control-plane access. Keep it server-only; never put it in client settings,
   model context, source control or logs.
 
-These variables are **not synchronized by the deployment workflow**. No
-credential was uploaded by this change. Missing configuration reports
+The deployment workflow synchronizes these variables from repository secrets
+when configured; missing values are skipped. No credential is supplied by the
+code itself. Missing configuration reports
 `execution_node_not_configured`, and never falls back to editing Atlas.
-The bridge refuses redirects and bounds request time. Only the authenticated
+The bridge refuses redirects and bounds request time. A proxy-reached owner
+request also requires the node's existing explicit remote-owner opt-in
+(Settings → Reach Atlas); the bridge does not bypass this security setting.
+The HTTPS node must be reachable from Cloudflare; a private tailnet address
+alone is not reachable by a public Worker. Only the authenticated
 deployment operator may use this deployment-owned node. Ordinary GitHub login
 and paid tenant membership do not grant operator access. A per-user Genesis
 node/OAuth connection remains future work.
