@@ -363,3 +363,44 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 - ProviderReadOnlyToolAgent now resolves exact offered/registered names first, then unique separator/camel-case and safe repository namespace aliases, including source-file read spelling. Ambiguous or unoffered names return only offered tools. No edit-distance guessing, argument rewriting, extra model call, policy bypass or tool replay. Existing registry still enforces scope, capability policy, approval, validation and redaction.
 - Existing tool.requested audit records canonical toolId plus requestedToolId and repair=automatic. Boundary regressions cover reported spellings, one tool execution in two model turns, ambiguity, hidden tools, denial, approval and scope mismatch.
 - Validation pending existing PR CI: local execution service failed before starting even Get-Location (helper_unknown_error: setup refresh had errors). Do not count tests as passed or this change as deployed. Operational test-only routing and truthful no-change completion remain separate work; active #253 owns runner/container validation. Narrow stale #200 dispatch overlap documented without replacing its provider work.
+# 2026-10-11 — Hosted new-project creation and streaming scroll lock
+
+User-requested workstream, issue #94, branch `codex/new-project-chat-scroll`.
+Based on main `530cb6b`; implemented in an isolated checkout to preserve other
+uncommitted work. Hosted chat now exposes structured create/status tools and
+actual safe capability state. `new_project_task` routes to a separate Genesis
+workspace, including direct coder-task requests, never the selected Atlas
+repository. Execution reuses Genesis planning/executor, curated templates,
+publisher, repository creator and exact-commit approvals. Added durable
+idempotent operation receipts, authenticated owner-only HTTPS/node boundaries,
+account credential distinction, repository readback and authenticated push
+verification. Blocked planning can resume into publication; interrupted
+external operations never replay automatically. Chat displays confirmed
+operation progress and URL without treating dispatch as completion.
+
+Replaced page-level streaming scrollIntoView with actual-container following:
+manual history reading locks across tokens/completion, near-bottom scrolling
+resumes, send/thread/new reset, Jump to latest restores following.
+
+Validation: web suite 471/471 passing; local-control 663 passing, 20 skipped
+(683 total); production build, typecheck, lint and diff checks passed. Focused
+integration includes actual workspace/check/test/build, model tool registry,
+real HTTP routes, mocked GitHub creation/readback/push, allow/ask/deny,
+permissions, failed pushes, visibility mismatch, concurrent retries, restart,
+blocked-plan continuation and approved-commit versus newer HEAD. Scroll guard
+mutation was detected. No real external repository or deployment was created.
+
+Protected credential/publishing boundaries require owner review; do not
+auto-merge. See `docs/HOSTED-PROJECT-CREATION.md` for configuration/limitations.
+Genesis bridge is deployment-operator-only and needs a configured
+Worker URL/token plus a trusted HTTPS execution node. The owner subsequently
+authorized deployment secret synchronization and requested push/merge of
+PR #272. The workflow now maps and uploads configured Genesis connection
+secrets with a parity regression test. No HTTPS node URL is configured and
+credential provisioning has not run: automatic approval review requires
+specific approval to store the existing GitHub OAuth credential in the local
+vault and transfer the existing owner token to GitHub/Cloudflare. The node's
+existing remote-owner opt-in remains required. Existing PR #101 proposes a separate
+hosted seeding implementation; this work reuses the requested local Genesis
+runtime and should be reconciled during review. Other open task-dispatch/UI
+work may require integration conflict resolution. No TODO file was created.

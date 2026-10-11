@@ -58,6 +58,7 @@ import { ACTIVE_STATES, GenesisService, GenesisStore } from "./platform/genesis/
 import { GenesisExecutor } from "./platform/genesis/executor.mjs";
 import { registerGenesisTools } from "./platform/genesis/tools.mjs";
 import { GenesisPublisher } from "./platform/genesis/publish.mjs";
+import { ProjectCreation } from "./platform/genesis/create-project.mjs";
 import { PreviewManager } from "./platform/genesis/preview.mjs";
 import { createInspector } from "./platform/genesis/inspector.mjs";
 import { createVisionReviewer } from "./platform/genesis/vision.mjs";
@@ -207,11 +208,13 @@ automations.tick().catch((error) => console.error(`Automation catch-up failed: $
 
 // Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
 const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
+let genesisCreation = null;
 const genesis = new GenesisService({
   store: genesisStore,
   policy: (capability) => store.policy(capability),
   onChange: (project) => {
     store.audit("genesis.transition", `${project.name}: ${project.state}`);
+    if (project.state === "ready") genesisCreation?.onReady(project.id);
     // Approved or resumed work starts (or continues) without the owner running anything.
     if ((project.state === "approved" || ACTIVE_STATES.includes(project.state)) && genesisExecutor && !genesisExecutor.isRunning(project.id)) genesisExecutor.run(project.id).catch(() => {});
   },
@@ -238,6 +241,7 @@ const genesisPublisher = new GenesisPublisher({
   runCheck,
 });
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
+genesisCreation = new ProjectCreation({ genesis, executor: genesisExecutor, publisher: genesisPublisher });
 // Remote access stays customer-managed (your VPN or HTTPS proxy); Atlas itself keeps listening on loopback.
 const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, "remote-access.json") });
 const server = createLocalControlServer({
@@ -260,9 +264,12 @@ const server = createLocalControlServer({
   genesis,
   genesisPreviews,
   genesisPublisher,
+  genesisCreation,
   onApprovalDecided: async (approval) => {
     await laneApplier.onApprovalDecided(approval);
-    return genesisPublisher.onApprovalDecided(approval);
+    const result = await genesisPublisher.onApprovalDecided(approval);
+    genesisCreation.recordApproval(approval, result);
+    return result;
   },
   laneApplier,
   automations,

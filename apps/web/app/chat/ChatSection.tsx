@@ -3,6 +3,8 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { classifyIntent } from "./intent.mjs";
 import { createScrollFollow } from "./scroll-follow.mjs";
+import { ProjectActivity, type ProjectOperation } from "./ProjectActivity.js";
+import { userWantsPublic } from "../api/chat/project-tools.mjs";
 import "./scroll-follow.css";
 import { MessageBody } from "./MessageBody.js";
 import { TaskActivity } from "./TaskActivity.js";
@@ -36,7 +38,7 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
   return items;
 }
 
-type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
+type Suggestion = { text: string; kind: "project_task" | "computer_task" | "new_project_task"; mode?: string; reason: string };
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
 const PANEL_KEY = "atlas.workPanel";
 
@@ -67,6 +69,7 @@ export function ChatSection() {
   const [version, setVersion] = useState(0);
   const { threads, close } = useThreads(version);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  const [projectOperation, setProjectOperation] = useState<ProjectOperation | null>(null);
   const [streaming, setStreaming] = useState<string | null>(null);
   // What the model thought before answering: streamed live, then kept (not stored) beside the reply it led to.
   const [thinking, setThinking] = useState("");
@@ -155,6 +158,7 @@ export function ChatSection() {
   }, [resetFollowing]);
 
   async function openThread(id: string) {
+    setProjectOperation(null);
     resetFollowing();
     setStored(true);
     setConversationId(id);
@@ -185,7 +189,7 @@ export function ChatSection() {
     }
   }
 
-  function startNew() { resetFollowing(); setStored(true); abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
+  function startNew() { setProjectOperation(null); resetFollowing(); setStored(true); abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
 
   useEffect(() => {
     if (!conversationId || !stored || sending) return;
@@ -223,7 +227,7 @@ export function ChatSection() {
     setDraft("");
     setNotice("");
     const intent = classifyIntent(text, { hasProject: Boolean(repository) });
-    if (ready?.configured === false && (intent.kind === "project_task" || intent.kind === "computer_task")) {
+    if (ready?.configured === false && intent.kind !== "chat") {
       showLocal(text);
       setSuggestion({ text, kind: intent.kind, mode: "mode" in intent ? intent.mode : undefined, reason: intent.reason });
       return;
@@ -242,7 +246,7 @@ export function ChatSection() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text, stream: true, provider }),
+        body: JSON.stringify({ conversationId, message: text, repository, branch, stream: true, provider }),
         signal: controller.signal,
       });
       if (!response.ok || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
@@ -267,7 +271,8 @@ export function ChatSection() {
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
           const data = item.data as { conversationId?: string; stored?: boolean; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
-          if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
+          if (item.type === "project") setProjectOperation(item.data as ProjectOperation);
+          else if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
           else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
           else if (item.type === "tool" && data?.id && data.label && data.state) {
@@ -334,6 +339,17 @@ export function ChatSection() {
     } finally {
       setSending(false);
     }
+  }
+
+  async function startNewProject(item: Suggestion) {
+    setSuggestion(null); setSending(true);
+    try {
+      const response = await fetch("/api/genesis/operations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: crypto.randomUUID(), name: `atlas-project-${crypto.randomUUID().slice(0, 8)}`, description: item.text, template: "web-app", visibility: userWantsPublic(item.text) ? "public" : "private", host: "github" }) });
+      const result = await response.json();
+      if (!response.ok) setNotice(result.message ?? "New project creation is unavailable.");
+      else setProjectOperation(result);
+    } catch { setNotice("Project creation could not be confirmed. Check Genesis before retrying."); }
+    finally { setSending(false); }
   }
 
   async function startComputerTask(item: Suggestion) {
@@ -419,12 +435,13 @@ export function ChatSection() {
           {liveAgents.length > 0 && <AgentTree agents={liveAgents} steps={liveSteps} />}
           {streaming ? <MessageBody text={streaming} /> : !thinking && liveSteps.length === 0 && liveAgents.length === 0 && <p className="thinking">Thinking…</p>}</div></div>}
         {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Starting…</p></div></div>}
+        {projectOperation && <ProjectActivity key={projectOperation.operationId} operation={projectOperation} />}
         {suggestion && <div className="atlas-message suggestion-card"><div className="assistant-avatar"><AtlasMark /></div><div>
           <b>Atlas</b>
-          <p>{suggestion.reason} {suggestion.kind === "project_task" ? <>It will run on <strong>{repository}</strong> ({branch}).</> : <>It will run on your computer and ask you before anything important.</>}</p>
+          <p>{suggestion.reason} {suggestion.kind === "project_task" ? <>It will run on <strong>{repository}</strong> ({branch}).</> : suggestion.kind === "new_project_task" ? <>It will use its own workspace.</> : <>It will run on your computer and ask you before anything important.</>}</p>
           <div className="suggestion-actions">
-            <button type="button" className="primary" onClick={() => void (suggestion.kind === "project_task" ? startProjectTask(suggestion) : startComputerTask(suggestion))}>
-              {suggestion.kind === "project_task" ? (suggestion.mode === "inspect" ? "Start review" : suggestion.mode === "debug" ? "Start debugging" : "Start task") : "Start on my computer"}
+            <button type="button" className="primary" onClick={() => void (suggestion.kind === "project_task" ? startProjectTask(suggestion) : suggestion.kind === "new_project_task" ? startNewProject(suggestion) : startComputerTask(suggestion))}>
+              {suggestion.kind === "project_task" ? (suggestion.mode === "inspect" ? "Start review" : suggestion.mode === "debug" ? "Start debugging" : "Start task") : suggestion.kind === "new_project_task" ? "Create separate project" : "Start on my computer"}
             </button>
             <button type="button" className="secondary" onClick={() => void ask(suggestion.text)}>Just answer in chat</button>
           </div>
