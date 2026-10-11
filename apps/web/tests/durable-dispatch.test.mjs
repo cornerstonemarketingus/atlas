@@ -127,7 +127,7 @@ test("built Worker saves before dispatch, survives lost response, reconciles aft
   const configuration = { ATLAS_OPERATOR_TOKEN: "operator-test", ATLAS_GITHUB_TOKEN: "github-test", ATLAS_ALLOWED_REPOSITORIES: "owner/repo", ATLAS_SESSION_SECRET: "test-session-secret" };
   const previous = Object.fromEntries(Object.keys(configuration).map(key => [key, process.env[key]]));
   const originalFetch = globalThis.fetch; Object.assign(process.env, configuration);
-  let dispatches = 0; let dispatchedId;
+  let dispatches = 0; let dispatchedId; let dispatchObserved = false;
   globalThis.fetch = async (url, options) => {
     if (String(url).includes("/collaborators/")) return Response.json({ role_name: "write" });
     if (options.method === "POST") {
@@ -135,6 +135,7 @@ test("built Worker saves before dispatch, survives lost response, reconciles aft
       assert.equal(options.redirect, "error"); assert.equal(options.headers.authorization, "Bearer github-test");
       assert.equal(f.sqlite.prepare("SELECT dispatch_state FROM tasks WHERE task_id = ?").get(dispatchedId).dispatch_state, "dispatching");
       assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM conversation_messages WHERE id = ?").get(`request:${dispatchedId}`).n, 1);
+      dispatchObserved = true;
       throw new TypeError("private provider connection error");
     }
     return Response.json({ workflow_runs: [{ id: 123, display_title: `Atlas Coder · task ${dispatchedId}`, name: "Atlas Coder", repository: { full_name: "owner/repo" }, event: "workflow_dispatch", head_branch: "main", path: ".github/workflows/atlas-coder.yml", created_at: new Date().toISOString(), status: "in_progress" }] });
@@ -149,6 +150,7 @@ test("built Worker saves before dispatch, survives lost response, reconciles aft
   assert.equal((await invoke(post({ authorization: "Bearer wrong" }))).status, 401);
   const response = await invoke(post()); assert.equal(response.status, 202);
   const body = await response.json(); assert.equal(body.status, "dispatch-unknown"); assert.equal(body.recorded, true); assert.equal(body.taskId, dispatchedId);
+  assert.equal(dispatchObserved, true, "all pre-dispatch assertions must pass before the intentional transport failure");
   assert.doesNotMatch(JSON.stringify(body), /private provider|github-test|Nothing was started/);
   const listed = await invoke(new Request("https://atlas.test/api/tasks", { headers: { authorization: "Bearer operator-test" } }));
   const tasks = (await listed.json()).tasks; assert.equal(tasks.length, 1); assert.equal(tasks[0].taskId, dispatchedId); assert.equal(tasks[0].run.id, 123); assert.equal(tasks[0].status, "running");
