@@ -25,7 +25,7 @@ import { createAutomationRoutes, createWebhookRoute } from "./platform/automatio
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -47,7 +47,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const selfImproveRoutes = selfImprove ? createSelfImproveRoutes({ service: selfImprove, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const modelHostingRoutes = modelHosting ? createModelHostingRoutes({ ...modelHosting, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const remoteRoutes = remoteAccess ? createRemoteRoutes({ remote: remoteAccess, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
-  const genesisRoutes = genesis ? createGenesisRoutes({ genesis, previews: genesisPreviews, publisher: genesisPublisher, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const genesisRoutes = genesis ? createGenesisRoutes({ genesis, previews: genesisPreviews, publisher: genesisPublisher, creation: genesisCreation, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const automationRoutes = automations ? createAutomationRoutes({ automations, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const webhookRoute = automations ? createWebhookRoute({ automations, limiter, send: (response, status, value) => { send(response, status, value); return true; },
     readRaw: async (request, response) => { try { return await readBody(request); } catch (error) { send(response, error?.code === "BODY_TOO_LARGE" ? 413 : 400, { message: error.message }); return null; } } }) : null;

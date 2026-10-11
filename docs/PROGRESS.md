@@ -356,3 +356,39 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 - #259 merged as 5962b90 after every CI check passed. Cloudflare deployment 38055321925 succeeded. Hosted chat release gate 38055467142 passed streaming and non-streaming with stored replies and successful repository search, served by Workers AI. That trace executed search only, so it does not prove live file reading/recovery; a targeted invalid-query + known-file verification was dispatched separately.
 - Final review caught a narrower retry gap: call-level deduplication did not remember invalid requests issued internally during query correction. Added request-local, credential-separated memory for HTTP 400/422 search refusals. A later corrected call cannot resend a previously invalid upstream query; successful results remain fresh and are not cached. Scope remains authorized before lookup.
 - Evidence: production build and 462/462 web tests pass (two additional guard cases); removing internal refusal lookup causes the new regression to fail. Source restored. Follow-up CI/deployment and targeted hosted verification are tracked in its PR.
+# 2026-10-11 — Hosted new-project creation and streaming scroll lock
+
+User-requested workstream, issue #94, branch `codex/new-project-chat-scroll`.
+Based on main `530cb6b`; implemented in an isolated checkout to preserve other
+uncommitted work. Hosted chat now exposes structured create/status tools and
+actual safe capability state. `new_project_task` routes to a separate Genesis
+workspace, including direct coder-task requests, never the selected Atlas
+repository. Execution reuses Genesis planning/executor, curated templates,
+publisher, repository creator and exact-commit approvals. Added durable
+idempotent operation receipts, authenticated owner-only HTTPS/node boundaries,
+account credential distinction, repository readback and authenticated push
+verification. Blocked planning can resume into publication; interrupted
+external operations never replay automatically. Chat displays confirmed
+operation progress and URL without treating dispatch as completion.
+
+Replaced page-level streaming scrollIntoView with actual-container following:
+manual history reading locks across tokens/completion, near-bottom scrolling
+resumes, send/thread/new reset, Jump to latest restores following.
+
+Validation: web suite 471/471 passing; local-control 663 passing, 20 skipped
+(683 total); production build, typecheck, lint and diff checks passed. Focused
+integration includes actual workspace/check/test/build, model tool registry,
+real HTTP routes, mocked GitHub creation/readback/push, allow/ask/deny,
+permissions, failed pushes, visibility mismatch, concurrent retries, restart,
+blocked-plan continuation and approved-commit versus newer HEAD. Scroll guard
+mutation was detected. No real external repository or deployment was created.
+
+Protected credential/publishing boundaries require owner review; do not
+auto-merge. See `docs/HOSTED-PROJECT-CREATION.md` for configuration/limitations.
+Genesis bridge is deployment-operator-only and needs manually configured
+Worker URL/token plus a trusted HTTPS execution node. Automatic approval
+review rejected deployment secret-sync configuration; workflow remains
+unchanged while approval is pending. Existing PR #101 proposes a separate
+hosted seeding implementation; this work reuses the requested local Genesis
+runtime and should be reconciled during review. Other open task-dispatch/UI
+work may require integration conflict resolution. No TODO file was created.
