@@ -53,7 +53,6 @@
 /* --- composer ------------------------------------------------------------ */
 .chat-composer{margin:0 max(5vw,26px) 24px;border:1px solid #323934;background:#171a18;border-radius:18px;padding:12px;box-shadow:0 24px 70px #0008}
 .chat-composer:focus-within{border-color:#525d55}
-.jump-to-latest{align-self:center;margin:8px;padding:8px 14px;border-radius:20px}
 .chat-composer textarea{display:block;width:100%;resize:none;border:0;background:transparent;color:white;font:450 15px/1.5 var(--font-geist-sans);padding:8px;outline:0}
 .chat-composer textarea::placeholder{color:#687169}
 .composer-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}

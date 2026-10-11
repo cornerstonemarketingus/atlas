@@ -103,7 +103,8 @@ autonomous production business, revenue, billing integration or monitoring.
 ## Scroll behavior and validation
 
 Chat tracks the actual `.section-scroll` element. Content growth follows only
-while the reader is within 80px of the bottom. Scrolling away locks the
+while the reader is at the bottom within a small rounding tolerance. Upward
+wheel, touch or keyboard navigation locks the
 viewport across streamed tokens and completion; returning near the bottom or
 pressing Jump to latest resumes following. Sending, loading or changing a
 thread resets initial following. No page-level `scrollIntoView` is used.

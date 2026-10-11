@@ -356,6 +356,13 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 - #259 merged as 5962b90 after every CI check passed. Cloudflare deployment 38055321925 succeeded. Hosted chat release gate 38055467142 passed streaming and non-streaming with stored replies and successful repository search, served by Workers AI. That trace executed search only, so it does not prove live file reading/recovery; a targeted invalid-query + known-file verification was dispatched separately.
 - Final review caught a narrower retry gap: call-level deduplication did not remember invalid requests issued internally during query correction. Added request-local, credential-separated memory for HTTP 400/422 search refusals. A later corrected call cannot resend a previously invalid upstream query; successful results remain fresh and are not cached. Scope remains authorized before lookup.
 - Evidence: production build and 462/462 web tests pass (two additional guard cases); removing internal refusal lookup causes the new regression to fail. Source restored. Follow-up CI/deployment and targeted hosted verification are tracked in its PR.
+
+## 2026-10-10 coder tool-name repair (#268)
+
+- Reported run 38112578914 spent 136.6 seconds in the native coder and ended with no edits; successful Actions completion is not evidence of completed test execution.
+- ProviderReadOnlyToolAgent now resolves exact offered/registered names first, then unique separator/camel-case and safe repository namespace aliases, including source-file read spelling. Ambiguous or unoffered names return only offered tools. No edit-distance guessing, argument rewriting, extra model call, policy bypass or tool replay. Existing registry still enforces scope, capability policy, approval, validation and redaction.
+- Existing tool.requested audit records canonical toolId plus requestedToolId and repair=automatic. Boundary regressions cover reported spellings, one tool execution in two model turns, ambiguity, hidden tools, denial, approval and scope mismatch.
+- Validation pending existing PR CI: local execution service failed before starting even Get-Location (helper_unknown_error: setup refresh had errors). Do not count tests as passed or this change as deployed. Operational test-only routing and truthful no-change completion remain separate work; active #253 owns runner/container validation. Narrow stale #200 dispatch overlap documented without replacing its provider work.
 # 2026-10-11 — Hosted new-project creation and streaming scroll lock
 
 User-requested workstream, issue #94, branch `codex/new-project-chat-scroll`.
