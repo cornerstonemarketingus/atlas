@@ -2,6 +2,18 @@ import { githubToolError } from "./github-tool-error.mjs";
 import { githubRequestObservation, logGitHubObservation } from "../tasks/github-observability.mjs";
 
 const QUALIFIERS = new Set(["filename", "path", "language", "extension", "size", "in", "fork"]);
+// Remember rejected upstream requests, including internally corrected ones.
+// This is per authenticated reply, never a shared cross-tenant search cache.
+const rejectedRequests = new WeakMap();
+
+function rejectedFor(context, authorization) {
+  let scope = rejectedRequests.get(context);
+  if (!scope || scope.authorization !== authorization) {
+    scope = { authorization, failures: new Map() };
+    rejectedRequests.set(context, scope);
+  }
+  return scope.failures;
+}
 
 /** REST code search uses legacy syntax, not the website's regex/symbol syntax. */
 export function repositoryQuery(args) {
@@ -50,16 +62,20 @@ export async function searchRepository({ args, repository, headers, fetcher, con
     return { ok: false, label: "Invalid search page", error: { operation: "search_repository_code", category: "invalid_request" }, content: "Use page >= 1 and perPage between 1 and 100, within GitHub's first 1000 results. Narrow with filename/path beyond that limit." };
   }
   const attempts = [];
+  const rejected = rejectedFor(context, headers.authorization);
   let query = parsed.query;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const url = `https://api.github.com/search/code?per_page=${perPage}&page=${page}&q=${encodeURIComponent(`${query} repo:${repository}`)}`;
     const startedAt = Date.now();
-    let response; let failure;
-    try {
-      response = await fetcher(url, { signal: AbortSignal.timeout(timeoutMs), headers });
-      if (!response.ok) failure = await githubToolError(response, "search_repository_code");
-    } finally {
-      try { (context.observeGitHub ?? logGitHubObservation)(githubRequestObservation({ url, response, startedAt, endedAt: Date.now(), source: "hosted_chat", outcome: response?.ok ? "success" : "http_failure" })); } catch { /* observability is not execution */ }
+    let response; let failure = rejected.get(url);
+    if (!failure) {
+      try {
+        response = await fetcher(url, { signal: AbortSignal.timeout(timeoutMs), headers });
+        if (!response.ok) failure = await githubToolError(response, "search_repository_code");
+        if (failure?.error.category === "invalid_request") rejected.set(url, failure);
+      } finally {
+        try { (context.observeGitHub ?? logGitHubObservation)(githubRequestObservation({ url, response, startedAt, endedAt: Date.now(), source: "hosted_chat", outcome: response?.ok ? "success" : "http_failure" })); } catch { /* observability is not execution */ }
+      }
     }
     if (failure) {
       attempts.push(failure.error);
