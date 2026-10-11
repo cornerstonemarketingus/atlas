@@ -59,6 +59,30 @@ test("failed corrections fall back to the existing file reader without claiming 
   assert.match(result.content, /Search did not succeed/); assert.match(result.content, /original operation evidence/);
 });
 
+test("internally corrected invalid requests are never resent in later calls", async () => {
+  const seen = [];
+  const ctx = context(async url => { seen.push(url); return json({ message: "Query validation failed" }, 400); });
+  assert.equal((await runInstantTool(call({ query: "handler" }), ctx)).ok, false);
+  assert.equal(seen.length, 2);
+  assert.equal((await runInstantTool(call({ query: '"handler"' }), ctx)).ok, false);
+  assert.equal((await runInstantTool(call({ query: "handler" }), ctx)).ok, false);
+  assert.equal(seen.length, 2);
+  ctx.githubToken = async () => "changed-credential";
+  assert.equal((await runInstantTool(call({ query: '"handler"' }), ctx)).ok, false);
+  assert.equal(seen.length, 3, "a changed credential cannot reuse the previous credential's refusal");
+});
+
+test("a recovered query skips its known invalid form on reread and still returns fresh results", async () => {
+  const seen = [];
+  const ctx = context(async url => {
+    const q = new URL(url).searchParams.get("q"); seen.push(q);
+    return q.startsWith('"') ? json({ total_count: 1, items: [{ path: "src/a.ts" }] }) : json({ message: "Query validation failed" }, 400);
+  });
+  assert.equal((await runInstantTool(call({ query: "handler" }), ctx)).ok, true);
+  assert.equal((await runInstantTool(call({ query: "handler" }), ctx)).ok, true);
+  assert.deepEqual(seen, ["handler repo:owner/repo", '"handler" repo:owner/repo', '"handler" repo:owner/repo']);
+});
+
 for (const [status, headers, message, category] of [
   [401, {}, "Bad credentials", "authentication"],
   [403, {}, "Resource not accessible by integration", "permission"],
