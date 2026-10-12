@@ -134,6 +134,13 @@
       "when": 1791763200000,
       "tag": "0018_task_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1791849600000,
+      "tag": "0019_task_execution_claims",
+      "breakpoints": true
     }
   ]
 }

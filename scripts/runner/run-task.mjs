@@ -2,6 +2,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
+import { enforceHostedExecutionLease } from "./claim-execution.mjs";
+
+// Also fence cached pre-claim workflow definitions that check out current main policy.
+enforceHostedExecutionLease(process.env);
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const outputDirectory = process.env.ATLAS_OUTPUT_DIR;

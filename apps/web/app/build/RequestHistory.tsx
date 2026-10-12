@@ -5,7 +5,7 @@ import "./request-history.css";
 
 type SavedRequest = {
   requestKey: string; createdAt: string; state: string; receiptState: string; outcomeStatus: number | null;
-  task: null | { taskId: string; conversationId: string | null; repository: string; branch: string; objective: string; dispatchState: string };
+  task: null | { taskId: string; conversationId: string | null; repository: string; branch: string; objective: string; dispatchState: string; execution?: null | { runId: number; runAttempt: number; claimedAt: string; expiresAt: string } };
 };
 
 /** Read-only investigation remains reachable without a composer draft or local retry cache. */
@@ -62,6 +62,7 @@ export function RequestHistory({ version = 0 }: { version?: number }) {
       {requests.map(request => <article key={request.requestKey}>
         <h3>{request.task?.objective || `Request ${request.requestKey.slice(0, 8)}`}</h3>
         <p>{requestExplanation(request)}</p>
+        {request.task?.execution && <p>Execution reserved for run {request.task.execution.runId}, attempt {request.task.execution.runAttempt}. Lease ends {request.task.execution.expiresAt}. Expiry requires investigation; it does not authorize a retry.</p>}
         <small>{request.createdAt} UTC{request.task ? ` · ${request.task.repository} · ${request.task.branch}` : ""}</small>
         <div className="request-history-actions">
           <button type="button" disabled={checking !== null} onClick={() => void check(request.requestKey)}>{checking === request.requestKey ? "Checking…" : "Check request"}</button>
