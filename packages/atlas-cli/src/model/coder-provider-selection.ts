@@ -7,13 +7,20 @@
  * observable in production.
  */
 
-export type CoderProviderId = "anthropic" | "groq";
+export type CoderProviderId = "anthropic" | "groq" | "local";
 
 export interface CoderProviderProfile {
   readonly providerId: CoderProviderId;
   readonly displayName: string;
   /** Used when `--api-key-env` is omitted. */
   readonly defaultApiKeyEnvironmentVariable: string;
+  /**
+   * False only for `local`: an unauthenticated OpenAI-compatible server
+   * (Ollama, llama.cpp, vLLM) has no account to hold a key for, so requiring
+   * one would force an operator to invent a dummy environment variable just
+   * to satisfy a check that does not apply to their setup.
+   */
+  readonly requiresApiKey: boolean;
   readonly contextWindowTokens: number;
   /**
    * Ceiling on `max_tokens` for a single turn, independent of the session's
@@ -27,6 +34,7 @@ const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
     providerId: "groq",
     displayName: "Groq",
     defaultApiKeyEnvironmentVariable: "GROQ_API_KEY",
+    requiresApiKey: true,
     contextWindowTokens: 128_000,
     // Capped well under 8,192: Groq rejects a request outright (HTTP 413) once
     // prompt tokens + max_tokens exceeds its tokens-per-minute limit for a
@@ -39,6 +47,7 @@ const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
     providerId: "anthropic",
     displayName: "Anthropic",
     defaultApiKeyEnvironmentVariable: "ANTHROPIC_API_KEY",
+    requiresApiKey: true,
     // The conservative figure across the models in DEFAULT_ANTHROPIC_MODELS,
     // so a smaller model is never handed a request its window cannot hold.
     contextWindowTokens: 200_000,
@@ -47,12 +56,25 @@ const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
     // still be split to leave room in the session budget.
     maxOutputTokensPerTurn: 8_192,
   },
+  local: {
+    providerId: "local",
+    displayName: "Local (Ollama-compatible)",
+    defaultApiKeyEnvironmentVariable: "",
+    requiresApiKey: false,
+    // Overridden per-run by --context-window/--max-output-tokens (or their
+    // environment equivalents); these are just a reasonable default for an
+    // unconfigured local server. Kept in step with SELF_HOSTED_DEFAULT_* in
+    // coder-endpoint.ts (duplicated rather than imported, to keep this module
+    // free of a dependency a pure default value does not need).
+    contextWindowTokens: 16_384,
+    maxOutputTokensPerTurn: 2_048,
+  },
 };
 
-export const CODER_PROVIDER_IDS: readonly CoderProviderId[] = ["anthropic", "groq"];
+export const CODER_PROVIDER_IDS: readonly CoderProviderId[] = ["anthropic", "groq", "local"];
 
 export function isCoderProviderId(value: string): value is CoderProviderId {
-  return value === "anthropic" || value === "groq";
+  return value === "anthropic" || value === "groq" || value === "local";
 }
 
 /**
@@ -62,7 +84,10 @@ export function isCoderProviderId(value: string): value is CoderProviderId {
  * Claude and Anthropic does not serve Llama — so this is a safe default rather
  * than a guess, and it keeps `--model claude-sonnet-5` working without a
  * second flag. Anything unrecognised falls back to Groq, which is what every
- * existing caller (including the workflow) already means.
+ * existing caller (including the workflow) already means. `local` is never
+ * inferred — an unauthenticated loopback server is a deliberate choice an
+ * operator makes with `--provider local`, not a guess from a model name that
+ * could just as easily name a cloud-hosted model.
  */
 export function inferCoderProviderId(model: string): CoderProviderId {
   return /^(anthropic\/)?claude[-.]/iu.test(model.trim()) ? "anthropic" : "groq";

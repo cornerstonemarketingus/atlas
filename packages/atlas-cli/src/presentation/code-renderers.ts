@@ -29,6 +29,8 @@ export interface CodeOutput {
   readonly toolCalls: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /** Which provider/model actually answered the last turn, when one did. */
+  readonly answeredBy?: string;
 }
 
 export function toCodeOutput(
@@ -48,6 +50,11 @@ export function toCodeOutput(
     toolCalls: result.trace.toolCalls,
     inputTokens: result.trace.usage.inputTokens,
     outputTokens: result.trace.usage.outputTokens,
+    ...(result.trace.lastProviderId === undefined ? {} : {
+      answeredBy: result.trace.lastModel === undefined
+        ? result.trace.lastProviderId
+        : `${result.trace.lastProviderId} (${result.trace.lastModel})`,
+    }),
   };
 }
 
@@ -59,7 +66,13 @@ export function toCodeOutput(
 export function toVerifiedCodeOutput(
   sessionId: string,
   result: VerifiedCoderResult,
-  usage: { readonly turns: number; readonly toolCalls: number; readonly inputTokens: number; readonly outputTokens: number },
+  usage: {
+    readonly turns: number;
+    readonly toolCalls: number;
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly answeredBy?: string;
+  },
 ): CodeOutput {
   return {
     sessionId,
@@ -100,5 +113,6 @@ export function renderCodeText(output: CodeOutput): string {
     `Turns: ${output.turns}`,
     `Tool calls: ${output.toolCalls}`,
     `Tokens: ${output.inputTokens} input / ${output.outputTokens} output`,
+    ...(output.answeredBy === undefined ? [] : [`Answered by: ${output.answeredBy}`]),
   ].join("\n");
 }

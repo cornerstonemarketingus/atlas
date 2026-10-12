@@ -125,6 +125,13 @@ export interface ModelProvider {
 export type ModelProviderErrorCode =
   | "authentication"
   | "rate-limit"
+  /**
+   * Billing/quota exhaustion (e.g. OpenAI's insufficient_quota, Anthropic's
+   * credit-balance check). Shares a status code with rate-limit or
+   * invalid-request errors but cannot clear on retry; always non-retryable,
+   * and treated like model-unavailable for an explicit fallback chain.
+   */
+  | "billing-exhausted"
   | "invalid-request"
   | "model-unavailable"
   | "cancelled"

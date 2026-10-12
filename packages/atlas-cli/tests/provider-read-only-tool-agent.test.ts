@@ -203,6 +203,23 @@ test("recovers from an invented tool name by naming the real tools", async () =>
   );
 });
 
+test("records which provider/model answered the final turn", async () => {
+  const provider = new MockModelProvider({ metadata, responses: [
+    response("one", [{ type: "tool-call", id: "call-1", name: tool.name, arguments: {} }], "tool-calls"),
+    response("two", [{ type: "text", text: "Atlas is a TypeScript repository." }], "stop"),
+  ] });
+  const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: registry("allow"), tools: [tool], audit: new InMemorySessionAuditLog() });
+
+  const result = await agent.run({
+    sessionId: "session", objective: "Explain Atlas", evidence: [],
+    scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" },
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.trace.lastProviderId, "mock");
+  assert.equal(result.trace.lastModel, "test");
+});
+
 test("still ends the session when policy denies a tool", async () => {
   // TOOL_NOT_FOUND is recoverable because it is the model's mistake. A policy
   // denial is a security decision, and "try again with something else" is the

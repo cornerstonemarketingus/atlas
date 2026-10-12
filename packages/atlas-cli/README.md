@@ -39,6 +39,8 @@ node .\dist\src\cli.js read C:\path\to\repository src\service.ts --start-line 20
 node .\dist\src\cli.js github repo cornerstonemarketingus/atlas
 node .\dist\src\cli.js github prs cornerstonemarketingus/atlas --state open
 node .\dist\src\cli.js chat C:\path\to\repository "Explain the architecture" --endpoint http://127.0.0.1:1234/v1/chat/completions --model local-model
+node .\dist\src\cli.js provider-status --provider local
+node .\dist\src\cli.js provider-status --provider groq --format json
 ```
 
 For a local `atlas` command, optionally link the package after building it:
@@ -64,6 +66,7 @@ atlas github repo <owner>/<repository> [--format text|json]
 atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
 atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
 atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
+atlas provider-status [--provider anthropic|groq|local] [--endpoint <url>] [--timeout-ms N] [--format text|json]
 atlas --help
 ```
 
@@ -118,6 +121,21 @@ GitHub commands use the locally authenticated `gh` CLI session and make only
 bounded, read-only GitHub API calls. They return repository metadata, pull
 requests, or issues; they never create branches, commits, pull requests, or
 modify GitHub state. Run `gh auth login` before using them.
+
+`atlas code` and `atlas chat` support `--provider local` as a first-class
+alternative to the hosted `anthropic`/`groq` providers, so Atlas does not
+depend entirely on a paid vendor to function. `--provider local` talks to an
+unauthenticated OpenAI-compatible server, defaulting to Ollama's loopback
+address (`http://127.0.0.1:11434/v1`); point it at any other OpenAI-compatible
+local server with `--endpoint`. `atlas provider-status` checks whether a
+provider is usable before a real run: for `anthropic`/`groq` it only checks
+that the expected API-key environment variable is set (it never spends billed
+quota on the check itself); for `local` it makes a real bounded request to the
+server's `/models` endpoint and reports whether it is reachable, including
+which models it reports. Chat and code output both include an "Answered by"
+line naming the provider and model that actually produced the final response,
+which can differ from the one requested when a fallback or escalation route
+ran instead.
 
 ## Validation
 

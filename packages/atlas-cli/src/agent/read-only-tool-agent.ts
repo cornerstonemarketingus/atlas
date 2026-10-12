@@ -47,6 +47,15 @@ export interface ReadOnlyToolAgentTrace {
   readonly toolCalls: number;
   readonly usage: ModelUsage;
   readonly messages: readonly ModelMessage[];
+  /**
+   * Which provider/model actually answered the most recent request — as
+   * reported by that provider's own `ModelResponse`, not the one the agent
+   * was configured with. A fallback or escalation route can differ from the
+   * configured model, and an operator debugging "is Ollama actually being
+   * used" needs to see the one that really ran, not the one requested.
+   */
+  readonly lastProviderId?: string;
+  readonly lastModel?: string;
 }
 
 export type ReadOnlyToolAgentResult =

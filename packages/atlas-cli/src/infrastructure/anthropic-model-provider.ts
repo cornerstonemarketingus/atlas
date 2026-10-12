@@ -13,6 +13,7 @@ import {
   buildAnthropicMessagesPayload,
   parseAnthropicMessagesResponse,
 } from "./anthropic-message-format.js";
+import { isBillingExhausted } from "./billing-exhaustion.js";
 
 const DEFAULT_ENDPOINT = "https://api.anthropic.com/v1/messages";
 /** Higher than the Groq default: non-streaming Claude turns can legitimately run for minutes. */
@@ -121,7 +122,15 @@ export class AnthropicModelProvider implements ModelProvider {
       });
     }
     if (!response.ok) {
-      const classified = classifyStatus(response.status);
+      // Anthropic answers an exhausted account's credit balance with a plain
+      // 400 ("Your credit balance is too low..."), the same status a bad
+      // model ID or malformed message sequence uses, and that error cannot
+      // clear on retry the way the other 400s theoretically could after a
+      // caller-side fix. It is checked before the generic status mapping so
+      // it is never mistaken for one of those.
+      const classified = isBillingExhausted(text)
+        ? { code: "billing-exhausted" as const, retryable: false }
+        : classifyStatus(response.status);
       // The status code alone is ambiguous here - a 400 can mean a bad model
       // ID, an unsupported parameter or a malformed message sequence, and only
       // the body says which. It is echoed (truncated, and with any accidental

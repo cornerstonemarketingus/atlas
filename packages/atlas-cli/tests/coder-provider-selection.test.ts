@@ -111,7 +111,32 @@ describe("selectCoderProvider", () => {
     assert.equal(result.ok, false);
     if (result.ok) throw new Error("unreachable");
     assert.match(result.message, /Unknown --provider 'openai'/u);
-    assert.match(result.message, /anthropic, groq/u);
+    assert.match(result.message, /anthropic, groq, local/u);
+  });
+
+  it("selects the local provider only when explicitly requested", () => {
+    const selection = expectOk(selectCoderProvider({ provider: "local", model: "llama3.1", tokenBudget: 16_384 }));
+    assert.equal(selection.profile.providerId, "local");
+    assert.equal(selection.inferred, false);
+    assert.equal(selection.profile.requiresApiKey, false);
+    assert.equal(selection.apiKeyEnvironmentVariable, "");
+    assert.equal(selection.profile.contextWindowTokens, 16_384);
+    assert.equal(selection.maxOutputTokensPerTurn, 2_048);
+  });
+
+  it("never infers local from a model name, even one with no cloud match", () => {
+    const selection = expectOk(selectCoderProvider({ model: "some-ollama-only-model", tokenBudget: 16_384 }));
+    assert.equal(selection.profile.providerId, "groq");
+    assert.equal(selection.inferred, true);
+  });
+
+  it("only requires an API key env for providers whose profile demands one", () => {
+    const anthropic = expectOk(selectCoderProvider({ model: "claude-opus-5", tokenBudget: 16_384 }));
+    const groq = expectOk(selectCoderProvider({ model: "llama-3.3-70b-versatile", tokenBudget: 16_384 }));
+    const local = expectOk(selectCoderProvider({ provider: "local", model: "llama3.1", tokenBudget: 16_384 }));
+    assert.equal(anthropic.profile.requiresApiKey, true);
+    assert.equal(groq.profile.requiresApiKey, true);
+    assert.equal(local.profile.requiresApiKey, false);
   });
 
   it("treats a blank --provider as absent so inference still applies", () => {

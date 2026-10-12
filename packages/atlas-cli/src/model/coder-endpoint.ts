@@ -34,6 +34,24 @@ export function resolveCoderEndpoint(raw: string | undefined): CoderEndpointReso
   const value = (raw ?? "").trim();
   if (value.length === 0) return { ok: true, endpoint: undefined };
 
+  const validated = validateOpenAiCompatibleBaseUrl(value);
+  if (!validated.ok) return validated;
+
+  return { ok: true, endpoint: withChatCompletionsPath(validated.url) };
+}
+
+export type OpenAiCompatibleBaseUrlResolution =
+  | { readonly ok: true; readonly url: URL }
+  | { readonly ok: false; readonly message: string };
+
+/**
+ * Validates an OpenAI-compatible base URL (the part ending in `/v1`) without
+ * committing it to a specific path. `resolveCoderEndpoint` builds the
+ * chat-completions URL on top of this; a models-listing health check (see
+ * `provider-health-check.ts`) needs the same validation but a different
+ * suffix, so the rules live here once rather than drifting between callers.
+ */
+export function validateOpenAiCompatibleBaseUrl(value: string): OpenAiCompatibleBaseUrlResolution {
   let url: URL;
   try {
     url = new URL(value);
@@ -65,7 +83,7 @@ export function resolveCoderEndpoint(raw: string | undefined): CoderEndpointReso
     return { ok: false, message: "Model endpoint must not carry a query string or fragment." };
   }
 
-  return { ok: true, endpoint: withChatCompletionsPath(url) };
+  return { ok: true, url };
 }
 
 /**

@@ -28,6 +28,15 @@ test("does not fall back on authentication failures", async () => {
     assert.equal(seen.length, 1);
 });
 
+test("billing exhaustion falls forward to the next route instead of failing the whole chain", async () => {
+    const seen: ModelRequest[] = [];
+    const first = provider("one", "primary", new ModelProviderError({ message: "insufficient_quota", code: "billing-exhausted", providerId: "one", retryable: false }), seen);
+    const second = provider("two", "backup", response("two", "backup"), seen);
+    const result = await new FallbackModelProvider([{ provider: first, model: "primary" }, { provider: second, model: "backup" }]).complete(request);
+    assert.equal(result.model, "backup");
+    assert.deepEqual(seen.map((item) => item.model), ["primary", "backup"]);
+});
+
 test("a daily quota moves straight to the next route instead of sleeping through retries", async () => {
     const seen: ModelRequest[] = [];
     const delays: number[] = [];
