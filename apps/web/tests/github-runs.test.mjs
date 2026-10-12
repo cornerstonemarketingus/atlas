@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { assignRunsToTasks } from "../app/api/tasks/run-status.mjs";
 import {
   fetchGitHubJson,
   githubReadHeaders,
@@ -63,6 +64,18 @@ test("reports a pull request's merge state from merged_at", () => {
     { number: 4, url: "https://github.com/o/r/pull/4", state: "open", merged: false },
   );
   assert.equal(normalizePullRequest(undefined), null);
+});
+
+test("real GitHub display titles keep concurrent task runs exact despite reversed creation order", () => {
+  const first = "11111111-1111-4111-8111-111111111111";
+  const second = "22222222-2222-4222-8222-222222222222";
+  const tasks = [{ taskId: first, createdAt: "2026-10-10T10:00:00Z" }, { taskId: second, createdAt: "2026-10-10T10:00:01Z" }];
+  const runs = [
+    normalizeRun({ id: 1, name: "Atlas Coder", display_title: `Atlas Coder · task ${second}`, event: "workflow_dispatch", created_at: "2026-10-10T10:00:00Z" }),
+    normalizeRun({ id: 2, name: "Atlas Coder", display_title: `Atlas Coder · task ${first}`, event: "workflow_dispatch", created_at: "2026-10-10T10:00:01Z" }),
+  ];
+  assert.deepEqual(assignRunsToTasks(tasks, runs), [{ taskId: first, runId: 2 }, { taskId: second, runId: 1 }]);
+  assert.equal(normalizeRun({ id: 3, name: `task ${first}`, display_title: "Manual run" }).name, "Manual run");
 });
 
 test("degrades every GitHub read failure to null rather than throwing", async () => {
