@@ -20,7 +20,7 @@ and more to the point a wrapper would deliver none of the above.
 | Concern | Where |
 | --- | --- |
 | Signed deep links, push payloads, biometric policy, session states, crash redaction | `apps/local-control/src/mobile/` — shared with the daemon, which issues the links |
-| Keychain/Keystore access, plugin wiring, deep-link handling | `mobile/src/` |
+| Keychain/Keystore access, plugin wiring, deep-link handling, remote mission/approval polling | `mobile/src/` |
 | Native projects | `mobile/ios/`, `mobile/android/` — generated and checked in for reviewable platform configuration |
 
 ## Building
@@ -36,6 +36,20 @@ npm run open:ios      # or open:android
 ```
 
 `www/` must contain a build of the responsive web app before `cap sync`.
+
+## Validation
+
+The mobile shell checks for this repository are:
+
+```bash
+cd mobile
+npm run check
+npm test
+```
+
+Those cover the shell's secure storage, deep-link validation, session expiry,
+mission refresh/offline behavior, approval replay/expiry refusal, and biometric
+gating logic.
 
 ## Universal and app links
 

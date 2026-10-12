@@ -57,6 +57,11 @@ be introduced only when it adds mobile value beyond a wrapped website.
       `session-state.mjs`. An approval can never be answered from a cached
       list, and losing the network does not overwrite "revoked" with
       "offline".
+- [x] Build the remote companion client on top of the Capacitor shell.
+      `mobile/src/remote-companion.mjs` polls the existing daemon/web mission
+      and approval contracts, keeps the last honest mission state visible while
+      offline, reuses the signed-in web session, and refuses mismatched,
+      replayed, or expired approval decisions.
 - [x] Add native crash reporting with secret redaction and a user-controlled
       diagnostics consent path. Consent defaults to unasked, and the locally
       kept copy is redacted too.

@@ -1,5 +1,6 @@
 import { assertNoCredentialsInWebStorage, createSecureStorage } from "./secure-storage.mjs";
 import { createDeepLinkHandler } from "./deep-link-handler.mjs";
+import { createRemoteCompanion } from "./remote-companion.mjs";
 
 /**
  * Wires the Capacitor plugins to the Atlas web app.
@@ -10,7 +11,7 @@ import { createDeepLinkHandler } from "./deep-link-handler.mjs";
  * A plain WebView delivers none of those, which is why one should not be
  * submitted.
  */
-export async function startShell({ plugins, signer, navigate, onPushToken, platform, webStorages = {} }) {
+export async function startShell({ plugins, signer, navigate, onPushToken, platform, webStorages = {}, fetch = globalThis.fetch, remote = null, now = Date.now, setInterval = globalThis.setInterval, clearInterval = globalThis.clearInterval }) {
   // Fails loudly at startup rather than leaking quietly for a release or two.
   assertNoCredentialsInWebStorage(webStorages);
 
@@ -40,22 +41,33 @@ export async function startShell({ plugins, signer, navigate, onPushToken, platf
     await plugins.push.register();
   }
 
+  const verifyIdentity = async ({ reason }) => {
+    if (!plugins.biometrics) return { verified: false, reason: "This device has no biometric hardware available to Atlas." };
+    try {
+      await plugins.biometrics.verifyIdentity({ reason, title: "Atlas", subtitle: reason });
+      return { verified: true, at: Date.now() };
+    } catch (error) {
+      return { verified: false, reason: error?.message ?? "Re-authentication was cancelled." };
+    }
+  };
+
   return {
     storage,
     handler,
+    companion: remote ? createRemoteCompanion({
+      fetch,
+      storage,
+      verifyIdentity,
+      now,
+      setInterval,
+      clearInterval,
+      ...remote,
+    }) : null,
     /** Called when the daemon reports this device revoked. */
     async revoke() {
       await plugins.push?.unregister?.().catch(() => {});
       await storage.clearAll();
     },
-    async verifyIdentity({ reason }) {
-      if (!plugins.biometrics) return { verified: false, reason: "This device has no biometric hardware available to Atlas." };
-      try {
-        await plugins.biometrics.verifyIdentity({ reason, title: "Atlas", subtitle: reason });
-        return { verified: true, at: Date.now() };
-      } catch (error) {
-        return { verified: false, reason: error?.message ?? "Re-authentication was cancelled." };
-      }
-    },
+    verifyIdentity,
   };
 }
