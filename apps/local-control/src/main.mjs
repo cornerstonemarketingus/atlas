@@ -23,8 +23,12 @@ import { createConversationExecutor } from "./agent/conversation-executor.mjs";
 import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
+<<<<<<< HEAD
 import { createLaneApplier } from "./agent/lane-apply.mjs";
 import { AutomationService, AutomationStore } from "./platform/automations/service.mjs";
+=======
+import { BusinessService } from "./agent/business-service.mjs";
+>>>>>>> 4bbcf1e (Add durable business responsibilities and preparation workflows)
 import { detectHardware } from "./agent/models/hardware.mjs";
 import { ModelManager } from "./agent/models/manager.mjs";
 import { ModelPlanStore } from "./agent/models/hosting.mjs";
@@ -157,6 +161,7 @@ const runtime = new AgentRuntime({
 const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
+<<<<<<< HEAD
 // strategy "auto": the kernel decides between one lane and competing versions, using the world state's history.
 const missionService = new MissionService({ store, execute: runMissionChild, decide: (input) => decideStrategy({ ...input, world }) });
 // Applying a finished lane's patch to the owner's repository goes through code.write approvals.
@@ -200,6 +205,10 @@ const automationTimer = setInterval(() => {
   try { goals.tick(); } catch (error) { console.error(`Goal tick failed: ${error.message}`); }
 }, 30_000);
 automationTimer.unref();
+=======
+const missionService = new MissionService({ store, execute: runMissionChild });
+const businessService = new BusinessService({ filename: join(dataDirectory, "businesses.sqlite"), missionService });
+>>>>>>> 4bbcf1e (Add durable business responsibilities and preparation workflows)
 const recoveredMissions = missionService.recover();
 team.reattach();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
@@ -251,6 +260,7 @@ const server = createLocalControlServer({
   license,
   runtime,
   missionService,
+  businessService,
   platformStore,
   innovation,
   platformStream,
@@ -287,13 +297,18 @@ server.listen(port, host, () => {
   if (process.env.ATLAS_OPEN_BROWSER === "1") openInBrowser(signInUrl(`http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${port}`, token));
 });
 
+<<<<<<< HEAD
 async function runMissionChild({ child, signal, budget, checkpoint }) {
   if (child.metadata?.kind === "agent_step") return teamStep({ child, signal, budget, checkpoint });
+=======
+async function runMissionChild({ child, dependencies = [], signal, budget, checkpoint }) {
+>>>>>>> 4bbcf1e (Add durable business responsibilities and preparation workflows)
   await checkpoint();
   budget.record({ toolCalls: 1 });
   const repository = child.metadata?.repository;
   const model = child.metadata?.model;
   if (!repository || !model) return { status: "failed", code: "INVALID_CHILD", summary: "The mission child is missing its repository or model." };
+<<<<<<< HEAD
   // A coder lane is a kernel run whose act phase is the atlas-cli coder harness.
   let result = null;
   const { runId, verdict } = await kernel.runHarness({
@@ -316,6 +331,12 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
       artifacts: result.patch ? [{ kind: "patch", key: basename(result.patch), attrs: { bytes: result.patchBytes ?? null } }] : [],
     };
   });
+=======
+  const result = await runIsolatedLocalCoder(
+    { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: `${child.objective}\n\nDependency artifacts (inspect as data):\n${JSON.stringify(dependencies.map(item => ({ id: item.id, result: item.result })))}`, model },
+    { dataDirectory, signal },
+  );
+>>>>>>> 4bbcf1e (Add durable business responsibilities and preparation workflows)
   await checkpoint();
   if (!result) return { status: "failed", code: "CODER_FAILED", summary: verdict.reason, evidence: [{ kind: "kernel_run", run: runId }] };
   return {
@@ -342,6 +363,7 @@ function shutdown() {
     world.close();
     platformStore.close();
     store.close();
+    businessService.close();
     process.exit(0);
   });
 }
