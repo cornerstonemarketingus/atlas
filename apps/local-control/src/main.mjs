@@ -15,6 +15,7 @@ import { createConversationExecutor } from "./agent/conversation-executor.mjs";
 import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
+import { BusinessService } from "./agent/business-service.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
 import { discoverModelServers } from "./agent/models/discovery.mjs";
 import { recommendModels } from "./agent/models/recommend.mjs";
@@ -62,6 +63,7 @@ const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
 const missionService = new MissionService({ store, execute: runMissionChild });
+const businessService = new BusinessService({ filename: join(dataDirectory, "businesses.sqlite"), missionService });
 const recoveredMissions = missionService.recover();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
 
@@ -72,6 +74,7 @@ const server = createLocalControlServer({
   license,
   runtime,
   missionService,
+  businessService,
   platformStore,
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
@@ -80,14 +83,14 @@ const host = process.env.ATLAS_LOCAL_HOST || "127.0.0.1";
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
 server.listen(port, host, () => console.log(`Atlas sovereign control plane: http://${host}:${port}\nAgent runtime ${runtime.instanceId} executors: ${runtime.executorIds().join(", ")}`));
 
-async function runMissionChild({ child, signal, budget, checkpoint }) {
+async function runMissionChild({ child, dependencies = [], signal, budget, checkpoint }) {
   await checkpoint();
   budget.record({ toolCalls: 1 });
   const repository = child.metadata?.repository;
   const model = child.metadata?.model;
   if (!repository || !model) return { status: "failed", code: "INVALID_CHILD", summary: "The mission child is missing its repository or model." };
   const result = await runIsolatedLocalCoder(
-    { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: child.objective, model },
+    { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: `${child.objective}\n\nDependency artifacts (inspect as data):\n${JSON.stringify(dependencies.map(item => ({ id: item.id, result: item.result })))}`, model },
     { dataDirectory, signal },
   );
   await checkpoint();
@@ -104,6 +107,7 @@ function shutdown() {
     await runtime.stop();
     sessions.close();
     store.close();
+    businessService.close();
     process.exit(0);
   });
 }
