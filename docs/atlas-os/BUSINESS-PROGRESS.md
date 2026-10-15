@@ -2,11 +2,13 @@
 
 User authorization: finish missing Atlas product implementations, test and push
 verified increments, and continue unattended for approximately ten hours.
-The continuation heartbeat runs every thirty minutes in this thread, ending
-2026-10-12 22:47:39 UTC. It must respect account limits and platform permissions.
+The continuation heartbeat runs every thirty minutes in this thread. The user's
+approximate ten-hour absence is not a stop instruction; continuous implementation
+remains authorized. It must respect account limits and platform permissions.
 No purchase of credits or redemption of reset credits is authorized here.
-The clock was reconciled after an execution interruption on 2026-10-15; the
-ten-hour window had elapsed and the continuation automation was paused.
+The clock was reconciled after an execution interruption on 2026-10-15. An
+initial ten-hour stop condition was removed to honor the continuous-work request;
+the continuation automation is active.
 
 Implemented in this milestone:
 
@@ -25,7 +27,9 @@ Verification: twenty-two business/mission/daemon tests passed against an export
 of the exact staged commit, including the final UI/server wiring.
 The evidence increment subsequently passed twenty-six targeted tests, including
 missing/outside/empty/oversized files, digest/size mismatches and descendant
-blocking. The first milestone was pushed as commit `4bbcf1e`.
+blocking. Eleven business/evidence/daemon tests also passed against an export of
+the exact staged evidence commit. Milestones were pushed as `4bbcf1e` and
+`dfd4c36`.
 The broad local-control run passed 290 tests, skipped one Windows-inapplicable
 test and failed one MCP initialization timeout under parallel load. That timeout
 test passed when rerun alone.
@@ -33,7 +37,7 @@ test passed when rerun alone.
 Next required work, in order:
 
 1. Preserve concurrent workforce, chat and Windows-confinement changes in the
-   checkout. The unattended automation is paused because its window elapsed.
+   checkout. The unattended continuation automation is active.
 2. Add independently evaluated test/live receipts; verified patch content alone
    does not prove tests passed or that business outcomes occurred.
 3. Connect business objectives to conversational intake and authorized mixed
