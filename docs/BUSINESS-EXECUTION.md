@@ -23,7 +23,10 @@ can write; paired devices can inspect records, due reviews and plans.
 The launch plan creates five dependency-aware children: website, hosting
 preparation, CRM preparation, lead-generation preparation and review. Each child
 gets one fifth of the business execution budget and must return nonempty patch
-evidence before dependents can run. Dependency results include artifact handoffs;
+evidence before dependents can run. In the production daemon, an independent
+verifier reads each required patch from the configured artifact directory,
+checks its bounds and Git patch header, compares declared sizes/digests, and
+records its actual SHA-256 digest. Dependency results include artifact handoffs;
 agents must inspect them because isolated worktrees do not automatically merge.
 Budgets apply per launch, not cumulatively across all business missions.
 
@@ -42,8 +45,10 @@ automatically runs them yet.
 
 Current execution uses isolated coding worktrees. Completion means reviewable
 preparation artifacts exist, not that hosting is live, CRM delivery succeeded or
-outreach was sent. Evidence checks validate executor artifact metadata, not test
-results or business performance. Existing tool approvals remain authoritative;
+outreach was sent. Evidence checks validate patch contents, not test
+results or business performance. The daemon verifies required patch files;
+custom MissionService embedders must supply their own evidence verifier.
+Existing tool approvals remain authoritative;
 plan instructions are not an authorization boundary for future executors.
 
 Next integration work: connect conversation intake and a business UI, route

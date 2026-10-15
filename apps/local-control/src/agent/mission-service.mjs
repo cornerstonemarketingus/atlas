@@ -25,14 +25,18 @@ export class MissionService {
   #schedulers = new Map();
   #listeners = new Map();
 
-  constructor({ store, execute, defaultConcurrency = 2 }) {
+  constructor({ store, execute, verifyEvidence = null, defaultConcurrency = 2 }) {
     if (!store || typeof store.saveMission !== "function") throw new Error("A durable mission store is required.");
     if (typeof execute !== "function") throw new Error("A mission child executor is required.");
+    if (verifyEvidence !== null && typeof verifyEvidence !== "function") throw new Error("A mission evidence verifier must be a function.");
     if (!Number.isInteger(defaultConcurrency) || defaultConcurrency < 1 || defaultConcurrency > 8) {
       throw new Error("defaultConcurrency must be an integer from 1 to 8.");
     }
     this.#store = store;
-    this.#execute = execute;
+    this.#execute = verifyEvidence ? async context => {
+      const result = await execute(context);
+      return verifyEvidence({ child: context.child, result });
+    } : execute;
     this.#defaultConcurrency = defaultConcurrency;
   }
 

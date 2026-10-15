@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
 import { LocalTaskStore } from "./store.mjs";
@@ -16,6 +16,7 @@ import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
 import { BusinessService } from "./agent/business-service.mjs";
+import { createMissionEvidenceVerifier } from "./agent/mission-evidence.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
 import { discoverModelServers } from "./agent/models/discovery.mjs";
 import { recommendModels } from "./agent/models/recommend.mjs";
@@ -62,7 +63,8 @@ const runtime = new AgentRuntime({
 const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
-const missionService = new MissionService({ store, execute: runMissionChild });
+const missionService = new MissionService({ store, execute: runMissionChild,
+  verifyEvidence: createMissionEvidenceVerifier({ patchDirectory: resolve(dataDirectory, "patches") }) });
 const businessService = new BusinessService({ filename: join(dataDirectory, "businesses.sqlite"), missionService });
 const recoveredMissions = missionService.recover();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
