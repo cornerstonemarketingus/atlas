@@ -6,17 +6,13 @@ import { publishChange } from "./publish-adapters.mjs";
 import { discoverLocalModels } from "./model-discovery.mjs";
 import { createAgentRoutes } from "./agent/routes.mjs";
 import { createMissionRoutes } from "./agent/mission-routes.mjs";
-<<<<<<< HEAD
+import { createBusinessRoutes } from "./agent/business-routes.mjs";
+import { BUSINESS_UI_HTML, BUSINESS_UI_JS } from "./agent/business-ui.mjs";
 import { createPlatformRoutes, LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
 import { createInnovationRoutes, describeInnovationError } from "./platform/innovation/routes.mjs";
 import { createTeamRoutes } from "./agent/team/routes.mjs";
 import { createKnowledgeRoutes } from "./agent/knowledge-routes.mjs";
 import { createPlatformApiRoutes } from "./platform/api-routes.mjs";
-=======
-import { createBusinessRoutes } from "./agent/business-routes.mjs";
-import { BUSINESS_UI_HTML, BUSINESS_UI_JS } from "./agent/business-ui.mjs";
-import { createPlatformRoutes } from "./platform/dashboard.mjs";
->>>>>>> 4bbcf1e (Add durable business responsibilities and preparation workflows)
 import { createRateLimiter, LIMITS } from "./rate-limit.mjs";
 import { createSelfImproveRoutes } from "./platform/self-improve/service.mjs";
 import { createModelHostingRoutes } from "./agent/models/hosting.mjs";
@@ -31,16 +27,12 @@ import { createAutomationRoutes, createWebhookRoute } from "./platform/automatio
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-<<<<<<< HEAD
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null }) {
-=======
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, transcriber = null, modelHealth = null, platformStore = null }) {
->>>>>>> 4bbcf1e (Add durable business responsibilities and preparation workflows)
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
+  const businessRoutes = businessService ? createBusinessRoutes({ businessService }) : null;
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
-<<<<<<< HEAD
   // model "auto": the installed models, chosen by their verified history (capability economics).
   const chooseModel = world ? async ({ budget }) => {
     const { models } = await discoverModels();
@@ -66,11 +58,6 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const goalRoutes = goals ? createGoalRoutes({ goals, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, automations, goals, send: (response, status, value) => { send(response, status, value); return true; } });
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
-=======
-  const missionRoutes = missionService ? createMissionRoutes({ missionService }) : null;
-  const businessRoutes = businessService ? createBusinessRoutes({ businessService }) : null;
-  const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore }) : null;
->>>>>>> 4bbcf1e (Add durable business responsibilities and preparation workflows)
 
   async function startTask(taskId) {
     store.markRunning(taskId);
@@ -85,8 +72,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
     if (request.method === "GET" && (request.url === "/icon.svg" || request.url === "/favicon.ico")) return sendText(response, 200, "image/svg+xml", LOCAL_UI_ICON);
     if (request.method === "GET" && request.url === "/app.js") return sendText(response, 200, "text/javascript; charset=utf-8", LOCAL_UI_JS);
-    if (request.method === "GET" && request.url === "/businesses") return sendText(response, 200, "text/html; charset=utf-8", BUSINESS_UI_HTML);
-    if (request.method === "GET" && request.url === "/businesses.js") return sendText(response, 200, "text/javascript; charset=utf-8", BUSINESS_UI_JS);
+    if (businessService && request.method === "GET" && request.url === "/businesses") return sendText(response, 200, "text/html; charset=utf-8", BUSINESS_UI_HTML);
+    if (businessService && request.method === "GET" && request.url === "/businesses.js") return sendText(response, 200, "text/javascript; charset=utf-8", BUSINESS_UI_JS);
     if (platformRoutes?.handlePage(request, response)) return;
     if (innovationRoutes?.handlePage(request, response)) return;
     response.setHeader("content-type", "application/json; charset=utf-8");
@@ -118,6 +105,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (identity.role === "admin" && isRemoteRequest(request) && !remoteAccess?.ownerAllowedRemotely()) {
       return send(response, 403, { message: "The owner token only works on this computer.", unblock: "Pair this device from Settings on the computer running Atlas, or allow owner access remotely there." });
     }
+    if (businessRoutes && await businessRoutes.handle(request, response, identity)) return;
+    if (!businessService && (request.url ?? "").startsWith("/v1/businesses")) return send(response, 503, { message: "The business service is not running in this process." });
     if (commandCenterRoutes(request, response)) return;
     if (worldRoutes && await worldRoutes(request, response, identity)) return;
     if (goalRoutes && (request.url ?? "").startsWith("/v1/goals")) { if (await goalRoutes(request, response, identity)) return; }
@@ -131,7 +120,6 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (platformApi && await platformApi.handle(request, response, identity)) return;
     if (platformRoutes && platformRoutes.handle(request, response, identity)) return;
     if (!platformRoutes && (request.url ?? "").startsWith("/v1/platform/")) return send(response, 503, { message: "The Atlas platform task store is not running in this process." });
-<<<<<<< HEAD
     if (teamRoutes && (request.url ?? "").startsWith("/v1/team/")) { if (await teamRoutes(request, response, identity)) return; }
     if (!teamRoutes && (request.url ?? "").startsWith("/v1/team/")) return send(response, 503, { message: "Agent missions are not running in this process." });
     // What agents can do on this machine, and what the owner's policy says about each capability.
@@ -162,10 +150,6 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
       if (!modelHostingRoutes) return send(response, 503, { message: "Model hosting is not available in this process." });
       if (await modelHostingRoutes(request, response, identity)) return;
     }
-=======
-    if (businessRoutes && (request.url ?? "").startsWith("/v1/businesses")) { if (await businessRoutes.handle(request, response, identity)) return; }
-    if (!businessService && (request.url ?? "").startsWith("/v1/businesses")) return send(response, 503, { message: "The business service is not running in this process." });
->>>>>>> 4bbcf1e (Add durable business responsibilities and preparation workflows)
     if (missionRoutes && (request.url ?? "").startsWith("/v1/missions")) { if (await missionRoutes.handle(request, response, identity)) return; }
     if (!missionService && (request.url ?? "").startsWith("/v1/missions")) return send(response, 503, { message: "The Atlas mission service is not running in this process." });
     if (agentRoutes && (request.url ?? "").startsWith("/v1/sessions")) { if (await agentRoutes.handle(request, response, identity)) return; }
