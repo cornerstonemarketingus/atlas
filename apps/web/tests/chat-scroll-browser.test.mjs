@@ -81,6 +81,9 @@ test("real chat preserves desktop/mobile reading position through SSE, polling a
     await page.getByLabel("Message Atlas").fill("Explain the calculations");
     await page.getByLabel("Send", { exact: true }).click();
     await page.waitForFunction(() => document.querySelector('[aria-label="Stop the reply"]'));
+    // A streamed fence with metadata previously froze the entire React tab.
+    emit("delta", { text: '```typescript title="stream.ts"\nconst ready = true;\n```\n\n' });
+    await page.waitForFunction(() => [...document.querySelectorAll(".md-code")].some(element => element.textContent.includes("const ready = true")));
     emit("thinking", { text: "Live reasoning. ".repeat(30) });
     emit("delta", { text: "Working through the answer.\n\n".repeat(10) });
     await bottom();
