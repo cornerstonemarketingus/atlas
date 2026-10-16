@@ -1,8 +1,8 @@
-import { and, eq } from "drizzle-orm";
-import { getDb } from "../../../../db";
-import { conversationMessages, conversations, runEvents, tasks } from "../../../../db/schema";
+import { getD1 } from "../../../../db";
 import { createInstallationToken, githubAppConfiguration } from "../github-app.mjs";
 import { correlationMatchesTask, resultBelongsToTask, validateRunnerResult, verifyRunnerIdentity } from "../runner-result.mjs";
+import { saveRunnerResult } from "../result-storage.mjs";
+import { EXECUTOR_REPOSITORY_ID } from "../execution-claims.mjs";
 import { platformGitHubToken } from "../github-token.mjs";
 
 export async function POST(request: Request) {
@@ -32,9 +32,10 @@ export async function POST(request: Request) {
     body = validateRunnerResult(JSON.parse(new TextDecoder().decode(bytes)));
   } catch { return Response.json({ message: "Invalid result payload." }, { status: 400 }); }
   try {
-    const db = getDb();
-    const [task] = await db.select().from(tasks).where(eq(tasks.taskId, body.taskId)).limit(1);
+    const d1 = getD1();
+    const task = await d1.prepare("SELECT task_id AS taskId, tenant_id AS tenantId, requested_by AS requestedBy, repository, branch, mode, objective, merge_policy AS mergePolicy, correlation_id AS correlationId, execution_provider AS executionProvider, dispatch_state AS dispatchState, conversation_id AS conversationId, github_run_id AS githubRunId FROM tasks WHERE task_id = ?").bind(body.taskId).first();
     if (!task?.conversationId || identity.repository !== task.repository) return Response.json({ message: "Dispatch not found." }, { status: 404 });
+    if (task.dispatchState !== "legacy" && identity.repository_id !== EXECUTOR_REPOSITORY_ID) return Response.json({ message: "Executor identity does not match dispatch." }, { status: 403 });
     // Checked before the GitHub round-trip: a positive mismatch can never be
     // this task's result, whatever the run verification would say.
     if (!correlationMatchesTask(body, task)) return Response.json({ message: "Result correlation id does not match dispatch." }, { status: 409 });
@@ -43,21 +44,12 @@ export async function POST(request: Request) {
     if (!token) return Response.json({ message: "Run verification unavailable." }, { status: 503 });
     const response = await fetch(`https://api.github.com/repos/${task.repository}/actions/runs/${identity.run_id}`, {
       headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "atlas-control-plane" },
-      signal: AbortSignal.timeout(10000),
+      redirect: "error", signal: AbortSignal.timeout(10000),
     });
     if (!response.ok) return Response.json({ message: "Run verification unavailable." }, { status: 503 });
     if (!resultBelongsToTask(identity, task, await response.json())) return Response.json({ message: "Result does not match dispatch." }, { status: 403 });
-    const [conversation] = await db.select().from(conversations).where(and(eq(conversations.id, task.conversationId), eq(conversations.requestedBy, task.requestedBy))).limit(1);
-    if (!conversation) return Response.json({ message: "Dispatch not found." }, { status: 404 });
-    const id = `result:${task.taskId}:${identity.run_id}:${identity.run_attempt}`;
-    const now = new Date().toISOString();
-    // One transaction and stable ids make a retried delivery harmless.
-    await db.batch([
-      db.insert(runEvents).values({ id, conversationId: task.conversationId, taskId: task.taskId, requestedBy: task.requestedBy, kind: "result", label: "Runner results received", detail: body.summary, createdAt: now }).onConflictDoNothing(),
-      db.insert(conversationMessages).values({ id, conversationId: task.conversationId, requestedBy: task.requestedBy, role: "assistant", content: body.summary, createdAt: now }).onConflictDoNothing(),
-      db.update(tasks).set({ githubRunId: Number(identity.run_id) }).where(and(eq(tasks.taskId, task.taskId), eq(tasks.requestedBy, task.requestedBy))),
-      db.update(conversations).set({ updatedAt: now }).where(and(eq(conversations.id, task.conversationId), eq(conversations.requestedBy, task.requestedBy))),
-    ]);
+    // Recheck task, tenant, conversation and exact claim inside every write.
+    if (!await saveRunnerResult(d1, task, identity, body.summary)) return Response.json({ message: "Result execution ownership does not match dispatch." }, { status: 409 });
     const correlationId = task.correlationId ?? body.correlationId ?? null;
     return Response.json({ received: true, ...(correlationId ? { correlationId } : {}) }, correlationId ? { headers: { "x-atlas-correlation-id": correlationId } } : undefined);
   } catch { return Response.json({ message: "Result storage temporarily unavailable." }, { status: 503 }); }
