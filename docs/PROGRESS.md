@@ -427,3 +427,9 @@ explicitly and passed on desktop/mobile with no page errors. Focused regressions
 20/20 passed. No claim of measured live-model latency or completed business
 operations. Existing provider repair #240 and durable dispatch #270 remain
 separate workstreams; this patch does not overwrite their files.
+
+## 2026-10-16 — hosting request responsiveness (#292 / PR #293)
+
+From current main, isolated branch codex/infrastructure-deadlines in .worktrees/atlas-infrastructure-deadlines. The existing Cloudflare/Vercel/Git infrastructure client only signalled abort and retained caller listeners. Added a complete response deadline, cancellation before external execution, and listener cleanup. Possibly accepted writes are not automatically retried. Five negative regressions failed before and pass after; existing infrastructure integration tests pass (14/14). The real daemon HTTP end-to-end journey passed every step, including approvals, pause/resume/cancel and crash recovery, using its scripted model.
+
+Full local-control suite is still running locally (session 35506, output .infra-suite.log); required cross-platform CI is pending. Follow through CI and inspect the full local result before ordinary merge of #293. No live hosting changes made. Mission PR #291 latest full CI is green but still needs configured tenant-persistence review and migration application. Broader unattended cloud scheduling, cumulative spending and live business integrations remain incomplete.
