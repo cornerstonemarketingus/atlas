@@ -1,6 +1,7 @@
 import { getD1 } from "../../../../db";
 import { createInstallationToken, githubAppConfiguration } from "../github-app.mjs";
 import { correlationMatchesTask, resultBelongsToTask, validateRunnerResult, verifyRunnerIdentity } from "../runner-result.mjs";
+import { verifyExecutionOutcome } from "../execution-outcomes.mjs";
 import { saveRunnerResult } from "../result-storage.mjs";
 import { EXECUTOR_REPOSITORY_ID } from "../execution-claims.mjs";
 import { platformGitHubToken } from "../github-token.mjs";
@@ -47,9 +48,11 @@ export async function POST(request: Request) {
       redirect: "error", signal: AbortSignal.timeout(10000),
     });
     if (!response.ok) return Response.json({ message: "Run verification unavailable." }, { status: 503 });
-    if (!resultBelongsToTask(identity, task, await response.json())) return Response.json({ message: "Result does not match dispatch." }, { status: 403 });
+    const run = await response.json();
+    if (!resultBelongsToTask(identity, task, run)) return Response.json({ message: "Result does not match dispatch." }, { status: 403 });
+    const outcome = task.dispatchState === "legacy" ? null : await verifyExecutionOutcome(identity, task, run, token);
     // Recheck task, tenant, conversation and exact claim inside every write.
-    if (!await saveRunnerResult(d1, task, identity, body.summary)) return Response.json({ message: "Result execution ownership does not match dispatch." }, { status: 409 });
+    if (!await saveRunnerResult(d1, task, identity, body.summary, new Date().toISOString(), outcome)) return Response.json({ message: "Result execution ownership does not match dispatch." }, { status: 409 });
     const correlationId = task.correlationId ?? body.correlationId ?? null;
     return Response.json({ received: true, ...(correlationId ? { correlationId } : {}) }, correlationId ? { headers: { "x-atlas-correlation-id": correlationId } } : undefined);
   } catch { return Response.json({ message: "Result storage temporarily unavailable." }, { status: 503 }); }
