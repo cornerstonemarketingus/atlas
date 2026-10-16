@@ -101,7 +101,9 @@ test("pause during dispatch retains its receipt without reactivating the mission
 test("definitive task rejection blocks future work and is never charged another dispatch", async t => {
   const { service } = fixture(t, { dispatch: async () => ({ rejected: true }) });
   const created = await service.create(scope, plan());
-  await service.advance(scope, created.id);
+  const rejected = await service.advance(scope, created.id);
+  assert.equal(rejected.status, "failed", "intake rejection is terminal in the response shown to the user");
+  assert.equal(rejected.steps[1].state, "blocked");
   const failed = await service.advance(scope, created.id);
   assert.equal(failed.status, "failed");
   assert.equal(failed.steps[1].state, "blocked");

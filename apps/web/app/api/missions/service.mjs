@@ -142,6 +142,10 @@ export class CloudMissions {
         target.state = "submitted";
       } else if (result?.rejected === true) {
         target.state = "failed";
+        if (latest.status === "running") {
+          latest.status = "failed";
+          for (const step of latest.steps) if (step.state === "waiting") step.state = "blocked";
+        }
         target.message = typeof result.message === "string" ? result.message.slice(0, 500) : "Task intake rejected this step. No automatic retry was sent.";
       } else {
         target.state = "uncertain";
