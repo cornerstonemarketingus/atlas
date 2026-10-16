@@ -1,4 +1,5 @@
 "use client";
+import { latestProjectReceipt } from "./project-receipts.mjs";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { classifyIntent } from "./intent.mjs";
@@ -17,7 +18,7 @@ import { ThreadRail, useThreads } from "../ThreadRail.js";
 
 type Message = { id: string; role: string; content: string; createdAt: string };
 type Task = { taskId: string; objective: string; mode: string; status?: string; repository?: string; branch?: string; run?: { id?: number; url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
-type Detail = { messages?: Message[]; tasks?: Task[] };
+type Detail = { events?: { kind: string; detail: string }[]; messages?: Message[]; tasks?: Task[] };
 
 const STARTERS = [
   { title: "Fix a bug in my project", prompt: "Find the most likely bug in my project, fix it, run the tests, and open a pull request." },
@@ -152,6 +153,7 @@ export function ChatSection() {
         resetFollowing();
         setConversationId(requested);
         setMessages(detail.messages ?? []);
+      setProjectOperation((previous) => latestProjectReceipt(detail.events, previous));
         setTasks(await withLiveTaskStatus(detail.tasks ?? []));
       })
       .catch(() => setNotice("That conversation could not be loaded."));
@@ -170,6 +172,7 @@ export function ChatSection() {
       // The previous workspace fetched this and then threw the messages away,
       // so re-opening a thread showed an empty room. They are the thread.
       setMessages(detail.messages ?? []);
+        setProjectOperation((previous) => latestProjectReceipt(detail.events, previous));
       setTasks(await withLiveTaskStatus(detail.tasks ?? []));
     } catch {
       setNotice("That thread's history could not be loaded.");
@@ -200,6 +203,7 @@ export function ChatSection() {
         if (response.ok && active) {
           const detail = await response.json() as Detail;
           setMessages(detail.messages ?? []);
+        setProjectOperation((previous) => latestProjectReceipt(detail.events, previous));
           setTasks(await withLiveTaskStatus(detail.tasks ?? []));
         }
       } catch { /* Keep the last known conversation when offline. */ }
@@ -344,7 +348,7 @@ export function ChatSection() {
   async function startNewProject(item: Suggestion) {
     setSuggestion(null); setSending(true);
     try {
-      const response = await fetch("/api/genesis/operations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: crypto.randomUUID(), name: `atlas-project-${crypto.randomUUID().slice(0, 8)}`, description: item.text, template: "web-app", visibility: userWantsPublic(item.text) ? "public" : "private", host: "github" }) });
+      const response = await fetch("/api/genesis/operations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId, requestId: crypto.randomUUID(), name: `atlas-project-${crypto.randomUUID().slice(0, 8)}`, description: item.text, template: "web-app", visibility: userWantsPublic(item.text) ? "public" : "private", host: "github" }) });
       const result = await response.json();
       if (!response.ok) setNotice(result.message ?? "New project creation is unavailable.");
       else setProjectOperation(result);

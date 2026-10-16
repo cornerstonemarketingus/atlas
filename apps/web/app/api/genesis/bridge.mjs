@@ -12,6 +12,7 @@ export function genesisBridge(environment, { owner = false, fetchImpl = fetch } 
         headers: { authorization: `Bearer ${environment.ATLAS_GENESIS_TOKEN}`, "content-type": "application/json" },
         ...(input ? { body: JSON.stringify(input) } : {}), signal: AbortSignal.timeout(15000) });
       if (!response.ok) {
+        if (response.status === 404 && path.startsWith("/v1/genesis/operations/")) return { status: "not-found", message: "The node has no receipt for this operation. Creation is unconfirmed; checking status never resubmits it." };
         if ([400, 409].includes(response.status)) {
           const failure = await response.json().catch(() => ({}));
           if (["INVALID_PROJECT", "REQUEST_CONFLICT"].includes(failure.code)) return { status: "failed", code: failure.code, message: failure.message };

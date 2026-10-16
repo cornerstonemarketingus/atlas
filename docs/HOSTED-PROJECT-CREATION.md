@@ -92,9 +92,20 @@ receipt is never completion. A created repo with a failed push is a failure
 with the repository retained for inspection; Atlas never deletes it.
 Restarted in-flight operations report interrupted and are never blindly
 replayed across the external-action boundary. Approvals retain their existing
-durable exact-commit semantics. To check a receipt after closing the chat,
-ask `workspace_project_status` with its operation id or inspect Genesis.
-The activity card itself is not saved into conversation history.
+durable exact-commit semantics. Before contacting Genesis, hosted creation now
+reserves the operation ID in an existing, unarchived conversation belonging to
+the caller and tenant. If history is unavailable, no creation request is sent.
+Direct callers without a conversationId receive a new saved conversation.
+Caller-supplied conversation IDs must already belong to them. Only the
+operation ID is retained in the event, not the idea, credentials or tool output.
+
+Reopening a conversation restores its latest project card and reads the actual
+node status. A lost creation response remains recoverable through that receipt.
+Recovery never resubmits creation. A missing node receipt is unconfirmed, not a
+failed build or proof that no action occurred. Automatic polling stops after
+60 checks or a connection/authentication failure; Check project status retries
+only the read. Existing receipts that predate this change are not backfilled.
+The node must still be configured and reachable to confirm progress.
 
 Deployment stays `not-deployed` until a separately authorized deployment
 actually runs. A verified starter or business plan is not proof of an
