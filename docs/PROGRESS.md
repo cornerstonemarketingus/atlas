@@ -449,3 +449,11 @@ From current main, isolated branch codex/infrastructure-deadlines in .worktrees/
 Full local-control suite is still running locally (session 35506, output .infra-suite.log); required cross-platform CI is pending. Follow through CI and inspect the full local result before ordinary merge of #293. No live hosting changes made. Mission PR #291 latest full CI is green but still needs configured tenant-persistence review and migration application. Broader unattended cloud scheduling, cumulative spending and live business integrations remain incomplete.
 
 Hosting follow-through: PR #293 merged as 8ad577e3f138c0adedd6910cdd22d13f053bed5d after all cross-platform CI passed. Full local suite completed: 677 passed, 20 optional/environment skips, zero failures. Daemon e2e passed. Integrated current main into mission PR #291, preserving both progress entries; new mission persistence still requires configured review.
+
+## 2026-10-16 — complete DNS outcome verification (issue #294)
+
+Current-main branch codex/dns-verification reuses .worktrees/atlas-infrastructure-deadlines after #293 merged. Cloudflare DNS apply compared only content, so the real infrastructure tool could claim an approved proxy change was verified when the provider retained the old setting. Read-back now checks record name/type, content, TTL and proxy state; DNS name casing and a trailing root dot are normalized. It retains observed state and performs no automatic additional writes.
+
+Four negative regressions failed on the original adapter, including the actual approved ToolRegistry plan/apply boundary. All six DNS tests and existing hosting integration/deadline tests now pass: 20/20. No live DNS changes, credential changes or approval-policy changes. Full cross-platform CI must pass before ordinary merge. Mission #291 integrated-main CI is green and still awaits configured persistence review. Broader cloud scheduler/business work remains incomplete.
+
+DNS follow-through: PR #295 merged as a3b59322b57ec332f96ce28aeb93b568d405ae56 after all CI passed. Initial Windows daemon health timeouts reproduced neither locally (both boot tests passed) nor on one targeted retry; DNS regressions passed throughout. Preserved both progress entries while integrating current main into mission PR #291. No live DNS changes performed.
