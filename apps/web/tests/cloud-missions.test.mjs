@@ -190,3 +190,22 @@ test("audit events are append-only and paused/stopped work records outcomes with
   assert.throws(() => sqlite.exec("UPDATE cloud_mission_events SET kind='tampered'"), /append-only/);
   assert.throws(() => sqlite.exec("DELETE FROM cloud_mission_events"), /append-only/);
 });
+
+test("a paid allowance refusal fails immediately without uncertain recovery or another charge", async t => {
+  const { d1 } = fixture(t); let calls = 0;
+  const handle = await runtime({ getD1: () => d1, missionRoutes,
+    authenticatedAccount: async () => ({ userId: "operator" }),
+    resolveTenantContext: async () => scope, tenantScope: value => value,
+    startTask: async () => { calls++; return Response.json({ message: "Monthly task allowance exhausted" }, { status: 402 }); },
+  });
+  const input = plan();
+  const post = (body, id) => handle(new Request("https://atlas.test/api/missions" + (id ? `/${id}` : ""), { method: "POST", body: JSON.stringify(body) }), id ?? null);
+  await post(input);
+  const failed = (await (await post({ action: "advance" }, input.requestId)).json()).mission;
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.steps[0].state, "failed");
+  assert.match(failed.steps[0].message, /Monthly task allowance exhausted/);
+  assert.equal(failed.steps[1].state, "blocked");
+  await post({ action: "advance" }, input.requestId);
+  assert.equal(calls, 1);
+});

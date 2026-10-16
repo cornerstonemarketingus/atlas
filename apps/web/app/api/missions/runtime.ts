@@ -26,7 +26,7 @@ export const handleMission = missionRoutes({
   dispatch: async (request: Request, _scope: Scope, step: Step) => {
     const response = await startTask(forwarded(request, "/api/tasks", { repository: step.repository, branch: step.branch, mode: step.mode, objective: step.objective }, step.correlationId));
     if (!response.ok) {
-      const rejected = [400, 401, 403, 404, 422, 429].includes(response.status);
+      const rejected = [400, 401, 402, 403, 404, 422, 429].includes(response.status);
       const detail = rejected ? await response.json().catch(() => ({})) as { message?: string } : {};
       return { rejected, ...(typeof detail.message === "string" ? { message: detail.message.slice(0, 500) } : {}) };
     }
