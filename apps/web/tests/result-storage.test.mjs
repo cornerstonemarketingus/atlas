@@ -95,4 +95,3 @@ test("built Worker result callback enforces claim ownership after signed run ver
   const unavailable = await invoke(await sign());
   assert.equal(unavailable.status, 503); assert.doesNotMatch(await unavailable.text(), /SQL|no such table|fake-result-token/);
 });
-
