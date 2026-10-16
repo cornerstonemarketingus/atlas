@@ -1,0 +1,15 @@
+# HubSpot contact workflow
+
+Atlas's existing live business-workflow registration now includes `crm.find_contact` and `crm.create_contact`. HubSpot is a provisional first connector while the owner CRM preference is pending. This does not change the selected CRM for any business or provision an account.
+
+The owner configures `HUBSPOT_PRIVATE_APP_TOKEN` through the existing credential mechanism with contact read/write permissions, then explicitly configures `crm.read` and `crm.write` policy through the owner policy controls. Both capabilities remain denied by default. Contact creation always requires the existing approval of exact tool arguments even when its capability policy is allow. Tokens are declared secret references, resolved by the existing registry after policy and approval; they are never accepted as tool arguments. No policy or token is configured by this PR.
+
+Lookup returns whether an email exists and its contact ID. Creation first checks for an existing email and reuses it without modifying any existing fields. A new contact includes only supplied email/name/phone/company fields, then a separate GET verifies the returned ID and every submitted property. A differing read-back produces NOT_VERIFIED. A concurrent create conflict, uncertain response or network failure is not automatically replayed; lookup is available for recovery. Read-back can fail if HubSpot normalizes a submitted phone or other value, which is reported honestly rather than treated as success.
+
+Requests use only `https://api.hubapi.com`, refuse redirects and inherit the bounded complete-response client. Provider error bodies are discarded. Tool output contains only status and the validated contact ID. Cancellation before or during credential resolution cannot start an external request.
+
+Seven CRM tests cover live registry wiring, default denial, argument validation, approval before credential lookup, missing credentials, independent verification, existing contact reuse, mismatched state, provider-body redaction, cancellation including late credentials, and real loopback HTTP transport. Actual daemon startup tests pass. Cross-platform CI must also pass.
+
+Credential integration and external CRM writes require configured review before release. No real HubSpot credential or account was used; live acceptance is blocked until the owner selects/configures the CRM. This is a contact execution slice: it does not receive a public website form, save inquiry notes, run outreach, add marketing consent, schedule recurring campaigns or provide unattended cloud execution. Those remain separate integrated work.
+
+API contract: [HubSpot contacts guide](https://developers.hubspot.com/docs/api-reference/legacy/crm/objects/contacts/guide). The implementation uses documented single-contact create and email lookup rather than email batch upsert, whose partial-update limitations are unsuitable for this slice.
