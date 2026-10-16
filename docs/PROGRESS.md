@@ -404,3 +404,26 @@ existing remote-owner opt-in remains required. Existing PR #101 proposes a separ
 hosted seeding implementation; this work reuses the requested local Genesis
 runtime and should be reconciled during review. Other open task-dispatch/UI
 work may require integration conflict resolution. No TODO file was created.
+
+## 2026-10-15 — chat responsiveness rescue (issue #283)
+
+A streamed Markdown fence such as ```typescript title="app.ts" could prevent
+the paragraph cursor from advancing, leaving React in an infinite synchronous
+render loop. Added a mandatory progress fallback, support for longer fences and
+info strings, and memoization so completed messages are not parsed again for
+every new token. Added a VM-isolated regression that timed out on the original
+renderer and now renders every streamed prefix, plus a real ChatSection browser
+fixture covering the triggering fence on desktop and mobile.
+
+Genesis capability reads now have a 1.5-second deadline covering both headers
+and JSON parsing, rather than blocking every owner chat turn for the operation's
+15-second deadline. Cancellation-ignoring adapters are also bounded. Actual
+project creation/status retain their existing operation deadline; permissions,
+owner checks, publication policy and provider selection are unchanged.
+
+Evidence: production build, typecheck and lint passed; full web suite 483 passed,
+1 optional browser skip, 0 failures. The optional real Chromium gate then ran
+explicitly and passed on desktop/mobile with no page errors. Focused regressions
+20/20 passed. No claim of measured live-model latency or completed business
+operations. Existing provider repair #240 and durable dispatch #270 remain
+separate workstreams; this patch does not overwrite their files.
