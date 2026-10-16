@@ -427,3 +427,11 @@ explicitly and passed on desktop/mobile with no page errors. Focused regressions
 20/20 passed. No claim of measured live-model latency or completed business
 operations. Existing provider repair #240 and durable dispatch #270 remain
 separate workstreams; this patch does not overwrite their files.
+
+## 2026-10-16 — hosted mission recovery (issue #290)
+
+Added `/missions` and scoped D1 mission plans, idempotent creation, atomic revision/audit writes, bounded serial dispatch, reconnect reconciliation, pause/stop and exact current GitHub-attempt result evidence. Existing task intake remains the authority for execution permissions and allowance. Concurrent task/result PR files were preserved; migration 0021 avoids #289's 0020.
+
+Evidence: build/typecheck/lint passed; full web suite 494 passed, two optional skips; explicit real Chromium desktop/mobile mission reconnect gate passed. Eleven mission regression tests include old-attempt rejection, audit rollback and concurrent resumes. Performance rescue #285 deployment run 38834441273 and authenticated chat smokes 38834591463 / 38834676029 succeeded.
+
+Not deployed: new tenant persistence requires configured review and migration application/journal integration. Closed-page unattended advancement, cumulative money budgets and live business integrations remain incomplete. Next: obtain required review and integrated migration/CI evidence, then implement scoped scheduler ownership without storing browser credentials. See docs/HOSTED-MISSIONS.md. Branch codex/cloud-mission-recovery.
