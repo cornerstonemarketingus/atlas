@@ -3,15 +3,10 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AtlasShell } from "../AtlasShell.js";
 import "./missions.css";
+import { missionRequest as api } from "./request.mjs";
 type Step = { id: string; objective: string; state: string; taskId: string | null; message: string | null; evidence?: { runUrl?: string | null; summary?: string; receiptId?: string | null } | null };
 type Mission = { id: string; objective: string; status: string; revision: number; dispatchCount: number; dispatchLimit: number; steps: Step[] };
 type Summary = Pick<Mission, "id" | "objective" | "status">;
-async function api(path: string, body?: object) {
-  const response = await fetch(path, { method: body ? "POST" : "GET", cache: "no-store", headers: { "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.message ?? "Mission request failed.");
-  return result;
-}
 function safeRunUrl(value?: string | null) { try { const url = new URL(value ?? ""); return url.protocol === "https:" && url.hostname === "github.com" ? url.href : null; } catch { return null; } }
 export function MissionsSection() {
   const [missions, setMissions] = useState<Summary[]>([]);
