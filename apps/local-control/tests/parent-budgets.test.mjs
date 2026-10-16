@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { defineTool } from "../../../packages/atlas-contracts/src/index.mjs";
 import assert from "node:assert/strict";
@@ -76,4 +77,89 @@ test("a cyclic parent chain fails before any usage mutation", async t => {
   assert.throws(() => f.budget(child).reserve(), /cyclic/);
   assert.equal(get("owner", child.id).usage.toolCalls, 0);
   assert.equal(get("owner", root.id).usage.toolCalls, 0);
+});
+import { reconcileTaskBudgets } from "../src/platform/budget-reconciliation.mjs";
+import { main as reconcileCommand } from "../../../scripts/local/reconcile-task-budgets.mjs";
+
+test("historical direct usage reconciles atomically without double counting new descendant credits", async t => {
+  const f = await fixture(t); const root = f.task({ costMicroUsd: 100 }); const middle = f.task({}, root.id); const leaf = f.task({}, middle.id);
+  f.store.recordUsage("owner", root.id, { costMicroUsd: 2 });
+  f.store.recordUsage("owner", middle.id, { costMicroUsd: 3 });
+  f.store.recordUsage("owner", leaf.id, { costMicroUsd: 4 });
+  f.budget(leaf).charge({ costMicroUsd: 5 });
+  const before = f.store.listEvents("owner").length;
+  const dry = reconcileTaskBudgets({ store: f.store, tenantId: "owner" });
+  assert.ok(dry.updates.length > 0); assert.equal(dry.applied, false);
+  assert.equal(f.store.getTask("owner", root.id).usage.costMicroUsd, 7);
+  assert.equal(f.store.listEvents("owner").length, before);
+  reconcileTaskBudgets({ store: f.store, tenantId: "owner", apply: true });
+  assert.equal(f.store.getTask("owner", root.id).usage.costMicroUsd, 14);
+  assert.equal(f.store.getTask("owner", middle.id).usage.costMicroUsd, 12);
+  assert.equal(f.store.getTask("owner", leaf.id).usage.costMicroUsd, 9);
+  f.reopen();
+  assert.deepEqual(reconcileTaskBudgets({ store: f.store, tenantId: "owner", apply: true }).updates, []);
+  f.budget(leaf).charge({ costMicroUsd: 1 });
+  assert.equal(f.store.getTask("owner", root.id).usage.costMicroUsd, 15);
+  assert.deepEqual(reconcileTaskBudgets({ store: f.store, tenantId: "owner" }).updates, []);
+});
+
+test("historical reconciliation audit failure rolls every usage change back", async t => {
+  const f = await fixture(t); const root = f.task({}); const leaf = f.task({}, root.id);
+  f.store.recordUsage("owner", leaf.id, { inputTokens: 9 });
+  const before = f.store.listEvents("owner").length;
+  const append = f.store.appendEvent.bind(f.store);
+  f.store.appendEvent = event => { if (event.payload?.phase === "reconcile") throw Error("audit unavailable"); return append(event); };
+  assert.throws(() => reconcileTaskBudgets({ store: f.store, tenantId: "owner", apply: true }), /audit unavailable/);
+  assert.equal(f.store.getTask("owner", root.id).usage.inputTokens, 0);
+  assert.equal(f.store.getTask("owner", leaf.id).usage.inputTokens, 9);
+  assert.equal(f.store.listEvents("owner").length, before);
+});
+
+test("reconciliation command defaults to dry run and affects only the explicit tenant", async t => {
+  const f = await fixture(t); const root = f.task({}); const leaf = f.task({}, root.id);
+  const other = f.store.createTask({ tenantId: "other", userId: "different", objective: "Other owner's work", successCriteria: ["Verified"], budget: {} });
+  f.store.recordUsage("owner", leaf.id, { toolCalls: 4 }); f.store.recordUsage("other", other.id, { toolCalls: 7 });
+  assert.equal(reconcileCommand(["--database", f.filename, "--tenant", "owner"]).applied, false);
+  assert.equal(f.store.getTask("owner", root.id).usage.toolCalls, 0);
+  assert.equal(reconcileCommand(["--database", f.filename, "--tenant", "owner", "--apply"]).applied, true);
+  assert.equal(f.store.getTask("owner", root.id).usage.toolCalls, 4);
+  assert.equal(f.store.getTask("other", other.id).usage.toolCalls, 7);
+  assert.throws(() => reconcileCommand(["--database", f.filename]), /explicit tenant/);
+});
+
+test("inconsistent inherited credits are refused without guessing usage or committing changes", async t => {
+  const f = await fixture(t); const root = f.task({}); const leaf = f.task({}, root.id);
+  f.budget(leaf).charge({ inputTokens: 5 });
+  f.store.recordUsage("owner", root.id, { inputTokens: 0 });
+  const before = f.store.listEvents("owner").length;
+  assert.throws(() => reconcileTaskBudgets({ store: f.store, tenantId: "owner", apply: true }), /manual reconciliation/);
+  assert.equal(f.store.getTask("owner", root.id).usage.inputTokens, 0);
+  assert.equal(f.store.listEvents("owner").length, before);
+});
+import { DatabaseSync } from "node:sqlite";
+import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+
+test("reconciliation command rejects missing or unrelated databases without creating platform tables", async t => {
+  const f = await fixture(t); const missing = f.filename + ".missing.sqlite";
+  assert.throws(() => reconcileCommand(["--database", missing, "--tenant", "owner"]));
+  assert.equal(existsSync(missing), false);
+  const unrelated = join(f.filename + ".other.sqlite"); const db = new DatabaseSync(unrelated);
+  try {
+    db.exec("CREATE TABLE unrelated (id INTEGER)");
+    assert.throws(() => reconcileCommand(["--database", unrelated, "--tenant", "owner"]));
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name='tasks'").get().count, 0);
+  } finally { db.close(); }
+});
+
+test("reconciliation executable reports dry-run evidence and inherited overspend is audited on apply", async t => {
+  const f = await fixture(t); const root = f.task({ costMicroUsd: 1 }); const leaf = f.task({}, root.id);
+  f.store.recordUsage("owner", leaf.id, { costMicroUsd: 3 });
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../../../scripts/local/reconcile-task-budgets.mjs", import.meta.url)), "--database", f.filename, "--tenant", "owner"], { encoding: "utf8", timeout: 10000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).applied, false);
+  assert.equal(f.store.getTask("owner", root.id).usage.costMicroUsd, 0);
+  reconcileCommand(["--database", f.filename, "--tenant", "owner", "--apply"]);
+  assert.equal(f.store.getTask("owner", root.id).usage.costMicroUsd, 3);
+  assert.ok(f.store.listEvents("owner", { taskId: root.id }).some(event => event.type === "budget.exceeded" && event.payload.phase === "reconcile"));
 });
