@@ -30,6 +30,16 @@ try {
   simctl(['io', device.id, 'screenshot', resolve(output, 'launch.png')]);
   if (statSync(resolve(output, 'launch.png')).size === 0) throw new Error('Simulator screenshot is empty');
   console.log('Simulator launch receipt and screenshot captured. Review rendering independently; no pairing or approval acceptance is claimed.');
+} catch (error) {
+  // A failed launch must retain evidence before shutdown. This never converts
+  // a timeout into acceptance; a failure screenshot is diagnostic only.
+  writeFileSync(resolve(output, 'failure.json'), JSON.stringify({
+    stage: 'native-launch', code: error.code ?? null, status: error.status ?? null,
+    signal: error.signal ?? null,
+  }, null, 2));
+  try { simctl(['io', device.id, 'screenshot', resolve(output, 'failure.png')], 15000); }
+  catch { /* Keep the original failure even if the simulator is unresponsive. */ }
+  throw error;
 } finally {
   if (startedHere) { try { simctl(['shutdown', device.id]); } catch { /* Preserve the actual launch failure when cleanup also fails. */ } }
 }
