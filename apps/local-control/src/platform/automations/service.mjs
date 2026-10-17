@@ -200,6 +200,7 @@ export class AutomationService {
   #team;
   #clock;
   #onChange;
+  #onEvent;
 
   /**
    * @param {{ store: AutomationStore, missionService: object, team?: object | null, clock?: () => number, onChange?: (event: object) => void }} options
@@ -209,7 +210,13 @@ export class AutomationService {
   #setTimer;
   #clearTimer;
 
-  constructor({ store, missionService, team = null, clock = () => Date.now(), onChange = () => {}, watch = fsWatch, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  /**
+   * `onEvent(summary)` receives every signed GitHub delivery (after the
+   * signature check, before this automation's own event filter), so sleeping
+   * goals can wake on the same webhook. It never affects the automation.
+   */
+  constructor({ store, missionService, team = null, clock = () => Date.now(), onChange = () => {}, onEvent = () => {}, watch = fsWatch, setTimer = setTimeout, clearTimer = clearTimeout }) {
+    this.#onEvent = onEvent;
     this.#watch = watch;
     this.#setTimer = setTimer;
     this.#clearTimer = clearTimer;
@@ -299,22 +306,19 @@ export class AutomationService {
     }
     const event = String(headers["x-github-event"] ?? "");
     if (event === "ping") return { status: "ignored", message: "GitHub ping received; the webhook is connected." };
-    if (!automation.trigger.events.includes(event)) return { status: "ignored", message: `Event ${event || "(none)"} is not one this automation runs on.` };
     let payload;
     try { payload = JSON.parse(body); } catch { throw new AutomationError("INVALID_PAYLOAD", "The GitHub payload is not JSON."); }
     const branch = event === "push" ? String(payload.ref ?? "").replace(/^refs\/heads\//u, "")
       : event === "pull_request" ? String(payload.pull_request?.base?.ref ?? "") : null;
+    const delivery = String(headers["x-github-delivery"] ?? "");
+    try {
+      this.#onEvent({ source: "github", delivery: /^[\x21-\x7e]{1,200}$/u.test(delivery) ? delivery : null, ...githubEventSummary(event, payload, branch) });
+    } catch { /* a subscriber's failure never affects the automation */ }
+    if (!automation.trigger.events.includes(event)) return { status: "ignored", message: `Event ${event || "(none)"} is not one this automation runs on.` };
     if (automation.trigger.branches.length && branch !== null && !automation.trigger.branches.includes(branch)) {
       return { status: "ignored", message: `Branch ${branch || "(none)"} is not one this automation runs on.` };
     }
-    const summary = {
-      event, action: payload.action ?? null, repository: payload.repository?.full_name ?? null, branch,
-      sender: payload.sender?.login ?? null,
-      pullRequest: payload.pull_request ? { number: payload.pull_request.number, title: payload.pull_request.title, url: payload.pull_request.html_url } : null,
-      issue: payload.issue ? { number: payload.issue.number, title: payload.issue.title, url: payload.issue.html_url } : null,
-      headCommit: payload.head_commit ? { id: payload.head_commit.id, message: String(payload.head_commit.message ?? "").slice(0, 500) } : null,
-    };
-    const delivery = String(headers["x-github-delivery"] ?? "");
+    const summary = githubEventSummary(event, payload, branch);
     const key = /^[\x21-\x7e]{1,200}$/u.test(delivery) ? `github:${delivery}` : `github:${randomUUID()}`;
     return this.#fire(automation, { kind: "github", key, input: JSON.stringify(summary).slice(0, MAX_INPUT_BYTES) });
   }
@@ -479,3 +483,31 @@ export class AutomationService {
     return { ...automation, lastRun: last };
   }
 }
+
+/**
+ * The facts of a GitHub delivery that goals and automations act on: never the
+ * whole payload. Text fields are bounded; everything here is untrusted data.
+ */
+export function githubEventSummary(event, payload, branch = null) {
+  const suite = payload.check_suite ?? payload.check_run?.check_suite ?? null;
+  const run = payload.workflow_run ?? null;
+  const pullNumbers = [
+    payload.pull_request?.number,
+    payload.issue?.pull_request ? payload.issue.number : null,
+    ...(suite?.pull_requests ?? []).map((entry) => entry?.number),
+    ...(run?.pull_requests ?? []).map((entry) => entry?.number),
+  ].filter((value) => Number.isInteger(value));
+  return {
+    event, action: payload.action ?? null, repository: payload.repository?.full_name ?? null, branch,
+    sender: payload.sender?.login ?? null,
+    pullRequests: [...new Set(pullNumbers)],
+    merged: typeof payload.pull_request?.merged === "boolean" ? payload.pull_request.merged : null,
+    conclusion: payload.check_run?.conclusion ?? payload.check_suite?.conclusion ?? run?.conclusion ?? null,
+    review: payload.review?.state ?? null,
+    pullRequest: payload.pull_request ? { number: payload.pull_request.number, title: String(payload.pull_request.title ?? "").slice(0, 300), url: payload.pull_request.html_url } : null,
+    issue: payload.issue ? { number: payload.issue.number, title: String(payload.issue.title ?? "").slice(0, 300), url: payload.issue.html_url } : null,
+    comment: payload.comment ? String(payload.comment.body ?? "").slice(0, 1000) : payload.review?.body ? String(payload.review.body).slice(0, 1000) : null,
+    headCommit: payload.head_commit ? { id: payload.head_commit.id, message: String(payload.head_commit.message ?? "").slice(0, 500) } : null,
+  };
+}
+

@@ -43,9 +43,10 @@ export function AtlasGate({ children }: { readonly children: ReactNode }) {
 
   return <main id="top" className="landing"><MarketingNav /><div className="signin-shell"><section className="signin-story">
     <div>
-      <p className="signin-kicker">AI ASSISTANT FOR BUILDERS</p>
+      <p className="signin-kicker">AUTONOMOUS SOFTWARE PLATFORM</p>
       <h1>Ask it. Atlas does the work.</h1>
-      <p>Chat with Atlas like any AI assistant. When you ask it to build or fix something, it changes the code in your GitHub project and opens a pull request. When you ask it to do something online, it uses a browser on your computer and asks you before anything important.</p>
+      <p>From an idea to working software. Build repositories, websites and apps, coordinate child agents, and put your computer to work. Atlas brings creation, verified execution and persistent automation into one platform—with you in control of consequential actions.</p>
+      <div className="atlas-pipeline" aria-label="Atlas workflow"><span>Your goal</span><span>Create</span><span>Verify</span><span>Operate</span><span>Grow</span></div>
     </div>
     <div className="signin-proof"><span>Writes and tests code</span><span>Does browser tasks</span><span>Asks before important actions</span></div>
   </section><section className="signin-access"><div>
@@ -66,9 +67,10 @@ export function AtlasGate({ children }: { readonly children: ReactNode }) {
   <section className="landing-section">
     <h2>What Atlas does</h2>
     <div className="landing-cards">
-      <article><b>Answers questions</b><p>Ask about your code, your plans, or anything else. Answers stay in your chat history across devices.</p></article>
-      <article><b>Writes code</b><p>Say what to build or fix. Atlas edits a copy of your repository, runs your tests, and opens a pull request with the change.</p></article>
-      <article><b>Does browser work</b><p>Research, filling in forms, updating listings. Atlas uses a separate browser on your Windows PC and stops to ask before it submits, sends, or buys anything.</p></article>
+      <article><small>01 / CREATE</small><b>Build working software</b><p>Repositories, websites, web apps and APIs. Atlas edits code, checks the result and prepares changes you can review.</p></article>
+      <article><small>02 / COORDINATE</small><b>Work with child agents</b><p>Local mission teams and isolated coding lanes divide complex work, retain evidence and bring results back to the parent agent.</p></article>
+      <article><small>03 / EXECUTE</small><b>Control your computer</b><p>Pair your Windows PC for remote browser and computer tasks, with approvals and a record of consequential actions.</p></article>
+      <article><small>04 / OPERATE</small><b>Keep moving forward</b><p>Persistent missions, memory and scheduled automation support ongoing work. Complete business creation and dedicated game workflows are the larger direction.</p></article>
     </div>
   </section>
   <section className="landing-section">

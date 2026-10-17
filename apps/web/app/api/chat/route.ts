@@ -18,8 +18,13 @@ import { threadTitle } from "./model-endpoint.mjs";
 import { resolveChatProvider, chatProviderChoices } from "./providers.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
+import { governChain } from "../inference/governor-client.mjs";
+import { workerEnv } from "../inference/worker-env.mjs";
 import { createAgentTeam } from "./agent-team.mjs";
 import { instantToolDefinitions } from "./instant-tools.mjs";
+import { genesisBridge } from "../genesis/bridge.mjs";
+import { createProjectTools, userWantsPublic } from "./project-tools.mjs";
+import { classifyIntent } from "../../chat/intent.mjs";
 
 /** How much of a thread is replayed to the model. Enough for continuity, bounded so a long thread cannot grow a request without limit. */
 const HISTORY_TURNS = 20;
@@ -32,6 +37,8 @@ export async function POST(request: Request) {
   let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown; stream?: unknown; provider?: unknown };
   try { body = await request.json() as typeof body; } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
 
+  if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ message: "Request body must be a JSON object." }, { status: 400 });
+
   const message = typeof body.message === "string" ? body.message.trim().slice(0, MAX_MESSAGE) : "";
   if (!message) return Response.json({ message: "Say something for Atlas to reply to." }, { status: 400 });
   const repository = typeof body.repository === "string" ? body.repository.slice(0, 140) : "";
@@ -42,19 +49,22 @@ export async function POST(request: Request) {
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
   const selection = body.provider ?? "auto";
-  if (typeof selection !== "string" || !["auto", "configured", "openai"].includes(selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
-  const endpoint = resolveChatProvider(process.env, selection);
-  if (!endpoint.configured) {
-    return Response.json({ message: endpoint.reason, needsModelEndpoint: true }, { status: 503 });
+  if (typeof selection !== "string" || !chatProviderChoices(process.env).some((choice) => choice.id === selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
+  const resolved = resolveChatProvider(process.env, selection);
+  if (!resolved.configured) {
+    return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
   }
+  // Every model call reserves through the provider scope's quota ledger (Phase 1.2); none when unbound.
+  const endpoint = await governChain(resolved, workerEnv);
 
-  const db = getDb();
+  let db: ReturnType<typeof getDb> | undefined;
   const now = new Date().toISOString();
   let history: { role: string; content: string }[] = [];
   let memory = "";
   let stored = true;
   let allowlist = new Set<string>();
   try {
+    db = getDb();
     // Tenancy (#71): threads belong to the caller's tenant; an id owned by another tenant or principal is never written to.
     const tenant = await resolveTenantContext(request, account, getD1());
     if (!tenant || !(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) throw new Error("Conversation is not writable in this workspace.");
@@ -78,16 +88,21 @@ export async function POST(request: Request) {
   }
 
   // Stable prefix first (system prompt, then history) so the provider's prompt cache can reuse it; see turns.mjs.
-  const turns = chatTurns({ system: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository }), history, memory, message, historyTurns: HISTORY_TURNS });
+  const bridge = genesisBridge(process.env, { owner: isDeploymentOwner(account) });
+  const projectCapabilities = await bridge.capabilities({ visibility: userWantsPublic(message) ? "public" : "private" });
+  const projectTools = createProjectTools({ create: bridge.create, status: bridge.status, requestId: randomUUID(), userMessage: message });
+  const turns = chatTurns({ system: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository, projectCapabilities }), history, memory, message, historyTurns: HISTORY_TURNS });
 
-  const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
+  const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => classifyIntent(message).kind === "new_project_task"
+    ? Promise.resolve(["This is a new project request. Use workspace_create_project; do not change the selected repository."])
+    : startRequestedTasks(request, calls, { repository, branch, conversationId });
   const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
   // The lead (this reply) can hand work to an agent team built on the daemon's planner; see agent-team.mjs.
   const team = createAgentTeam({ endpoint, toolContext });
   const loop = {
     endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks,
-    tools: [TASK_TOOL, team.definition, ...instantToolDefinitions(toolContext.environment)],
-    handlers: { [team.definition.function.name]: team.handler },
+    tools: [...(classifyIntent(message).kind === "new_project_task" ? [] : [TASK_TOOL]), team.definition, ...instantToolDefinitions(toolContext.environment), ...projectTools.definitions],
+    handlers: { [team.definition.function.name]: team.handler, ...projectTools.handlers },
   };
 
   if (body.stream === true) {
@@ -101,7 +116,7 @@ export async function POST(request: Request) {
 
   const replyId = randomUUID();
   const replyAt = new Date().toISOString();
-  if (stored) {
+  if (stored && db) {
     try {
       await db.insert(conversationMessages).values({ id: replyId, conversationId, requestedBy: account.userId, role: "assistant", content: reply, createdAt: replyAt });
       await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, account.userId)));
@@ -109,7 +124,7 @@ export async function POST(request: Request) {
   }
 
   // `finalization` (metadata only) says the reply is the saved work because no model could write the answer.
-  return Response.json({ conversationId, stored, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+  return Response.json({ conversationId, stored, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.servedBy ? { servedBy: outcome.servedBy } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
 }
 
 /** A GitHub credential for the read-only chat tools: the GitHub App's installation token when configured, else the platform token. Fetched once per request, only if a tool needs it. */
@@ -209,7 +224,7 @@ async function startRequestedTasks(request: Request, { requests, errors }: TaskR
  */
 function streamReply({ conversationId, stored, db, userId, ...loop }: {
   endpoint: Endpoint; turns: ChatTurn[]; toolContext: ToolContext; conversationId: string; stored: boolean;
-  db: ReturnType<typeof getDb>; userId: string; defaultRepository: string; userMessage: string;
+  db: ReturnType<typeof getDb> | undefined; userId: string; defaultRepository: string; userMessage: string;
   startTasks: (calls: TaskRequests) => Promise<string[]>;
   tools: object[]; handlers: Parameters<typeof converse>[0]["handlers"];
 }) {
@@ -233,13 +248,13 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
       const replyId = randomUUID();
       const replyAt = new Date().toISOString();
       let persisted = stored;
-      if (persisted) {
+      if (persisted && db) {
         try {
           await db.insert(conversationMessages).values({ id: replyId, conversationId, requestedBy: userId, role: "assistant", content: reply, createdAt: replyAt });
           await db.update(conversations).set({ updatedAt: replyAt }).where(and(eq(conversations.id, conversationId), eq(conversations.requestedBy, userId)));
         } catch { persisted = false; }
       }
-      emit("done", { conversationId, stored: persisted, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
+      emit("done", { conversationId, stored: persisted, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.servedBy ? { servedBy: outcome.servedBy } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
       controller.close();
     },
   });

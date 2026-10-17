@@ -67,3 +67,54 @@ test("states the numbers it decided on, not just the verdict", () => {
   assert.match(verdict.reason, /100 remaining/u);
   assert.match(verdict.reason, /about 120/u);
 });
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { budgetVerdict, runBudgetCheck } from "./actions-budget.mjs";
+import { renderResult } from "./report-result.mjs";
+
+test("unknown usage blocks by default, including malformed billing values", () => {
+  for (const usage of [{}, { error: "403" }, { includedMinutes: null, usedMinutes: null }, { includedMinutes: "2000", usedMinutes: 0 }, { includedMinutes: -1, usedMinutes: 0 }]) {
+    assert.equal(budgetVerdict(usage).decision, "unknown");
+    assert.equal(budgetVerdict(usage).action, "block");
+  }
+});
+
+test("explicit allow preserves UNKNOWN but cannot bypass a known exhausted budget", () => {
+  const env = { ATLAS_ACTIONS_UNKNOWN_POLICY: "allow" };
+  assert.deepEqual(budgetVerdict({}, env), { decision: "unknown", reason: "Actions usage could not be read.", action: "allow" });
+  assert.equal(budgetVerdict({ includedMinutes: 2000, usedMinutes: 2000 }, env).action, "block");
+  assert.equal(budgetVerdict({}, { ATLAS_ACTIONS_UNKNOWN_POLICY: "alow" }).action, "block");
+});
+
+test("a failed probe produces a blocked task and an UNKNOWN hosted result", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-budget-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  assert.equal(runBudgetCheck({ ATLAS_OUTPUT_DIR: directory }, () => { throw new Error("private failure"); }), 1);
+  const budget = JSON.parse(fs.readFileSync(path.join(directory, "budget.json"), "utf8"));
+  const status = JSON.parse(fs.readFileSync(path.join(directory, "status.json"), "utf8"));
+  assert.equal(status.status, "blocked");
+  const summary = renderResult({ budget, status, conclusion: "failure" });
+  assert.match(summary, /UNKNOWN/u);
+  assert.doesNotMatch(summary, /private failure/u);
+});
+
+test("allowed unknown usage survives a later successful task result", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-budget-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  assert.equal(runBudgetCheck({ ATLAS_OUTPUT_DIR: directory, ATLAS_ACTIONS_UNKNOWN_POLICY: "allow" }, () => ({})), 0);
+  const budget = JSON.parse(fs.readFileSync(path.join(directory, "budget.json"), "utf8"));
+  assert.equal(fs.existsSync(path.join(directory, "status.json")), false);
+  assert.match(renderResult({ budget, status: { status: "completed" } }), /Actions budget: \*\*UNKNOWN\*\* — allow/u);
+});
+
+test("the actual CLI exits nonzero without billing credentials", () => {
+  const result = spawnSync(process.execPath, ["scripts/runner/actions-budget.mjs"], {
+    encoding: "utf8", windowsHide: true,
+    env: { ...process.env, GH_TOKEN: "", ATLAS_BILLING_ACCOUNT: "", ATLAS_OUTPUT_DIR: "", ATLAS_ACTIONS_UNKNOWN_POLICY: "" },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /Actions budget UNKNOWN/u);
+});

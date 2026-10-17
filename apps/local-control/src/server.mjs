@@ -6,6 +6,9 @@ import { publishChange } from "./publish-adapters.mjs";
 import { discoverLocalModels } from "./model-discovery.mjs";
 import { createAgentRoutes } from "./agent/routes.mjs";
 import { createMissionRoutes } from "./agent/mission-routes.mjs";
+import { createBusinessRoutes } from "./agent/business-routes.mjs";
+import { createWorkforceRoutes } from "./platform/workforce-runtime.mjs";
+import { BUSINESS_UI_HTML, BUSINESS_UI_JS } from "./agent/business-ui.mjs";
 import { createPlatformRoutes, LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
 import { createInnovationRoutes, describeInnovationError } from "./platform/innovation/routes.mjs";
 import { createTeamRoutes } from "./agent/team/routes.mjs";
@@ -18,16 +21,30 @@ import { createRemoteRoutes, isRemoteRequest } from "./remote/access.mjs";
 import { createGenesisRoutes } from "./platform/genesis/routes.mjs";
 import { createCommandCenterRoutes } from "./platform/command-center.mjs";
 import { createWorldRoutes } from "./agent/kernel/routes.mjs";
+import { createGoalRoutes } from "./agent/goal-routes.mjs";
+import { choosePath, localModelCandidates } from "./agent/kernel/economics.mjs";
+import { AUTONOMY_LEVELS, assessAction, suggestRelaxations } from "./agent/kernel/autonomy.mjs";
 import { createAutomationRoutes, createWebhookRoute } from "./platform/automations/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
+  const workforceRoutes = workforceRuntime ? createWorkforceRoutes(workforceRuntime) : null;
+  const businessRoutes = businessService ? createBusinessRoutes({ businessService }) : null;
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
-  const missionRoutes = missionService ? createMissionRoutes({ missionService, laneApplier }) : null;
+  // model "auto": the installed models, chosen by their verified history (capability economics).
+  const chooseModel = world ? async ({ budget }) => {
+    const { models } = await discoverModels();
+    if (!models.length) throw Object.assign(new Error("No local models are installed to choose from."), { code: "INVALID_MISSION" });
+    const decision = choosePath(localModelCandidates(world, models), { budget: { ...budget, localOnly: true }, prefer: model });
+    if (!decision.chosen) throw Object.assign(new Error(`No installed model fits: ${decision.rejected.map((r) => `${r.id} ${r.reason}`).join("; ")}`), { code: "INVALID_MISSION" });
+    world.upsert({ type: "event", key: `model-choice:${Date.now()}`, attrs: { kind: "model_choice", chosen: decision.chosen.id, reasons: decision.reasons, rejected: decision.rejected } });
+    return { model: decision.chosen.id, reasons: decision.reasons };
+  } : null;
+  const missionRoutes = missionService ? createMissionRoutes({ missionService, laneApplier, chooseModel }) : null;
   const platformRoutes = platformStore ? createPlatformRoutes({ store: platformStore, stream: platformStream }) : null;
   const teamRoutes = team ? createTeamRoutes({ team, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const knowledgeRoutes = createKnowledgeRoutes({ memory, connections, send: (response, status, value) => { send(response, status, value); return true; } });
@@ -35,12 +52,13 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const selfImproveRoutes = selfImprove ? createSelfImproveRoutes({ service: selfImprove, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const modelHostingRoutes = modelHosting ? createModelHostingRoutes({ ...modelHosting, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const remoteRoutes = remoteAccess ? createRemoteRoutes({ remote: remoteAccess, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
-  const genesisRoutes = genesis ? createGenesisRoutes({ genesis, previews: genesisPreviews, publisher: genesisPublisher, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const genesisRoutes = genesis ? createGenesisRoutes({ genesis, previews: genesisPreviews, publisher: genesisPublisher, creation: genesisCreation, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const automationRoutes = automations ? createAutomationRoutes({ automations, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const webhookRoute = automations ? createWebhookRoute({ automations, limiter, send: (response, status, value) => { send(response, status, value); return true; },
     readRaw: async (request, response) => { try { return await readBody(request); } catch (error) { send(response, error?.code === "BODY_TOO_LARGE" ? 413 : 400, { message: error.message }); return null; } } }) : null;
   const worldRoutes = world ? createWorldRoutes({ world, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
-  const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, automations, send: (response, status, value) => { send(response, status, value); return true; } });
+  const goalRoutes = goals ? createGoalRoutes({ goals, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, automations, goals, send: (response, status, value) => { send(response, status, value); return true; } });
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
 
   async function startTask(taskId) {
@@ -56,6 +74,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
     if (request.method === "GET" && (request.url === "/icon.svg" || request.url === "/favicon.ico")) return sendText(response, 200, "image/svg+xml", LOCAL_UI_ICON);
     if (request.method === "GET" && request.url === "/app.js") return sendText(response, 200, "text/javascript; charset=utf-8", LOCAL_UI_JS);
+    if (businessService && request.method === "GET" && request.url === "/businesses") return sendText(response, 200, "text/html; charset=utf-8", BUSINESS_UI_HTML);
+    if (businessService && request.method === "GET" && request.url === "/businesses.js") return sendText(response, 200, "text/javascript; charset=utf-8", BUSINESS_UI_JS);
     if (platformRoutes?.handlePage(request, response)) return;
     if (innovationRoutes?.handlePage(request, response)) return;
     response.setHeader("content-type", "application/json; charset=utf-8");
@@ -87,8 +107,13 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (identity.role === "admin" && isRemoteRequest(request) && !remoteAccess?.ownerAllowedRemotely()) {
       return send(response, 403, { message: "The owner token only works on this computer.", unblock: "Pair this device from Settings on the computer running Atlas, or allow owner access remotely there." });
     }
+    if (workforceRoutes && await workforceRoutes.handle(request, response, identity)) return;
+    if (!workforceRuntime && (request.url ?? "").startsWith("/v1/workforce")) return send(response, 503, { message: "The workforce runtime is not running in this process." });
+    if (businessRoutes && await businessRoutes.handle(request, response, identity)) return;
+    if (!businessService && (request.url ?? "").startsWith("/v1/businesses")) return send(response, 503, { message: "The business service is not running in this process." });
     if (commandCenterRoutes(request, response)) return;
-    if (worldRoutes && worldRoutes(request, response, identity)) return;
+    if (worldRoutes && await worldRoutes(request, response, identity)) return;
+    if (goalRoutes && (request.url ?? "").startsWith("/v1/goals")) { if (await goalRoutes(request, response, identity)) return; }
     if (automationRoutes && (request.url ?? "").startsWith("/v1/automations")) { if (await automationRoutes(request, response, identity)) return; }
     if ((request.url ?? "").startsWith("/v1/genesis")) {
       if (!genesisRoutes) return send(response, 503, { message: "Project Genesis is not running in this process." });
@@ -102,7 +127,16 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (teamRoutes && (request.url ?? "").startsWith("/v1/team/")) { if (await teamRoutes(request, response, identity)) return; }
     if (!teamRoutes && (request.url ?? "").startsWith("/v1/team/")) return send(response, 503, { message: "Agent missions are not running in this process." });
     // What agents can do on this machine, and what the owner's policy says about each capability.
-    if (request.method === "GET" && request.url === "/v1/tools") return send(response, 200, { tools: (toolCatalog?.() ?? []).map((tool) => ({ ...tool, decision: store.policy(tool.capability).decision })) });
+    if (request.method === "GET" && request.url === "/v1/tools") return send(response, 200, { tools: (toolCatalog?.() ?? []).map((tool) => ({ ...tool, decision: store.policy(tool.capability).decision, autonomy: autonomyOf(tool) })) });
+    // Adaptive autonomy: each tool's level before its arguments are known, and policies precedent says could be relaxed.
+    if (request.method === "GET" && request.url === "/v1/autonomy") {
+      const tools = toolCatalog?.() ?? [];
+      return send(response, 200, {
+        levels: AUTONOMY_LEVELS,
+        tools: tools.map((tool) => ({ name: tool.name, capability: tool.capability, decision: store.policy(tool.capability).decision, ...autonomyOf(tool) })),
+        suggestions: suggestRelaxations({ policies: store.policies(), approvals: store.approvals(), tools }),
+      });
+    }
     if (/^\/v1\/(knowledge|connections)(\/|\?|$)/u.test(request.url ?? "")) { if (await knowledgeRoutes(request, response, identity)) return; }
     if (innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) { if (await innovationRoutes.handle(request, response, identity)) return; }
     if (!innovationRoutes && (request.url ?? "").startsWith("/v1/innovation/")) return send(response, 503, { message: "The Atlas innovation pipeline is not running in this process." });
@@ -174,7 +208,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
           }
           return send(response, 200, { approval: store.approval(pending.id) });
         }
-        const approval = store.decideApproval(approvalMatch[1], body.decision);
+        const approval = store.decideApproval(approvalMatch[1], body.decision, { confirmed: body.confirm === true });
         if (!approval) return send(response, 409, { message: "Approval is missing or already resolved." });
         if (approval.taskId) {
           if (body.decision === "approved") queueMicrotask(() => startTask(approval.taskId));
@@ -193,7 +227,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
           });
         }
         return send(response, 200, { approval });
-      } catch (error) { return send(response, 400, { message: error.message }); }
+      } catch (error) { return send(response, error.code === "CONFIRMATION_REQUIRED" ? 409 : 400, { message: error.message, ...(error.code ? { code: error.code } : {}) }); }
     }
     if (request.method === "POST" && request.url === "/v1/pair") { if (identity.role !== "admin") return send(response,403,{message:"Owner access required."}); const code=String(randomInt(100000,1000000)); const expiresAt=new Date(Date.now()+5*60_000).toISOString(); store.addPairingCode(digest(code),expiresAt); return send(response,201,{code,expiresAt}); }
     if (request.method === "GET" && request.url === "/v1/devices") { if (identity.role !== "admin") return send(response,403,{message:"Owner access required."}); return send(response,200,{devices:store.devices()}); }
@@ -234,3 +268,8 @@ async function readBody(request) {
 
 function send(response, status, value) { response.writeHead(status); response.end(JSON.stringify(value)); }
 function sendText(response, status, contentType, value) { response.setHeader("content-type", contentType); response.writeHead(status); response.end(value); }
+
+function autonomyOf(tool) {
+  const { level, mode, label, reasons } = assessAction({ tool });
+  return { level, mode, label, reasons };
+}

@@ -196,6 +196,27 @@ jobs:
       - name: Test platform contracts
         run: npm test
 
+  inference:
+    name: packages/atlas-inference
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/atlas-inference
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Provider-neutral inference contracts (requests, targets, usage,
+      # checkpoints, error kinds, capacity state). Dependency-free like the
+      # contracts package, so there is nothing to install.
+      - name: Test inference contracts
+        run: npm test
+
   browser-worker:
     name: apps/browser-worker
     runs-on: ubuntu-latest

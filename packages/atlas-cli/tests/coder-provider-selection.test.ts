@@ -42,7 +42,7 @@ describe("inferCoderProviderId", () => {
 describe("isCoderProviderId", () => {
   it("accepts exactly the advertised identifiers", () => {
     for (const id of CODER_PROVIDER_IDS) assert.equal(isCoderProviderId(id), true, id);
-    assert.equal(isCoderProviderId("openai"), false);
+    assert.equal(isCoderProviderId("other-vendor"), false);
     assert.equal(isCoderProviderId(""), false);
     assert.equal(isCoderProviderId("Anthropic"), false);
   });
@@ -107,10 +107,10 @@ describe("selectCoderProvider", () => {
   });
 
   it("rejects an unknown provider by name instead of silently falling back", () => {
-    const result = selectCoderProvider({ provider: "openai", model: "gpt-4", tokenBudget: 16_384 });
+    const result = selectCoderProvider({ provider: "other-vendor", model: "gpt-4", tokenBudget: 16_384 });
     assert.equal(result.ok, false);
     if (result.ok) throw new Error("unreachable");
-    assert.match(result.message, /Unknown --provider 'openai'/u);
+    assert.match(result.message, /Unknown --provider 'other-vendor'/u);
     assert.match(result.message, /anthropic, groq/u);
   });
 

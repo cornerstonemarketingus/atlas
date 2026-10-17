@@ -28,7 +28,7 @@ export class MissionService {
   #decide;
 
   /** `decide({ objective, repository })` → { branch, variants, reasons } for strategy "auto" (the kernel's branching). */
-  constructor({ store, execute, defaultConcurrency = DEFAULT_BATCH_SIZE, decide = null }) {
+  constructor({ store, execute, verifyEvidence = null, defaultConcurrency = DEFAULT_BATCH_SIZE, decide = null }) {
     this.#decide = decide;
     if (!store || typeof store.saveMission !== "function") throw new Error("A durable mission store is required.");
     if (typeof execute !== "function") throw new Error("A mission child executor is required.");
@@ -36,7 +36,11 @@ export class MissionService {
       throw new Error("defaultConcurrency must be an integer from 1 to 8.");
     }
     this.#store = store;
-    this.#execute = execute;
+    if (verifyEvidence !== null && typeof verifyEvidence !== "function") throw new Error("A mission evidence verifier must be a function.");
+    this.#execute = verifyEvidence ? async context => {
+      const result = await execute(context);
+      return verifyEvidence({ child: context.child, result });
+    } : execute;
     this.#defaultConcurrency = defaultConcurrency;
   }
 
@@ -59,7 +63,7 @@ export class MissionService {
     return snapshot ? publicMission(snapshot) : null;
   }
 
-  create({ id = randomUUID(), title = "", repository, model, children, tasks, objective, variants, strategy, maxConcurrency = this.#defaultConcurrency }) {
+  create({ id = randomUUID(), title = "", repository, model, children, tasks, objective, variants, strategy, modelChoice = null, maxConcurrency = this.#defaultConcurrency }) {
     // "auto": the kernel decides whether this objective runs as one lane or as competing versions.
     let decision = null;
     if (strategy === "auto" && children === undefined && tasks === undefined && variants === undefined) {
@@ -72,6 +76,8 @@ export class MissionService {
     }
     if (children === undefined) ({ children, title } = expandLaunch({ tasks, objective, variants, title }));
     if (decision) children = children.map((child) => ({ ...child, metadata: { ...(child.metadata ?? {}), strategy: { decidedBy: "kernel", branch: decision.branch, reasons: decision.reasons } } }));
+    // Why this model, when the kernel chose it (capability economics).
+    if (modelChoice && Array.isArray(children)) children = children.map((child) => ({ ...child, metadata: { ...(child.metadata ?? {}), modelChoice: { decidedBy: "kernel", model: String(modelChoice.model), reasons: (modelChoice.reasons ?? []).map(String).slice(0, 4) } } }));
     if (this.get(id)) throw new MissionServiceError("MISSION_EXISTS", `Mission '${id}' already exists.`);
     if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 8) {
       throw new MissionServiceError("INVALID_CONCURRENCY", "maxConcurrency must be an integer from 1 to 8.");

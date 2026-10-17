@@ -143,5 +143,11 @@ test("a rename into a vendored directory is refused, and a symlinked file is nev
 
 test("allowGenerated must be a boolean", async (t) => {
   const root = await repository(t, {});
-  await assert.rejects(run(tools(root), "repository.propose_file_edit", { path: "a.ts", content: "", allowGenerated: "yes" }), /allowGenerated must be a boolean/);
+  // Malformed input never runs; it comes back as a correctable failure the model can fix (#159).
+  const result = await run(tools(root), "repository.propose_file_edit", { path: "a.ts", content: "", allowGenerated: "yes" });
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") {
+    assert.equal(result.errorCode, "INVALID_TOOL_INPUT");
+    assert.match(result.message, /allowGenerated must be a boolean/);
+  }
 });

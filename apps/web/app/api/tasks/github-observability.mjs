@@ -21,7 +21,7 @@ function category(url) {
   } catch { return "other"; }
 }
 
-export function githubRequestObservation({ url, response, outcome, startedAt, endedAt }) {
+export function githubRequestObservation({ url, response, outcome, startedAt, endedAt, source = "hosted_task_reads", responseBodyBytes }) {
   const headers = response?.headers;
   const remaining = integer(headers, "x-ratelimit-remaining");
   const retryRaw = headers?.get("retry-after");
@@ -40,14 +40,26 @@ export function githubRequestObservation({ url, response, outcome, startedAt, en
   else if (status === 404) failure = "not_found";
   const resource = headers?.get("x-ratelimit-resource");
   return {
-    atlas: "github", event: "github.request", source: "hosted_task_reads",
+    atlas: "github", event: "github.request", source: source === "hosted_chat" ? source : "hosted_task_reads",
     category: category(url), requests: 1, timestamp: new Date(endedAt).toISOString(),
     status, outcome: failure, latencyMs: Math.max(0, endedAt - startedAt),
+    ...(Number.isSafeInteger(responseBodyBytes) && responseBodyBytes >= 0 ? { responseBodyBytes } : {}),
     rateLimit: {
       resource: resource ? (RESOURCES.has(resource) ? resource : "other") : null,
       limit: integer(headers, "x-ratelimit-limit"), used: integer(headers, "x-ratelimit-used"),
       remaining, resetEpochSeconds: integer(headers, "x-ratelimit-reset"), retryAfterMs,
     },
+  };
+}
+
+export function githubContentObservation({ cache, contentBytes = 0, latencyMs = 0 }) {
+  const state = ["hit", "miss", "coalesced", "cooldown"].includes(cache) ? cache : "miss";
+  return {
+    atlas: "github", event: "github.content_reuse", source: "hosted_chat", category: "contents",
+    timestamp: new Date().toISOString(), requests: 0, cache: state,
+    upstreamRequestsAvoided: state === "miss" ? 0 : 1,
+    contentBytes: Number.isSafeInteger(contentBytes) && contentBytes >= 0 ? contentBytes : 0,
+    latencyMs: Number.isFinite(latencyMs) ? Math.max(0, latencyMs) : 0,
   };
 }
 

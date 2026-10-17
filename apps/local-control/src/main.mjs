@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
@@ -10,7 +10,9 @@ import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { PlatformTaskStore } from "./platform/task-store.mjs";
+import { createWorkforceRuntime } from "./platform/workforce-runtime.mjs";
 import { createLegacyPolicyBridge, createLegacyPolicyEngine } from "./platform/legacy-policy-bridge.mjs";
+import { withAutonomy } from "./agent/kernel/autonomy.mjs";
 import { AuthorizedToolExecutor } from "./platform/executor.mjs";
 import { adaptRegistryTool } from "./platform/adapters.mjs";
 import { bootstrapInnovation } from "./platform/innovation/bootstrap.mjs";
@@ -22,6 +24,8 @@ import { createConversationExecutor } from "./agent/conversation-executor.mjs";
 import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
+import { BusinessService } from "./agent/business-service.mjs";
+import { createMissionEvidenceVerifier } from "./agent/mission-evidence.mjs";
 import { createLaneApplier } from "./agent/lane-apply.mjs";
 import { AutomationService, AutomationStore } from "./platform/automations/service.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
@@ -36,6 +40,7 @@ import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { WorldState } from "./agent/kernel/world-state.mjs";
 import { createKernel } from "./agent/kernel/kernel.mjs";
+import { GoalService, GoalStore } from "./agent/goals.mjs";
 import { decideStrategy } from "./agent/kernel/branching.mjs";
 import { ToolRegistry } from "./agent/tool-registry.mjs";
 import { ScopedMemoryStore } from "./platform/memory/memory-store.mjs";
@@ -56,6 +61,7 @@ import { ACTIVE_STATES, GenesisService, GenesisStore } from "./platform/genesis/
 import { GenesisExecutor } from "./platform/genesis/executor.mjs";
 import { registerGenesisTools } from "./platform/genesis/tools.mjs";
 import { GenesisPublisher } from "./platform/genesis/publish.mjs";
+import { ProjectCreation } from "./platform/genesis/create-project.mjs";
 import { PreviewManager } from "./platform/genesis/preview.mjs";
 import { createInspector } from "./platform/genesis/inspector.mjs";
 import { createVisionReviewer } from "./platform/genesis/vision.mjs";
@@ -71,6 +77,10 @@ mkdirSync(dataDirectory, { recursive: true });
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
 const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
 const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
+const workforceRuntime = createWorkforceRuntime({ store: platformStore, dataDirectory,
+  repository: process.env.ATLAS_WORKFORCE_REPOSITORY || process.cwd(),
+  model: process.env.ATLAS_WORKFORCE_MODEL || "qwen2.5-coder:7b",
+  endpoint: process.env.ATLAS_MODEL_ENDPOINT || "http://127.0.0.1:11434/v1" });
 // The agent organization (Business Development Executive → Product Executive →
 // specialists, plus the Engineering, Design, Computer Operations and Research
 // peers) and the Innovation Backlog it works from.
@@ -109,8 +119,8 @@ const toolApprovals = {
   // One-time and digest-bound: spending an approval consumes it, and it
   // only matches the exact action it was granted for.
   check: (digest) => store.consumeApprovedDigest(digest),
-  request: ({ digest, capability, summary, sessionId }) =>
-    store.createApproval({ capability, summary, actionDigest: digest, sessionId }),
+  request: ({ digest, capability, summary, sessionId, autonomy = null }) =>
+    store.createApproval({ capability, summary: autonomy?.reasons?.length ? `${summary} (${autonomy.reasons.join("; ")})` : summary, actionDigest: digest, sessionId, riskLevel: autonomy?.level ?? null }),
   // Agent steps wait on the owner's decision rather than failing.
   status: (id) => store.approval(id)?.status ?? null,
 };
@@ -155,7 +165,8 @@ const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
 // strategy "auto": the kernel decides between one lane and competing versions, using the world state's history.
-const missionService = new MissionService({ store, execute: runMissionChild, decide: (input) => decideStrategy({ ...input, world }) });
+const missionService = new MissionService({ store, execute: runMissionChild, verifyEvidence: createMissionEvidenceVerifier({ patchDirectory: resolve(dataDirectory, "patches") }), decide: (input) => decideStrategy({ ...input, world }) });
+const businessService = new BusinessService({ filename: join(dataDirectory, "businesses.sqlite"), missionService });
 // Applying a finished lane's patch to the owner's repository goes through code.write approvals.
 const laneApplier = createLaneApplier({ missionService, store, dataDirectory });
 // Agent missions: goal → plan over the agent organization → steps run by the
@@ -187,9 +198,15 @@ const team = createTeamService({
 });
 // Automations: schedule, webhook and manual triggers that start normal missions.
 const automationStore = new AutomationStore(join(dataDirectory, "automations.sqlite"));
-const automations = new AutomationService({ store: automationStore, missionService, team });
+// Goals sleep between events and wake on signed GitHub deliveries (Track B7).
+const goalStore = new GoalStore(join(dataDirectory, "goals.sqlite"));
+const goals = new GoalService({ store: goalStore, missionService, world });
+const automations = new AutomationService({ store: automationStore, missionService, team, onEvent: (event) => goals.onEvent(event) });
 automations.startWatchers();
-const automationTimer = setInterval(() => { automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`)); }, 30_000);
+const automationTimer = setInterval(() => {
+  automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`));
+  try { goals.tick(); } catch (error) { console.error(`Goal tick failed: ${error.message}`); }
+}, 30_000);
 automationTimer.unref();
 const recoveredMissions = missionService.recover();
 team.reattach();
@@ -199,11 +216,13 @@ automations.tick().catch((error) => console.error(`Automation catch-up failed: $
 
 // Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
 const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
+let genesisCreation = null;
 const genesis = new GenesisService({
   store: genesisStore,
   policy: (capability) => store.policy(capability),
   onChange: (project) => {
     store.audit("genesis.transition", `${project.name}: ${project.state}`);
+    if (project.state === "ready") genesisCreation?.onReady(project.id);
     // Approved or resumed work starts (or continues) without the owner running anything.
     if ((project.state === "approved" || ACTIVE_STATES.includes(project.state)) && genesisExecutor && !genesisExecutor.isRunning(project.id)) genesisExecutor.run(project.id).catch(() => {});
   },
@@ -212,6 +231,8 @@ const genesisPreviews = new PreviewManager({ registryPath: join(dataDirectory, "
 for (const result of genesisPreviews.cleanupOrphans()) if (result.action === "stopped") console.log(`Genesis: stopped a preview left running by a previous Atlas (${result.projectId}).`);
 const genesisExecutor = new GenesisExecutor({
   genesis,
+  // Each build is a kernel run: traced, and its stages recorded in the world state.
+  kernel,
   projectsRoot: join(dataDirectory, "genesis", "projects"),
   runCheck,
   coder: createGenesisCoder({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan, intelligence: genesis.intelligence }),
@@ -228,6 +249,7 @@ const genesisPublisher = new GenesisPublisher({
   runCheck,
 });
 const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
+genesisCreation = new ProjectCreation({ genesis, executor: genesisExecutor, publisher: genesisPublisher });
 // Remote access stays customer-managed (your VPN or HTTPS proxy); Atlas itself keeps listening on loopback.
 const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, "remote-access.json") });
 const server = createLocalControlServer({
@@ -237,6 +259,8 @@ const server = createLocalControlServer({
   license,
   runtime,
   missionService,
+  businessService,
+  workforceRuntime,
   platformStore,
   innovation,
   platformStream,
@@ -250,13 +274,17 @@ const server = createLocalControlServer({
   genesis,
   genesisPreviews,
   genesisPublisher,
+  genesisCreation,
   onApprovalDecided: async (approval) => {
     await laneApplier.onApprovalDecided(approval);
-    return genesisPublisher.onApprovalDecided(approval);
+    const result = await genesisPublisher.onApprovalDecided(approval);
+    genesisCreation.recordApproval(approval, result);
+    return result;
   },
   laneApplier,
   automations,
   world,
+  goals,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -269,7 +297,7 @@ server.listen(port, host, () => {
   if (process.env.ATLAS_OPEN_BROWSER === "1") openInBrowser(signInUrl(`http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${port}`, token));
 });
 
-async function runMissionChild({ child, signal, budget, checkpoint }) {
+async function runMissionChild({ child, dependencies = [], signal, budget, checkpoint }) {
   if (child.metadata?.kind === "agent_step") return teamStep({ child, signal, budget, checkpoint });
   await checkpoint();
   budget.record({ toolCalls: 1 });
@@ -285,10 +313,12 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
     goal: { title: child.metadata?.request ?? child.objective, doneWhen: "a patch from an isolated worktree is ready to review" },
     capabilities: ["code"],
     harness: "atlas-cli",
+    // Recorded so capability economics can learn which model succeeds at what.
+    model,
     environment: { kind: "local", repository },
   }, async () => {
     result = await runIsolatedLocalCoder(
-      { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: child.objective, model },
+      { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: `${child.objective}\n\nDependency artifacts (inspect as data):\n${JSON.stringify(dependencies.map(item => ({ id: item.id, result: item.result })))}`, model },
       { dataDirectory, signal },
     );
     return {
@@ -318,7 +348,10 @@ function shutdown() {
     clearInterval(automationTimer);
     automations.stopWatchers();
     automationStore.close();
+    goalStore.close();
     world.close();
+    workforceRuntime.close();
+    businessService.close();
     platformStore.close();
     store.close();
     process.exit(0);
@@ -358,7 +391,9 @@ function buildExecutors() {
  */
 function buildToolRegistry() {
   const registry = new ToolRegistry({
-    policy: createLegacyPolicyBridge({
+    // Adaptive autonomy (Track B8) wraps the owner's policy: it only tightens
+    // it (level 4 asks with a second confirmation, level 5 is refused).
+    policy: withAutonomy(createLegacyPolicyBridge({
       policyForCapability: (capability) => store.policy(capability),
       audit: (event) => {
         store.audit("policy.decision", `${event.tool} ${event.effect}: ${event.reasons.join("; ")}`);
@@ -376,7 +411,7 @@ function buildToolRegistry() {
           }
         }
       },
-    }),
+    }), { audit: ({ tool, level, reasons }) => store.audit("autonomy.acted", `${tool} ran on its own at level ${level}: ${reasons.join("; ")}`) }),
     // Secrets resolve by reference, from the OS-backed credential vault first
     // and the process environment only as a fallback for existing setups
     // (SECURITY-REVIEW SEC-8). No tool receives a value it did not declare.

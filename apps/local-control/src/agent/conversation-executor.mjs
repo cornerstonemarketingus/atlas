@@ -204,6 +204,7 @@ export function createConversationExecutor({
               digest: result.digest,
               capability: result.capability,
               risk: result.risk,
+              autonomy: result.autonomy ?? null,
               sessionId: session.id,
               summary: `${call.name} — ${declared?.description ?? "a consequential action"}`,
               input: result.input,

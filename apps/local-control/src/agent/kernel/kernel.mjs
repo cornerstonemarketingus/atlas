@@ -156,7 +156,7 @@ export function createKernel({ toolRegistry, world = null }) {
     observe({
       source: `run:${runId}`,
       entities: [
-        { type: "run", key: runId, attrs: { goal: goal.title, status: "running", capabilities: spec.capabilities, harness: spec.harness, environment: environment.kind } },
+        { type: "run", key: runId, attrs: { goal: goal.title, status: "running", capabilities: spec.capabilities, harness: spec.harness, model: spec.model ?? null, environment: environment.kind } },
         { type: "task", key: taskRef.key, attrs: { title: goal.title, doneWhen: goal.doneWhen ?? null } },
         ...(repository ? [repository] : []),
       ],

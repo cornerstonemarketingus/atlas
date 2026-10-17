@@ -21,7 +21,7 @@ import { DatabaseSync } from "node:sqlite";
  */
 
 export const ENTITY_TYPES = Object.freeze([
-  "user", "machine", "repository", "application", "browser_session", "browser_resource", "file", "database",
+  "user", "machine", "repository", "package", "application", "browser_session", "browser_resource", "file", "database",
   "person", "agent", "task", "run", "deployment", "service", "credential", "approval", "event", "artifact", "organization",
 ]);
 
@@ -29,6 +29,12 @@ export const RELATIONS = Object.freeze([
   "uses", "owns", "calls", "depends_on", "deploys_to", "tests", "created_by", "approved_by", "failed_because",
   "replaced_by", "learned_from", "touched", "part_of", "assigned_to", "produced", "waits_on",
 ]);
+
+// Edges along which a change spreads: X is affected when it depends on, uses,
+// calls or tests a changed thing, when a changed thing is part of it, and when
+// a changed thing deploys to it.
+const IMPACT_INCOMING = Object.freeze(["depends_on", "uses", "calls", "tests"]);
+const IMPACT_OUTGOING = Object.freeze(["part_of", "deploys_to"]);
 
 const SECRET_KEY = /pass(word|phrase)?|secret|token|api[_-]?key|private[_-]?key|credential[_-]?value|cookie|authorization/iu;
 const CREDENTIAL_KEYS = new Set(["name", "provider", "scope", "ref", "status"]);
@@ -168,6 +174,48 @@ export class WorldState {
   relations(id) {
     return this.#db.prepare("SELECT from_id, relation, to_id FROM world_relations WHERE from_id = ? OR to_id = ? ORDER BY created_at, from_id, to_id").all(id, id)
       .map((row) => ({ from: row.from_id, relation: row.relation, to: row.to_id }));
+  }
+
+  /** Removes every relation one source recorded (a re-map replaces its own edges, never anyone else's). */
+  dropRelations({ source }) {
+    if (!source) throw new WorldStateError("INVALID_SOURCE", "Name the source whose relations to remove.");
+    return Number(this.#db.prepare("DELETE FROM world_relations WHERE source = ?").run(source).changes);
+  }
+
+  /**
+   * "What breaks if I change this?" Walks out from an entity to everything
+   * that would be affected: what depends on, uses, calls or tests it (incoming
+   * edges), what it is part of, and where it deploys to (outgoing). Each
+   * affected entity comes with its distance and the edge that reached it, and
+   * the tests among them are listed separately, as the ones to run.
+   */
+  impact(id, { depth = 4, limit = 200 } = {}) {
+    const root = this.get(id);
+    if (!root) return null;
+    const affected = new Map();
+    let frontier = [id];
+    for (let hop = 1; hop <= depth && frontier.length && affected.size < limit; hop += 1) {
+      const next = [];
+      for (const current of frontier) {
+        const incoming = this.#db.prepare(`SELECT from_id AS other, relation FROM world_relations WHERE to_id = ? AND relation IN (${IMPACT_INCOMING.map(() => "?").join(", ")}) ORDER BY from_id`).all(current, ...IMPACT_INCOMING);
+        const outgoing = this.#db.prepare(`SELECT to_id AS other, relation FROM world_relations WHERE from_id = ? AND relation IN (${IMPACT_OUTGOING.map(() => "?").join(", ")}) ORDER BY to_id`).all(current, ...IMPACT_OUTGOING);
+        for (const edge of [...incoming, ...outgoing]) {
+          if (edge.other === id || affected.has(edge.other) || affected.size >= limit) continue;
+          const entity = this.get(edge.other);
+          if (!entity) continue;
+          affected.set(edge.other, { id: entity.id, type: entity.type, key: entity.key, attrs: entity.attrs, depth: hop, via: { relation: edge.relation, from: current } });
+          next.push(edge.other);
+        }
+      }
+      frontier = next;
+    }
+    const list = [...affected.values()];
+    return {
+      entity: root,
+      affected: list,
+      tests: list.filter((entry) => entry.attrs?.kind === "test"),
+      truncated: affected.size >= limit,
+    };
   }
 
   /**
