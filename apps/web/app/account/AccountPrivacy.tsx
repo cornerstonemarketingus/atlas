@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AtlasShell } from "../AtlasShell.js";
 
 type DeletionRequest = { status: string; requestedAt: string };
@@ -10,6 +10,14 @@ type Account = {
 };
 
 const TIER_LABELS: Record<string, string> = { free: "Free", pro: "Pro", team: "Team" };
+
+function deletionReceipt(value: unknown): DeletionRequest | null {
+  if (value === null) return null;
+  if (!value || typeof value !== "object") throw new Error("Invalid deletion receipt");
+  const row = value as Partial<DeletionRequest>;
+  if (!["pending", "completed", "rejected"].includes(row.status ?? "") || typeof row.requestedAt !== "string" || !Number.isFinite(Date.parse(row.requestedAt))) throw new Error("Invalid deletion receipt");
+  return { status: row.status!, requestedAt: row.requestedAt };
+}
 
 /** Settings: the plan, the privacy controls, and the way out. */
 export function AccountPrivacy() {
@@ -26,19 +34,50 @@ export function AccountPrivacy() {
   const [billingBusy, setBillingBusy] = useState(false);
   const [deletionBusy, setDeletionBusy] = useState(false);
   const deletionInFlight = useRef(false);
+  const [deletionStatus, setDeletionStatus] = useState<"loading" | "ready" | "unavailable">("loading");
+  const deletionRead = useRef(0);
+  const deletionController = useRef<AbortController | null>(null);
+
+  const refreshDeletionStatus = useCallback(async () => {
+    if (deletionInFlight.current) return;
+    const version = ++deletionRead.current;
+    deletionController.current?.abort();
+    const controller = new AbortController();
+    deletionController.current = controller;
+    const deadline = window.setTimeout(() => controller.abort(), 12000);
+    setDeletionStatus("loading");
+    try {
+      const response = await fetch("/api/account/deletion", { signal: controller.signal });
+      if (version !== deletionRead.current) return;
+      if (response.status === 401) { window.location.href = "/"; return; }
+      if (!response.ok) throw new Error("Deletion status unavailable");
+      const data = await response.json();
+      if (version !== deletionRead.current) return;
+      setRequest(deletionReceipt(data?.request));
+      setDeletionStatus("ready"); setNotice("");
+    } catch {
+      if (version !== deletionRead.current) return;
+      setDeletionStatus("unavailable");
+      setNotice("We could not load your deletion status. Refresh the status before submitting another request.");
+    } finally { window.clearTimeout(deadline); }
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.atlasTheme = theme;
-    const timer = window.setTimeout(() => {
-      void fetch("/api/account").then((response) => (response.ok ? response.json() : null))
-        .then((value) => { if (value) setAccount(value as Account); }).catch(() => undefined);
-      void fetch("/api/account/deletion").then(async (response) => {
-        if (response.status === 401) { window.location.href = "/"; return; }
-        if (response.ok) setRequest((await response.json()).request);
-      }).catch(() => undefined);
-    }, 0);
-    return () => window.clearTimeout(timer);
   }, [theme]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void fetch("/api/account", { signal: controller.signal }).then((response) => (response.ok ? response.json() : null))
+        .then((value) => { if (!controller.signal.aborted && value) setAccount(value as Account); }).catch(() => undefined);
+      void refreshDeletionStatus();
+    }, 0);
+    return () => {
+      window.clearTimeout(timer); controller.abort();
+      deletionRead.current += 1; deletionController.current?.abort();
+    };
+  }, [refreshDeletionStatus]);
 
   function changeTheme(next: "system" | "light" | "dark") {
     setTheme(next); window.localStorage.setItem("atlas-theme", next); document.documentElement.dataset.atlasTheme = next;
@@ -46,25 +85,33 @@ export function AccountPrivacy() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (deletionInFlight.current || confirmation !== "DELETE") return;
+    if (deletionInFlight.current || deletionStatus !== "ready" || confirmation !== "DELETE") return;
     deletionInFlight.current = true;
+    deletionRead.current += 1; deletionController.current?.abort();
+    setDeletionStatus("loading");
     setDeletionBusy(true); setNotice("");
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(), 15000);
     try {
       const response = await fetch("/api/account/deletion", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ confirmation }),
+        body: JSON.stringify({ confirmation }), signal: controller.signal,
       });
       if (!response.ok) {
-        setNotice(response.status === 401 ? "Sign in again to request account deletion." : "We could not confirm your deletion request. Refresh the page before trying again.");
+        setDeletionStatus("unavailable");
+        setNotice(response.status === 401 ? "Sign in again to request account deletion." : "We could not confirm your deletion request. Refresh deletion status before trying again.");
         return;
       }
       const data = await response.json();
-      if (data?.request?.status !== "pending" || typeof data.request.requestedAt !== "string" || !Number.isFinite(Date.parse(data.request.requestedAt))) throw new Error("Invalid deletion receipt");
-      setRequest({ status: data.request.status, requestedAt: data.request.requestedAt });
+      const receipt = deletionReceipt(data?.request);
+      if (receipt?.status !== "pending") throw new Error("Invalid deletion receipt");
+      setRequest(receipt); setDeletionStatus("ready");
       setNotice("Deletion requested. We will remove eligible account data within 30 days.");
     } catch {
-      setNotice("We could not confirm your deletion request. Refresh the page before trying again.");
+      setDeletionStatus("unavailable");
+      setNotice("We could not confirm your deletion request. Refresh deletion status before trying again.");
     } finally {
+      window.clearTimeout(deadline);
       deletionInFlight.current = false; setDeletionBusy(false);
     }
   }
@@ -137,6 +184,8 @@ export function AccountPrivacy() {
 
         <section className="page-block">
           <h2><span>{account?.unrestricted ? "02" : "03"}</span>Delete account</h2>
+          {deletionStatus === "loading" && !deletionBusy && <p role="status">Checking deletion status…</p>}
+          {deletionStatus === "unavailable" && <button type="button" onClick={() => void refreshDeletionStatus()}>Refresh deletion status</button>}
           {request?.status === "pending"
             ? <p className="page-notice" role="status">Deletion requested on {new Date(request.requestedAt).toLocaleDateString()}. Eligible data will be removed within 30 days.</p>
             : <>
@@ -145,7 +194,7 @@ export function AccountPrivacy() {
                 <label>Type DELETE to confirm
                   <input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" enterKeyHint="done" />
                 </label>
-                <button disabled={confirmation !== "DELETE" || deletionBusy}>{deletionBusy ? "Requesting deletion…" : "Request account deletion"}</button>
+                <button disabled={confirmation !== "DELETE" || deletionBusy || deletionStatus !== "ready"}>{deletionBusy ? "Requesting deletion…" : "Request account deletion"}</button>
               </form>
             </>}
           {notice && <p className="page-notice" role="status">{notice}</p>}
