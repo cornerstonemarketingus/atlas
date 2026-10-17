@@ -32,4 +32,3 @@ test("actual coder CLI creates a website in missing directories and returns a ch
   assert.match(await readFile(join(root, "apps/web/services/wood-framing-mn/index.html"), "utf8"), /Minnesota framing/);
   assert.equal(result.verification.status, "unverified");
 });
-
