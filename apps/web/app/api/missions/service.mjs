@@ -106,7 +106,7 @@ export class CloudMissions {
     for (const step of mission.steps) {
       if (["dispatching", "uncertain"].includes(step.state)) {
         const found = await this.receipt(scope, step.correlationId, step);
-        if (found?.taskId) { step.taskId = found.taskId; step.state = "submitted"; step.message = null; }
+        if (found?.taskId) { step.taskId = found.taskId; step.state = found.rejected ? "failed" : "submitted"; step.message = found.rejected ? "The saved dispatch was rejected. No retry was sent." : null; }
         else if (step.state === "dispatching" && this.now() >= step.leaseUntil) { step.state = "uncertain"; step.message = "Dispatch outcome is uncertain. No retry was sent."; }
         else continue;
         if (!await this.save(scope, mission, "receipt-reconciled")) return this.get(scope, id);
@@ -154,8 +154,9 @@ export class CloudMissions {
       if (target.state !== "dispatching") return latest;
       if (result?.taskId && result.correlationId === next.correlationId) {
         target.taskId = result.taskId;
-        target.state = result.recorded === false ? "uncertain" : "submitted";
-        target.message = result.recorded === false ? (result.message ?? "The accepted task has no confirmed durable receipt. No retry was sent.").slice(0, 500) : null;
+        const uncertain = result.recorded === false || result.uncertain === true;
+        target.state = uncertain ? "uncertain" : "submitted";
+        target.message = uncertain ? (typeof result.message === "string" ? result.message.slice(0, 500) : "The accepted task has no confirmed durable receipt. No retry was sent.") : null;
       } else if (result?.rejected === true) {
         target.state = "failed";
         if (latest.status === "running") {

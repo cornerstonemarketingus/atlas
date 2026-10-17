@@ -257,3 +257,35 @@ for (const scenario of ["unconfigured", "unrecorded", "private"]) {
     assert.equal(calls, scenario === "unconfigured" ? 0 : 1);
   });
 }
+
+for (const finalState of ["dispatched", "rejected", "immediate-rejection"]) {
+  test(`mission adapter reconciles typed durable dispatch state: ${finalState}`, async t => {
+    const { d1, sqlite } = fixture(t); let calls = 0; const taskId = randomUUID();
+    sqlite.exec("ALTER TABLE tasks ADD COLUMN dispatch_state TEXT NOT NULL DEFAULT 'legacy'");
+    const handle = await runtime({ getD1: () => d1, missionRoutes,
+      authenticatedAccount: async () => ({ userId: "operator" }), resolveTenantContext: async () => scope, tenantScope: value => value,
+      githubAppConfiguration: () => ({ configured: false }), platformGitHubToken: () => "server-token",
+      startTask: async request => {
+        calls++; const task = await request.json(); const conversationId = randomUUID(); const correlationId = request.headers.get("x-atlas-correlation-id");
+        sqlite.prepare("INSERT INTO conversations(id,tenant_id,requested_by,title,repository,branch) VALUES (?,1,'operator','durable',?,?)").run(conversationId, task.repository, task.branch);
+        sqlite.prepare("INSERT INTO tasks(task_id,tenant_id,requested_by,repository,branch,mode,objective,conversation_id,correlation_id,dispatch_state) VALUES (?,1,'operator',?,?,?,?,?,?,?)").run(taskId, task.repository, task.branch, task.mode, task.objective, conversationId, correlationId, finalState === "immediate-rejection" ? "rejected" : "unknown");
+        return Response.json({ taskId, correlationId, runner: "managed", recorded: true, status: finalState === "immediate-rejection" ? "dispatch-rejected" : "dispatch-unknown", message: "Saved dispatch was rejected" }, { status: finalState === "immediate-rejection" ? 502 : 202 });
+      },
+    });
+    const input = plan();
+    const post = (body, id) => handle(new Request("https://atlas.test/api/missions" + (id ? `/${id}` : ""), { method: "POST", body: JSON.stringify(body) }), id ?? null);
+    await post(input);
+    const first = (await (await post({ action: "advance" }, input.requestId)).json()).mission;
+    if (finalState === "immediate-rejection") { assert.equal(first.status, "failed"); assert.equal(first.steps[1].state, "blocked"); }
+    else {
+      assert.equal(first.steps[0].state, "uncertain"); assert.equal(first.steps[0].taskId, taskId);
+      const pending = (await (await post({ action: "advance" }, input.requestId)).json()).mission;
+      assert.equal(pending.steps[0].state, "uncertain", "a saved intent alone is not confirmed acceptance");
+      sqlite.prepare("UPDATE tasks SET dispatch_state=? WHERE task_id=?").run(finalState, taskId);
+      const resolved = (await (await post({ action: "advance" }, input.requestId)).json()).mission;
+      assert.equal(resolved.steps[0].state, finalState === "dispatched" ? "submitted" : "failed");
+      if (finalState === "rejected") { assert.equal(resolved.status, "failed"); assert.equal(resolved.steps[1].state, "blocked"); }
+    }
+    assert.equal(calls, 1, "reconciliation never replays a dispatch");
+  });
+}
