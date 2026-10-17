@@ -50,7 +50,11 @@ export function createDeviceClient({ http, vault, timeoutMs = 12000 }) {
         const next = { version: 1, origin, token: result.deviceToken };
         try { await vault.set({ key: KEY, value: JSON.stringify(next) }); }
         catch { throw new Error('Atlas could not save secure device access. Revoke this device in Atlas settings before pairing again.'); }
-        if (version !== generation) { await vault.remove({ key: KEY }); return false; }
+        if (version !== generation) {
+          try { await vault.remove({ key: KEY }); }
+          catch { throw new Error('Device access could not be removed. Revoke this device from Atlas settings.'); }
+          return false;
+        }
         record = next;
         return true;
       } finally { busy = false; }

@@ -54,3 +54,14 @@ test('native vault write failures cannot become customer diagnostic text',async(
  await assert.rejects(f.client.pair({origin:'https://atlas.example',code:'123456'}),error=>!error.message.includes('PRIVATE')&&error.message.includes('secure device access'));
  await assert.rejects(f.client.refresh(),/Pair this device/);
 });
+
+test('late pairing vault cleanup failures stay customer-safe after disconnect',async()=>{
+ let finish;
+ const f=fixture();
+ f.vault.set=()=>new Promise(resolve=>{finish=resolve});
+ let removes=0;f.vault.remove=async()=>{if(++removes===2)throw new Error('PRIVATE_NATIVE_STACK')};
+ const pending=f.client.pair({origin:'https://atlas.example',code:'123456'});
+ await new Promise(resolve=>setTimeout(resolve,0));
+ await f.client.disconnect();finish();
+ await assert.rejects(pending,error=>!error.message.includes('PRIVATE')&&error.message.includes('Revoke this device'));
+});
