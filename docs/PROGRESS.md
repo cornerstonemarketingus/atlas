@@ -510,6 +510,29 @@ Customer prompt privacy follow-up (#310): found the system prompt unconditionall
 
 Prompt integration repair (#310): complete web validation caught an existing Genesis contract requiring publish policy ask in customer context. Restored only explicitly selected availability booleans and the known approval policy enum, preserving required approval semantics while excluding internal reason/credential/build fields. Existing project-tools tests remain unchanged. Fresh focused/full validation and CI required; do not merge the earlier failed web revision.
 
+## 2026-10-17 — durable cloud dispatch integration (#267 / #270)
+
+Merged current main 9443843 into the existing codex/durable-dispatch branch,
+preserving new-project routing and current chat privacy changes. Fixed the
+existing GitHub dispatch timeout: abort alone could leave a cancellation-ignoring
+transport pending indefinitely. A hard acknowledgement deadline now returns the
+saved request as uncertain, never automatically resends it, and discards/cancels
+late response bodies without changing the uncertain receipt.
+
+Two regressions pass against actual migrated SQLite and the existing dispatch
+helper. Fresh Worker build passed; complete web suite: 507 total, 505 passed,
+two optional skips, zero failures. Typecheck and whitespace check pass. Targeted
+lint passed; fresh remote CI and existing tenant-persistence
+review gate remain required. No production migration, dispatch, credential
+change or deployment performed. Next: complete #270 CI/review, then integrate
+the existing #274 → #276 → #278 → #282 stack in dependency order.
+
+Separate inference PR #307 integrated current main and resolved the shared
+handoff conflict. Original code CI 38995719143 passed all 13 jobs. Local full
+run: 707 pass, 6 fail, 20 skip; smaller integrated retest: 81 pass, 3 Genesis
+timeouts. The approval case passes individually on both unchanged main and
+the inference branch. Timing dependence is suspected; no local all-green
+claim. Fresh integrated PR CI is required before ordinary merge.
 ## 2026-10-17 — native Atlas branding (#317)
 
 Current-main branch codex/mobile-brand-assets replaces template native icons with sixteen raster assets derived directly from the existing Atlas favicon SVG. Adds a repeatable Chromium-based generator, source/artifact manifest, opaque 1024px iOS icon, five Android legacy/round/adaptive foreground densities and matching background color. No new artwork or runtime dependency. Real pixel checks caught and fixed SVG fill inheritance during visual QA; negative-space RGB regression failed before and passes after. Eleven mobile tests and syntax checks pass. Store icons were inspected visually. Device masking/launch assets, working bootstrap, signed builds and store submission remain incomplete; no App Store readiness claim. #316 native compatibility repair is a separate pending PR.
