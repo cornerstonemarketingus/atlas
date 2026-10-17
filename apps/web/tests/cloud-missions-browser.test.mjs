@@ -18,6 +18,15 @@ test("real cloud mission screen reconnects on desktop/mobile without duplicate d
   const handle = missionRoutes({ database: () => d1, authenticate: async () => ({}), resolveScope: async () => ({ tenantId: 1, principal: "operator" }),
     dispatch: async (_request, _scope, step) => { calls++; return { taskId: randomUUID(), correlationId: step.correlationId }; },
     receipt: async () => null, outcome: async () => finished ? ({ status: "completed", evidence: { receiptId: "signed-result", summary: "Recorded runner result", runUrl: "https://github.com/owner/repo/actions/runs/1" } }) : ({ status: "pending" }) });
+  const seeded = [];
+  for (let i = 0; i < 35; i++) {
+    const input = { requestId: randomUUID(), objective: `History mission ${i}`, steps: [{ id: "inspect", dependencies: [], repository: "owner/repo", branch: "main", mode: "inspect", objective: "Inspect project files" }] };
+    const response = await handle(new Request("https://fixture/api/missions", { method: "POST", body: JSON.stringify(input) }));
+    assert.equal(response.status, 201); seeded.push((await response.json()).mission);
+  }
+  const firstHistory = await (await handle(new Request("https://fixture/api/missions"))).json();
+  const olderSeed = seeded.find(mission => !firstHistory.missions.some(item => item.id === mission.id));
+  assert.ok(olderSeed);
   const root = fileURLToPath(new URL("../", import.meta.url)).replaceAll("\\", "/");
   const html = '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0"><div id="root"></div><script type="module">import React from "react";import {createRoot} from "react-dom/client";import {MissionsSection} from "/app/missions/MissionsSection.tsx";import "/app/globals.css";import "/app/workspace.css";import "/app/atlas-shell.css";import "/app/atlas-brand.css";createRoot(document.getElementById("root")).render(React.createElement(MissionsSection));</script></body></html>';
   const server = await createServer({ root, configFile: false, cacheDir: "../../.review/mission-browser-cache", define: { "process.env": "{}" },
@@ -45,6 +54,11 @@ test("real cloud mission screen reconnects on desktop/mobile without duplicate d
     const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 }, isMobile: mobile, hasTouch: mobile });
     const page = await context.newPage(); const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.goto(origin);
+    await page.getByRole("button", { name: "Load older missions", exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: `${olderSeed.objective} ready`, exact: true }).count(), 0);
+    await page.getByRole("button", { name: "Load older missions", exact: true }).click();
+    await page.getByRole("button", { name: `${olderSeed.objective} ready`, exact: true }).click();
+    await page.getByRole("heading", { name: olderSeed.objective, exact: true }).waitFor();
     const objective = mobile ? "Mobile persistent review" : "Desktop persistent review";
     await page.getByLabel("Overall objective", { exact: true }).fill(objective);
     await page.getByLabel("Connected repository", { exact: true }).fill("owner/repo");

@@ -37,9 +37,24 @@ export class CloudMissions {
     const row = await this.db.prepare("SELECT revision, record_json FROM cloud_missions WHERE tenant_id=? AND requested_by=? AND id=?").bind(...scopeArgs(scope), id).first();
     return row ? { ...JSON.parse(row.record_json), revision: row.revision } : null;
   }
-  async list(scope) {
-    const rows = await this.db.prepare("SELECT revision, record_json FROM cloud_missions WHERE tenant_id=? AND requested_by=? ORDER BY updated_at DESC, id LIMIT 30").bind(...scopeArgs(scope)).all();
-    return rows.results.map(row => { const record = JSON.parse(row.record_json); return { id: record.id, objective: record.objective.slice(0, 240), status: record.status, updatedAt: record.updatedAt, revision: row.revision }; });
+  async list(scope) { return (await this.listPage(scope)).missions; }
+  async listPage(scope, cursor = null) {
+    let boundary = null;
+    if (cursor) {
+      try {
+        if (typeof cursor !== "string" || cursor.length > 500) throw new Error();
+        boundary = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+        if (!Array.isArray(boundary) || boundary.length !== 2 || typeof boundary[1] !== "string" || typeof boundary[0] !== "string" || new Date(boundary[0]).toISOString() !== boundary[0] || !/^[0-9a-f-]{36}$/u.test(boundary[1])) throw new Error();
+      } catch { throw new MissionError("Invalid mission history cursor."); }
+    }
+    const query = "SELECT id,updated_at,revision,record_json FROM cloud_missions WHERE tenant_id=? AND requested_by=?"
+      + (boundary ? " AND (updated_at<? OR (updated_at=? AND id>?))" : "")
+      + " ORDER BY updated_at DESC,id LIMIT 31";
+    const rows = await this.db.prepare(query).bind(...scopeArgs(scope), ...(boundary ? [boundary[0], boundary[0], boundary[1]] : [])).all();
+    const page = rows.results.slice(0, 30);
+    const last = page.at(-1);
+    return { missions: page.map(row => { const record = JSON.parse(row.record_json); return { id: record.id, objective: record.objective.slice(0, 240), status: record.status, updatedAt: record.updatedAt, revision: row.revision }; }),
+      nextCursor: rows.results.length > 30 ? Buffer.from(JSON.stringify([last.updated_at, last.id])).toString("base64url") : null };
   }
   async create(scope, input) {
     const plan = normalized(input);

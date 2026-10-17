@@ -29,7 +29,7 @@ export function missionRoutes({ authenticate, resolveScope, database, dispatch, 
       const service = new CloudMissions({ db,
         dispatch: (scope, step) => dispatch(request, scope, step), receipt: (scope, correlationId, step) => receipt(request, scope, correlationId, step),
         outcome: (scope, taskId, step) => outcome(request, scope, taskId, step) });
-      if (request.method === "GET") return Response.json(id ? { mission: await service.require(scope, id) } : { missions: await service.list(scope) }, { headers });
+      if (request.method === "GET") return Response.json(id ? { mission: await service.require(scope, id) } : await service.listPage(scope, new URL(request.url).searchParams.get("cursor")), { headers });
       if (request.method !== "POST") throw new MissionError("Method not allowed.", 405);
       const body = await readBody(request);
       if (!id) return Response.json({ mission: await service.create(scope, body) }, { status: 201, headers });

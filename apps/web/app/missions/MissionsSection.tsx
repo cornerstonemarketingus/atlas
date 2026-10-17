@@ -10,6 +10,7 @@ type Summary = Pick<Mission, "id" | "objective" | "status">;
 function safeRunUrl(value?: string | null) { try { const url = new URL(value ?? ""); return url.protocol === "https:" && url.hostname === "github.com" ? url.href : null; } catch { return null; } }
 export function MissionsSection() {
   const [missions, setMissions] = useState<Summary[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [mission, setMission] = useState<Mission | null>(null);
   const [objective, setObjective] = useState("");
   const [repository, setRepository] = useState("");
@@ -23,8 +24,20 @@ export function MissionsSection() {
   const invalidate = useCallback(() => { generation.current++; }, []);
   const working = useRef(false);
   const selected = useRef<string | null>(null);
-  const refresh = async () => { const result = await api("/api/missions"); setMissions(result.missions); };
-  useEffect(() => { let active = true; void api("/api/missions").then(result => { if (active) setMissions(result.missions); }).catch(error => { if (active) setNotice(error.message); }); return () => { active = false; invalidate(); }; }, [invalidate]);
+  const refresh = async () => { const result = await api("/api/missions"); setMissions(result.missions); setNextCursor(result.nextCursor ?? null); };
+  useEffect(() => { let active = true; void api("/api/missions").then(result => { if (active) { setMissions(result.missions); setNextCursor(result.nextCursor ?? null); } }).catch(error => { if (active) setNotice(error.message); }); return () => { active = false; invalidate(); }; }, [invalidate]);
+  async function more() {
+    if (!nextCursor || working.current) return;
+    working.current = true; setBusy(true); const current = generation.current;
+    try {
+      const result = await api(`/api/missions?cursor=${encodeURIComponent(nextCursor)}`);
+      if (current === generation.current) {
+        setMissions(items => [...new Map([...items, ...result.missions].map(item => [item.id, item])).values()]);
+        setNextCursor(result.nextCursor ?? null);
+      }
+    } catch (error) { if (current === generation.current) setNotice((error as Error).message); }
+    finally { working.current = false; setBusy(false); }
+  }
   async function open(id: string) {
     const current = ++generation.current; selected.current = id; setMission(null); setNotice("");
     try { const result = await api(`/api/missions/${id}`); if (current === generation.current) setMission(result.mission); }
@@ -80,7 +93,7 @@ export function MissionsSection() {
       <label>Steps, one concrete objective per line<textarea value={steps} onChange={event => setSteps(event.target.value)} rows={5} maxLength={32000} required /></label>
       <p>Each step can start one task and consumes your normal task allowance. Steps run sequentially on the branches you specify; code changes are not automatically combined.</p><button disabled={busy}>Save mission</button>
     </form>
-    <section><h2>Saved missions</h2><div className="mission-list">{missions.map(item => <button key={item.id} onClick={() => void open(item.id)}>{item.objective} <small>{item.status}</small></button>)}{!missions.length && <p>No saved missions yet.</p>}</div></section>
+    <section><h2>Saved missions</h2><div className="mission-list">{missions.map(item => <button key={item.id} onClick={() => void open(item.id)}>{item.objective} <small>{item.status}</small></button>)}{!missions.length && <p>No saved missions yet.</p>}</div>{nextCursor && <button disabled={busy} onClick={() => void more()}>Load older missions</button>}</section>
     {mission && <section className="mission-detail"><h2>{mission.objective}</h2><p><strong>{mission.status}</strong> · {mission.dispatchCount}/{mission.dispatchLimit} dispatch attempts</p>
       <div className="mission-controls">{!["completed", "failed", "stopped"].includes(mission.status) && <><button disabled={busy} onClick={() => void control(mission.status === "paused" ? "resume" : "advance")}>{mission.status === "paused" ? "Resume" : "Start / reconcile"}</button><button disabled={busy} onClick={() => void control("pause")}>Pause future steps</button><button disabled={busy} onClick={() => void control("stop")}>Stop future steps</button></>}</div>
       <p>A running cloud task can finish while this page is closed. Reopen the mission to reconcile its result and continue. Pausing or stopping prevents new steps; it does not cancel a runner already working.</p>

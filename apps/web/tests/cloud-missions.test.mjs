@@ -209,3 +209,21 @@ test("a paid allowance refusal fails immediately without uncertain recovery or a
   await post({ action: "advance" }, input.requestId);
   assert.equal(calls, 1);
 });
+
+test("saved mission history remains reachable past 30 records with scoped stable cursors", async t => {
+  const { service, d1 } = fixture(t, { now: () => 100000 }); const ids = [];
+  for (let i = 0; i < 65; i++) { const input = { ...plan(), requestId: randomUUID(), objective: `Mission ${i}` }; ids.push((await service.create(scope, input)).id); }
+  await service.create({ ...scope, principal: "other" }, { ...plan(), requestId: randomUUID(), objective: "Private other mission" });
+  const all = []; let cursor = null; let pages = 0;
+  do { const result = await service.listPage(scope, cursor); all.push(...result.missions); cursor = result.nextCursor; pages++; assert.ok(result.missions.length <= 30); } while (cursor && pages < 5);
+  assert.equal(pages, 3); assert.equal(all.length, 65); assert.deepEqual(all.map(mission => mission.id), ids.sort());
+  assert.ok(all.every(mission => !Object.hasOwn(mission, "steps")), "history stays a bounded summary");
+  const handle = missionRoutes({ database: () => d1, authenticate: async () => ({}), resolveScope: async () => scope });
+  const first = await (await handle(new Request("https://atlas.test/api/missions"))).json();
+  assert.equal(first.missions.length, 30); assert.equal(typeof first.nextCursor, "string");
+  const second = await (await handle(new Request(`https://atlas.test/api/missions?cursor=${first.nextCursor}`))).json();
+  assert.equal(second.missions.length, 30); assert.equal(new Set([...first.missions, ...second.missions].map(mission => mission.id)).size, 60);
+  for (const bad of ["not-a-cursor", Buffer.from(JSON.stringify(["1970-01-01T00:01:40.000Z", [ids[0]]])).toString("base64url")]) {
+    assert.equal((await handle(new Request(`https://atlas.test/api/missions?cursor=${bad}`))).status, 400);
+  }
+});
