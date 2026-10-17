@@ -33,7 +33,7 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
   const items: { label: string; href: string }[] = [];
   if (tasks.length && conversationId) items.push({ label: "Code", href: `/build?conversation=${encodeURIComponent(conversationId)}` });
   const pullRequest = tasks.find((task) => task.pullRequest?.url)?.pullRequest?.url;
-  if (pullRequest) items.push({ label: "Pull request â†—", href: pullRequest });
+  if (pullRequest) items.push({ label: "Pull request ↗", href: pullRequest });
   if (messages.some((message) => message.role === "assistant" && message.content.includes("](/automation)"))) items.push({ label: "Computer control", href: "/automation" });
   return items;
 }
@@ -76,7 +76,7 @@ export function ChatSection() {
   const [thoughts, setThoughts] = useState<Record<string, string>>({});
   const [liveSteps, setLiveSteps] = useState<ToolStep[]>([]);
   const [stepLogs, setStepLogs] = useState<Record<string, ToolStep[]>>({});
-  // The agent team working on a reply (lead â†’ team â†’ child agents), live and then kept beside the reply.
+  // The agent team working on a reply (lead → team → child agents), live and then kept beside the reply.
   const [liveAgents, setLiveAgents] = useState<AgentNode[]>([]);
   const [agentLogs, setAgentLogs] = useState<Record<string, AgentNode[]>>({});
   // The side panel: a terminal-style log of every step, and the files Atlas read or changed.
@@ -294,7 +294,7 @@ export function ChatSection() {
       setThinking("");
       setLiveSteps([]);
       setLiveAgents([]);
-      addLog({ kind: "note", text: `â€º ${text.length > 120 ? `${text.slice(0, 120)}â€¦` : text}` });
+      addLog({ kind: "note", text: `› ${text.length > 120 ? `${text.slice(0, 120)}…` : text}` });
       for (;;) {
         const { value, done } = await reader.read();
         if (current !== generation.current) { await reader.cancel(); return; }
@@ -311,7 +311,7 @@ export function ChatSection() {
             setLiveSteps(steps);
             setStreaming((current) => current ?? "");
             const who = data.agentId ? agents.find((agent) => agent.id === data.agentId)?.name ?? "Agent" : "Atlas";
-            addLog({ kind: "tool", state: step.state, who, text: step.state === "running" ? `$ ${step.label}` : `${step.state === "done" ? "âœ“" : "âœ•"} ${step.label}` });
+            addLog({ kind: "tool", state: step.state, who, text: step.state === "running" ? `$ ${step.label}` : `${step.state === "done" ? "✓" : "✕"} ${step.label}` });
             if (data.preview) addItems([itemFromPreview(data.preview)]);
           }
           else if (item.type === "agent" && data?.id && data.name) {
@@ -319,9 +319,9 @@ export function ChatSection() {
             agents = upsert(agents, node);
             setLiveAgents(agents);
             setStreaming((current) => current ?? "");
-            addLog({ kind: "agent", state: node.state, who: node.name, text: `${node.state === "running" || node.state === "planning" ? "â–¸" : node.state === "done" ? "âœ“" : node.state === "failed" ? "âœ•" : "Â·"} ${node.title}${node.summary && (node.state === "done" || node.state === "failed") && node.depth === 0 ? ` (${node.summary})` : ""} Â· ${node.state}` });
+            addLog({ kind: "agent", state: node.state, who: node.name, text: `${node.state === "running" || node.state === "planning" ? "▸" : node.state === "done" ? "✓" : node.state === "failed" ? "✕" : "·"} ${node.title}${node.summary && (node.state === "done" || node.state === "failed") && node.depth === 0 ? ` (${node.summary})` : ""} · ${node.state}` });
           }
-          else if (item.type === "error") { diagnosed = true; setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `âœ• ${data?.message ?? "the reply failed"}` }); }
+          else if (item.type === "error") { diagnosed = true; setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `✕ ${data?.message ?? "the reply failed"}` }); }
           else if (item.type === "done" && data?.reply) {
             succeeded = true;
             if (data.stored === false) {
@@ -332,7 +332,7 @@ export function ChatSection() {
             if (thought) setThoughts((items) => ({ ...items, [reply.id]: thought }));
             if (steps.length) setStepLogs((items) => ({ ...items, [reply.id]: steps }));
             if (agents.length) setAgentLogs((items) => ({ ...items, [reply.id]: agents }));
-            addLog({ kind: "note", state: "done", who: "Atlas", text: "âœ“ reply finished" });
+            addLog({ kind: "note", state: "done", who: "Atlas", text: "✓ reply finished" });
             setMessages((items) => [...items, reply]);
           }
         }
@@ -454,7 +454,7 @@ export function ChatSection() {
         {...(item.href.startsWith("http") ? { target: "_blank", rel: "noreferrer" } : {})}>{item.label}</a>)}
       {ready?.configured === false && <span className="context-chip">No model connected</span>}
       <button type="button" className={panelOpen ? "context-chip panel-toggle active" : "context-chip panel-toggle"} aria-pressed={panelOpen}
-        onClick={() => togglePanel()} title="Show what Atlas is doing: terminal log and files">{panelOpen ? "Hide panel" : `Terminal${items.length ? ` Â· ${items.length} files` : ""}`}</button>
+        onClick={() => togglePanel()} title="Show what Atlas is doing: terminal log and files">{panelOpen ? "Hide panel" : `Terminal${items.length ? ` · ${items.length} files` : ""}`}</button>
     </>}
   >
     {/* Keyboard focus makes this scrolling region usable without a pointer. */}
@@ -490,11 +490,11 @@ export function ChatSection() {
             {stepLogs[item.id]?.some((step) => !step.agentId) && <ToolSteps steps={stepLogs[item.id].filter((step) => !step.agentId)} collapsed />}
             <MessageBody text={item.content} /></div></div>)}
         {streaming !== null && <div className="atlas-message" aria-live="polite"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b>
-          {thinking && <details className="thinking-block" open={!streaming}><summary>{streaming ? "Thought process" : "Thinkingâ€¦"}</summary><p>{thinking}</p></details>}
+          {thinking && <details className="thinking-block" open={!streaming}><summary>{streaming ? "Thought process" : "Thinking…"}</summary><p>{thinking}</p></details>}
           {liveSteps.some((step) => !step.agentId) && <ToolSteps steps={liveSteps.filter((step) => !step.agentId)} />}
           {liveAgents.length > 0 && <AgentTree agents={liveAgents} steps={liveSteps} />}
-          {streaming ? <MessageBody text={streaming} /> : !thinking && liveSteps.length === 0 && liveAgents.length === 0 && <p className="thinking">Thinkingâ€¦</p>}</div></div>}
-        {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Startingâ€¦</p></div></div>}
+          {streaming ? <MessageBody text={streaming} /> : !thinking && liveSteps.length === 0 && liveAgents.length === 0 && <p className="thinking">Thinking…</p>}</div></div>}
+        {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Starting…</p></div></div>}
         {projectOperation && <ProjectActivity key={projectOperation.operationId} operation={projectOperation} />}
         {suggestion && <div className="atlas-message suggestion-card"><div className="assistant-avatar"><AtlasMark /></div><div>
           <b>Atlas</b>
@@ -513,21 +513,21 @@ export function ChatSection() {
     </div>
     <form className="chat-composer" onSubmit={send}>
       {!following && <button type="button" className="secondary jump-to-latest"
-        onClick={() => { scrollFollow.jump(); setFollowing(true); }}>â†“ Jump to latest</button>}
+        onClick={() => { scrollFollow.jump(); setFollowing(true); }}>↓ Jump to latest</button>}
       {blocked && <p className="composer-blocked">
-        Questions need an AI model connection. Project and computer tasks can still start. {ready?.reason} <Link href="/setup">Open Connections â†’</Link>
+        Questions need an AI model connection. Project and computer tasks can still start. {ready?.reason} <Link href="/setup">Open Connections →</Link>
       </p>}
       <textarea aria-label="Message Atlas" value={draft} rows={3} onKeyDown={keyDown}
         onChange={(event) => setDraft(event.target.value)}
-      placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anythingâ€¦"} />
+      placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything…"} />
         <div className="composer-actions">
           <label>Model <select aria-label="Model provider" value={provider} onChange={(event) => setProvider(event.target.value)} disabled={streaming !== null}>
-            {(ready?.providers ?? [{ id: "auto", label: "Automatic", available: true }]).map((option) => <option key={option.id} value={option.id} disabled={!option.available}>{option.label}{option.paid ? " (paid API)" : ""}{!option.available ? " â€” not configured" : ""}</option>)}
+            {(ready?.providers ?? [{ id: "auto", label: "Automatic", available: true }]).map((option) => <option key={option.id} value={option.id} disabled={!option.available}>{option.label}{option.paid ? " (paid API)" : ""}{!option.available ? " — not configured" : ""}</option>)}
           </select></label>
-        <div><span className="composer-hint">Enter sends Â· Shift+Enter for a new line</span></div>
+        <div><span className="composer-hint">Enter sends · Shift+Enter for a new line</span></div>
         {streaming !== null
-          ? <button type="button" className="send" onClick={stop} aria-label="Stop the reply">â– </button>
-          : <button className="send" aria-label="Send" disabled={sending || !draft.trim()}>{sending ? "â€¦" : "â†‘"}</button>}
+          ? <button type="button" className="send" onClick={stop} aria-label="Stop the reply">■</button>
+          : <button className="send" aria-label="Send" disabled={sending || !draft.trim()}>{sending ? "…" : "↑"}</button>}
       </div>
       {notice && <p className="composer-notice" role="status">{notice}</p>}
     </form>
