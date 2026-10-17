@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createScrollFollow } from "./scroll-follow.mjs";
 import "./scroll-follow.css";
+import "./activity-disclosure.css";
 import { DiffLines, MessageBody } from "./MessageBody.js";
 
 /**
@@ -35,16 +36,16 @@ const AGENT_MARK: Record<string, string> = { planning: "◌", running: "●", ve
 const AGENT_STATE: Record<string, string> = { planning: "planning", running: "working", verifying: "checking its work", done: "verified", unverified: "unverified", failed: "failed", skipped: "skipped" };
 
 /** Tool steps, optionally folded into "N steps". */
-export function ToolSteps({ steps, collapsed = false }: { readonly steps: ToolStep[]; readonly collapsed?: boolean }) {
+export function ToolSteps({ steps, collapsed = true }: { readonly steps: ToolStep[]; readonly collapsed?: boolean }) {
   const list = <ol className="activity-steps tool-steps">
     {steps.map((step) => <li key={step.id} className={step.state}><span aria-hidden="true">{STEP_MARK[step.state]}</span>{step.label}</li>)}
   </ol>;
   if (!collapsed) return list;
-  return <details className="thinking-block"><summary>{steps.length === 1 ? "1 step" : `${steps.length} steps`}</summary>{list}</details>;
+  return <details className="thinking-block activity-disclosure"><summary>{steps.length === 1 ? "1 step" : `${steps.length} steps`}</summary>{list}</details>;
 }
 
 /** The agent family working on a reply, each agent with its own tool steps. */
-export function AgentTree({ agents, steps, collapsed = false }: { readonly agents: AgentNode[]; readonly steps: ToolStep[]; readonly collapsed?: boolean }) {
+export function AgentTree({ agents, steps, collapsed = true }: { readonly agents: AgentNode[]; readonly steps: ToolStep[]; readonly collapsed?: boolean }) {
   if (!agents.length) return null;
   const children = (parentId: string | null) => agents.filter((agent) => agent.parentId === parentId);
   const render = (agent: AgentNode) => {
@@ -64,7 +65,7 @@ export function AgentTree({ agents, steps, collapsed = false }: { readonly agent
   const tree = <ul className="agent-tree">{children(null).map(render)}</ul>;
   if (!collapsed) return tree;
   const count = agents.filter((agent) => agent.depth > 0).length;
-  return <details className="thinking-block"><summary>Agent team · {count} agent{count === 1 ? "" : "s"}</summary>{tree}</details>;
+  return <details className="thinking-block activity-disclosure"><summary>Agent team · {count} agent{count === 1 ? "" : "s"}</summary>{tree}</details>;
 }
 
 function time(at: number) {
