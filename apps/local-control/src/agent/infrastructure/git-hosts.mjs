@@ -197,6 +197,24 @@ export function createRepositoryCreator({ host, token, baseUrl = null, fetchImpl
 
   return {
     provider: host,
+    async capabilities({ visibility = "private" } = {}) {
+      if (host !== "github") return { connected: true, canReadRepositories: null, canCreateRepositories: null, canPush: null, reason: "permission_unverified" };
+      let response;
+      try { response = await fetchImpl(`${root}/user`, { headers, redirect: "error", signal: AbortSignal.timeout(10_000) }); }
+      catch { return { connected: false, canReadRepositories: false, canCreateRepositories: false, canPush: false, reason: "host_unavailable" }; }
+      if (!response.ok) return { connected: false, canReadRepositories: false, canCreateRepositories: false, canPush: false,
+        reason: response.status === 401 ? "invalid_credential" : response.status === 403 ? "insufficient_permission" : "host_unavailable" };
+      const profile = await response.json().catch(() => ({}));
+      const scopesHeader = response.headers.get("x-oauth-scopes");
+      const scopes = new Set((scopesHeader ?? "").split(",").map((scope) => scope.trim()).filter(Boolean));
+      const permitted = scopes.has("repo") || (visibility === "public" && scopes.has("public_repo"));
+      // Fine-grained/user-to-server credentials need the actual create check;
+      // no read-only GitHub probe can prove creation rights for a future repo.
+      const known = scopesHeader !== null;
+      return { connected: typeof profile.login === "string", owner: profile.login ?? null,
+        canReadRepositories: permitted ? true : null, canCreateRepositories: known ? permitted : null,
+        canPush: known ? permitted : null, reason: permitted ? null : known ? "insufficient_permission" : "permission_unverified" };
+    },
     async planRepository({ name, visibility = "private", description = "", signal }) {
       if (!REPOSITORY_NAME.test(name ?? "")) throw new InfrastructureError("BAD_REPOSITORY", "A repository name uses letters, numbers, dots, dashes and underscores.");
       if (!["private", "public"].includes(visibility)) throw new InfrastructureError("BAD_VISIBILITY", "Visibility is private or public.");
@@ -219,13 +237,15 @@ export function createRepositoryCreator({ host, token, baseUrl = null, fetchImpl
     },
     async applyRepository({ plan, signal }) {
       const { name, visibility, description, owner: login } = plan.after;
+      if (await owner(signal) !== login) throw new InfrastructureError("ACCOUNT_CHANGED", "The connected account changed after this repository was planned; request a new plan.");
       const body = host === "gitlab"
         ? { name, path: name, visibility, description }
         : { name, private: visibility === "private", description, auto_init: false };
       await call(host === "gitlab" ? "/projects" : "/user/repos", { method: "POST", body, signal });
       // Read back rather than trusting the create call's own response.
       const created = await find(`${login}/${name}`, signal);
-      return { verified: Boolean(created), observed: created ? { fullName: `${login}/${name}`, cloneUrl: cloneUrl(created), webUrl: webUrl(created) } : null };
+      const verified = Boolean(created) && (host !== "github" || (created.full_name === `${login}/${name}` && created.private === (visibility === "private")));
+      return { verified, observed: created ? { fullName: `${login}/${name}`, cloneUrl: cloneUrl(created), webUrl: webUrl(created), visibility } : null };
     },
   };
 }

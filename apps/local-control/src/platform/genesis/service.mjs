@@ -90,11 +90,16 @@ export class GenesisService {
   }
 
   /** "Build me …": creates the project, writes requirements, and plans unless a material question is open. */
-  async create(prompt, { actor = "owner" } = {}) {
+  async create(prompt, { actor = "owner", name = null, template = null } = {}) {
     const text = String(prompt ?? "").trim();
     if (!text) throw new GenesisError("PROMPT_REQUIRED", "Describe what to build.");
     if (text.length > MAX_PROMPT) throw new GenesisError("PROMPT_TOO_LONG", `Keep the description under ${MAX_PROMPT} characters.`);
     const { spec, refinedBy } = await this.#specify(text, {});
+    if (name) spec.name = name;
+    if (template) {
+      if (!["web-app", "static-site", "api-service"].includes(template)) throw new GenesisError("BAD_TEMPLATE", "Choose a curated Genesis template.");
+      spec.archetype = { "web-app": "webapp", "static-site": "website", "api-service": "api" }[template];
+    }
     let project = this.store.create({ tenantId: this.tenantId, prompt: text, name: spec.name, actor });
     project = this.#move(project.id, "requirements", {
       reason: `Requirements written (${plural(spec.pages.length, "page")}, ${plural(spec.entities.length, "record type")}, ${plural(spec.acceptanceCriteria.length, "acceptance criterion")}).`.replace("criterions", "criteria"),
