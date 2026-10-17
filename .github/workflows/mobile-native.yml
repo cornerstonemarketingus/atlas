@@ -81,6 +81,16 @@ jobs:
             -derivedDataPath build/ios CODE_SIGNING_ALLOWED=NO build
           test -d build/ios/Build/Products/Debug-iphonesimulator/App.app
           ditto -c -k --keepParent build/ios/Build/Products/Debug-iphonesimulator/App.app build/atlas-ios-simulator.zip
+      - name: Launch the compiled app in an available iPhone simulator
+        timeout-minutes: 8
+        run: node scripts/ios-launch-smoke.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: atlas-ios-launch-evidence
+          path: mobile/build/ios-launch
+          if-no-files-found: warn
+          retention-days: 3
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: atlas-ios-simulator
