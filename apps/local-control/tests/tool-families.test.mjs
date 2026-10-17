@@ -420,6 +420,7 @@ test("a symlink inside a root cannot be used to read or write outside it", async
   // path. Both are things a cloned repository can legitimately contain.
   if (!await symlinkOrSkip(t, outside, join(repo, "escape"))) return;
   if (!await symlinkOrSkip(t, join(outside, "secret.txt"), join(repo, "passwd-link"))) return;
+  if (!await symlinkOrSkip(t, join(outside, "missing.txt"), join(repo, "dangling-link"))) return;
 
   const { registry, approvals } = registryFor();
   registerRepositoryTools(registry);
@@ -428,7 +429,7 @@ test("a symlink inside a root cannot be used to read or write outside it", async
 
   // path.resolve() only normalizes lexically, so before this was fixed every
   // one of these succeeded.
-  for (const path of ["escape/secret.txt", "passwd-link"]) {
+  for (const path of ["escape/secret.txt", "passwd-link", "dangling-link"]) {
     const result = await run("repository.read", { path });
     assert.equal(result.status, "failed", `${path} must not be readable`);
     assert.equal(result.code, "PATH_ESCAPES_REPOSITORY");
@@ -437,6 +438,11 @@ test("a symlink inside a root cannot be used to read or write outside it", async
   const written = await run("repository.write", { path: "escape/planted.txt", content: "x" });
   assert.equal(written.status, "failed");
   assert.equal(existsSync(join(outside, "planted.txt")), false, "nothing was written outside the repository");
+
+  const danglingWrite = await run("repository.write", { path: "dangling-link", content: "x" });
+  assert.equal(danglingWrite.status, "failed");
+  assert.equal(danglingWrite.code, "PATH_ESCAPES_REPOSITORY");
+  assert.equal(existsSync(join(outside, "missing.txt")), false);
 
   // Ordinary paths, and a new file in a directory that does not exist yet,
   // must still work — the fix must not break writing.
