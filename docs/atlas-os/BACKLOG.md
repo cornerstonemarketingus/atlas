@@ -7,6 +7,32 @@ automated coverage, real sessions and deployed evidence. Historical rows below
 are retained for traceability and are superseded by this queue. No duplicate
 TODO is introduced. Check current ownership before each implementation.
 
+## Reliability slice — CLI retry cancellation (#305, 2026-10-17)
+
+The existing `RetryingModelProvider` is instantiated by the CLI's actual
+provider routes. Cancellation previously could still invoke a provider before
+the first attempt or after a resolving backoff, report a last-attempt rate
+failure instead of cancellation, or accept late success from an abort-ignoring
+adapter. Successful default backoffs also retained their abort listener.
+
+The focused change checks cancellation before dispatch, after completion and
+before handling provider failures; cancelled requests use the existing
+nonretryable `cancelled` error. Timer and abort paths remove their listener.
+Five new regressions fail against the original wrapper and pass with the fix;
+the real loopback HTTP fixture confirms exactly one request when cancellation
+occurs during backoff. Focused retry/fallback/timing validation passes 21/21;
+TypeScript build passes. Refreshed full Windows suite: 533 tests, 525 pass,
+four skips and four failures. Those Windows failures reproduce with
+the unmodified retry wrapper (CRLF, doubled drive path, and two POSIX-mode
+assertions). Remote CI status belongs to the focused PR.
+
+No provider, fallback configuration, credential, approval or shared quota
+implementation was replaced. The wrapper prevents subsequent dispatch and late
+success; it cannot forcibly stop an adapter that ignores AbortSignal or undo
+provider charges. Cross-runtime quota settlement remains in the queue. Active
+PROGRESS and provider documentation edits are preserved; #305 carries the
+handoff until integration.
+
 | Priority / task | Reuse and exact scope | Dependencies / ownership | Acceptance and required tests | Risk / owner intervention |
 |---|---|---|---|---|
 | P0: finish evidence audit | Existing ARCHITECTURE.md and this backlog; audited main b47f136, later-main delta reviewed separately | #279; preserve all active implementation PRs | Fresh suites, daemon HTTP restart/approval journey, exact-commit CI failure and hosted acceptance; document unavailable visual/native tests | Low; no runtime deployment |
