@@ -11,6 +11,17 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window?.rootViewController = CAPBridgeViewController()
         window?.makeKeyAndVisible()
 
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["ATLAS_NATIVE_SMOKE"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+                let script = "JSON.stringify({secureContext:window.isSecureContext,cryptoRandom:typeof window.crypto?.getRandomValues,bridge:typeof window.Capacitor?.nativePromise,headers:(window.Capacitor?.PluginHeaders || []).map(p=>p.name)})"
+                (self?.window?.rootViewController as? CAPBridgeViewController)?.webView?.evaluateJavaScript(script) { result, error in
+                    NSLog("%@", "ATLAS_NATIVE_SMOKE runtime=\(result as? String ?? "unavailable") evaluationFailed=\(error != nil)")
+                }
+            }
+        }
+        #endif
+
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
     }
 
