@@ -69,6 +69,7 @@ test('real file previews retain distinct pages and render partial ranges without
     './scroll-follow.mjs': new URL('../app/chat/scroll-follow.mjs', import.meta.url).href,
     // Static markup has no stylesheet loader; browser coverage uses the real CSS.
     './scroll-follow.css': 'data:text/javascript,export {};',
+    './activity-disclosure.css': 'data:text/javascript,export {};',
   }));
   const first = await runInstantTool(call({}), fixture('x'.repeat(3500)));
   const second = await runInstantTool(call({ offset: first.page.nextOffset, fileSha: sha }), fixture('x'.repeat(3500)));

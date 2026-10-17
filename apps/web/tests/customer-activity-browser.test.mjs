@@ -3,7 +3,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { encodeEvent } from "../app/api/chat/stream.mjs";
 let playwright;
-try { playwright = await import(process.env.ATLAS_TEST_PLAYWRIGHT ? pathToFileURL(process.env.ATLAS_TEST_PLAYWRIGHT).href : "playwright-core"); } catch {}
+try { playwright = await import(process.env.ATLAS_TEST_PLAYWRIGHT ? pathToFileURL(process.env.ATLAS_TEST_PLAYWRIGHT).href : "playwright-core"); } catch { /* Browser gate is optional without configured Playwright. */ }
 test("customer activity folds with accessible plus/minus controls on desktop and mobile", { skip: !playwright && "Configure Playwright for browser acceptance", timeout:60000 }, async t => {
  const {createServer}=await import("vite"); const {default:react}=await import("@vitejs/plugin-react");
  const wire=encodeEvent("thinking",{text:"PRIVATE_BUILD_SENTINEL"})+encodeEvent("tool",{id:"call_1",state:"done",label:"PRIVATE_BUILD_SENTINEL",preview:{content:"PRIVATE_BUILD_SENTINEL"}});
