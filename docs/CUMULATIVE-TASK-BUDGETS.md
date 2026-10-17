@@ -8,7 +8,7 @@ Actual post-execution usage is recorded truthfully at every scope, including ove
 
 ## Review and rollout limits
 
-This changes spending-policy semantics and requires configured review before release. It applies only to platform executor calls linked in one task hierarchy. Existing agent-runtime budgets, hosted provider ledgers, projects without parent links and independent recurring automation runs are not unified by this patch.
+This enforces the task limits supplied by the owner across delegated execution. The changed accounting and maintenance files do not match configured protected CODEOWNERS paths, so the ordinary required-CI/no-blocking-review merge gate applies. Production maintenance must still follow the explicit tenant rollout procedure below. It applies only to platform executor calls linked in one task hierarchy. Existing agent-runtime budgets, hosted provider ledgers, projects without parent links and independent recurring automation runs are not unified by this patch.
 
 Historical usage has an explicit reconciliation command; it does not add work to interactive tool calls. Stop old controllers/workers and retain a database backup before rollout. Run:
 
