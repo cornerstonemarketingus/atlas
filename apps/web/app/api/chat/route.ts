@@ -37,6 +37,8 @@ export async function POST(request: Request) {
   let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown; stream?: unknown; provider?: unknown };
   try { body = await request.json() as typeof body; } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
 
+  if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ message: "Request body must be a JSON object." }, { status: 400 });
+
   const message = typeof body.message === "string" ? body.message.trim().slice(0, MAX_MESSAGE) : "";
   if (!message) return Response.json({ message: "Say something for Atlas to reply to." }, { status: 400 });
   const repository = typeof body.repository === "string" ? body.repository.slice(0, 140) : "";
