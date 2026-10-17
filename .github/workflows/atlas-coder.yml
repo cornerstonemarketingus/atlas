@@ -209,12 +209,16 @@ jobs:
 
       - name: Run Atlas task
         env:
-          # Both vendor keys are exposed; the runner reads only the one the
-          # selected provider needs, and an unset key for the *other* vendor is
-          # not an error. Set ATLAS_CODER_PROVIDER to pick explicitly, or leave
-          # it empty and let a claude-* ATLAS_CODER_MODEL select Anthropic.
+          # Provider credentials stay in this trusted CLI step. Validation
+          # children receive the CLI's existing scrubbed environment.
+          # Explicit primary wins; configured cross-vendor routes can recover
+          # capacity failures. ATLAS_CODER_FALLBACKS=none disables fallbacks.
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ATLAS_WORKERS_AI_TOKEN: ${{ secrets.ATLAS_WORKERS_AI_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ATLAS_WORKERS_AI_MODEL: ${{ vars.ATLAS_WORKERS_AI_MODEL }}
           ATLAS_CODER_PROVIDER: ${{ vars.ATLAS_CODER_PROVIDER }}
           ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
           ATLAS_CODER_FALLBACKS: ${{ vars.ATLAS_CODER_FALLBACKS }}

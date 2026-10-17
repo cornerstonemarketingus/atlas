@@ -108,6 +108,19 @@ test("pushMain pushes main to a real repository without prompting", () => withRo
   store.close();
 }));
 
+test("publishing an approved commit never pushes a newer HEAD", () => withRoot(async (root) => {
+  const { store, project } = await readyProject(root);
+  try {
+    const approved = execFileSync("git", ["-C", project.workspace, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(project.workspace, "UNAPPROVED.md"), "A later change\n");
+    await commitWorkspace(project.workspace, "Later unapproved change");
+    const bare = join(root, "approved.git");
+    execFileSync("git", ["init", "-q", "--bare", bare]);
+    assert.equal((await pushMain(project.workspace, bare, { expectedCommit: approved })).ok, true);
+    assert.equal(execFileSync("git", ["-C", bare, "rev-parse", "refs/heads/main"], { encoding: "utf8" }).trim(), approved);
+  } finally { store.close(); }
+}));
+
 test("over HTTP: publish waits in Approvals, and approving it there publishes", (t) => withRoot(async (root) => {
   const { store: genesisStore, genesis, project } = await readyProject(root);
   const store = new LocalTaskStore(join(root, "atlas.sqlite"));

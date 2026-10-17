@@ -356,3 +356,131 @@ Format: date | PR | phase/item | what shipped | evidence | open issues | next
 - #259 merged as 5962b90 after every CI check passed. Cloudflare deployment 38055321925 succeeded. Hosted chat release gate 38055467142 passed streaming and non-streaming with stored replies and successful repository search, served by Workers AI. That trace executed search only, so it does not prove live file reading/recovery; a targeted invalid-query + known-file verification was dispatched separately.
 - Final review caught a narrower retry gap: call-level deduplication did not remember invalid requests issued internally during query correction. Added request-local, credential-separated memory for HTTP 400/422 search refusals. A later corrected call cannot resend a previously invalid upstream query; successful results remain fresh and are not cached. Scope remains authorized before lookup.
 - Evidence: production build and 462/462 web tests pass (two additional guard cases); removing internal refusal lookup causes the new regression to fail. Source restored. Follow-up CI/deployment and targeted hosted verification are tracked in its PR.
+
+## 2026-10-10 coder tool-name repair (#268)
+
+- Reported run 38112578914 spent 136.6 seconds in the native coder and ended with no edits; successful Actions completion is not evidence of completed test execution.
+- ProviderReadOnlyToolAgent now resolves exact offered/registered names first, then unique separator/camel-case and safe repository namespace aliases, including source-file read spelling. Ambiguous or unoffered names return only offered tools. No edit-distance guessing, argument rewriting, extra model call, policy bypass or tool replay. Existing registry still enforces scope, capability policy, approval, validation and redaction.
+- Existing tool.requested audit records canonical toolId plus requestedToolId and repair=automatic. Boundary regressions cover reported spellings, one tool execution in two model turns, ambiguity, hidden tools, denial, approval and scope mismatch.
+- Validation pending existing PR CI: local execution service failed before starting even Get-Location (helper_unknown_error: setup refresh had errors). Do not count tests as passed or this change as deployed. Operational test-only routing and truthful no-change completion remain separate work; active #253 owns runner/container validation. Narrow stale #200 dispatch overlap documented without replacing its provider work.
+# 2026-10-11 — Hosted new-project creation and streaming scroll lock
+
+User-requested workstream, issue #94, branch `codex/new-project-chat-scroll`.
+Based on main `530cb6b`; implemented in an isolated checkout to preserve other
+uncommitted work. Hosted chat now exposes structured create/status tools and
+actual safe capability state. `new_project_task` routes to a separate Genesis
+workspace, including direct coder-task requests, never the selected Atlas
+repository. Execution reuses Genesis planning/executor, curated templates,
+publisher, repository creator and exact-commit approvals. Added durable
+idempotent operation receipts, authenticated owner-only HTTPS/node boundaries,
+account credential distinction, repository readback and authenticated push
+verification. Blocked planning can resume into publication; interrupted
+external operations never replay automatically. Chat displays confirmed
+operation progress and URL without treating dispatch as completion.
+
+Replaced page-level streaming scrollIntoView with actual-container following:
+manual history reading locks across tokens/completion, near-bottom scrolling
+resumes, send/thread/new reset, Jump to latest restores following.
+
+Validation: web suite 471/471 passing; local-control 663 passing, 20 skipped
+(683 total); production build, typecheck, lint and diff checks passed. Focused
+integration includes actual workspace/check/test/build, model tool registry,
+real HTTP routes, mocked GitHub creation/readback/push, allow/ask/deny,
+permissions, failed pushes, visibility mismatch, concurrent retries, restart,
+blocked-plan continuation and approved-commit versus newer HEAD. Scroll guard
+mutation was detected. No real external repository or deployment was created.
+
+Protected credential/publishing boundaries require owner review; do not
+auto-merge. See `docs/HOSTED-PROJECT-CREATION.md` for configuration/limitations.
+Genesis bridge is deployment-operator-only and needs a configured
+Worker URL/token plus a trusted HTTPS execution node. The owner subsequently
+authorized deployment secret synchronization and requested push/merge of
+PR #272. The workflow now maps and uploads configured Genesis connection
+secrets with a parity regression test. No HTTPS node URL is configured and
+credential provisioning has not run: automatic approval review requires
+specific approval to store the existing GitHub OAuth credential in the local
+vault and transfer the existing owner token to GitHub/Cloudflare. The node's
+existing remote-owner opt-in remains required. Existing PR #101 proposes a separate
+hosted seeding implementation; this work reuses the requested local Genesis
+runtime and should be reconciled during review. Other open task-dispatch/UI
+work may require integration conflict resolution. No TODO file was created.
+
+## 2026-10-15 — chat responsiveness rescue (issue #283)
+
+A streamed Markdown fence such as ```typescript title="app.ts" could prevent
+the paragraph cursor from advancing, leaving React in an infinite synchronous
+render loop. Added a mandatory progress fallback, support for longer fences and
+info strings, and memoization so completed messages are not parsed again for
+every new token. Added a VM-isolated regression that timed out on the original
+renderer and now renders every streamed prefix, plus a real ChatSection browser
+fixture covering the triggering fence on desktop and mobile.
+
+Genesis capability reads now have a 1.5-second deadline covering both headers
+and JSON parsing, rather than blocking every owner chat turn for the operation's
+15-second deadline. Cancellation-ignoring adapters are also bounded. Actual
+project creation/status retain their existing operation deadline; permissions,
+owner checks, publication policy and provider selection are unchanged.
+
+Evidence: production build, typecheck and lint passed; full web suite 483 passed,
+1 optional browser skip, 0 failures. The optional real Chromium gate then ran
+explicitly and passed on desktop/mobile with no page errors. Focused regressions
+20/20 passed. No claim of measured live-model latency or completed business
+operations. Existing provider repair #240 and durable dispatch #270 remain
+separate workstreams; this patch does not overwrite their files.
+
+## 2026-10-16 — hosting request responsiveness (#292 / PR #293)
+
+From current main, isolated branch codex/infrastructure-deadlines in .worktrees/atlas-infrastructure-deadlines. The existing Cloudflare/Vercel/Git infrastructure client only signalled abort and retained caller listeners. Added a complete response deadline, cancellation before external execution, and listener cleanup. Possibly accepted writes are not automatically retried. Five negative regressions failed before and pass after; existing infrastructure integration tests pass (14/14). The real daemon HTTP end-to-end journey passed every step, including approvals, pause/resume/cancel and crash recovery, using its scripted model.
+
+Full local-control suite is still running locally (session 35506, output .infra-suite.log); required cross-platform CI is pending. Follow through CI and inspect the full local result before ordinary merge of #293. No live hosting changes made. Mission PR #291 latest full CI is green but still needs configured tenant-persistence review and migration application. Broader unattended cloud scheduling, cumulative spending and live business integrations remain incomplete.
+
+## 2026-10-16 — complete DNS outcome verification (issue #294)
+
+Current-main branch codex/dns-verification reuses .worktrees/atlas-infrastructure-deadlines after #293 merged. Cloudflare DNS apply compared only content, so the real infrastructure tool could claim an approved proxy change was verified when the provider retained the old setting. Read-back now checks record name/type, content, TTL and proxy state; DNS name casing and a trailing root dot are normalized. It retains observed state and performs no automatic additional writes.
+
+Four negative regressions failed on the original adapter, including the actual approved ToolRegistry plan/apply boundary. All six DNS tests and existing hosting integration/deadline tests now pass: 20/20. No live DNS changes, credential changes or approval-policy changes. Full cross-platform CI must pass before ordinary merge. Mission #291 integrated-main CI is green and still awaits configured persistence review. Broader cloud scheduler/business work remains incomplete.
+
+## 2026-10-16 — connected CRM contact workflow (issue #296)
+
+Branch codex/crm-contacts, based on current main a3b5932, reuses .worktrees/atlas-infrastructure-deadlines. Added optional HubSpot lookup and explicitly approved contact creation to the existing live workflow registration, using declared vault credentials and default-denied CRM capabilities. Independent read-back verifies new contacts; existing emails are reused without changing fields. No outreach, automatic write retries, account provisioning or policy grants. Active main/credential PR files were preserved.
+
+Seven focused CRM tests and real daemon boot tests pass, including actual HTTP transport, approval-before-credentials, provider error redaction and late-credential cancellation. Full local-control suite completed: 689 passed, 20 optional/environment skips, zero failures. The late-credential cancellation regression passed independently after that run began; cross-platform CI passed on PR #297. New credential integration needs configured review. No live CRM account/token was used; owner CRM preference question is pending, so HubSpot is provisional and live acceptance is externally blocked. See docs/CRM-CONTACT-WORKFLOW.md. Website inquiry intake, recurring operations and unattended cloud scheduling remain incomplete. Mission #291 integrated-main CI is green and still requires persistence review.
+
+CRM acceptance follow-up: added an authenticated real-daemon HTTP check proving both CRM tools are exposed through /v1/tools, remain denied by default, require write approval, and reveal no credential metadata. Eight focused CRM tests pass. Pushed to #297 for fresh CI; configured credential review and real account acceptance remain outstanding. No live CRM actions performed.
+
+CRM Windows acceptance follow-up: the fresh CI run timed out starting the new catalog daemon and both existing boot fixtures; Linux and all other jobs passed. Isolated local reproduction passed all three boot cases in about three seconds. Reused the existing daemon-boot fixture for every authenticated catalog/denial/metadata assertion and removed the extra process; startup deadlines and product checks were not relaxed. Seven CRM tests plus both real daemon boot cases pass (9/9). Pushed to #297 for fresh Windows CI; no merge or live CRM action.
+
+## 2026-10-16 — delegated cumulative spending (issue #298)
+
+Current-main branch codex/cumulative-task-budgets in .worktrees/atlas-infrastructure-deadlines extends the existing TaskBudget/executor boundary through tenant-scoped parentTaskId links. Sibling/nested executions share ancestor allowances; reservations check every scope before atomic usage/audit writes. Actual cost/token overruns are recorded honestly and block later reservations. No duplicate store, ledger, executor or task schema was introduced; #235-owned store/executor files are untouched.
+
+Four real SQLite/executor regressions failed before and pass after; six parent-budget cases include eight independent SQLite workers and corruption/rollback guards. Existing platform-core suite passes. Full local suite completed: 689 passed, 20 optional/environment skips, zero failures. PR #299 awaits required CI and spending-policy/rollout review. Historical descendant usage needs reconciliation or fresh task trees before rollout. This is not universal project/automation/provider monetary enforcement. See docs/CUMULATIVE-TASK-BUDGETS.md.
+
+CRM #297 latest complete CI passed, including the reused Windows daemon fixture; it still awaits configured credential review and selected CRM account. Mission #291 remains pending persistence review. No real CRM actions or external spending occurred.
+
+Budget rollout follow-up (#299): implemented an explicit dry-run-by-default historical reconciliation command using existing store methods. It handles mixed legacy direct usage and attributed descendant credits, avoids double counting on repeat/restart, validates tenant/database and parent chains, and commits usage plus credits/overspend audit together. No owned store/executor files changed. Twelve budget cases plus platform-core pass (32 focused checks), including actual CLI execution and rollback. Full suite is running (session 74140, .parent-budget-suite.log); fresh CI required. No real database reconciliation or spending occurred. Prior #299 CI passed; this expanded revision still needs policy/rollout review.
+
+Budget merge-gate correction (#299): verified actual CODEOWNERS and GitHub review state. The accounting/maintenance changes do not touch protected policy, identity, approval or isolation files; all CI passed and there is no blocking review. The earlier extra spending-review hold was an inference, not a configured requirement. Under the user’s existing full approvals, use the ordinary CI gate after this documentation correction. No production database maintenance is authorized by a code merge alone; the documented rollout remains separate.
+
+Budget #299 merged as ff1dd30ab67dcee34025944cc28b1a7ff71f8748 after all cross-platform CI passed. No production database reconciliation was run. Integrated into CRM #297, preserving both handoffs. CRM gate clarification: this adds consumers of the existing declared-secret/approval mechanisms, changes no credential infrastructure or grants, and touches no protected CODEOWNERS path. The earlier extra credential-review hold was inferred; use the actual ordinary CI/no-blocking-review gate under the existing user authorization. Live acceptance remains blocked by selected CRM configuration.
+
+## 2026-10-17 — customer-safe chat activity and readiness audit (#309)
+
+Branch codex/customer-chat-privacy starts at current main 1c3be5b in the reusable isolated infrastructure worktree. Existing SSE serialization now drops internal thinking, raw errors, tool previews/labels, agent reports and diagnostic completion metadata, retaining safe progress/recovery/approval state and validated customer repository links. Activity defaults collapsed with keyboard-accessible plus/minus. Active provider route/ChatSection ownership is preserved. Nine focused tests pass; real Chromium desktop/mobile keyboard/privacy gate passed; typecheck passed. Changed-file lint and production build are running (session 11047). No deployment or global confidentiality claim.
+
+Read-only hosted audit confirms public/legal/deletion pages 200 and both mobile association URLs 404. Mobile native projects exist but www contains an initializing placeholder and no hosted server URL is configured. Detailed scoped findings and release blockers: docs/CUSTOMER-READINESS-AUDIT.md. Next: CI and full web acceptance, coordinate non-streaming/history/project/API diagnostics with existing owners, then cloud networking and real native packaging/device/store gates.
+
+Customer activity acceptance follow-up (#310): production build passed and the full web suite found one fixture failure: the real file-preview test loads Workspace from a data URL and explicitly stubs CSS imports, so the added stylesheet needed the same mapping. Added that mapping without changing preview assertions. Browser-test lint also identified an empty optional-import catch; documented it. All other full-suite cases passed (486 pass, two optional skips, one fixture failure); rerun the affected preview test and full suite before merge.
+## 2026-10-16 — Cloud coder recovery from Groq-only failure (#301)
+
+- Incident 38819478158: 23 tool turns, no edits, two missing-parent write refusals, then Groq HTTP 413 (8503 requested / 8000 TPM). Exact work-step duration 11m48s; result reporting succeeded.
+- Branch codex/cloud-coder-repair: approved creates now materialize confined parent directories; preview remains read-only, symlinks and tampered approvals remain refused. Rollback restores files and may leave empty new directories.
+- Added fixed-origin OpenAI/Workers AI CLI providers, exact tool-name translation, bounded responses/cancellation, sanitized errors and existing-budget fallback. The Actions coder and PR-steward pass scoped provider credentials only to trusted coder steps. Owner explicitly approved the steward credential extension on October 16. Custom/private endpoints gain no implicit public fallback; none disables all fallbacks.
+- Added bounded asynchronous subprocess capture and metadata-only 15-second CLI / 30-second runner progress. Timeout/output-limit failures cannot be parsed as successful completion.
+- Evidence: initial nested-create regression failed before repair; final affected CLI 83 total / 81 pass / 2 POSIX skips; runner/local 76/76; complete Windows CLI 528 total / 520 pass / 4 fail / 4 skip. The same four failures reproduce on unchanged baseline (line endings, Windows file URL, two POSIX-mode assumptions). No unrelated test weakened. Workflow validation uses the actual Git Bash interpreter because Windows bash resolves to unavailable WSL by default.
+- Cloud fallback integration uses simulated HTTP 413 → Workers AI then writes five framing-site files. Actual CLI subprocess creates nested HTML/CSS and returns edit receipts. These do not prove live model quality or website deployment. Existing cloud secret names were inspected, never values.
+- No live configuration switch, credential provisioning, production publish or merge performed. See docs/CLOUD-CODER-RECOVERY.md. Pending: protected review and required CI, then real cloud coder acceptance and the framing-site retry. Reconcile older #200 provider changes rather than replacing its billing/local-provider work.
+
+Customer prompt privacy follow-up (#310): found the system prompt unconditionally included Atlas source paths, infrastructure architecture and credential deployment instructions for non-owners. Added a failed-before test and now include those blocks only for the existing server-verified owner; non-owner prompts omit raw capability diagnostics and request safe progress/error summaries. Sixteen focused prompt/privacy tests pass. This is context minimization, not a replacement for tool authorization or a model confidentiality guarantee. Integrated prior full web run: 492 passed, two optional skips; build/typecheck/lint passed. All prior cross-platform CI jobs were green except still-running Windows/Genesis; the expanded prompt revision requires fresh CI.
+
+Prompt integration repair (#310): complete web validation caught an existing Genesis contract requiring publish policy ask in customer context. Restored only explicitly selected availability booleans and the known approval policy enum, preserving required approval semantics while excluding internal reason/credential/build fields. Existing project-tools tests remain unchanged. Fresh focused/full validation and CI required; do not merge the earlier failed web revision.
