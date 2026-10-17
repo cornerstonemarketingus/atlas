@@ -25,6 +25,7 @@ import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
 import { BusinessService } from "./agent/business-service.mjs";
+import { registerBusinessTools } from "./agent/tools/business-tools.mjs";
 import { createMissionEvidenceVerifier } from "./agent/mission-evidence.mjs";
 import { createLaneApplier } from "./agent/lane-apply.mjs";
 import { AutomationService, AutomationStore } from "./platform/automations/service.mjs";
@@ -426,6 +427,9 @@ function buildToolRegistry() {
   // Genesis is created after the registry; the tools look it up when they run.
   registerGenesisTools(registry, () => genesis, () => genesisPublisher);
   registerWorkflowTools(registry);
+  // Deferred lookup: BusinessService is initialized after the shared registry.
+  // business.read remains denied until the owner opts in through Policies.
+  registerBusinessTools(registry, () => businessService);
   // The browser family is registered whether or not a companion is attached:
   // its tools then fail closed with "no browser on this machine", which is a
   // better answer than the model never learning the capability exists.
