@@ -146,7 +146,7 @@ test("production adapter forwards authorization and requires both run success an
       const task = await request.json(); const taskId = randomUUID(); const conversationId = randomUUID(); const correlationId = request.headers.get("x-atlas-correlation-id");
       sqlite.prepare("INSERT INTO conversations(id,tenant_id,requested_by,title,repository,branch) VALUES (?,1,'operator','mission',?,?)").run(conversationId, task.repository, task.branch);
       sqlite.prepare("INSERT INTO tasks(task_id,tenant_id,requested_by,repository,branch,mode,objective,conversation_id,correlation_id,github_run_id) VALUES (?,1,'operator',?,?,?,?,?,?,123)").run(taskId, task.repository, task.branch, task.mode, task.objective, conversationId, correlationId);
-      return Response.json({ taskId, correlationId, recorded: true }, { status: 202 });
+      return Response.json({ taskId, correlationId, runner: "managed", recorded: true }, { status: 202 });
     },
     githubAppConfiguration: () => ({ configured: false }), platformGitHubToken: () => "server-token",
     workflowRunRequest: input => { assert.equal(input.token, "server-token"); assert.equal(input.repository, "owner/repo"); return input; },
@@ -196,6 +196,7 @@ test("a paid allowance refusal fails immediately without uncertain recovery or a
   const handle = await runtime({ getD1: () => d1, missionRoutes,
     authenticatedAccount: async () => ({ userId: "operator" }),
     resolveTenantContext: async () => scope, tenantScope: value => value,
+    githubAppConfiguration: () => ({ configured: false }), platformGitHubToken: () => "server-token",
     startTask: async () => { calls++; return Response.json({ message: "Monthly task allowance exhausted" }, { status: 402 }); },
   });
   const input = plan();
@@ -227,3 +228,32 @@ test("saved mission history remains reachable past 30 records with scoped stable
     assert.equal((await handle(new Request(`https://atlas.test/api/missions?cursor=${bad}`))).status, 400);
   }
 });
+
+for (const scenario of ["unconfigured", "unrecorded", "private"]) {
+  test(`mission runtime avoids unsupported or unconfirmed execution: ${scenario}`, async t => {
+    const { d1, sqlite } = fixture(t); let calls = 0; const taskId = randomUUID();
+    const handle = await runtime({ getD1: () => d1, missionRoutes,
+      authenticatedAccount: async () => ({ userId: "operator" }), resolveTenantContext: async () => scope, tenantScope: value => value,
+      githubAppConfiguration: () => ({ configured: false }), platformGitHubToken: () => scenario === "unconfigured" ? null : "server-token",
+      startTask: async request => {
+        calls++; const correlationId = request.headers.get("x-atlas-correlation-id");
+        if (scenario === "private") {
+          const body = await request.json(); const conversationId = randomUUID();
+          sqlite.prepare("INSERT INTO conversations(id,tenant_id,requested_by,title,repository,branch) VALUES (?,1,'operator','private',?,?)").run(conversationId, body.repository, body.branch);
+          sqlite.prepare("INSERT INTO tasks(task_id,tenant_id,requested_by,repository,branch,mode,objective,conversation_id,correlation_id,execution_provider) VALUES (?,1,'operator',?,?,?,?,?,?,'private')").run(taskId, body.repository, body.branch, body.mode, body.objective, conversationId, correlationId);
+        }
+        return Response.json({ taskId, correlationId, runner: scenario === "private" ? "private" : "managed", recorded: scenario !== "unrecorded" }, { status: 202 });
+      },
+    });
+    const input = plan();
+    const post = (body, id) => handle(new Request("https://atlas.test/api/missions" + (id ? `/${id}` : ""), { method: "POST", body: JSON.stringify(body) }), id ?? null);
+    await post(input);
+    const mission = (await (await post({ action: "advance" }, input.requestId)).json()).mission;
+    assert.equal(mission.steps[0].state, scenario === "unconfigured" ? "failed" : "uncertain");
+    if (scenario === "unconfigured") { assert.equal(mission.status, "failed"); assert.match(mission.steps[0].message, /managed GitHub Actions/); }
+    else { assert.equal(mission.steps[0].taskId, taskId); assert.match(mission.steps[0].message, /no retry was sent/); }
+    const reconciled = (await (await post({ action: "advance" }, input.requestId)).json()).mission;
+    assert.equal(reconciled.steps[0].state, mission.steps[0].state, "private receipts cannot be promoted to managed execution");
+    assert.equal(calls, scenario === "unconfigured" ? 0 : 1);
+  });
+}

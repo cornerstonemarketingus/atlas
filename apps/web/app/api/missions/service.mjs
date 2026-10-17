@@ -154,7 +154,8 @@ export class CloudMissions {
       if (target.state !== "dispatching") return latest;
       if (result?.taskId && result.correlationId === next.correlationId) {
         target.taskId = result.taskId;
-        target.state = "submitted";
+        target.state = result.recorded === false ? "uncertain" : "submitted";
+        target.message = result.recorded === false ? (result.message ?? "The accepted task has no confirmed durable receipt. No retry was sent.").slice(0, 500) : null;
       } else if (result?.rejected === true) {
         target.state = "failed";
         if (latest.status === "running") {

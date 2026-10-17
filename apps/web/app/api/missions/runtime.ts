@@ -24,21 +24,26 @@ export const handleMission = missionRoutes({
     return tenant ? tenantScope(tenant) : null;
   },
   dispatch: async (request: Request, _scope: Scope, step: Step) => {
+    if (!githubAppConfiguration().configured && !platformGitHubToken()) return { rejected: true, message: "Cloud missions require managed GitHub Actions execution. Configure the managed runner before starting a mission." };
     const response = await startTask(forwarded(request, "/api/tasks", { repository: step.repository, branch: step.branch, mode: step.mode, objective: step.objective }, step.correlationId));
     if (!response.ok) {
       const rejected = [400, 401, 402, 403, 404, 422, 429].includes(response.status);
       const detail = rejected ? await response.json().catch(() => ({})) as { message?: string } : {};
       return { rejected, ...(typeof detail.message === "string" ? { message: detail.message.slice(0, 500) } : {}) };
     }
-    return response.json();
+    const result = await response.json() as { taskId?: string; correlationId?: string; runner?: string; recorded?: boolean };
+    if (result.runner !== "managed" || result.recorded !== true) return { ...result, recorded: false, message: result.runner !== "managed"
+      ? "Work was accepted by an unsupported runner. Its outcome cannot be verified here; no retry was sent."
+      : "Work was accepted, but its durable task receipt was not confirmed. Reconcile before continuing; no retry was sent." };
+    return result;
   },
   receipt: async (_request: Request, scope: Scope, correlationId: string, step: Step) => {
-    const rows = await getD1().prepare("SELECT task_id AS taskId FROM tasks WHERE tenant_id=? AND requested_by=? AND correlation_id=? AND repository=? AND branch=? AND mode=? AND objective=? LIMIT 2")
+    const rows = await getD1().prepare("SELECT task_id AS taskId FROM tasks WHERE execution_provider='managed' AND tenant_id=? AND requested_by=? AND correlation_id=? AND repository=? AND branch=? AND mode=? AND objective=? LIMIT 2")
       .bind(scope.tenantId, scope.principal, correlationId, step.repository, step.branch, step.mode, step.objective).all<{ taskId: string }>();
     return rows.results.length === 1 ? rows.results[0] : null;
   },
   outcome: async (_request: Request, scope: Scope, taskId: string, step: Step) => {
-    const task = await getD1().prepare("SELECT github_run_id AS runId FROM tasks WHERE task_id=? AND tenant_id=? AND requested_by=? AND correlation_id=? AND repository=? AND branch=? AND mode=? AND objective=?")
+    const task = await getD1().prepare("SELECT github_run_id AS runId FROM tasks WHERE execution_provider='managed' AND task_id=? AND tenant_id=? AND requested_by=? AND correlation_id=? AND repository=? AND branch=? AND mode=? AND objective=?")
       .bind(taskId, scope.tenantId, scope.principal, step.correlationId, step.repository, step.branch, step.mode, step.objective).first<{ runId: number | null }>();
     if (!task?.runId) return { status: "pending" };
     let run;
