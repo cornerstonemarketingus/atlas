@@ -1,10 +1,11 @@
+import { customerFailure } from '../../customer-failure.mjs';
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { subscriptions } from "../../../../db/schema";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { stripeConfiguration, createPortalSession } from "../stripe.mjs";
 
-export async function POST(request: Request) {
+async function handlePost(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account || account.dbUserId === null) {
     return Response.json({ message: "Sign in with GitHub is required." }, { status: 401 });
@@ -22,7 +23,12 @@ export async function POST(request: Request) {
     const origin = new URL(request.url).origin;
     const url = await createPortalSession(configuration, { customerId: subscription.stripeCustomerId, returnUrl: `${origin}/` });
     return Response.json({ url });
-  } catch (error) {
-    return Response.json({ message: error instanceof Error ? error.message : "Billing portal session creation failed." }, { status: 502 });
+  } catch {
+    return customerFailure('portal', 502);
   }
+}
+
+export async function POST(request: Request) {
+  try { return await handlePost(request); }
+  catch { return customerFailure('portal'); }
 }
