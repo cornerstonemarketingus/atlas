@@ -40,6 +40,12 @@ try {
   try { simctl(['io', device.id, 'screenshot', resolve(output, 'failure.png')], 15000); }
   catch { /* Keep the original failure even if the simulator is unresponsive. */ }
   throw error;
-} finally {
+ } finally {
+  // This CI app has no account, pairing code or credential. Keep bounded
+  // native process logs in CI artifacts, never in the customer interface.
+  try {
+    const logs = simctl(['spawn', device.id, 'log', 'show', '--last', '2m', '--style', 'compact', '--predicate', 'process == "App"'], 15000);
+    writeFileSync(resolve(output, 'native-process.log'), logs.slice(-200000));
+  } catch { /* Simulator logs are supplemental, never acceptance. */ }
   if (startedHere) { try { simctl(['shutdown', device.id]); } catch { /* Preserve the actual launch failure when cleanup also fails. */ } }
 }
