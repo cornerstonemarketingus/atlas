@@ -48,6 +48,21 @@ preparation artifacts exist, not that hosting is live, CRM delivery succeeded or
 outreach was sent. Evidence checks validate patch contents, not test
 results or business performance. The daemon verifies required patch files;
 custom MissionService embedders must supply their own evidence verifier.
+After artifact verification the persisted child result includes an authoritative
+`verification` receipt: schema version, evaluator, and actual patch digests/sizes.
+It always records validation as `unavailable` and live outcomes as
+`not-evaluated`; executor-provided `verification` claims are replaced, and
+non-patch evidence is labeled `executor-reported`. Dependency handoffs receive
+the same receipt. Requiring `validation` evidence fails closed even if an
+executor reports passing tests. Ordinary missions without artifact requirements
+retain their existing behavior.
+
+The existing CLI has structured validation internally, but the local daemon
+runner receives a process exit code and bounded combined text. Neither is an
+independent test receipt: an exit-zero run can have no applicable checks.
+A future trusted adapter must evaluate actual post-change validation results
+and bind them to the reviewed patch before this boundary can report test
+success. Live deployment and business checks require their own adapters.
 Existing tool approvals remain authoritative;
 plan instructions are not an authorization boundary for future executors.
 
