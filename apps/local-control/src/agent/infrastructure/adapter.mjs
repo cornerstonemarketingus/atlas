@@ -80,29 +80,44 @@ export function createApiClient({ root, headers = {}, fetchImpl = fetch, timeout
     }
     if (url.protocol !== "https:") throw new InfrastructureError("INSECURE_ENDPOINT", "Infrastructure APIs must be reached over HTTPS.");
 
+    if (signal?.aborted) throw new InfrastructureError("REQUEST_CANCELLED", "Infrastructure request cancelled before execution.");
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    signal?.addEventListener("abort", () => controller.abort(), { once: true });
+    let timer; let onAbort;
+    const interrupted = new Promise((_, reject) => {
+      onAbort = () => {
+        reject(new InfrastructureError("REQUEST_CANCELLED", "Infrastructure request cancelled. An accepted operation may still finish; inspect its status before retrying."));
+        controller.abort();
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      timer = setTimeout(() => {
+        reject(new InfrastructureError("REQUEST_TIMEOUT", "Infrastructure request timed out. Its outcome may be uncertain; inspect its status before retrying."));
+        controller.abort();
+      }, timeoutMs);
+    });
     try {
-      const response = await fetchImpl(url, {
-        method,
-        signal: controller.signal,
-        headers: { accept: "application/json", ...(body ? { "content-type": "application/json" } : {}), ...headers },
-        ...(body ? { body: JSON.stringify(body) } : {}),
-      });
-      const text = await response.text();
-      const payload = text.length > 0 ? safeJson(text) : null;
-      if (!response.ok) {
-        // The provider's own message is surfaced; the request headers, which
-        // carry the token, never are.
-        throw new InfrastructureError(
-          response.status === 401 || response.status === 403 ? "NOT_AUTHORIZED" : "REQUEST_FAILED",
-          `${method} ${url.pathname} returned HTTP ${response.status}: ${describeError(payload) ?? "no detail"}`,
-        );
-      }
-      return payload;
+      // Include body consumption, even when a transport ignores AbortSignal.
+      return await Promise.race([interrupted, (async () => {
+        const response = await fetchImpl(url, {
+          method,
+          signal: controller.signal,
+          headers: { accept: "application/json", ...(body ? { "content-type": "application/json" } : {}), ...headers },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+        const text = await response.text();
+        const payload = text.length > 0 ? safeJson(text) : null;
+        if (!response.ok) {
+          // The provider's own message is surfaced; the request headers, which
+          // carry the token, never are.
+          throw new InfrastructureError(
+            response.status === 401 || response.status === 403 ? "NOT_AUTHORIZED" : "REQUEST_FAILED",
+            `${method} ${url.pathname} returned HTTP ${response.status}: ${describeError(payload) ?? "no detail"}`,
+          );
+        }
+        return payload;
+      })()]);
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
     }
   };
 }

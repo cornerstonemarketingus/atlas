@@ -1,5 +1,8 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createScrollFollow } from "./scroll-follow.mjs";
+import "./scroll-follow.css";
+import "./activity-disclosure.css";
 import { DiffLines, MessageBody } from "./MessageBody.js";
 
 /**
@@ -33,16 +36,16 @@ const AGENT_MARK: Record<string, string> = { planning: "◌", running: "●", ve
 const AGENT_STATE: Record<string, string> = { planning: "planning", running: "working", verifying: "checking its work", done: "verified", unverified: "unverified", failed: "failed", skipped: "skipped" };
 
 /** Tool steps, optionally folded into "N steps". */
-export function ToolSteps({ steps, collapsed = false }: { readonly steps: ToolStep[]; readonly collapsed?: boolean }) {
+export function ToolSteps({ steps, collapsed = true }: { readonly steps: ToolStep[]; readonly collapsed?: boolean }) {
   const list = <ol className="activity-steps tool-steps">
     {steps.map((step) => <li key={step.id} className={step.state}><span aria-hidden="true">{STEP_MARK[step.state]}</span>{step.label}</li>)}
   </ol>;
   if (!collapsed) return list;
-  return <details className="thinking-block"><summary>{steps.length === 1 ? "1 step" : `${steps.length} steps`}</summary>{list}</details>;
+  return <details className="thinking-block activity-disclosure"><summary>{steps.length === 1 ? "1 step" : `${steps.length} steps`}</summary>{list}</details>;
 }
 
 /** The agent family working on a reply, each agent with its own tool steps. */
-export function AgentTree({ agents, steps, collapsed = false }: { readonly agents: AgentNode[]; readonly steps: ToolStep[]; readonly collapsed?: boolean }) {
+export function AgentTree({ agents, steps, collapsed = true }: { readonly agents: AgentNode[]; readonly steps: ToolStep[]; readonly collapsed?: boolean }) {
   if (!agents.length) return null;
   const children = (parentId: string | null) => agents.filter((agent) => agent.parentId === parentId);
   const render = (agent: AgentNode) => {
@@ -62,7 +65,7 @@ export function AgentTree({ agents, steps, collapsed = false }: { readonly agent
   const tree = <ul className="agent-tree">{children(null).map(render)}</ul>;
   if (!collapsed) return tree;
   const count = agents.filter((agent) => agent.depth > 0).length;
-  return <details className="thinking-block"><summary>Agent team · {count} agent{count === 1 ? "" : "s"}</summary>{tree}</details>;
+  return <details className="thinking-block activity-disclosure"><summary>Agent team · {count} agent{count === 1 ? "" : "s"}</summary>{tree}</details>;
 }
 
 function time(at: number) {
@@ -74,27 +77,58 @@ export function WorkPanel({ tab, onTab, onClose, log, items, selectedId, onSelec
   readonly tab: "terminal" | "files"; readonly onTab: (tab: "terminal" | "files") => void; readonly onClose: () => void;
   readonly log: LogLine[]; readonly items: WorkItem[]; readonly selectedId: string | null; readonly onSelect: (id: string) => void;
 }) {
-  const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { if (tab === "terminal") endRef.current?.scrollIntoView({ block: "end" }); }, [log.length, tab]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const getScrollContainer = useCallback(() => scrollRef.current, []);
+  // The controller stores this callback; it reads the DOM only in effects/events.
+  // eslint-disable-next-line react-hooks/refs
+  const [follow] = useState(() => createScrollFollow(getScrollContainer));
+  const [following, setFollowing] = useState(true);
+  const touchY = useRef<number | null>(null);
+  function pauseFollowing() { follow.pause(); setFollowing(false); }
+  function selectTab(next: "terminal" | "files") { follow.reset(); setFollowing(true); onTab(next); }
+  useEffect(() => { if (tab === "terminal") follow.contentChanged(); }, [log, tab, follow]);
+  useEffect(() => {
+    const observer = new ResizeObserver(() => follow.contentChanged());
+    if (scrollRef.current) observer.observe(scrollRef.current);
+    if (contentRef.current) observer.observe(contentRef.current);
+    return () => observer.disconnect();
+  }, [tab, follow]);
   const selected = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
   const changed = items.filter((item) => item.kind === "diff");
   const read = items.filter((item) => item.kind !== "diff");
   return <aside className="atlas-side-panel" aria-label="Atlas work panel">
     <div className="atlas-side-panel-bar">
       <div role="tablist" aria-label="Panel views">
-        <button role="tab" aria-selected={tab === "terminal"} className={tab === "terminal" ? "active" : ""} onClick={() => onTab("terminal")}>Terminal</button>
-        <button role="tab" aria-selected={tab === "files"} className={tab === "files" ? "active" : ""} onClick={() => onTab("files")}>Files{items.length ? ` · ${items.length}` : ""}</button>
+        <button role="tab" aria-selected={tab === "terminal"} className={tab === "terminal" ? "active" : ""} onClick={() => selectTab("terminal")}>Terminal</button>
+        <button role="tab" aria-selected={tab === "files"} className={tab === "files" ? "active" : ""} onClick={() => selectTab("files")}>Files{items.length ? ` · ${items.length}` : ""}</button>
       </div>
+      {tab === "terminal" && !following && <button className="jump-to-latest" type="button"
+        onClick={() => { follow.jump(); setFollowing(true); }}>Jump to latest activity</button>}
       <button className="atlas-side-panel-close" aria-label="Close panel" onClick={onClose}>×</button>
     </div>
-    {tab === "terminal" ? <div className="terminal" role="log" aria-live="polite">
+    {/* Keyboard focus allows reading the scrollable activity log without a pointer. */}
+    {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex, jsx-a11y/no-noninteractive-element-interactions */}
+    {tab === "terminal" ? <div className="terminal" role="log" aria-live="polite" aria-label="Activity log" tabIndex={0}
+      ref={scrollRef} onScroll={() => setFollowing(follow.onScroll())}
+      onWheel={(event) => { if (event.deltaY < 0) pauseFollowing(); }}
+      onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? null; }}
+      onTouchMove={(event) => {
+        const y = event.touches[0]?.clientY;
+        if (y !== undefined && touchY.current !== null && y > touchY.current) pauseFollowing();
+        touchY.current = y ?? null;
+      }}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) pauseFollowing();
+      }}>
+      <div ref={contentRef}>
       {log.length === 0 && <p className="terminal-empty">$ waiting for Atlas… every agent, tool and run step appears here as it happens.</p>}
       {log.map((line) => <div key={line.id} className={`terminal-line term-${line.kind} ${line.state ? `term-${line.state}` : ""}`}>
         <span className="term-time">{time(line.at)}</span>
         {line.who && <span className="term-who">{line.who}</span>}
         <span className="term-text">{line.text}</span>
       </div>)}
-      <div ref={endRef} />
+      </div>
     </div> : <div className="files-view">
       <div className="files-list" role="navigation" aria-label="Files">
         {items.length === 0 && <p className="terminal-empty">Files Atlas reads or changes show up here.</p>}

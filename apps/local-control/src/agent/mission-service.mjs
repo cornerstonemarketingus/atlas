@@ -28,7 +28,7 @@ export class MissionService {
   #decide;
 
   /** `decide({ objective, repository })` → { branch, variants, reasons } for strategy "auto" (the kernel's branching). */
-  constructor({ store, execute, defaultConcurrency = DEFAULT_BATCH_SIZE, decide = null }) {
+  constructor({ store, execute, verifyEvidence = null, defaultConcurrency = DEFAULT_BATCH_SIZE, decide = null }) {
     this.#decide = decide;
     if (!store || typeof store.saveMission !== "function") throw new Error("A durable mission store is required.");
     if (typeof execute !== "function") throw new Error("A mission child executor is required.");
@@ -36,7 +36,11 @@ export class MissionService {
       throw new Error("defaultConcurrency must be an integer from 1 to 8.");
     }
     this.#store = store;
-    this.#execute = execute;
+    if (verifyEvidence !== null && typeof verifyEvidence !== "function") throw new Error("A mission evidence verifier must be a function.");
+    this.#execute = verifyEvidence ? async context => {
+      const result = await execute(context);
+      return verifyEvidence({ child: context.child, result });
+    } : execute;
     this.#defaultConcurrency = defaultConcurrency;
   }
 

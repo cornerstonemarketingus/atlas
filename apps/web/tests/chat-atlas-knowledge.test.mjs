@@ -93,7 +93,9 @@ test("the system prompt tells the model to choose the capability itself and to b
   const prompt = atlasSystemPrompt({ isOwner: true });
   assert.match(prompt, /never ask them to pick a mode/u);
   assert.match(prompt, /"computer" does browser or desktop work/u);
-  assert.match(prompt, /every Monday/u);
+  assert.match(prompt, /schedules require separate configured capabilities/u);
+  assert.match(prompt, /workspace_create_project/u);
+  assert.match(prompt, /execution_node_not_configured/u);
 });
 
 test("memory digest recalls other conversations and runs, clipped and capped", () => {
