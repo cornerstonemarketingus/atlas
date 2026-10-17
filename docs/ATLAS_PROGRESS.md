@@ -1,5 +1,25 @@
 # Atlas master implementation progress
 
+## 2026-10-17 — execution-claims integration (#277 / #278)
+
+Integrated the validated #276 recovery parent, retaining current main's atomic
+billing, authorized coder provider fallback and all claim/workload/report gates.
+RequestHistory retains both the new response fencing and claim metadata display.
+No protected merge or policy weakening occurred.
+
+Final Worker build/typecheck/full lint pass; full web suite: 545 pass, four optional skips,
+no failures (549 total). All nine inherited recovery race guards pass. All 83
+runner/local-script tests and all ten mandatory workflow checks pass. The checker
+used bundled Python with PyYAML in ignored scratch space and installed Git Bash.
+No application dependency was added. The inherited #276 parent 5a9ba04 passed
+all 13 CI jobs; fresh integrated claims CI remains required.
+
+Fresh integrated claims CI and protected workflow/identity review remain open.
+JWT/key/run HTTP responses are controlled test fixtures, not a live cloud run.
+Next: integrate #282 result ownership against this parent; retain migration
+0019, rollout quiescence and existing sandbox/approval requirements. No production
+migration, credential transfer, real dispatch, provisioning or deployment.
+
 ## 2026-10-17 — request recovery integration (#275 / #276)
 
 Propagated main 1e0909f through existing dispatch and deduplication parents;

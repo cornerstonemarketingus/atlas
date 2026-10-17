@@ -2,7 +2,7 @@
 
 Initially reviewed 2026-10-16 against main `1c3be5b`; integration checkpoint
 2026-10-17 includes main `1e0909f` and the existing dispatch/request recovery
-stack through #276. This is an incremental inventory,
+stack through #278. This is an incremental inventory,
 not a certification that every source line or deployed integration was tested.
 Resume from ATLAS_PROGRESS.md and docs/PROGRESS.md. The owner's older checkout
 and unrelated changes were preserved in place; implementation uses an isolated worktree.
@@ -19,6 +19,7 @@ Windows; it is historical evidence, not the current-main release gate.
 | Shared inference contracts, quota and circuit logic | PARTIAL | `packages/atlas-inference/src`; hosted `api/inference/governor-client.mjs`, `worker/inference-governor*.mjs` | All CLI/local/cloud callers must share authorized budgets; durable waiting/resumption needs live outage acceptance |
 | Hosted cloud dispatch | PARTIAL | `apps/web/app/api/tasks`, `scripts/runner`, Actions workflow; open #270/#274/#276/#278/#282 | Integrate stacked changes, migrate and verify lost acknowledgements/stale attempts |
 | Saved-request discovery/reconnect | PARTIAL | #276 scoped list/detail API and RequestHistory; 537 web tests pass plus nine race guards and actual desktop/mobile browser acceptance | Fresh CI/review and deployed tenant/physical-phone acceptance; inspection never retries execution |
+| Hosted execution claims | PARTIAL | #278 claim API, trusted workflow gate and runner lease checks; 545 web and 83 runner/local tests pass; ten workflow checks pass | Fresh protected review/CI, result ownership #282, migration and real GitHub OIDC journey; expiry never permits automatic replay |
 | Durable hosted mission state | PARTIAL | Open #291; do not replace its implementation | Persistence integration and configured recovery acceptance |
 | Coding execution | PARTIAL | `packages/atlas-cli/src/agent/verified-coder-session.ts`, Actions runner | Real-model edit/test/repair/PR journey; isolated validation #253 remains open |
 | Native cloud execution worker | MISSING end-to-end service | Existing local runtime, worker registry and Actions adapter are reusable foundations | Linux container worker plus durable authenticated claims/artifacts, replacement-worker acceptance with PC offline |
