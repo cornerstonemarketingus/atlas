@@ -28,7 +28,34 @@ verifier reads each required patch from the configured artifact directory,
 checks its bounds and Git patch header, compares declared sizes/digests, and
 records its actual SHA-256 digest. Dependency results include artifact handoffs;
 agents must inspect them because isolated worktrees do not automatically merge.
-Budgets apply per launch, not cumulatively across all business missions.
+New businesses enforce cumulative execution allowances across their launches.
+Before MissionService can start work, a SQLite `BEGIN IMMEDIATE` transaction
+reserves every requested budget dimension against that business's lifetime
+allowance. Separate daemon connections cannot overcommit it. A launch can supply
+an optional `budget` object with smaller per-mission limits; omitted dimensions
+inherit the business limit. The local UI offers a percentage of all business
+limits. Default launch reserves the full business allowance.
+
+Business detail exposes `executionBudget`: limits, reserved, remaining,
+observedUsage, reservation count, uncertainMissions and historyUncertain.
+Reserved amounts are upper execution bounds, **not actual spending**. Observed
+usage comes from durable mission child ledgers and is a lower bound; missing
+provider cost telemetry must not be interpreted as free execution or a cash
+receipt. A crash between reservation and mission creation or a thrown launch
+acknowledgement leaves the allowance held and explicitly uncertain. No timeout,
+restart, completion, failure or cancellation releases it: terminal mission lanes
+can still be retried through the mission API with their original budgets.
+
+Reservations are bounded to 1,000 per business. At that bound, admission fails
+closed rather than deleting history and forgetting committed capacity. Businesses
+created before cumulative accounting have unknown historical usage and cannot
+launch further work; their records and responsibilities remain readable. To
+authorize new work, create a new business with an explicit new allowance. This
+does not reconcile, refund or erase the old business's spending. There is no
+automatic historical migration, allowance top-up, receipt reconciliation or
+reservation release endpoint in this milestone. These limits cover execution
+through BusinessService.launch, not purchases, external cash flows, or unrelated
+missions created directly through the mission API.
 
 Use `?template=self-improvement` on the plan preview or add
 `"template":"self-improvement"` to the launch body to prepare controlled Atlas
@@ -53,6 +80,6 @@ plan instructions are not an authorization boundary for future executors.
 
 Next integration work: connect conversation intake and a business UI, route
 operational steps through the authorized tool executor, verify receipts and live
-health checks, enforce cumulative business spending, dispatch recurring reviews
+health checks, reconcile actual business spending receipts, dispatch recurring reviews
 with leases and deduplication, and connect improvement proposals to protected
 repository review and deployment policies.
