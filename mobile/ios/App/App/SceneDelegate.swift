@@ -1,8 +1,6 @@
 import UIKit
 import Capacitor
-#if DEBUG
 import Security
-#endif
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
