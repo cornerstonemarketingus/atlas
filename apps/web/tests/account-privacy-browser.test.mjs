@@ -10,13 +10,14 @@ test('actual account component hides backend failures and recovers uncertain del
  await server.listen();t.after(()=>server.close());
  const browser=await playwright.chromium.launch({headless:true,...(process.env.ATLAS_TEST_BROWSER?{executablePath:process.env.ATLAS_TEST_BROWSER}:{})});t.after(()=>browser.close());
  const page=await browser.newPage({viewport:{width:390,height:844}});const errors=[];page.on('pageerror',error=>errors.push(error.message));
- let mode='failure',posts=0;
+ let mode='failure',posts=0,reads=0,record=null,statusUnavailable=false,stall=false;
  await page.route('**/api/account',route=>route.fulfill({json:{signedIn:true,tier:'free'}}));
  await page.route('**/api/billing/checkout',route=>route.fulfill({status:502,json:{message:'PRIVATE_STRIPE_SECRET /srv/atlas/internal'}}));
  await page.route('**/api/account/deletion',async route=>{
-  if(route.request().method()==='GET')return route.fulfill({json:{request:null}});
+  if(route.request().method()==='GET'){reads++;if(stall)return;return statusUnavailable?route.fulfill({status:503,json:{message:'PRIVATE_STATUS_FAILURE'}}):route.fulfill({json:{request:record}});}
   posts++;await new Promise(resolve=>setTimeout(resolve,100));
   if(mode==='failure')return route.fulfill({status:503,json:{message:'PRIVATE_DATABASE_SECRET /srv/atlas/internal'}});
+  if(mode==='lost'){record={status:'pending',requestedAt:'2026-10-17T12:00:00.000Z'};return route.abort('failed');}
   if(mode==='invalid')return route.fulfill({status:200,contentType:'text/html',body:'PRIVATE_GATEWAY_FAILURE'});
   return route.fulfill({status:201,json:{request:{status:'pending',requestedAt:'2026-10-17T12:00:00.000Z'}}});
  });
@@ -24,8 +25,17 @@ test('actual account component hides backend failures and recovers uncertain del
  await page.getByRole('button',{name:'Upgrade to Pro'}).click();await page.getByText('Billing is temporarily unavailable. Try again shortly.').waitFor();
  await page.getByLabel('Type DELETE to confirm').fill('DELETE');
  await page.locator('form').evaluate(form=>{form.requestSubmit();form.requestSubmit()});
- await page.getByText('We could not confirm your deletion request. Refresh the page before trying again.').waitFor();assert.equal(posts,1);assert.equal(await page.getByRole('button',{name:'Request account deletion'}).isEnabled(),true);
- mode='invalid';await page.getByRole('button',{name:'Request account deletion'}).click();await page.waitForFunction(()=>!document.querySelector('.danger-form button').disabled);assert.equal(posts,2);
+ await page.getByText('We could not confirm your deletion request. Refresh deletion status before trying again.').waitFor();assert.equal(posts,1);assert.equal(await page.getByRole('button',{name:'Request account deletion'}).isEnabled(),false);
+ await page.getByRole('button',{name:'Refresh deletion status'}).click();await page.waitForFunction(()=>!document.querySelector('.danger-form button').disabled);
+ mode='invalid';await page.getByRole('button',{name:'Request account deletion'}).click();await page.getByRole('button',{name:'Refresh deletion status'}).waitFor();assert.equal(posts,2);await page.getByRole('button',{name:'Refresh deletion status'}).click();await page.waitForFunction(()=>!document.querySelector('.danger-form button').disabled);
  assert.doesNotMatch(await page.locator('body').innerText(),/PRIVATE_|\/srv\/atlas/);
- mode='success';await page.getByRole('button',{name:'Request account deletion'}).click();await page.getByText('Deletion requested. We will remove eligible account data within 30 days.').waitFor();assert.equal(posts,3);assert.deepEqual(errors,[]);
+ mode='success';await page.getByRole('button',{name:'Request account deletion'}).click();await page.getByText('Deletion requested. We will remove eligible account data within 30 days.').waitFor();assert.equal(posts,3);
+ mode='lost';record=null;await page.reload();await page.getByLabel('Type DELETE to confirm').fill('DELETE');await page.getByRole('button',{name:'Request account deletion'}).click();
+ await page.getByRole('button',{name:'Refresh deletion status'}).waitFor();assert.equal(posts,4);assert.equal(await page.getByRole('button',{name:'Request account deletion'}).isEnabled(),false);
+ await page.getByRole('button',{name:'Refresh deletion status'}).click();await page.getByText(/Deletion requested on/).waitFor();assert.equal(posts,4);assert.equal(await page.locator('form').count(),0);
+ const beforeTheme=reads;await page.getByLabel('Theme').selectOption('dark');await page.waitForTimeout(100);assert.equal(reads,beforeTheme,'appearance changes do not re-read or overwrite deletion status');
+ record=null;statusUnavailable=true;await page.reload();await page.getByText('We could not load your deletion status. Refresh the status before submitting another request.').waitFor();await page.getByLabel('Type DELETE to confirm').fill('DELETE');assert.equal(await page.getByRole('button',{name:'Request account deletion'}).isEnabled(),false);
+ await page.locator('form').evaluate(form=>form.requestSubmit());await page.waitForTimeout(100);assert.equal(posts,4,'unknown initial status blocks mutations even on programmatic submission');
+ statusUnavailable=false;await page.getByRole('button',{name:'Refresh deletion status'}).click();await page.waitForFunction(()=>!document.querySelector('.danger-form button').disabled);assert.equal(posts,4);
+ stall=true;await page.reload();await page.getByText('We could not load your deletion status. Refresh the status before submitting another request.').waitFor({timeout:20000});assert.equal(posts,4,'stalled status read expires without a mutation');assert.deepEqual(errors,[]);
 });
