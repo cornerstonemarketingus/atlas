@@ -76,7 +76,7 @@ this document and issue #273 provide the implementation handoff.
 
 2026-10-17 integration: merged the updated durable-dispatch parent, preserving
 current-main task routing and the enforced uncertain-acknowledgement deadline.
-Fresh Worker build and typecheck passed. Full integrated web suite: 517 total,
+Fresh Worker build, typecheck and full web lint passed. Full integrated web suite: 517 total,
 515 passed, two optional skips, no failures. This includes actual migrated
 SQLite concurrent admission and the rebuilt authenticated Worker request/replay
 boundary. Fresh branch CI and the existing tenant-persistence review are required.

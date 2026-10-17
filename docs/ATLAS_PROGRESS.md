@@ -15,7 +15,7 @@ suite: 507 total, 505 pass, 2 optional skips, no failures. Runtime fix: f131c34.
 Fresh CI and the existing tenant-persistence review gate remain required.
 
 The updated parent was merged into existing #274. Its fresh Worker build and
-typecheck pass; full web suite: 517 total, 515 passed, two optional skips, no
+typecheck and full web lint pass; full web suite: 517 total, 515 passed, two optional skips, no
 failures. Same-key admission and authenticated reconnect/replay checks pass.
 Fresh CI and tenant-persistence review remain open. No replacement deduplication/billing system,
 production migration, live task dispatch, paid provisioning or deployment.

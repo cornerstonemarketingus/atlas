@@ -555,7 +555,7 @@ reused; no second scheduler, billing ledger or request-key mechanism added.
 Fresh Worker build and typecheck passed; full web suite: 517 total, 515 passed,
 two optional skips, zero failures. The rebuilt authenticated request endpoint
 replays after reconnect without another bill or dispatch; concurrent same-key
-requests enter admission once. Lint is still running at this checkpoint.
+requests enter admission once. Full web lint also passed.
 Fresh CI and tenant-persistence review remain required. No production migration,
 live GitHub dispatch, billing mutation, provisioning or deployment performed.
 Next: #270/#274 CI/review, then update #276 → #278 → #282 in dependency order.
