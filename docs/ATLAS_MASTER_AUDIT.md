@@ -1,6 +1,7 @@
 # Atlas implementation inventory
 
-Reviewed 2026-10-16 against main `1c3be5b`. This is an incremental inventory,
+Initially reviewed 2026-10-16 against main `1c3be5b`; integration checkpoint
+2026-10-17 includes main `af500709` and dispatch #270. This is an incremental inventory,
 not a certification that every source line or deployed integration was tested.
 Resume from ATLAS_PROGRESS.md and docs/PROGRESS.md. The owner's older checkout
 and unrelated changes were preserved in place; implementation uses an isolated worktree.
@@ -11,7 +12,7 @@ Current main CI run 38991786626 passed all 13 jobs, including Windows.
 
 | Area | Classification | Source/evidence | Remaining acceptance |
 |---|---|---|---|
-| Local inference SSE transport | BROKEN on baseline; fixed in this branch | `apps/local-control/src/agent/model-client.mjs`; `tests/model-stream.test.mjs`: original eight regressions failed, fixed transport passes | Required PR CI; configured real model acceptance |
+| Local inference SSE transport | COMPLETE at protocol boundary | `apps/local-control/src/agent/model-client.mjs`; `tests/model-stream.test.mjs`: original eight regressions failed; #307 merged with all 13 CI jobs passing | Configured real-model quality/reliability remains unverified |
 | Local conversations and restart persistence | PARTIAL | `agent/{runtime,session-store,conversation-executor}.mjs`; new actual SQLite restart regression plus existing conversation suite | Automatic capacity-wait recovery across all executors; no universal side-effect replay guarantee |
 | Shared inference contracts, quota and circuit logic | PARTIAL | `packages/atlas-inference/src`; hosted `api/inference/governor-client.mjs`, `worker/inference-governor*.mjs` | All CLI/local/cloud callers must share authorized budgets; durable waiting/resumption needs live outage acceptance |
 | Hosted cloud dispatch | PARTIAL | `apps/web/app/api/tasks`, `scripts/runner`, Actions workflow; open #270/#274/#276/#278/#282 | Integrate stacked changes, migrate and verify lost acknowledgements/stale attempts |
