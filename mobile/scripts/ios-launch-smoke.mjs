@@ -10,7 +10,7 @@ if (!statSync(app).isDirectory()) throw new Error('Compiled simulator app is mis
 const { appId } = JSON.parse(readFileSync('capacitor.config.json', 'utf8'));
 if (!/^[a-zA-Z0-9.]+$/.test(appId)) throw new Error('Invalid native bundle identifier');
 function simctl(args, timeout = 30000) {
-  return execFileSync('xcrun', ['simctl', ...args], { encoding: 'utf8', timeout });
+  return execFileSync('xcrun', ['simctl', ...args], { encoding: 'utf8', timeout, env: args[0] === 'launch' ? { ...process.env, SIMCTL_CHILD_ATLAS_NATIVE_SMOKE: '1' } : process.env });
 }
 const inventory = JSON.parse(simctl(['list', 'devices', 'available', '--json']));
 const candidate = Object.entries(inventory.devices).flatMap(([runtime, devices]) => devices.map(device => ({ ...device, runtime })))
