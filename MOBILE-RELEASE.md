@@ -110,3 +110,7 @@ with Xcode and a machine with Android Studio:
 - [ ] Accessibility, rotation, dark mode and large-text passes on both
       platforms.
 - [ ] Sign in with Apple, which is still the open P0 item above.
+
+### Paired launch follow-through — 2026-10-17
+
+A bundled pairing/count dashboard now replaces the placeholder on the native launch branch. See docs/MOBILE-PAIRED-LAUNCH.md. It requires the existing daemon behind a trusted HTTPS endpoint and stores the paired-device credential in the platform vault. Exact mobile approval decisions and hosted account login are still unavailable; owner-device review remains required. Local Chromium acceptance uses native-adapter emulation, not a physical-device/live-service result. The earlier native compiler artifacts predate this launcher and do not validate it.
