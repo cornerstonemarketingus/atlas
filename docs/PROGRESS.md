@@ -463,3 +463,23 @@ Budget rollout follow-up (#299): implemented an explicit dry-run-by-default hist
 Budget merge-gate correction (#299): verified actual CODEOWNERS and GitHub review state. The accounting/maintenance changes do not touch protected policy, identity, approval or isolation files; all CI passed and there is no blocking review. The earlier extra spending-review hold was an inference, not a configured requirement. Under the user’s existing full approvals, use the ordinary CI gate after this documentation correction. No production database maintenance is authorized by a code merge alone; the documented rollout remains separate.
 
 Budget #299 merged as ff1dd30ab67dcee34025944cc28b1a7ff71f8748 after all cross-platform CI passed. No production database reconciliation was run. Integrated into CRM #297, preserving both handoffs. CRM gate clarification: this adds consumers of the existing declared-secret/approval mechanisms, changes no credential infrastructure or grants, and touches no protected CODEOWNERS path. The earlier extra credential-review hold was inferred; use the actual ordinary CI/no-blocking-review gate under the existing user authorization. Live acceptance remains blocked by selected CRM configuration.
+
+## 2026-10-16 — local inference stream integrity (#300)
+
+Isolated branch codex/inference-quota-reliability, current main 1c3be5b. Fixed
+the existing local OpenAI-compatible client's CRLF/CR framing, multiline data,
+UTF-8 chunk retention and DONE termination. EOF without a completion receipt,
+empty/reasoning-only answers and malformed/oversized events fail explicitly.
+Interrupted tool fragments cannot reach execution. No pending routing/provider
+PR files were changed. Eight original regressions failed before the fix; 54
+focused tests and 63 inference foundation tests now pass, including real HTTP
+and actual SQLite close/reopen/retry with no partial tool execution. Full local
+suite and branch CI remain pending. No live model or production deployment.
+
+Master inventory, dependency order, evidence and deployment gates are in
+docs/ATLAS_{MASTER_AUDIT,IMPLEMENTATION_ROADMAP,PROGRESS,TEST_RESULTS,DEPLOYMENT}.md.
+Latest main CI 38991786626 is green, including Windows; old startup failure
+must not be reported as a fresh confirmed defect. Next: finish suite/CI for
+#300, then reconcile #270 → #274 → #276 → #278 → #282 and mission #291 with
+their existing owners, before adding a native Linux worker adapter. Universal
+provider wait/resume, cloud artifacts and desktop-offline acceptance remain open.
