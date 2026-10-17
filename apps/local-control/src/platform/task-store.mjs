@@ -783,7 +783,7 @@ export class PlatformTaskStore {
 
   #approvalFromRow(row) {
     // A pending approval past its deadline reads as expired even before anyone resolves it.
-    const expired = row.status === "pending" && row.expires_at && row.expires_at <= this.#now();
+    const expired = ["pending", "approved"].includes(row.status) && row.expires_at && row.expires_at <= this.#now();
     return {
       id: row.id,
       tenantId: row.tenant_id,
@@ -835,8 +835,8 @@ export class PlatformTaskStore {
       }
       const now = this.#now();
       const updated = this.#db
-        .prepare("UPDATE approvals SET status = ?, resolved_by = ?, reason = ?, resolved_at = ? WHERE id = ? AND tenant_id = ? AND status = 'pending'")
-        .run(decision, resolvedBy, reason, now, approvalId, tenantId);
+        .prepare("UPDATE approvals SET status = ?, resolved_by = ?, reason = ?, resolved_at = ? WHERE id = ? AND tenant_id = ? AND status = 'pending' AND (? != 'approved' OR expires_at IS NULL OR expires_at > ?)")
+        .run(decision, resolvedBy, reason, now, approvalId, tenantId, decision, now);
       if (Number(updated.changes) !== 1) throw new PlatformStoreError("ALREADY_RESOLVED", "Approval was resolved concurrently.");
       this.appendEvent({
         type: "approval.resolved", tenantId, correlationId: current.correlationId, taskId: current.taskId, userId: resolvedBy,
@@ -847,10 +847,16 @@ export class PlatformTaskStore {
   }
 
   /** Spends an approved approval on one tool call; a second spend is refused. */
-  consumeApproval(tenantId, approvalId, toolCallId) {
+  consumeApproval(tenantId, approvalId, toolCallId, expected = {}) {
+    requireTenant(tenantId);
     const result = this.#db
-      .prepare("UPDATE approvals SET consumed_by = ? WHERE id = ? AND tenant_id = ? AND status = 'approved' AND consumed_by IS NULL")
-      .run(toolCallId, approvalId, tenantId);
+      .prepare(`UPDATE approvals SET consumed_by = ? WHERE id = ? AND tenant_id = ? AND status = 'approved' AND consumed_by IS NULL
+        AND (expires_at IS NULL OR expires_at > ?)
+        AND (? IS NULL OR task_id = ?) AND (? IS NULL OR tool = ?)
+        AND (? IS NULL OR action_digest = ?) AND (? IS NULL OR requested_by = ?)`)
+      .run(toolCallId, approvalId, tenantId, this.#now(),
+        expected.taskId ?? null, expected.taskId ?? null, expected.tool ?? null, expected.tool ?? null,
+        expected.actionDigest ?? null, expected.actionDigest ?? null, expected.requestedBy ?? null, expected.requestedBy ?? null);
     return Number(result.changes) === 1;
   }
 
