@@ -47,7 +47,8 @@ This branch is stacked on `codex/durable-dispatch` / PR #270; review this slice
 against that branch. Apply migrations 0017 and 0018 before deploying it. There
 is no production migration, merge or deployment performed by this implementation.
 
-PR #272 owns the normal task route and chat submission. Those files are untouched;
+The merged PR #272 supplies the normal task route's Genesis handling. Its routing
+and current customer-safe chat behavior are retained by this integration;
 chat can adopt this endpoint in a coordinated follow-up. Direct `/api/tasks`
 callers retain their existing behavior and do not gain request deduplication.
 PR #203 owns atomic billing caps. Its implementation and tests are untouched.
@@ -72,3 +73,11 @@ Local validation passed: production build, TypeScript, ESLint, all 482 web tests
 and diff checks. Removing the recovery principal guard failed its negative test;
 the restored guard passed again. The shared progress log is owned by active PRs;
 this document and issue #273 provide the implementation handoff.
+
+2026-10-17 integration: merged the updated durable-dispatch parent, preserving
+current-main task routing and the enforced uncertain-acknowledgement deadline.
+Fresh Worker build and typecheck passed. Full integrated web suite: 517 total,
+515 passed, two optional skips, no failures. This includes actual migrated
+SQLite concurrent admission and the rebuilt authenticated Worker request/replay
+boundary. Fresh branch CI and the existing tenant-persistence review are required.
+No live task, billing mutation, production migration or deployment was performed.

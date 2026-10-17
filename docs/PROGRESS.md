@@ -544,3 +544,18 @@ claim. Fresh integrated PR CI is required before ordinary merge.
 - #311 publishes the unique remaining dangling-symlink and Windows environment/constrained executable-path fixes; current namespace/container, npm/npx and Windows process cleanup implementations are retained. Focused tests: 41/41 passed. The protected sandbox PR remains unmerged pending full CI and owner review under PROGRAM section 3; no review/ruleset bypass attempted.
 - Local runtime code merged to main is available for an installed daemon update/restart; no fleet rollout, signed installer release, production database maintenance, live CRM send or business deployment is asserted.
 - Next: finish #311's Windows/review gate; independently evaluated test/live receipts for business outcomes; actual configured Genesis/CRM acceptance; leased/deduplicated recurring business work and cumulative business-level spending. Reuse the existing task/kernel/approval/budget services and active PR ownership rather than introducing another scheduler. Generated local audit logs and worktree metadata are retained locally, not committed as product source.
+
+## 2026-10-17 — stacked request-deduplication integration (#273 / #274)
+
+Merged the updated #270 parent into existing codex/task-request-idempotency.
+Preserved current Genesis task routing, customer-safe chat changes and the hard
+dispatch acknowledgement deadline. Existing admission/receipt implementation is
+reused; no second scheduler, billing ledger or request-key mechanism added.
+
+Fresh Worker build and typecheck passed; full web suite: 517 total, 515 passed,
+two optional skips, zero failures. The rebuilt authenticated request endpoint
+replays after reconnect without another bill or dispatch; concurrent same-key
+requests enter admission once. Lint is still running at this checkpoint.
+Fresh CI and tenant-persistence review remain required. No production migration,
+live GitHub dispatch, billing mutation, provisioning or deployment performed.
+Next: #270/#274 CI/review, then update #276 → #278 → #282 in dependency order.
