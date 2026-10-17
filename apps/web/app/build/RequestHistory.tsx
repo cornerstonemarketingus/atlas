@@ -1,11 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
-import { readTaskRequests, requestExplanation, reconcileTaskRequest } from "./request-inspection-client.mjs";
+import { readTaskRequests, requestExplanation, reconcileTaskRequest, configureTaskObservation } from "./request-inspection-client.mjs";
 import "./request-history.css";
 
 type SavedRequest = {
   requestKey: string; createdAt: string; state: string; receiptState: string; outcomeStatus: number | null;
-  task: null | { taskId: string; conversationId: string | null; repository: string; branch: string; objective: string; dispatchState: string; execution?: null | { runId: number; runAttempt: number; claimedAt: string; expiresAt: string; outcome?: null | { jobId: number; conclusion: string; completedAt: string; verifiedAt: string } } };
+  task: null | { taskId: string; conversationId: string | null; repository: string; branch: string; objective: string; dispatchState: string; execution?: null | { runId: number; runAttempt: number; claimedAt: string; expiresAt: string; observation?: null | { enabled: boolean; expiresAt: string; attempts: number; limit: number }; outcome?: null | { jobId: number; conclusion: string; completedAt: string; verifiedAt: string } } };
 };
 
 /** Read-only investigation remains reachable without a composer draft or local retry cache. */
@@ -64,6 +64,16 @@ export function RequestHistory({ version = 0 }: { version?: number }) {
     } finally { setChecking(null); }
   }
 
+  async function observe(requestKey: string, enabled: boolean) {
+    setChecking(requestKey);
+    try {
+      const body = await configureTaskObservation({ requestKey, enabled });
+      setRequests(items => items.map(item => item.requestKey === requestKey ? body.request : item));
+      setNotice(enabled ? "Automatic status checks enabled with fixed limits. Execution will not be retried." : "Future automatic checks stopped. An in-flight check may finish.");
+    } catch { setRequests([]); setNextCursor(null); setNotice("Observation settings unavailable. Refresh saved requests before trying again."); }
+    finally { setChecking(null); }
+  }
+
   return <details className="request-history" onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>Saved requests</summary>
     {open && <div className="request-history-body">
@@ -76,10 +86,13 @@ export function RequestHistory({ version = 0 }: { version?: number }) {
         <p>{requestExplanation(request)}</p>
         {request.task?.execution && <p>Execution reserved for run {request.task.execution.runId}, attempt {request.task.execution.runAttempt}. Lease ends {request.task.execution.expiresAt}. Expiry requires investigation; it does not authorize a retry.</p>}
         {request.task?.execution?.outcome && <p>GitHub execution job {request.task.execution.outcome.jobId}: {request.task.execution.outcome.conclusion}, completed {request.task.execution.outcome.completedAt}. Verified by Atlas at {request.task.execution.outcome.verifiedAt}. This job result does not prove code validation or authorize a retry.</p>}
+        {request.task?.execution?.observation && <p>Automatic checks {request.task.execution.observation.enabled ? "enabled" : "stopped"}: {request.task.execution.observation.attempts}/{request.task.execution.observation.limit}, until {request.task.execution.observation.expiresAt}. Daily budgets may delay checks; execution is never retried.</p>}
+        {request.task?.execution && !request.task.execution.outcome && !request.task.execution.observation && <p>Optional automatic checks run for up to 24 hours and stop after eight checks. They never retry execution.</p>}
         <small>{request.createdAt} UTC{request.task ? ` · ${request.task.repository} · ${request.task.branch}` : ""}</small>
         <div className="request-history-actions">
           <button type="button" disabled={checking !== null} onClick={() => void check(request.requestKey)}>{checking === request.requestKey ? "Checking…" : "Check request"}</button>
           {request.task?.execution && !request.task.execution.outcome && <button type="button" disabled={checking !== null} onClick={() => void reconcile(request.requestKey)}>Reconcile execution</button>}
+          {request.task?.execution && !request.task.execution.outcome && <button type="button" disabled={checking !== null} onClick={() => void observe(request.requestKey, !request.task?.execution?.observation?.enabled)}>{request.task.execution.observation?.enabled ? "Stop automatic checks" : "Enable automatic checks"}</button>}
           {request.task?.conversationId && <a href={`/?conversation=${encodeURIComponent(request.task.conversationId)}`}>Open task activity</a>}
         </div>
       </article>)}

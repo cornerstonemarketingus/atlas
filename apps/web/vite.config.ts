@@ -40,6 +40,7 @@ export default defineConfig(async ({ command }) => {
 
   const localBindingConfig = {
     main: "./worker/index.ts",
+    triggers: { crons: ["*/15 * * * *"] },
     compatibility_flags: ["nodejs_compat"],
     d1_databases: d1 && d1DatabaseId
       ? [
