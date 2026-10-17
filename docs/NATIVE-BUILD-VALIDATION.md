@@ -9,3 +9,5 @@ The workflow is a protected CODEOWNERS path and requires its configured review b
 A successful compilation does not prove the app is usable: www still contains the initializing placeholder. Working mobile bootstrap, account authentication/deletion, exact authorized approvals, native push/biometric behavior, real link associations, simulator/device accessibility, release signing, store billing decisions and review metadata remain separate release gates. Never submit these development artifacts as evidence those flows exist.
 
 Runner toolchain inventory checked against [GitHub macOS15](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md); pinned runtime migration follows [Capacitor8](https://capacitorjs.com/docs/updating/8-0) and [8.5 scene lifecycle](https://capacitorjs.com/docs/updating/8-5).
+
+First remote build evidence: Actions run 39007793513 successfully compiled both native jobs and uploaded non-expired Android debug and iOS simulator artifacts. The native project repair merged in #316; workflow PR #320 now targets main and still requires configured workflow review. This run predates the separate icon integration #318.
