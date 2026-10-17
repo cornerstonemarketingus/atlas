@@ -1,4 +1,188 @@
-# Atlas architecture and production audit — 2026-10-08
+# Atlas capability evidence audit — refreshed 2026-10-15
+
+## October 15 refresh (takes precedence over the October 12 snapshot below)
+
+Current main and audit branch base: `dee7942d7fb4a3971229be1f2ca9d97e8cef3eaf`
+(#285). The six-file delta from b47f136 changes streamed Markdown rendering,
+Genesis capability preflight timeouts/cache and their tests, plus PROGRESS.
+The earlier local-control, foundation and mobile test evidence below still
+applies to unchanged sources; those suites were not relabeled as rerun today.
+
+- [CI 38834441308](https://github.com/cornerstonemarketingus/atlas/actions/runs/38834441308)
+  passes **all 13 jobs**, including Windows daemon/local-control and Genesis.
+  The earlier Windows boot timeout is an unresolved intermittent observation,
+  not evidence that current main consistently fails to boot. No root cause is
+  established and a green rerun does not explain it.
+- [Deployment 38834441273](https://github.com/cornerstonemarketingus/atlas/actions/runs/38834441273)
+  succeeded. Hosted [chat 38834676029](https://github.com/cornerstonemarketingus/atlas/actions/runs/38834676029)
+  passes one tool step and persisted replies in both modes: Groq non-streaming
+  (344 characters), Workers AI streaming (335 characters). These traces were
+  inspected during this refresh; they were dispatched by the existing release
+  workstream, not newly dispatched here.
+- [Chat 38834591463](https://github.com/cornerstonemarketingus/atlas/actions/runs/38834591463)
+  passes both modes with **zero tool steps**, 175 characters from Workers AI.
+  It proves response/persistence for that request, not Genesis creation.
+- 38 open PRs are now inventoried. Additional #282 binds result callbacks to
+  execution ownership: review with #278/#266/#270, require stale-attempt and
+  cancelled-task negative tests. Additional #284 recovers Genesis project
+  receipts on chat reopening: validate persisted receipts with #274/#276 and
+  do not infer completed creation from a recovered notice. Neither is on main.
+- Native/mobile visual browser acceptance remains unperformed. The attempted
+  in-app browser session failed in its local sandbox before navigation. Main's
+  browser regression job is automated evidence, distinct from a manual deployed
+  browser journey.
+
+No new major implementation preceded this audit. The immediate next reliability
+work is to validate/reconcile existing execution/security PRs, then investigate
+the intermittent Windows startup observation without masking it by timeout-only
+changes. Independent subagent reviews were requested but returned no usable
+findings in this session; no conclusions below rely on them.
+
+Fresh refresh-only regression: `node --test
+apps/web/tests/genesis-bridge-latency.test.mjs` passes **3/3** on dee7942,
+including cancellation-ignoring transport, stalled body and unchanged creation
+deadline. This is a transport fixture, not a live Genesis operation.
+
+## October 12 detailed snapshot and evidence
+
+Audited checkout: `b47f136a70d7cd3b2fcc3f17423229ac41ef3b3a` (main).
+Ownership: [#279](https://github.com/cornerstonemarketingus/atlas/issues/279),
+`codex/evidence-audit-1011`. This inventory supersedes current-status claims in
+the dated inventory below and the October 9 TODO reconciliation. Historical
+evidence remains useful only for its named commit and tested boundary.
+No major implementation, merge, production migration or deployment was performed.
+Uncommitted workforce/business changes in the owner's checkout were preserved
+and are **not main capabilities**.
+
+## Evidence levels and release findings
+
+Source existence, runtime wiring, automated tests, a real process/browser
+session, and a deployed acceptance result are different evidence levels.
+"Verified" below applies only to the stated journey. A fixture-backed model
+does not qualify model quality; a successful inspection does not qualify coding.
+
+| Evidence | Result and scope |
+|---|---|
+| Fresh local-control suite, audited checkout | `node --test tests/*.test.mjs`: **692 tests; 672 passed, 20 skipped, zero failures**. Skips cover unavailable container/namespace/Xvfb isolation, CLI-dependent Genesis cases and Playwright UI cases; those boundaries were not freshly qualified locally. |
+| Fresh inference/contracts/runner/local scripts | `node --test packages/atlas-inference/tests/*.test.mjs packages/atlas-contracts/tests/*.test.mjs scripts/runner/*.test.mjs scripts/local/*.test.mjs`: **137/137 passed**. Includes actual callback HTTP failures, ledger concurrency and simulated providers. |
+| Fresh mobile shell tests | `node --test mobile/tests/*.test.mjs`: **7/7 passed**; no native install, push or physical phone qualification. |
+| Fresh real daemon session | `node scripts/e2e/journey.mjs`: every step passed. Real child daemon, HTTP, SQLite, tool execution, exact approval/single consumption, denial, delegation, pause/resume/cancel, kill/restart and explicit resume; **scripted inference**. |
+| Main CI | [38160397827](https://github.com/cornerstonemarketingus/atlas/actions/runs/38160397827): **FAILED**. Windows `daemon-boot.test.mjs` timed out after 15 seconds waiting for health, with no daemon output. Other 12 jobs passed, including web, CLI and Genesis real coder/browser harness. Cause unresolved; local success does not erase the failure. |
+| Deployed inspection | [38160488156](https://github.com/cornerstonemarketingus/atlas/actions/runs/38160488156), runner [38160503256](https://github.com/cornerstonemarketingus/atlas/actions/runs/38160503256): task `48b9c53c-3e9d-44a3-92ba-9333e17e0e19`, result **Received and persisted**. No model-backed edit. |
+| Fresh deployed model/tool chat | [38252392959](https://github.com/cornerstonemarketingus/atlas/actions/runs/38252392959), October 12, same commit: setup 8/8; non-streaming Groq `openai/gpt-oss-20b`, 319 characters, one tool step, stored; streaming Workers AI `@cf/openai/gpt-oss-120b`, 333 characters, one tool step, stored. Workers AI credential/models/inference probes HTTP 200. |
+| Fresh visual deployed browser session | **Unavailable**: in-app browser kernel failed before opening a page (`apply deny-read ACLs`). No screenshot, visual/mobile usability or authenticated browser journey is claimed. HTTP acceptance above is a separate boundary. |
+
+The fresh workflow dispatch returned GitHub HTTP 502, but subsequent read-only
+inspection found run 38252392959 completed successfully. It was **not dispatched
+again**. This is concrete evidence that an error acknowledging dispatch does
+not establish that work never started. It supports the existing durable-dispatch
+and request-idempotency workstreams, not a claim that main already handles them.
+
+## Capability inventory
+
+Paths abbreviate `LC = apps/local-control/src`, `W = apps/web`.
+Automated coverage is the fresh suites above or named exact-commit CI, unless
+explicitly stated otherwise. No percentages are inferred.
+
+| Capability / classification | Source and connection to runtime | Automated / real session / deployed evidence and gap |
+|---|---|---|
+| Hosted chat and read-only tools — IMPLEMENTED AND VERIFIED (bounded journey) | `W/app/api/chat/{route.ts,agent-loop.mjs,providers.mjs}`; real chat UI/API, tool dispatch and conversation persistence | Fresh deployed streaming/non-streaming one-tool replies above. Long missions, arbitrary provider failure and client disconnect survival remain unqualified. |
+| Hosted inference coordination — PARTIALLY IMPLEMENTED | `packages/atlas-inference/src`, `W/app/api/inference/governor-client.mjs`, `W/worker/inference-governor*.mjs`; `governedSend` used by hosted loop; DO binding in `W/vite.config.ts` | Fresh ledger/provider fixtures pass. CLI/Actions and local inference do not share this allowance; global budget/release-on-crash qualification missing. |
+| Commercial/open model routing — PARTIALLY IMPLEMENTED | Hosted providers plus CLI `infrastructure/*model-provider.ts`, local `agent/models`; Workers AI uses REST compatible endpoint | Live Groq and Workers AI chat now established. OpenAI paid availability, Anthropic live use, local Ollama coding/tool quality and privacy-safe fallback across all routes not verified. Native Workers AI repair remains #240. |
+| Verified coder — IMPLEMENTED AND VERIFIED (harness), production reliability PARTIAL | `packages/atlas-cli/src/agent/verified-coder-session.ts`, `scripts/runner/run-task.mjs`, Actions workflows; real edits and checks, bounded repairs and result reporting | Main CLI and Genesis harness CI pass. No fresh repeated real-model coding missions with provider outages/interruption; Phase 1 acceptance remains open. |
+| Callback delivery — IMPLEMENTED AND VERIFIED (transport and normal hosted path) | `scripts/runner/report-result.mjs` and `W/app/api/tasks/result/route.ts`; #246 merged; stable result identities and bounded transient retries | Fresh regression suite plus deployed inspection persisted. Lost-ack test uses HTTP fixture; no live D1/OIDC network-fault injection. Old BROKEN row below is superseded. |
+| Hosted task dispatch/idempotency — PARTIALLY IMPLEMENTED | `W/app/api/tasks/{route.ts,dispatch.mjs}`, D1 task rows and Actions run identity | Main still lacks the pending #270/#274/#278 intent, client-request dedupe and worker execution fencing. GitHub 502 observed during this audit makes uncertainty material. |
+| Unified cloud lifecycle / LOCAL-CLOUD-HYBRID — NOT IMPLEMENTED end to end | Existing local stores/kernel, D1 task history, Actions workers are reusable but separate | No generic externally durable filesystem/checkpoint/lease/tool-receipt runtime supporting all three modes. Phone/tab-independent inspection exists; durable Genesis/local automations do not move to cloud automatically. |
+| Local lifecycle and recovery — IMPLEMENTED AND VERIFIED (explicit resume) | `LC/agent/{runtime,session-store,mission-service,mission-scheduler}.mjs`, local SQLite | Fresh real daemon restart/resume journey passes. This does not prove an arbitrary interrupted consequential tool is never repeated. Automation uncertain-start recovery remains #252. |
+| Kernel and multi-agent command center — PARTIALLY IMPLEMENTED | `LC/agent/kernel`, `LC/platform/command-center.mjs`, mission/team services, `main.mjs`, server and UI | Real delegation/tool evidence in daemon journey. Hosted and CLI loops remain distinct; one global cost/control view and intentional-defect independent-review acceptance not established. |
+| Credential broker — PARTIALLY IMPLEMENTED | `LC/agent/credential-vault.mjs`, tool registry; hosted GitHub App/OAuth resolution | Existing vault/allowlist tests pass; short-lived capability broker and final execution boundary fixes in #233/#235, not main completion. No unrestricted credential expansion is authorized. |
+| Approval/security boundaries — PARTIALLY IMPLEMENTED | Local authorized executor/policy/store, hosted computer approval routes, CLI policy wrappers | Real deny, exact approval and one-use consumption pass locally. Universal principal/task/environment/argument/expiry binding and cloud credential timing need #235 and integration qualification. |
+| Sandbox/isolation — PARTIALLY IMPLEMENTED | `LC/platform/terminal`, CLI command/process controls, local sandbox config, trusted Actions checkout | Existing tests/CI do not establish all generated-code validation is isolated from trusted runner secrets. #253 owns this blocker. No fallback to unrestricted host execution may be introduced. |
+| Genesis creation/spec/change/preview — PARTIALLY IMPLEMENTED | `LC/platform/genesis`, templates, tools/server; new hosted bridge `W/app/api/genesis/{bridge.mjs,operations/route.ts}` and `/api/tasks` routing landed #272 | Local suite and main Genesis real CLI/Chromium harness pass. Hosted bridge requires configured trusted execution node; it is not a cloud worker. Team Hahn real-model website acceptance not run. |
+| Genesis visual editor — PARTIALLY IMPLEMENTED (preview), selection editing NOT ON MAIN | Existing previews/inspection; open #181 contains static text selection/source mapping | Do not duplicate #181. Source-backed color/layout/move/delete/component alternatives and live responsive visual QA remain incomplete. |
+| Genesis deployment/backend — PARTIALLY IMPLEMENTED | Shared auth/files/secrets/jobs/queue templates; `LC/platform/genesis/publish.mjs` and infrastructure tools | Reusable local backend templates and publish checks exist. Server-backed production database/migrations/backups/rollback/health and Team Hahn deployed artifact not verified. |
+| Cloud browser — NOT IMPLEMENTED executor | `W/app/api/computer/browser-plan.mjs`: `HOSTED_BROWSER_EXECUTOR_AVAILABLE = false`; task route refuses unsupported work | Explicit refusal is wired; no cloud consumer executing browser tasks with owner PC off. |
+| Local browser/operator — PARTIALLY IMPLEMENTED | `apps/browser-worker`, `apps/windows-companion`, local browser adapters and authorized operator | Browser-worker/companion CI pass; #237 takeover journal unmerged. No fresh browser challenge/approval/interruption/hand-back journey performed here. |
+| MCP / signed skills — PARTIALLY IMPLEMENTED | LC configured MCP client/gateway and registry; `LC/platform/skills` packaging/approvals/proposals | Library tests and configured local transport exist. Approved signed skill installation/loading/revocation into all runtimes and capability-gap-to-reviewed-skill loop incomplete. |
+| Replay/evaluation/self-improvement — PARTIALLY IMPLEMENTED | CLI replay/audit, LC reviewer/isolated worktree; open #236 eval and #243 verified-commit merge binding | Tests/records are not a production benchmark. Independent intentional-defect catch, review isolation, exact-head merge/rollback gates incomplete on main. Protected changes need owner review. |
+| Business lead-to-completion — NOT VERIFIED end to end | Genesis forms/backend and opportunity/goal modules; #223 opportunity scout pending | No test customer estimate -> durable lead -> owner notification -> tracked completion acceptance. Dirty workforce/business files are excluded. SEO/GEO actual indexing/conversion measurement not established. |
+| Tenant/auth/billing/onboarding — PARTIALLY IMPLEMENTED | `W/app/api/auth`, tenant/repository guards, billing routes/plan, setup UI | Main web CI passes and forged identity is denied by hosted gate. Fresh independent-user signup/repo/approval/project acceptance absent. Atomic billing #203 and API limiting #69 need reconciliation; paid Stripe setup not established. |
+| Mobile / Windows install-update — PARTIALLY IMPLEMENTED | Capacitor `mobile`, Windows release tooling, local companion | Fresh mobile shell 7/7 and release-tooling CI pass. Clean-machine installer/update and physical-phone takeover/offline cloud coding untested; #61 pending. |
+
+## Disconnected and incomplete infrastructure
+
+Historical `ChildAgentRegistry`, orchestrator `TaskDag`/`AgentLoop`, capability
+router and signed SkillRegistry modules are library infrastructure, not proof of
+a unified production agent OS. Their actual import/instantiation path must be
+the acceptance gate when wiring them. Existing kernel/mission and MCP paths
+should be reused rather than replaced. The owner's dirty workforce integration
+must be reviewed separately before changing these conclusions.
+
+Deployment currently binds D1 and an inference Durable Object through
+`W/vite.config.ts`; that governor is not a durable general-purpose agent worker.
+Secret **names only** were inventoried: model, Cloudflare, D1, GitHub, operator
+and session configuration are present. No `ATLAS_GENESIS_URL/TOKEN`, Anthropic
+or Stripe secret names appeared in GitHub. This does not reveal manual Worker
+configuration and does not prove absence there. Never infer balance, permission
+or health from a secret name alone.
+
+## Open PR and branch reconciliation
+
+Snapshot includes all 36 open PRs seen during the October 12 audit. UNKNOWN
+mergeability means GitHub has not computed it; it is not a clean or conflicting
+verdict. Recommendations below are dispositions for review, not authorization
+to merge failing/protected changes or close another agent's work without review.
+
+| PRs | Disposition and reuse |
+|---|---|
+| #270, #274, #276, #278 | Validate/reconcile as a dependency stack: persisted dispatch intent, request dedupe, inspection and execution fencing. Protected tenant/worker boundaries require owner review. Keep exact run/task receipts; do not start a duplicate queue abstraction. |
+| #266 | Reconcile cancellation against that stack, test late callbacks/stale attempts and durable receipts; not full pause/resume. |
+| #253 | Review isolation before live consequential coder acceptance; preserve trusted/untrusted boundary and workflow owner review. |
+| #252 | Validate automation uncertain-start recovery; do not replay an unknown mission. CI green recorded; still unmerged. |
+| #243, #235, #233 | Priority security reconciliation: exact verified-head merge, approval/credential execution boundaries, broker. Preserve owner review; resolve overlap rather than merging both implementations blindly. |
+| #240, #178 | Reconcile native Workers AI transport with selected-provider hosted acceptance; REST live success does not qualify native cancellation. |
+| #200 | Repair failed CLI CI and reconcile current CLI changes; billing taxonomy/local provider work is not superseded by hosted governor. |
+| #230 | Rebase/qualify local models, retain guided setup and measured real coding/tool evidence. |
+| #181, #101 | Rebase unique visual editing/repository creation over current Genesis bridge and local publisher; no duplicate Genesis infrastructure. |
+| #203, #69, #77 | Rebase/repair atomic billing, hosted rate limiting and CSP; protected review and concurrency/security tests. |
+| #237, #105, #61 | Validate/rebase takeover, browser adapter and mobile companion; actual browser and phone acceptance required. |
+| #236 | Validate replay/evals with side effects prohibited; integrate real release evidence after runtime boundaries stabilize. |
+| #207 | Compare unique cross-page immutable-content reuse against merged #205/#259/#265; port only missing behavior and close superseded remainder after review. |
+| #191 | Dispatch persistence approach superseded by #270; preserve any unrelated UI/knowledge fixes before closure review. |
+| #129–#133, #158, #160 | Hosted inference stack largely ported by #224. Diff review for unique capability/latency/cache behavior, then supersede/close duplicates; mergeability alone is insufficient. |
+| #202 | Rebase unique untrusted tool-log wrapping; retain injection tests. |
+| #223, #97, #98 | Rebase/review unique opportunity, durable knowledge and CI-awareness work after foundation; no claim that open code is deployed. |
+
+`git branch -r --no-merged origin/main` was examined: it includes many
+squash-merged historical branches as well as these open PR heads. Reachability
+alone is not a missing-feature inventory. `atlas/task-*` run branches are
+execution artifacts, not implementations to merge blindly. Uncommitted primary
+checkout work and standalone historical branches are unqualified until their
+diff, ownership and tests are reviewed; they were not imported into this audit.
+
+## Phase acceptance still outstanding
+
+1. Reliability: repeated real-model coding with deliberate provider refusal,
+   interrupted sessions and exactly-once consequential-action evidence.
+2. Genesis: Team Hahn Construction site built, visually reviewed and published
+   through approved deployment; server-backed rollback/health if used.
+3. Cloud: coding continues with owner's computer disconnected; durable files,
+   checkpoints, fenced worker ownership and receipts, not just task history.
+4. Browser: real supported form workflow with exact approval, interruption,
+   takeover, fresh observation and continuation.
+5. Collaboration: independent reviewer catches an intentionally planted defect
+   before release within measured budgets.
+6. Business: test estimate is stored, owner notified and completion tracked;
+   actual indexing/performance/conversion evidence for SEO/GEO.
+7. Customer release: clean Windows install/update and fresh-user project journey;
+   unverified capabilities cannot be advertised as complete.
+
+The prioritized queue in [BACKLOG.md](BACKLOG.md) is the next-work authority for
+this audit. No phase acceptance above was substituted with a model's statement.
+
+---
+
+# Historical architecture and production audit — 2026-10-08
 
 Snapshot: remote `main` `17570ff348baef91a7637153df93538d56629762`.
 Workstream: #244, `codex/cloud-result-recovery`. This section supersedes the
