@@ -510,6 +510,11 @@ Customer prompt privacy follow-up (#310): found the system prompt unconditionall
 
 Prompt integration repair (#310): complete web validation caught an existing Genesis contract requiring publish policy ask in customer context. Restored only explicitly selected availability booleans and the known approval policy enum, preserving required approval semantics while excluding internal reason/credential/build fields. Existing project-tools tests remain unchanged. Fresh focused/full validation and CI required; do not merge the earlier failed web revision.
 
+## 2026-10-17 — native platform compatibility (#315)
+
+Current-main branch codex/mobile-platform-readiness repairs the native projects for pinned Capacitor 8.5.2: iOS15 across CocoaPods/Xcode, registered SceneDelegate and scene forwarding for cold/warm/universal links, Android SDK36/min24 with matching AndroidX/Gradle and resize density/navigation config. Uses exact installed CLI templates without changing identifiers, secrets, signing or approval policy. Three compatibility cases failed before and pass after; ten mobile tests and syntax check pass. Real cap sync android found all five plugins. Doctor reports no Xcode; this Windows host has only Java8 and no Android SDK, so native compile/device acceptance is externally blocked. MOBILE-RELEASE.md now separates generated projects from an operational product. Web bootstrap is a placeholder, association URLs are missing, and three moderate CLI development-dependency advisories need compatible upstream review. No forced override. Next: required CI/native build evidence, then working mobile bootstrap and authenticated approval flows.
+
+Privacy #310 deployment 39006513100 succeeded at 9443843; configured authenticated chat smoke 39006706217 passed streaming and non-streaming. This confirms normal authenticated chat, not non-admin adversarial confidentiality or completion of the remaining API privacy audit.
 
 ## 2026-10-17 — chat and pending-runtime release (#304, #306, #311)
 
