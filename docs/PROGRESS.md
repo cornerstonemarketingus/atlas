@@ -484,3 +484,27 @@ Customer activity acceptance follow-up (#310): production build passed and the f
 Customer prompt privacy follow-up (#310): found the system prompt unconditionally included Atlas source paths, infrastructure architecture and credential deployment instructions for non-owners. Added a failed-before test and now include those blocks only for the existing server-verified owner; non-owner prompts omit raw capability diagnostics and request safe progress/error summaries. Sixteen focused prompt/privacy tests pass. This is context minimization, not a replacement for tool authorization or a model confidentiality guarantee. Integrated prior full web run: 492 passed, two optional skips; build/typecheck/lint passed. All prior cross-platform CI jobs were green except still-running Windows/Genesis; the expanded prompt revision requires fresh CI.
 
 Prompt integration repair (#310): complete web validation caught an existing Genesis contract requiring publish policy ask in customer context. Restored only explicitly selected availability booleans and the known approval policy enum, preserving required approval semantics while excluding internal reason/credential/build fields. Existing project-tools tests remain unchanged. Fresh focused/full validation and CI required; do not merge the earlier failed web revision.
+
+## 2026-10-17 — durable cloud dispatch integration (#267 / #270)
+
+Merged current main 9443843 into the existing codex/durable-dispatch branch,
+preserving new-project routing and current chat privacy changes. Fixed the
+existing GitHub dispatch timeout: abort alone could leave a cancellation-ignoring
+transport pending indefinitely. A hard acknowledgement deadline now returns the
+saved request as uncertain, never automatically resends it, and discards/cancels
+late response bodies without changing the uncertain receipt.
+
+Two regressions pass against actual migrated SQLite and the existing dispatch
+helper. Fresh Worker build passed; complete web suite: 507 total, 505 passed,
+two optional skips, zero failures. Typecheck and whitespace check pass. Targeted
+lint is still running locally; fresh remote CI and existing tenant-persistence
+review gate remain required. No production migration, dispatch, credential
+change or deployment performed. Next: complete #270 CI/review, then integrate
+the existing #274 → #276 → #278 → #282 stack in dependency order.
+
+Separate inference PR #307 integrated current main and resolved the shared
+handoff conflict. Original code CI 38995719143 passed all 13 jobs. Local full
+run: 707 pass, 6 fail, 20 skip; smaller integrated retest: 81 pass, 3 Genesis
+timeouts. The approval case passes individually on both unchanged main and
+the inference branch. Timing dependence is suspected; no local all-green
+claim. Fresh integrated PR CI is required before ordinary merge.
