@@ -6,7 +6,9 @@ Checkpoint: 2026-10-17; base main 1c3be5b; issue #309. This is the first evidenc
 
 The existing server SSE encoder now projects public activity through an explicit field allowlist. It drops thinking events, tool previews and labels, agent reports/titles, raw backend error messages and completion diagnostic metadata. Unknown event types are dropped. Safe progress, recovery identity, customer answer, approval status and validated customer GitHub project links remain available. Native details/summary controls default to collapsed and show plus/minus; keyboard focus stays visible. No approval is granted or consumed by expanding activity.
 
-Nine focused parser/privacy checks pass, including sentinel diagnostic content, arbitrary SSE chunking, completion metadata, approvals and redirect rejection. Real Chromium desktop/mobile acceptance passed, including keyboard Enter toggles, computed plus/minus indicators and absent internal sentinel content. Typecheck passed. Full build/CI remains a separate gate; no deployment has occurred.
+Ten focused parser/privacy checks pass, including sentinel diagnostic content, arbitrary SSE chunking, completion metadata, approvals and redirect rejection. Real Chromium desktop/mobile acceptance passed, including keyboard Enter toggles, computed plus/minus indicators and absent internal sentinel content. Typecheck passed. Production build, typecheck and changed-file lint passed; integrated full web suite passed with 492 tests and two optional skips before the prompt follow-up. Fresh CI is required for the prompt revision; no deployment has occurred.
+
+A failed-before regression also exposed unconditional Atlas architecture and credential-deployment instructions in customer model context. The prompt now excludes those details and raw capability diagnostics unless the existing server-verified deployment-owner flag is true. The customer prompt explicitly requests safe summaries instead of hidden reasoning and backend failures. This reduces context exposure; it does not replace retrieval/tool authorization or guarantee arbitrary model output.
 
 ## Blocking exposure paths still to close
 

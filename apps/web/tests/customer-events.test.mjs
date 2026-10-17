@@ -40,3 +40,13 @@ test("published project links survive filtering while untrusted redirects do not
   const [result]=event("project",{status:"published",repository:{fullName:"customer/website",webUrl}});assert.equal(result.data.repository,undefined);
  }
 });
+
+test("customer model context excludes Atlas architecture and credential deployment instructions", async()=>{
+ const {atlasSystemPrompt}=await import("../app/api/chat/atlas-knowledge.mjs");
+ for(const input of [{},{isOwner:false,repository:"customer/site",projectCapabilities:{reason:"INTERNAL_BUILD_SENTINEL"}}]){
+  const prompt=atlasSystemPrompt(input);
+  for(const internal of ["apps/web","apps/local-control","node:sqlite","ATLAS_GITHUB_TOKEN","ATLAS_GITHUB_APP_","Cloudflare Worker secret","INTERNAL_BUILD_SENTINEL"]){assert.equal(prompt.includes(internal),false,internal);}
+  assert.match(prompt,/private|internal/);
+ }
+ const owner=atlasSystemPrompt({isOwner:true});assert.match(owner,/apps\/web/);assert.match(owner,/ATLAS_GITHUB_TOKEN/);
+});
