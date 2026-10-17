@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { AtlasShell } from "../AtlasShell.js";
 
 type DeletionRequest = { status: string; requestedAt: string };
@@ -24,6 +24,8 @@ export function AccountPrivacy() {
   const [notice, setNotice] = useState("");
   const [billingNotice, setBillingNotice] = useState("");
   const [billingBusy, setBillingBusy] = useState(false);
+  const [deletionBusy, setDeletionBusy] = useState(false);
+  const deletionInFlight = useRef(false);
 
   useEffect(() => {
     document.documentElement.dataset.atlasTheme = theme;
@@ -44,14 +46,27 @@ export function AccountPrivacy() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const response = await fetch("/api/account/deletion", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ confirmation }),
-    });
-    const data = await response.json();
-    if (!response.ok) { setNotice(data.message); return; }
-    setRequest(data.request);
-    setNotice("Deletion requested. We will remove eligible account data within 30 days.");
+    if (deletionInFlight.current || confirmation !== "DELETE") return;
+    deletionInFlight.current = true;
+    setDeletionBusy(true); setNotice("");
+    try {
+      const response = await fetch("/api/account/deletion", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirmation }),
+      });
+      if (!response.ok) {
+        setNotice(response.status === 401 ? "Sign in again to request account deletion." : "We could not confirm your deletion request. Refresh the page before trying again.");
+        return;
+      }
+      const data = await response.json();
+      if (data?.request?.status !== "pending" || typeof data.request.requestedAt !== "string" || !Number.isFinite(Date.parse(data.request.requestedAt))) throw new Error("Invalid deletion receipt");
+      setRequest({ status: data.request.status, requestedAt: data.request.requestedAt });
+      setNotice("Deletion requested. We will remove eligible account data within 30 days.");
+    } catch {
+      setNotice("We could not confirm your deletion request. Refresh the page before trying again.");
+    } finally {
+      deletionInFlight.current = false; setDeletionBusy(false);
+    }
   }
 
   async function billing(action: "checkout" | "portal", tier?: "pro" | "team") {
@@ -62,9 +77,13 @@ export function AccountPrivacy() {
         headers: { "content-type": "application/json" },
         body: action === "checkout" ? JSON.stringify({ tier }) : undefined,
       });
-      const result = await response.json() as { url?: string; message?: string };
-      if (response.ok && result.url) { window.location.href = result.url; return; }
-      setBillingNotice(result.message ?? "The billing service did not respond with a link.");
+      if (!response.ok) {
+        setBillingNotice(response.status === 401 ? "Sign in again to manage billing." : "Billing is temporarily unavailable. Try again shortly.");
+        return;
+      }
+      const result = await response.json() as { url?: string };
+      if (typeof result?.url === "string" && new URL(result.url).protocol === "https:") { window.location.href = result.url; return; }
+      setBillingNotice("Billing is temporarily unavailable. Try again shortly.");
     } catch {
       setBillingNotice("The billing service is temporarily unavailable.");
     } finally {
@@ -126,7 +145,7 @@ export function AccountPrivacy() {
                 <label>Type DELETE to confirm
                   <input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" enterKeyHint="done" />
                 </label>
-                <button disabled={confirmation !== "DELETE"}>Request account deletion</button>
+                <button disabled={confirmation !== "DELETE" || deletionBusy}>{deletionBusy ? "Requesting deletion…" : "Request account deletion"}</button>
               </form>
             </>}
           {notice && <p className="page-notice" role="status">{notice}</p>}
