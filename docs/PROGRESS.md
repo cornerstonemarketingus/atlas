@@ -464,6 +464,31 @@ Budget merge-gate correction (#299): verified actual CODEOWNERS and GitHub revie
 
 Budget #299 merged as ff1dd30ab67dcee34025944cc28b1a7ff71f8748 after all cross-platform CI passed. No production database reconciliation was run. Integrated into CRM #297, preserving both handoffs. CRM gate clarification: this adds consumers of the existing declared-secret/approval mechanisms, changes no credential infrastructure or grants, and touches no protected CODEOWNERS path. The earlier extra credential-review hold was inferred; use the actual ordinary CI/no-blocking-review gate under the existing user authorization. Live acceptance remains blocked by selected CRM configuration.
 
+## 2026-10-16 — local inference stream integrity (#300)
+
+Isolated branch codex/inference-quota-reliability, current main 1c3be5b. Fixed
+the existing local OpenAI-compatible client's CRLF/CR framing, multiline data,
+UTF-8 chunk retention and DONE termination. EOF without a completion receipt,
+empty/reasoning-only answers and malformed/oversized events fail explicitly.
+Interrupted tool fragments cannot reach execution. No pending routing/provider
+PR files were changed. Eight original regressions failed before the fix; 54
+focused tests and 63 inference foundation tests now pass, including real HTTP
+and actual SQLite close/reopen/retry with no partial tool execution. Full local
+suite and branch CI remain pending. No live model or production deployment.
+
+Master inventory, dependency order, evidence and deployment gates are in
+docs/ATLAS_{MASTER_AUDIT,IMPLEMENTATION_ROADMAP,PROGRESS,TEST_RESULTS,DEPLOYMENT}.md.
+Latest main CI 38991786626 is green, including Windows; old startup failure
+must not be reported as a fresh confirmed defect. Next: finish suite/CI for
+#300, then reconcile #270 → #274 → #276 → #278 → #282 and mission #291 with
+their existing owners, before adding a native Linux worker adapter. Universal
+provider wait/resume, cloud artifacts and desktop-offline acceptance remain open.
+
+Published as PR #307, commit f8f894e. CI 38995719143: 12 of 13 jobs passed,
+Windows local-control pending at checkpoint. Linux full suite, real Genesis
+coder/browser and remaining package checks passed. Local full suite continues
+in session 36438 (`.stream-suite.log`), with slow Genesis repair cases; do not
+record a local total until it finishes. No merge or production deployment.
 ## 2026-10-17 — customer-safe chat activity and readiness audit (#309)
 
 Branch codex/customer-chat-privacy starts at current main 1c3be5b in the reusable isolated infrastructure worktree. Existing SSE serialization now drops internal thinking, raw errors, tool previews/labels, agent reports and diagnostic completion metadata, retaining safe progress/recovery/approval state and validated customer repository links. Activity defaults collapsed with keyboard-accessible plus/minus. Active provider route/ChatSection ownership is preserved. Nine focused tests pass; real Chromium desktop/mobile keyboard/privacy gate passed; typecheck passed. Changed-file lint and production build are running (session 11047). No deployment or global confidentiality claim.
