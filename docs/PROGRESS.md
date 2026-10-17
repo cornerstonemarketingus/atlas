@@ -602,3 +602,27 @@ Native source #322 follow-through: audited actual CODEOWNERS/PR paths. This cons
 Reused the original October 2 implementation and PR rather than duplicate it. Posted integration takeover after verifying the sole implementation commit was over 48 hours old, per PROGRAM section 4. Preserved the author code and current main, including source launcher #322 merged as 7bd3c74 after all CI39041528713 passed, and deletion recovery #326 merged as 90dbdce after green CI; recovery deployment39041436007 succeeded. Protected native workflow #320 remains separate and unmerged pending configured review. Resolved only appended PROGRESS conflicts by retaining both handoffs.
 
 The real migrated-DB cap regression fails against current main (30 admitted versus the 20 limit) and passes with the existing atomic upsert. Three focused plan cases pass; complete web build/typecheck/focused lint pass, full web498pass/3optional skips. This fixes concurrent monthly admission counting without changing plan limits, modes, billing credentials or existing authorization. It does not establish live business cash budgets or refund failed-task units. Fresh original PR CI is required before ordinary merge. Next: complete current-head CI and deployment acceptance, then continue persistent cloud/privacy/native release gaps using existing implementations and actual configured gates.
+
+## 2026-10-17 — safe saved-request reconnect and UI recovery (#275 / #276)
+
+Propagated main 1e0909f through #270 and #274 into the existing inspection
+branch, preserving atomic monthly admission and current account/native changes.
+Resolved appended handoff conflicts without replacing source implementations.
+Parents' preceding heads had all 13 CI jobs green; integrated heads need fresh CI.
+
+Fixed RequestHistory list/detail overlap and stale responses after close/reopen,
+refresh, pagination, version changes and unmount. A generation refresh also
+handles batched close/reopen without leaving a cancelled session inactive.
+No dispatch, admission, billing, auth or receipt policy changed.
+
+Six initial component regressions failed on original source; nine final cases
+pass. Actual headless Edge desktop/phone-width acceptance passes with keyboard
+opening, late responses, refresh, pagination, touch targets and GET-only traffic.
+Final build/typecheck/full lint pass; full web: 537 pass, four optional browser
+skips, no failures (541 total). The saved-request browser gate ran separately
+and passed. Migrated SQLite and rebuilt Worker inspection retain scoped access,
+unchanged task/request/usage snapshots and zero external execution calls.
+
+No production migration, secret transfer, deployment, real dispatch or physical
+phone acceptance. Next: finish #276 CI/review, propagate to #278 claims and
+#282 result ownership; retain existing persistence/approval gates.

@@ -15,6 +15,9 @@ Evidence dates: 2026-10-16–17. Node v24.14.0 on Windows; CI pins Node 22.
 | Integrated dispatch #270 Worker and full web suite | Build passes; 505 pass, 2 skip, 0 fail (507 total) | Actual migrated SQLite and built authenticated Worker routes; external GitHub transport simulated |
 | Dispatch typecheck, targeted lint, whitespace | Pass | New enforced-deadline and late-response regressions included in full suite |
 | Integrated request deduplication #274 | Build/typecheck/full lint pass; 515 pass, 2 skip, 0 fail (517 total) | Same-key admission and built authenticated Worker reconnect/replay; GitHub transport simulated |
+| Current-main request recovery #276 | Final build/typecheck/full lint pass; 537 pass, 4 skip, 0 fail (541 total) | Includes atomic billing, scoped inspection, unchanged storage snapshots and zero external-call guards |
+| Request-history component races | 9/9 pass | Initial six cases failed on original source; batched-toggle guard also failed before its fix; real TSX with cancellation-ignoring deferred reads |
+| Request-history actual browser | 1/1 pass across desktop and phone widths | Headless Edge, actual React component and GET client with controlled API; separate from the optional full-suite skip |
 | Current-main focused follow-up | 84 total: 81 pass, 3 Genesis creation timeouts | Transport/conversation/model and desktop cases pass; local Genesis issue remains unresolved |
 | Unchanged local-control main, single Genesis approval case | 1/1 pass | `.baseline-project-check.log` in durable-dispatch worktree; does not establish full baseline parity |
 | Live model / production | Not run / not deployed by this session | No production acceptance claim |
