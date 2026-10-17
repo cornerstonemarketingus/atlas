@@ -137,6 +137,7 @@ async function runtime(dependencies) {
 test("production adapter forwards authorization and requires both run success and stored runner receipt", async t => {
   const { d1, sqlite } = fixture(t);
   const headers = { authorization: "Bearer test-owner", "x-atlas-tenant": "1", "content-type": "application/json" };
+  let conclusion = "success";
   const handle = await runtime({ getD1: () => d1, missionRoutes,
     authenticatedAccount: async request => request.headers.get("authorization") === headers.authorization ? { userId: "operator" } : null,
     resolveTenantContext: async () => ({ tenantId: 1, principal: "operator" }), tenantScope: value => value,
@@ -150,13 +151,20 @@ test("production adapter forwards authorization and requires both run success an
     },
     githubAppConfiguration: () => ({ configured: false }), platformGitHubToken: () => "server-token",
     workflowRunRequest: input => { assert.equal(input.token, "server-token"); assert.equal(input.repository, "owner/repo"); return input; },
-    fetchGitHubJson: async () => ({ id: 123, run_attempt: 2, status: "completed", conclusion: "success", html_url: "https://github.com/owner/repo/actions/runs/123" }),
+    fetchGitHubJson: async () => ({ id: 123, run_attempt: 2, status: "completed", conclusion, html_url: "https://github.com/owner/repo/actions/runs/123" }),
     runBelongsToTask: (_run, taskId) => Boolean(sqlite.prepare("SELECT task_id FROM tasks WHERE task_id=?").get(taskId)),
   });
   const input = plan(); input.steps = [input.steps[0]];
   const post = (body, id) => handle(new Request("https://atlas.test/api/missions" + (id ? `/${id}` : ""), { method: "POST", headers, body: JSON.stringify(body) }), id ?? null);
   assert.equal((await post(input)).status, 201);
   const dispatched = (await (await post({ action: "advance" }, input.requestId)).json()).mission;
+  for (const incomplete of [null, undefined, "", "unknown-provider-state"]) {
+    conclusion = incomplete;
+    const unresolved = (await (await post({ action: "advance" }, input.requestId)).json()).mission;
+    assert.equal(unresolved.steps[0].state, "submitted", "missing or unknown conclusions are not verified failures");
+    assert.equal(unresolved.status, "running");
+  }
+  conclusion = "success";
   const waiting = (await (await post({ action: "advance" }, input.requestId)).json()).mission;
   assert.equal(waiting.steps[0].state, "submitted", "GitHub success alone is insufficient");
   const row = sqlite.prepare("SELECT conversation_id AS conversationId FROM tasks WHERE task_id=?").get(dispatched.steps[0].taskId);

@@ -59,6 +59,8 @@ export const handleMission = missionRoutes({
       run = await fetchGitHubJson(workflowRunRequest({ token, repository: step.repository, runId: task.runId }));
     } catch { return { status: "pending" }; }
     if (!run || Number(run.id) !== Number(task.runId) || !runBelongsToTask(run, taskId) || run.status !== "completed" || !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) return { status: "pending" };
+    // A completed status without a recognized conclusion is incomplete evidence.
+    if (!["success", "failure", "cancelled", "timed_out", "action_required", "neutral", "skipped", "stale", "startup_failure"].includes(run.conclusion)) return { status: "pending" };
     const receiptId = ["result", taskId, run.id, run.run_attempt].join(":");
     const result = await getD1().prepare("SELECT id, detail FROM run_events WHERE id=? AND task_id=? AND requested_by=? AND kind='result'")
       .bind(receiptId, taskId, scope.principal).first<{ id: string; detail: string | null }>();
