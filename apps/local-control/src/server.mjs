@@ -7,6 +7,7 @@ import { discoverLocalModels } from "./model-discovery.mjs";
 import { createAgentRoutes } from "./agent/routes.mjs";
 import { createMissionRoutes } from "./agent/mission-routes.mjs";
 import { createBusinessRoutes } from "./agent/business-routes.mjs";
+import { createWorkforceRoutes } from "./platform/workforce-runtime.mjs";
 import { BUSINESS_UI_HTML, BUSINESS_UI_JS } from "./agent/business-ui.mjs";
 import { createPlatformRoutes, LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
 import { createInnovationRoutes, describeInnovationError } from "./platform/innovation/routes.mjs";
@@ -27,10 +28,11 @@ import { createAutomationRoutes, createWebhookRoute } from "./platform/automatio
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
+  const workforceRoutes = workforceRuntime ? createWorkforceRoutes(workforceRuntime) : null;
   const businessRoutes = businessService ? createBusinessRoutes({ businessService }) : null;
   const agentRoutes = runtime ? createAgentRoutes({ runtime, transcriber, modelHealth }) : null;
   // model "auto": the installed models, chosen by their verified history (capability economics).
@@ -105,6 +107,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (identity.role === "admin" && isRemoteRequest(request) && !remoteAccess?.ownerAllowedRemotely()) {
       return send(response, 403, { message: "The owner token only works on this computer.", unblock: "Pair this device from Settings on the computer running Atlas, or allow owner access remotely there." });
     }
+    if (workforceRoutes && await workforceRoutes.handle(request, response, identity)) return;
+    if (!workforceRuntime && (request.url ?? "").startsWith("/v1/workforce")) return send(response, 503, { message: "The workforce runtime is not running in this process." });
     if (businessRoutes && await businessRoutes.handle(request, response, identity)) return;
     if (!businessService && (request.url ?? "").startsWith("/v1/businesses")) return send(response, 503, { message: "The business service is not running in this process." });
     if (commandCenterRoutes(request, response)) return;

@@ -10,6 +10,7 @@ import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { PlatformTaskStore } from "./platform/task-store.mjs";
+import { createWorkforceRuntime } from "./platform/workforce-runtime.mjs";
 import { createLegacyPolicyBridge, createLegacyPolicyEngine } from "./platform/legacy-policy-bridge.mjs";
 import { withAutonomy } from "./agent/kernel/autonomy.mjs";
 import { AuthorizedToolExecutor } from "./platform/executor.mjs";
@@ -76,6 +77,10 @@ mkdirSync(dataDirectory, { recursive: true });
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
 const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
 const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
+const workforceRuntime = createWorkforceRuntime({ store: platformStore, dataDirectory,
+  repository: process.env.ATLAS_WORKFORCE_REPOSITORY || process.cwd(),
+  model: process.env.ATLAS_WORKFORCE_MODEL || "qwen2.5-coder:7b",
+  endpoint: process.env.ATLAS_MODEL_ENDPOINT || "http://127.0.0.1:11434/v1" });
 // The agent organization (Business Development Executive → Product Executive →
 // specialists, plus the Engineering, Design, Computer Operations and Research
 // peers) and the Innovation Backlog it works from.
@@ -255,6 +260,7 @@ const server = createLocalControlServer({
   runtime,
   missionService,
   businessService,
+  workforceRuntime,
   platformStore,
   innovation,
   platformStream,
@@ -344,6 +350,7 @@ function shutdown() {
     automationStore.close();
     goalStore.close();
     world.close();
+    workforceRuntime.close();
     businessService.close();
     platformStore.close();
     store.close();
