@@ -464,6 +464,31 @@ Budget merge-gate correction (#299): verified actual CODEOWNERS and GitHub revie
 
 Budget #299 merged as ff1dd30ab67dcee34025944cc28b1a7ff71f8748 after all cross-platform CI passed. No production database reconciliation was run. Integrated into CRM #297, preserving both handoffs. CRM gate clarification: this adds consumers of the existing declared-secret/approval mechanisms, changes no credential infrastructure or grants, and touches no protected CODEOWNERS path. The earlier extra credential-review hold was inferred; use the actual ordinary CI/no-blocking-review gate under the existing user authorization. Live acceptance remains blocked by selected CRM configuration.
 
+## 2026-10-16 — local inference stream integrity (#300)
+
+Isolated branch codex/inference-quota-reliability, current main 1c3be5b. Fixed
+the existing local OpenAI-compatible client's CRLF/CR framing, multiline data,
+UTF-8 chunk retention and DONE termination. EOF without a completion receipt,
+empty/reasoning-only answers and malformed/oversized events fail explicitly.
+Interrupted tool fragments cannot reach execution. No pending routing/provider
+PR files were changed. Eight original regressions failed before the fix; 54
+focused tests and 63 inference foundation tests now pass, including real HTTP
+and actual SQLite close/reopen/retry with no partial tool execution. Full local
+suite and branch CI remain pending. No live model or production deployment.
+
+Master inventory, dependency order, evidence and deployment gates are in
+docs/ATLAS_{MASTER_AUDIT,IMPLEMENTATION_ROADMAP,PROGRESS,TEST_RESULTS,DEPLOYMENT}.md.
+Latest main CI 38991786626 is green, including Windows; old startup failure
+must not be reported as a fresh confirmed defect. Next: finish suite/CI for
+#300, then reconcile #270 → #274 → #276 → #278 → #282 and mission #291 with
+their existing owners, before adding a native Linux worker adapter. Universal
+provider wait/resume, cloud artifacts and desktop-offline acceptance remain open.
+
+Published as PR #307, commit f8f894e. CI 38995719143: 12 of 13 jobs passed,
+Windows local-control pending at checkpoint. Linux full suite, real Genesis
+coder/browser and remaining package checks passed. Local full suite continues
+in session 36438 (`.stream-suite.log`), with slow Genesis repair cases; do not
+record a local total until it finishes. No merge or production deployment.
 ## 2026-10-17 — customer-safe chat activity and readiness audit (#309)
 
 Branch codex/customer-chat-privacy starts at current main 1c3be5b in the reusable isolated infrastructure worktree. Existing SSE serialization now drops internal thinking, raw errors, tool previews/labels, agent reports and diagnostic completion metadata, retaining safe progress/recovery/approval state and validated customer repository links. Activity defaults collapsed with keyboard-accessible plus/minus. Active provider route/ChatSection ownership is preserved. Nine focused tests pass; real Chromium desktop/mobile keyboard/privacy gate passed; typecheck passed. Changed-file lint and production build are running (session 11047). No deployment or global confidentiality claim.
@@ -488,3 +513,14 @@ Prompt integration repair (#310): complete web validation caught an existing Gen
 ## 2026-10-17 — native Atlas branding (#317)
 
 Current-main branch codex/mobile-brand-assets replaces template native icons with sixteen raster assets derived directly from the existing Atlas favicon SVG. Adds a repeatable Chromium-based generator, source/artifact manifest, opaque 1024px iOS icon, five Android legacy/round/adaptive foreground densities and matching background color. No new artwork or runtime dependency. Real pixel checks caught and fixed SVG fill inheritance during visual QA; negative-space RGB regression failed before and passes after. Eleven mobile tests and syntax checks pass. Store icons were inspected visually. Device masking/launch assets, working bootstrap, signed builds and store submission remain incomplete; no App Store readiness claim. #316 native compatibility repair is a separate pending PR.
+
+## 2026-10-17 — chat and pending-runtime release (#304, #306, #311)
+
+- Reconciled the older owner checkout onto current main without replacing newer inference, tenancy, streaming, scroll-follow, Genesis, CRM or cumulative-budget work. Current main already contained the missing-database history boundary fix.
+- #304 merged as 832263e. Chat rejects non-object JSON, invalidates late history/poll/task/SSE responses on navigation and restores failed/truncated drafts without overwriting new input. Five actual-component race/draft regressions passed; local lint/typecheck/build passed; web suite 488 passed, one optional browser skip. All CI jobs passed (38995578956).
+- Cloudflare deploy 38996029310 succeeded. Fresh post-deployment hosted chat gate 39006489138 passed streaming and non-streaming; both replies were stored and served by Workers AI. A later concurrent customer-activity release 9443843 also deployed successfully (39006513100). These receipts establish hosted chat, not live CRM/Genesis publication or overall product readiness.
+- #306 merged as 49b0be4. Local daemon now integrates durable business responsibilities/preparation UI, real patch-file evidence verification and explicit-plan workforce execution. Existing kernel/team/goal/automation/remote/Genesis wiring is preserved. Focused business/evidence/workforce/HTTP: 22 passed. Full CI passed, including Linux/Windows and real-coder/browser Genesis (38995678008).
+- Local broad runtime test under concurrent host load: 715 passed, 20 dependency/platform skips, six bounded-time failures (two boot, four Genesis operation waits). Isolated rerun of both daemon boot cases and the full affected Genesis operation file: 10/10 passed. No assertion or deadline was weakened. This discrepancy remains part of release evidence.
+- #311 publishes the unique remaining dangling-symlink and Windows environment/constrained executable-path fixes; current namespace/container, npm/npx and Windows process cleanup implementations are retained. Focused tests: 41/41 passed. The protected sandbox PR remains unmerged pending full CI and owner review under PROGRAM section 3; no review/ruleset bypass attempted.
+- Local runtime code merged to main is available for an installed daemon update/restart; no fleet rollout, signed installer release, production database maintenance, live CRM send or business deployment is asserted.
+- Next: finish #311's Windows/review gate; independently evaluated test/live receipts for business outcomes; actual configured Genesis/CRM acceptance; leased/deduplicated recurring business work and cumulative business-level spending. Reuse the existing task/kernel/approval/budget services and active PR ownership rather than introducing another scheduler. Generated local audit logs and worktree metadata are retained locally, not committed as product source.
