@@ -483,3 +483,9 @@ must not be reported as a fresh confirmed defect. Next: finish suite/CI for
 #300, then reconcile #270 → #274 → #276 → #278 → #282 and mission #291 with
 their existing owners, before adding a native Linux worker adapter. Universal
 provider wait/resume, cloud artifacts and desktop-offline acceptance remain open.
+
+Published as PR #307, commit f8f894e. CI 38995719143: 12 of 13 jobs passed,
+Windows local-control pending at checkpoint. Linux full suite, real Genesis
+coder/browser and remaining package checks passed. Local full suite continues
+in session 36438 (`.stream-suite.log`), with slow Genesis repair cases; do not
+record a local total until it finishes. No merge or production deployment.

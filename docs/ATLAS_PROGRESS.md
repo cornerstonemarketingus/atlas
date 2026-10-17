@@ -19,8 +19,12 @@ Evidence: eight initial negative tests failed on original code (including actual
 HTTP CRLF); 54 focused tests then passed. Actual SQLite close/reopen proves an
 interrupted call leaves the objective retryable and executes no tool. This does
 not prove safe replay after a tool already executed earlier in a task.
-Existing inference foundation passes 63/63. Full local-control suite and remote
-CI are pending; see ATLAS_TEST_RESULTS.md.
+Existing inference foundation passes 63/63. Reviewable PR:
+https://github.com/cornerstonemarketingus/atlas/pull/307 (commit f8f894e).
+CI run 38995719143 has 12/13 jobs passing, Windows pending at checkpoint.
+Local full suite remains active (session 36438, `.stream-suite.log`); Genesis
+repair checks are slow. See ATLAS_TEST_RESULTS.md; neither entire run is yet
+counted successful. No merge performed.
 
 Current-main CI is green; historical Windows startup failure is not reproduced
 as a current production defect. The first sandboxed boot attempt could not

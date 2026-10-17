@@ -10,7 +10,8 @@ Date: 2026-10-16. Node v24.14.0 on Windows; CI pins Node 22.
 | git diff --check | Pass | Whitespace only |
 | Full local-control | Pending | Log `.stream-suite.log`; do not infer success from focused checks |
 | Latest main CI 38991786626 | All 13 jobs pass | Main 1c3be5b, not this branch |
-| Branch CI / live model / production | Pending / not run / not deployed | Required before completion claims |
+| Branch CI 38995719143, commit f8f894e, PR #307 | 12 of 13 jobs passed; Windows pending at checkpoint | Includes real Genesis coder/browser, Linux full local-control, web, CLI and inference; not final CI success |
+| Live model / production | Not run / not deployed by this session | No production acceptance claim |
 
 Commands from repository root:
 
@@ -26,3 +27,9 @@ recoverable diagnostics and explicit retry without executing the partial call.
 Not established: live provider reliability, deployed cloud claims, fallback
 privacy/capability qualification, safe replay after earlier consequential tools,
 Linux container isolation, live mobile approvals or real-model website quality.
+
+Local full suite remains active in execution session 36438, log
+`.stream-suite.log` in the isolated worktree. Genesis repair tests are taking
+several minutes each; observed successful cases do not establish suite success.
+Use remote CI for cross-platform results and inspect this log before counting
+the local run. No timeout assertions were relaxed.
