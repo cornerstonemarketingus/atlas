@@ -1,5 +1,22 @@
 # Atlas program progress (handoff log)
 
+## 2026-10-17 — scoped business evidence receipts (#339)
+
+The existing production mission artifact verifier now persists a digest-bound
+receipt that separates verified patch bytes from unavailable test validation and
+unevaluated live outcomes. Executor verification claims are overwritten;
+non-patch evidence stays explicitly executor-reported. Dependency handoffs and
+durable mission snapshots carry the same scoped receipt. Required validation
+fails closed until a trusted test adapter exists. CLI validation remains internal;
+the daemon's exit code and combined text cannot establish test success.
+
+Two spoofed-success regressions failed before the change. Focused receipt,
+scheduler, mission service and business service suites: 24 passed. Full local
+suite was interrupted during Genesis fixtures amid shared Windows host load;
+it did not produce a complete passing result. Next: CI on this branch, then a
+trusted post-change test receipt adapter bound to reviewed patch digests and
+separate live-health/business outcome adapters. No live business action claimed.
+
 Handoff log for [`PROGRAM.md`](PROGRAM.md). Append one row per PR, newest
 last. A new session resumes from the last row's "Next".
 
