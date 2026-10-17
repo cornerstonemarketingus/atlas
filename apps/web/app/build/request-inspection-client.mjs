@@ -34,3 +34,13 @@ export async function reconcileTaskRequest({ requestKey, fetcher = fetch, signal
   if (!response.ok) throw new Error("Execution evidence is unavailable. Refresh saved requests before checking again. No task was started.");
   return response.json();
 }
+
+/** @param {{requestKey: string, enabled: boolean, fetcher?: typeof fetch}} options */
+export async function configureTaskObservation({ requestKey, enabled, fetcher = fetch }) {
+  if (!TASK_REQUEST_KEY.test(requestKey) || typeof enabled !== "boolean") throw new Error("Invalid observation setting");
+  const response = await fetcher(`/api/tasks/requests/${encodeURIComponent(requestKey)}/observation`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }), cache: "no-store", signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error("Observation settings unavailable. Refresh saved requests before trying again.");
+  return response.json();
+}

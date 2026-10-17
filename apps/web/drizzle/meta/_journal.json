@@ -148,6 +148,13 @@
       "when": 1792108800000,
       "tag": "0020_task_execution_outcomes",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1792195200000,
+      "tag": "0022_task_outcome_observation",
+      "breakpoints": true
     }
   ]
 }
