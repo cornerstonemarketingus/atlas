@@ -23,7 +23,7 @@ try {
   if (startedHere) simctl(['boot', device.id]);
   simctl(['bootstatus', device.id, '-b'], 240000);
   simctl(['install', device.id, app], 60000);
-  const receipt = simctl(['launch', '--terminate-running-process', device.id, appId], 60000);
+  const receipt = simctl(['launch', `--stdout=${resolve(output, 'app.stdout.log')}`, `--stderr=${resolve(output, 'app.stderr.log')}`, device.id, appId], 60000);
   writeFileSync(resolve(output, 'launch.txt'), receipt);
   if (!new RegExp(`${appId.replaceAll('.', '\\.')}:[ \\t]+[0-9]+`).test(receipt)) throw new Error('Simulator did not return an application launch receipt');
   await new Promise(resolve => setTimeout(resolve, 15000));
@@ -40,7 +40,7 @@ try {
   try { simctl(['io', device.id, 'screenshot', resolve(output, 'failure.png')], 15000); }
   catch { /* Keep the original failure even if the simulator is unresponsive. */ }
   throw error;
- } finally {
+} finally {
   // This CI app has no account, pairing code or credential. Keep bounded
   // native process logs in CI artifacts, never in the customer interface.
   try {
