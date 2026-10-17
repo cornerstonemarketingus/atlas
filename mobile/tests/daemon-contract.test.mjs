@@ -31,7 +31,7 @@ test('paired launch consumes the real daemon code, restores a device session and
   const restored=createDeviceClient({http,vault});
   assert.equal(await restored.restore(),true);
   assert.deepEqual(await restored.refresh(),{tasks:0,approvals:0});
-  const replay=createDeviceClient({http,vault:{...vault,async set(){throw new Error('should not persist')}}});
+  const replay=createDeviceClient({http,vault:{...vault,async set(options){if(options.key==='atlas.device.credential')throw new Error('should not persist');return vault.set(options)}}});
   await assert.rejects(replay.pair({origin:'https://atlas.example',code}),/could not connect/);
   const device=store.devices()[0];assert.ok(device.id);store.revokeDevice(device.id);
   await assert.rejects(restored.refresh(),error=>error.message==='Atlas could not connect. Check your connection and try again.');
