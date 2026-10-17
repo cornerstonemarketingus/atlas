@@ -14,7 +14,7 @@ export function decodeRequestCursor(cursor) {
 
 /** Two matches suffice to detect ambiguity, without loading an entire task history. */
 export async function requestTaskMatches(d1, scope, correlationId) {
-  const { results } = await d1.prepare("SELECT task_id, conversation_id, repository, branch, substr(objective, 1, 240) AS objective, execution_provider, merge_policy, dispatch_state FROM tasks WHERE tenant_id = ? AND requested_by = ? AND correlation_id = ? ORDER BY id LIMIT 2")
+  const { results } = await d1.prepare("SELECT t.task_id, t.conversation_id, t.repository, t.branch, substr(t.objective, 1, 240) AS objective, t.execution_provider, t.merge_policy, t.dispatch_state, c.run_id AS claimRunId, c.run_attempt AS claimRunAttempt, c.claimed_at AS claimedAt, c.expires_at AS claimExpiresAt FROM tasks t LEFT JOIN task_execution_claims c ON c.task_id = t.task_id AND c.tenant_id = t.tenant_id AND c.requested_by = t.requested_by WHERE t.tenant_id = ? AND t.requested_by = ? AND t.correlation_id = ? ORDER BY t.id LIMIT 2")
     .bind(scope.tenantId, scope.principal, correlationId).all();
   return results;
 }
@@ -25,7 +25,8 @@ async function inspectRow(d1, scope, row) {
   if (matches.length > 1) return { ...view, state: "ambiguous" };
   if (matches.length === 1) {
     const task = matches[0];
-    return { ...view, state: "task-saved", task: { taskId: task.task_id, conversationId: task.conversation_id, repository: task.repository, branch: task.branch, objective: task.objective, dispatchState: task.dispatch_state } };
+    const execution = task.claimRunId === null ? null : { runId: task.claimRunId, runAttempt: task.claimRunAttempt, claimedAt: task.claimedAt, expiresAt: task.claimExpiresAt };
+    return { ...view, state: "task-saved", task: { taskId: task.task_id, conversationId: task.conversation_id, repository: task.repository, branch: task.branch, objective: task.objective, dispatchState: task.dispatch_state, execution } };
   }
   if (row.state !== "completed") return view;
   try {

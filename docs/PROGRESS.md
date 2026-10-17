@@ -626,3 +626,22 @@ unchanged task/request/usage snapshots and zero external execution calls.
 No production migration, secret transfer, deployment, real dispatch or physical
 phone acceptance. Next: finish #276 CI/review, propagate to #278 claims and
 #282 result ownership; retain existing persistence/approval gates.
+
+## 2026-10-17 — integrated execution ownership gate (#277 / #278)
+
+Merged updated #276 into existing codex/execution-claims. Current main 1e0909f,
+atomic monthly admission, coder fallback, trusted claim/report separation and
+the fixed Saved requests component coexist without source conflicts. Existing
+immutable task/run/attempt ownership and lease policy remain unchanged.
+
+Build/typecheck pass; full web 545 pass, four optional skips, zero failures
+(549 total). Runner/local scripts 83/83; inherited recovery race guards 9/9.
+All ten workflows pass the original checker using bundled Python, isolated
+scratch PyYAML and installed Git Bash. Full web lint passed. Parent #276 at
+5a9ba04 passed all 13 CI jobs; fresh integrated claims CI remains required.
+No checker, security assertion or approval was weakened.
+
+Fresh claims CI and protected workflow/identity review are required. Controlled
+signed-JWT/SQLite/GitHub fixtures are not live cloud execution or deployment.
+No production migration, credentials, dispatch or workflow enablement occurred.
+Next: #282 result callback ownership against this parent, then outcome recovery.
