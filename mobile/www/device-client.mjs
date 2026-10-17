@@ -6,10 +6,35 @@ export function trustedOrigin(value) {
   if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('Enter an HTTPS origin without a path.');
   return url.origin;
 }
-export function createDeviceClient({ http, vault, timeoutMs = 12000 }) {
+export function createDeviceClient({ http, vault, timeoutMs = 12000, vaultTimeoutMs = 5000 }) {
   let record = null;
   let generation = 0;
   let busy = false;
+  let storageCheck = null;
+  async function checkStorage() {
+    let timer;
+    try {
+      if (!storageCheck) {
+        const value = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+        const key = 'atlas.secure-storage-check';
+        const pending = (async () => {
+          try {
+            await vault.set({ key, value });
+            if ((await vault.get({ key }))?.value !== value) throw new Error('Storage verification failed');
+          } finally { await vault.remove({ key }); }
+        })();
+        storageCheck = pending;
+        // Reuse a still-running native probe after timeout instead of piling up calls.
+        const finished = () => { if (storageCheck === pending) storageCheck = null; };
+        pending.then(finished, finished);
+      }
+      await Promise.race([storageCheck, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Storage timeout')), vaultTimeoutMs); })]);
+    } catch {
+      const error = new Error('Atlas could not prepare secure device access. Unlock your device and try again.');
+      error.code = 'SECURE_STORAGE_UNAVAILABLE';
+      throw error;
+    } finally { clearTimeout(timer); }
+  }
   async function request(origin, path, { token, data } = {}) {
     let timer;
     try {
@@ -27,6 +52,8 @@ export function createDeviceClient({ http, vault, timeoutMs = 12000 }) {
   return {
     async restore() {
       const version = generation;
+      await checkStorage();
+      if (version !== generation) return false;
       const stored = await vault.get({ key: KEY }).catch(() => null);
       if (!stored?.value) return false;
       try {
@@ -44,6 +71,8 @@ export function createDeviceClient({ http, vault, timeoutMs = 12000 }) {
       busy = true;
       const version = generation;
       try {
+        await checkStorage();
+        if (version !== generation) return false;
         const result = await request(origin, '/v1/pair/claim', { data: { code, name: 'Atlas mobile' } });
         if (typeof result?.deviceToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(result.deviceToken) || !result.device?.id) throw new Error(SAFE_ERROR);
         if (version !== generation) return false;

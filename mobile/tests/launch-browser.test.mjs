@@ -16,14 +16,19 @@ test('packaged phone UI pairs through native adapters, keeps secrets out of brow
   t.after(async()=>{await browser.close();await new Promise(resolve=>server.close(resolve));});
   const page=await browser.newPage({viewport:{width:390,height:844}});
   await page.addInitScript(()=>{
-    window.androidBridge={};window.vault=new Map();window.fail=false;
+    window.androidBridge={};window.vault=new Map();window.fail=false;window.vaultFail=true;window.httpCalls=0;
     window.Capacitor={PluginHeaders:[{name:'SecureStoragePlugin',methods:['get','set','remove'].map(name=>({name,rtype:'promise'}))},{name:'CapacitorHttp',methods:[{name:'request',rtype:'promise'}]}],nativePromise:async(plugin,method,options)=>{
-      if(plugin==='SecureStoragePlugin') {if(method==='get')return {value:window.vault.get(options.key)};if(method==='set')window.vault.set(options.key,options.value);if(method==='remove')window.vault.delete(options.key);return {};}
+      if(plugin==='SecureStoragePlugin') {if(window.vaultFail)throw new Error('PRIVATE_KEYCHAIN_FAILURE');if(method==='get')return {value:window.vault.get(options.key)};if(method==='set')window.vault.set(options.key,options.value);if(method==='remove')window.vault.delete(options.key);return {};}
+      window.httpCalls++;
       if(window.fail)throw new Error('PRIVATE_BACKEND_STACK');
       return {status:200,url:options.url,data:options.method==='POST'?{device:{id:'phone'},deviceToken:'a'.repeat(43)}:options.url.endsWith('/tasks')?{tasks:[{error:'PRIVATE_TASK_STACK'}]}:{approvals:[{status:'pending',summary:'PRIVATE_APPROVAL'}]}};
     }};
   });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
+  await page.getByRole('button',{name:'Retry secure setup'}).waitFor();
+  assert.equal(await page.locator('form').isVisible(),false);assert.equal(await page.evaluate(()=>window.httpCalls),0);assert.equal((await page.locator('body').innerText()).includes('PRIVATE'),false);
+  await page.evaluate(()=>{window.vaultFail=false});await page.getByRole('button',{name:'Retry secure setup'}).click();
+  await page.locator('form').waitFor();assert.equal(await page.evaluate(()=>window.vault.size),0);
   await page.locator('#origin').fill('https://atlas.example');await page.locator('#code').fill('123456');await page.getByRole('button',{name:'Pair securely'}).click();
   await page.waitForFunction(()=>document.querySelector('#tasks').textContent==='1');
   assert.equal(await page.locator('#approvals').textContent(),'1');
