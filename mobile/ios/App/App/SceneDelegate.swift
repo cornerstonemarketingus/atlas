@@ -14,6 +14,16 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         #if DEBUG
         if ProcessInfo.processInfo.environment["ATLAS_NATIVE_SMOKE"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+                let probe = """
+                (()=>{const s=window.__atlasSmokeStorage={stage:'set'};const key='atlas.ci.nonsecret-check';const call=(method,options)=>window.Capacitor.nativePromise('SecureStoragePlugin',method,options);call('set',{key,value:'nonsecret'}).then(()=>{s.stage='get';return call('get',{key})}).then(r=>{s.matches=r.value==='nonsecret';s.stage='remove';return call('remove',{key})}).then(()=>s.stage='complete').catch(()=>{s.failed=true;call('remove',{key}).catch(()=>{})});return true})()
+                """
+                (self?.window?.rootViewController as? CAPBridgeViewController)?.webView?.evaluateJavaScript(probe)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                    let storage = "JSON.stringify(window.__atlasSmokeStorage || {})"
+                    (self?.window?.rootViewController as? CAPBridgeViewController)?.webView?.evaluateJavaScript(storage) { result, error in
+                        NSLog("%@", "ATLAS_NATIVE_SMOKE storage=\(result as? String ?? "unavailable") evaluationFailed=\(error != nil)")
+                    }
+                }
                 let script = "JSON.stringify({secureContext:window.isSecureContext,cryptoRandom:typeof window.crypto?.getRandomValues,bridge:typeof window.Capacitor?.nativePromise,headers:(window.Capacitor?.PluginHeaders || []).map(p=>p.name)})"
                 (self?.window?.rootViewController as? CAPBridgeViewController)?.webView?.evaluateJavaScript(script) { result, error in
                     NSLog("%@", "ATLAS_NATIVE_SMOKE runtime=\(result as? String ?? "unavailable") evaluationFailed=\(error != nil)")
