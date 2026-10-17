@@ -8,9 +8,11 @@ Date: 2026-10-16. Node v24.14.0 on Windows; CI pins Node 22.
 | Focused model-stream, conversation, model suites | 54/54 pass | 11 new stream checks, actual HTTP and SQLite restart; no live AI credentials |
 | Inference foundation | 63/63 pass | Existing quota, circuit, error, fingerprint and registry tests; mocked provider boundaries |
 | git diff --check | Pass | Whitespace only |
-| Full local-control | Pending | Log `.stream-suite.log`; do not infer success from focused checks |
+| Full local-control, original branch | 733 total: 707 pass, 6 fail, 20 skip | Five Genesis creation failures and one desktop timing assertion; `.stream-suite.log`; not green |
 | Latest main CI 38991786626 | All 13 jobs pass | Main 1c3be5b, not this branch |
-| Branch CI 38995719143, commit f8f894e, PR #307 | 12 of 13 jobs passed; Windows pending at checkpoint | Includes real Genesis coder/browser, Linux full local-control, web, CLI and inference; not final CI success |
+| Branch CI 38995719143, commit f8f894e, PR #307 | All 13 jobs passed | Includes Windows, real Genesis coder/browser, Linux full local-control, web, CLI and inference; current-main merge needs fresh CI |
+| Current-main focused follow-up | 84 total: 81 pass, 3 Genesis creation timeouts | Transport/conversation/model and desktop cases pass; local Genesis issue remains unresolved |
+| Unchanged local-control main, single Genesis approval case | 1/1 pass | `.baseline-project-check.log` in durable-dispatch worktree; does not establish full baseline parity |
 | Live model / production | Not run / not deployed by this session | No production acceptance claim |
 
 Commands from repository root:
@@ -28,8 +30,7 @@ Not established: live provider reliability, deployed cloud claims, fallback
 privacy/capability qualification, safe replay after earlier consequential tools,
 Linux container isolation, live mobile approvals or real-model website quality.
 
-Local full suite remains active in execution session 36438, log
-`.stream-suite.log` in the isolated worktree. Genesis repair tests are taking
-several minutes each; observed successful cases do not establish suite success.
-Use remote CI for cross-platform results and inspect this log before counting
-the local run. No timeout assertions were relaxed.
+2026-10-17: the full local run finished in 804.6 seconds with six failures.
+The smaller current-main follow-up took 184.5 seconds and retained three
+Genesis timeouts. Timing/load dependence is suspected, not proven; local
+success is not inferred from CI. No timeout assertions were relaxed.

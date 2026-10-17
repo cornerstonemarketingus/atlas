@@ -21,10 +21,11 @@ interrupted call leaves the objective retryable and executes no tool. This does
 not prove safe replay after a tool already executed earlier in a task.
 Existing inference foundation passes 63/63. Reviewable PR:
 https://github.com/cornerstonemarketingus/atlas/pull/307 (commit f8f894e).
-CI run 38995719143 has 12/13 jobs passing, Windows pending at checkpoint.
-Local full suite remains active (session 36438, `.stream-suite.log`); Genesis
-repair checks are slow. See ATLAS_TEST_RESULTS.md; neither entire run is yet
-counted successful. No merge performed.
+CI run 38995719143 finished with all 13 jobs passing, including Windows.
+Local full suite finished: 707 passed, 6 failed, 20 skipped (733 total).
+Current-main focused retest: 81 passed, 3 Genesis timeouts (84 total).
+The inference and desktop cases pass; Genesis timing/load causality remains
+unresolved. See ATLAS_TEST_RESULTS.md. No PR merge performed.
 
 Current-main CI is green; historical Windows startup failure is not reproduced
 as a current production defect. The first sandboxed boot attempt could not
@@ -33,4 +34,6 @@ complete due to restricted subprocess/network access; do not count it as passed.
 Remaining: durable cloud PR integration, universal inference wait/resume and
 spend enforcement, native cloud executor, real-provider/business/phone acceptance.
 No deployment, migration, production data mutation, secret transfer or paid
-provisioning performed. Next: finish suite/CI, then review #270 dependency stack.
+provisioning performed. Next: fresh CI after merging main 9443843 into this
+branch, then durable-dispatch #270 integrated-main deadline regressions. Main's
+newer source and both progress handoffs were preserved during conflict resolution.
