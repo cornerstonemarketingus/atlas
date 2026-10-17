@@ -553,6 +553,20 @@ Privacy #310 deployment 39006513100 succeeded at 9443843; configured authenticat
 - Local runtime code merged to main is available for an installed daemon update/restart; no fleet rollout, signed installer release, production database maintenance, live CRM send or business deployment is asserted.
 - Next: finish #311's Windows/review gate; independently evaluated test/live receipts for business outcomes; actual configured Genesis/CRM acceptance; leased/deduplicated recurring business work and cumulative business-level spending. Reuse the existing task/kernel/approval/budget services and active PR ownership rather than introducing another scheduler. Generated local audit logs and worktree metadata are retained locally, not committed as product source.
 
+## 2026-10-17 — stacked request-deduplication integration (#273 / #274)
+
+Merged the updated #270 parent into existing codex/task-request-idempotency.
+Preserved current Genesis task routing, customer-safe chat changes and the hard
+dispatch acknowledgement deadline. Existing admission/receipt implementation is
+reused; no second scheduler, billing ledger or request-key mechanism added.
+
+Fresh Worker build and typecheck passed; full web suite: 517 total, 515 passed,
+two optional skips, zero failures. The rebuilt authenticated request endpoint
+replays after reconnect without another bill or dispatch; concurrent same-key
+requests enter admission once. Full web lint also passed.
+Fresh CI and tenant-persistence review remain required. No production migration,
+live GitHub dispatch, billing mutation, provisioning or deployment performed.
+Next: #270/#274 CI/review, then update #276 → #278 → #282 in dependency order.
 Native compatibility #316 merged as d96304bc28c21f08e436f0cac15cd4739139f599 after complete cross-platform CI passed (39007576511). Separate protected workflow PR #320 compiled both Android debug and unsigned iOS simulator successfully in run 39007793513, using the same repaired native project sources; actual APK and simulator ZIP artifacts exist (about 6.1MB / 1.9MB). This is compiler evidence, not product launch/physical-device/store acceptance. Workflow #320 awaits configured review before merge. Integrating the merged repair into icons #318; new combined CI is required.
 
 ## 2026-10-17 — native paired launch (#321)

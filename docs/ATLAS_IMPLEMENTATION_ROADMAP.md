@@ -32,7 +32,8 @@ Do not overwrite files owned by pending workstreams. Claim each new issue.
 
 Current follow-up: #270 is integrated with main and adds an enforced dispatch
 deadline, with 505 web tests passing and two optional skips. #274 has received
-the updated parent for validation. Finish their CI/review, then propagate to
+the updated parent and passes its full web suite (515 pass, two optional skips),
+build and typecheck. Finish their CI/review, then propagate to
 #276 → #278 → #282, respecting existing ownership. If held for review, implement an
 independent model-client cancellation/deadline regression without modifying
 #230-owned routing or #240-owned hosted transport.

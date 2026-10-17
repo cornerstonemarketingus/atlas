@@ -1,6 +1,6 @@
 # Atlas verification results
 
-Date: 2026-10-16. Node v24.14.0 on Windows; CI pins Node 22.
+Evidence dates: 2026-10-16–17. Node v24.14.0 on Windows; CI pins Node 22.
 
 | Check | Result | Scope |
 |---|---|---|
@@ -14,6 +14,7 @@ Date: 2026-10-16. Node v24.14.0 on Windows; CI pins Node 22.
 | Integrated inference CI 39007161939, commit 906158a | All 13 jobs passed; #307 merged as af500709 | Exact-head checks verified before ordinary merge |
 | Integrated dispatch #270 Worker and full web suite | Build passes; 505 pass, 2 skip, 0 fail (507 total) | Actual migrated SQLite and built authenticated Worker routes; external GitHub transport simulated |
 | Dispatch typecheck, targeted lint, whitespace | Pass | New enforced-deadline and late-response regressions included in full suite |
+| Integrated request deduplication #274 | Build/typecheck/full lint pass; 515 pass, 2 skip, 0 fail (517 total) | Same-key admission and built authenticated Worker reconnect/replay; GitHub transport simulated |
 | Current-main focused follow-up | 84 total: 81 pass, 3 Genesis creation timeouts | Transport/conversation/model and desktop cases pass; local Genesis issue remains unresolved |
 | Unchanged local-control main, single Genesis approval case | 1/1 pass | `.baseline-project-check.log` in durable-dispatch worktree; does not establish full baseline parity |
 | Live model / production | Not run / not deployed by this session | No production acceptance claim |
