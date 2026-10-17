@@ -497,7 +497,7 @@ late response bodies without changing the uncertain receipt.
 Two regressions pass against actual migrated SQLite and the existing dispatch
 helper. Fresh Worker build passed; complete web suite: 507 total, 505 passed,
 two optional skips, zero failures. Typecheck and whitespace check pass. Targeted
-lint is still running locally; fresh remote CI and existing tenant-persistence
+lint passed; fresh remote CI and existing tenant-persistence
 review gate remain required. No production migration, dispatch, credential
 change or deployment performed. Next: complete #270 CI/review, then integrate
 the existing #274 → #276 → #278 → #282 stack in dependency order.
@@ -508,3 +508,14 @@ run: 707 pass, 6 fail, 20 skip; smaller integrated retest: 81 pass, 3 Genesis
 timeouts. The approval case passes individually on both unchanged main and
 the inference branch. Timing dependence is suspected; no local all-green
 claim. Fresh integrated PR CI is required before ordinary merge.
+
+## 2026-10-17 — chat and pending-runtime release (#304, #306, #311)
+
+- Reconciled the older owner checkout onto current main without replacing newer inference, tenancy, streaming, scroll-follow, Genesis, CRM or cumulative-budget work. Current main already contained the missing-database history boundary fix.
+- #304 merged as 832263e. Chat rejects non-object JSON, invalidates late history/poll/task/SSE responses on navigation and restores failed/truncated drafts without overwriting new input. Five actual-component race/draft regressions passed; local lint/typecheck/build passed; web suite 488 passed, one optional browser skip. All CI jobs passed (38995578956).
+- Cloudflare deploy 38996029310 succeeded. Fresh post-deployment hosted chat gate 39006489138 passed streaming and non-streaming; both replies were stored and served by Workers AI. A later concurrent customer-activity release 9443843 also deployed successfully (39006513100). These receipts establish hosted chat, not live CRM/Genesis publication or overall product readiness.
+- #306 merged as 49b0be4. Local daemon now integrates durable business responsibilities/preparation UI, real patch-file evidence verification and explicit-plan workforce execution. Existing kernel/team/goal/automation/remote/Genesis wiring is preserved. Focused business/evidence/workforce/HTTP: 22 passed. Full CI passed, including Linux/Windows and real-coder/browser Genesis (38995678008).
+- Local broad runtime test under concurrent host load: 715 passed, 20 dependency/platform skips, six bounded-time failures (two boot, four Genesis operation waits). Isolated rerun of both daemon boot cases and the full affected Genesis operation file: 10/10 passed. No assertion or deadline was weakened. This discrepancy remains part of release evidence.
+- #311 publishes the unique remaining dangling-symlink and Windows environment/constrained executable-path fixes; current namespace/container, npm/npx and Windows process cleanup implementations are retained. Focused tests: 41/41 passed. The protected sandbox PR remains unmerged pending full CI and owner review under PROGRAM section 3; no review/ruleset bypass attempted.
+- Local runtime code merged to main is available for an installed daemon update/restart; no fleet rollout, signed installer release, production database maintenance, live CRM send or business deployment is asserted.
+- Next: finish #311's Windows/review gate; independently evaluated test/live receipts for business outcomes; actual configured Genesis/CRM acceptance; leased/deduplicated recurring business work and cumulative business-level spending. Reuse the existing task/kernel/approval/budget services and active PR ownership rather than introducing another scheduler. Generated local audit logs and worktree metadata are retained locally, not committed as product source.
