@@ -469,6 +469,27 @@ test("artifact verification is deterministic and never accepts prose", async (t)
 // Adapter for an existing tool
 // ---------------------------------------------------------------------------
 
+test("artifact verification evidence and error codes cannot persist credentials", async (t) => {
+  const h = await harness(t);
+  const task = runningTask(h.store);
+  const secret = "KNOWN_VAULT_CREDENTIAL_VALUE";
+  const submit = () => h.store.submitArtifact({ tenantId: A, taskId: task.id, kind: "report", content: { rows: 3 } });
+  const artifact = submit();
+  const result = await verifyArtifact(h.store, { tenantId: A, artifactId: artifact.id, knownSecrets: [secret], check: () => ({ ok: true,
+    evidence: [{ check: "rows", output: secret, authorization: "opaque-bearer", credentialRef: "CONNECTION_TOKEN" }] }) });
+  assert.equal(result.verification, "verified");
+  const persisted = h.store.getArtifact(A, artifact.id);
+  assert.equal(JSON.stringify(persisted.verificationEvidence).includes(secret), false);
+  assert.equal(JSON.stringify(persisted.verificationEvidence).includes("opaque-bearer"), false);
+  assert.equal(persisted.verificationEvidence[1].credentialRef, "CONNECTION_TOKEN");
+  const rejected = await verifyArtifact(h.store, { tenantId: A, artifactId: submit().id, knownSecrets: [secret], check: () => {
+    const error = new Error(`Failed ${secret}`); error.code = secret; throw error;
+  } });
+  assert.equal(rejected.verification, "rejected");
+  assert.equal(JSON.stringify(rejected.verificationEvidence).includes(secret), false);
+  assert.equal(rejected.verificationEvidence[0].error.code, "TOOL_ERROR");
+});
+
 test("the existing repository.read tool runs through the authorized executor", async (t) => {
   const h = await harness(t);
   const repository = join(h.directory, "repo");
