@@ -5,6 +5,7 @@ import { conversationWritable, recallForMemory, tenantAllowlist } from "../../..
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
+import { checkAndRecordChatUsage } from "../billing/plan.mjs";
 import { isDeploymentOwner } from "../tasks/self-protection.mjs";
 import { POST as startTask } from "../tasks/route";
 import { allowedRepositories } from "../tasks/dispatch.mjs";
@@ -53,6 +54,21 @@ export async function POST(request: Request) {
   const resolved = resolveChatProvider(process.env, selection);
   if (!resolved.configured) {
     return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
+  }
+  // The hosted model pool is shared, so each signed-in account has a daily
+  // message cap (owners and operator tokens are exempt). Counted before any
+  // write or model call; if usage cannot be read the message is allowed and
+  // the gap is logged, because a database fault must not take chat down.
+  if (account.dbUserId !== null && !isDeploymentOwner(account)) {
+    try {
+      const usage = await checkAndRecordChatUsage(getDb(), account.dbUserId);
+      if (!usage.allowed) {
+        const retryAfter = Math.max(1, Math.ceil((Date.parse(usage.resetsAt) - Date.now()) / 1000));
+        return Response.json({ message: usage.reason, code: usage.code, tier: usage.tier, limit: usage.limit, resetsAt: usage.resetsAt, upgradeUrl: "/pricing" }, { status: 429, headers: { "retry-after": String(retryAfter) } });
+      }
+    } catch (error) {
+      try { console.warn(JSON.stringify({ atlas: "chat", event: "chat.usage_unavailable", error: error instanceof Error ? error.name : "unknown" })); } catch { /* logging never breaks a reply */ }
+    }
   }
   // Every model call reserves through the provider scope's quota ledger (Phase 1.2); none when unbound.
   const endpoint = await governChain(resolved, workerEnv);
