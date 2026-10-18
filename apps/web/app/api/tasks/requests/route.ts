@@ -5,6 +5,11 @@ import { POST as dispatchTask } from "../route";
 import { TASK_REQUEST_KEY, taskRequestFingerprint } from "../task-request-contract.mjs";
 import { executeTaskRequest } from "../task-requests.mjs";
 import { CORRELATION_HEADER } from "../correlation.mjs";
+import { requestInspectionResponse } from "../request-inspection-route.mjs";
+
+export async function GET(request: Request) {
+  return requestInspectionResponse(request);
+}
 
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);

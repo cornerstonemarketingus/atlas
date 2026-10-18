@@ -1,5 +1,28 @@
 # Atlas master implementation progress
 
+## 2026-10-17 — request recovery integration (#275 / #276)
+
+Propagated main 1e0909f through existing dispatch and deduplication parents;
+preserved atomic monthly admission, current account/native changes and both
+appended handoffs. The parents' preceding heads passed all 13 CI jobs; their
+new integrated heads and this recovery revision require fresh CI.
+
+Fixed stale Saved requests responses after close/reopen, refresh, paging,
+version changes and unmount. Poll/list/detail reads are single-flight and a
+batched close/reopen always starts a new session. Reuses the existing read API,
+request receipts and correlation lookup; no automatic dispatch or billing retry.
+
+Six initial regressions failed on the original component; nine final component
+tests pass. Final build, typecheck, full lint and complete web suite pass: 541 total, 537 passed,
+four optional skips. Separately executed actual headless Edge desktop/mobile
+acceptance passes; no physical phone or production acceptance is claimed.
+Existing scoped SQLite/built Worker snapshot and zero-external-call guards pass.
+
+Next: publish #276 validation and fresh CI/review, then integrate #278 execution
+claims and #282 result ownership against this parent. Native cloud worker,
+production migrations, capacity-wait recovery and live business acceptance
+remain open. No production data, credentials or infrastructure changed here.
+
 ## 2026-10-17 — inference merged; durable cloud stack integration
 
 PR #307 merged as af500709 after exact-head CI 39007161939 passed all 13

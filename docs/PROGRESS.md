@@ -603,6 +603,29 @@ Reused the original October 2 implementation and PR rather than duplicate it. Po
 
 The real migrated-DB cap regression fails against current main (30 admitted versus the 20 limit) and passes with the existing atomic upsert. Three focused plan cases pass; complete web build/typecheck/focused lint pass, full web498pass/3optional skips. This fixes concurrent monthly admission counting without changing plan limits, modes, billing credentials or existing authorization. It does not establish live business cash budgets or refund failed-task units. Fresh original PR CI is required before ordinary merge. Next: complete current-head CI and deployment acceptance, then continue persistent cloud/privacy/native release gaps using existing implementations and actual configured gates.
 
+## 2026-10-17 — safe saved-request reconnect and UI recovery (#275 / #276)
+
+Propagated main 1e0909f through #270 and #274 into the existing inspection
+branch, preserving atomic monthly admission and current account/native changes.
+Resolved appended handoff conflicts without replacing source implementations.
+Parents' preceding heads had all 13 CI jobs green; integrated heads need fresh CI.
+
+Fixed RequestHistory list/detail overlap and stale responses after close/reopen,
+refresh, pagination, version changes and unmount. A generation refresh also
+handles batched close/reopen without leaving a cancelled session inactive.
+No dispatch, admission, billing, auth or receipt policy changed.
+
+Six initial component regressions failed on original source; nine final cases
+pass. Actual headless Edge desktop/phone-width acceptance passes with keyboard
+opening, late responses, refresh, pagination, touch targets and GET-only traffic.
+Final build/typecheck/full lint pass; full web: 537 pass, four optional browser
+skips, no failures (541 total). The saved-request browser gate ran separately
+and passed. Migrated SQLite and rebuilt Worker inspection retain scoped access,
+unchanged task/request/usage snapshots and zero external execution calls.
+
+No production migration, secret transfer, deployment, real dispatch or physical
+phone acceptance. Next: finish #276 CI/review, propagate to #278 claims and
+#282 result ownership; retain existing persistence/approval gates.
 ## 2026-10-17 — bounded cloud coder process recovery (#331 / #333)
 
 Existing trusted cloud coder subprocess cleanup now retains SIGKILL after the group leader exits, closes inherited pipes at a bounded cleanup deadline, and isolates progress observer exceptions/rejected promises. Two new real-process regressions failed before the repair and pass after it. Complete Windows runner/local suite: 80 passed, one Linux-only skip; final process suite seven passed, one Linux-only skip. CI must verify the resistant-descendant process-group case before merge. Focused handoff: docs/CLOUD-PROCESS-RECOVERY.md. No production database, provider, credentials or workflow changed. Migration 0017 and its deployment remain paused for exact production approval. Next: complete #333 CI, then continue the existing task/claim/outcome/mission rollout in dependency order; persistent isolated workspace checkpoints remain unfinished.

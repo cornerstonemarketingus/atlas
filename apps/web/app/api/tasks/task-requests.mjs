@@ -1,12 +1,12 @@
 import { newCorrelationId, CORRELATION_HEADER } from "./correlation.mjs";
+import { requestTaskMatches } from "./request-inspection.mjs";
 
 function reply(body, status, correlationId) {
   return Response.json(body, { status, headers: { "cache-control": "no-store", ...(correlationId ? { [CORRELATION_HEADER]: correlationId } : {}) } });
 }
 
 async function pendingRequest(d1, scope, correlationId) {
-  const { results } = await d1.prepare("SELECT task_id, conversation_id, execution_provider, merge_policy, dispatch_state FROM tasks WHERE tenant_id = ? AND requested_by = ? AND correlation_id = ? LIMIT 2")
-    .bind(scope.tenantId, scope.principal, correlationId).all();
+  const results = await requestTaskMatches(d1, scope, correlationId);
   if (results.length !== 1) return reply({ requestState: "pending", correlationId, message: "Your request is saved. Check progress before starting another request." }, 202, correlationId);
   const task = results[0];
   return reply({ requestState: "pending", correlationId, taskId: task.task_id, conversationId: task.conversation_id, runner: task.execution_provider, mergePolicy: task.merge_policy, recorded: true,

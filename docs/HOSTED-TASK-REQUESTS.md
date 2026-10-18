@@ -60,8 +60,10 @@ refunds/settlement remain billing work. A failed dispatch can still consume usag
 Reservations and receipts remain durable indefinitely. They are not automatically
 expired, retried or deleted, because doing so could duplicate work. Operators need
 a later authenticated investigation/settlement flow for abandoned reservations.
-Storage growth, per-tenant request rate governance, retention policy and request
-status lookup without resubmitting the body are follow-ups. There is no lease
+Authenticated history and per-key lookup are implemented in the follow-up
+documented in `HOSTED-REQUEST-INSPECTION.md`, without resubmitting the body.
+Storage growth, per-tenant request rate governance and retention policy remain
+follow-ups. There is no lease
 takeover, persistent queue, automatic worker replacement or new sandbox here.
 
 The tests use real migrated SQLite, concurrent admissions, failure injection and
