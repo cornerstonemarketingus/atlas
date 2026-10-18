@@ -40,7 +40,7 @@ export function parseRateLimitHeaders(headers, now = Date.now()) {
     const ms = parseDurationMs(headerValue(headers, name));
     return ms === null ? null : now + ms;
   };
-  const retryAfter = retryAfterHeaderMs(headers);
+  const retryAfter = retryAfterHeaderMs(headers, now);
   return {
     limitRequests: integer("x-ratelimit-limit-requests"),
     limitTokens: integer("x-ratelimit-limit-tokens"),

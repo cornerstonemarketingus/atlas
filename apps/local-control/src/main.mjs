@@ -59,6 +59,7 @@ import { createCredentialVault } from "./agent/credential-vault.mjs";
 import { openInBrowser, ownerAccount, resolveOwnerToken, signInUrl } from "./identity/owner.mjs";
 import { RemoteAccess } from "./remote/access.mjs";
 import { ACTIVE_STATES, GenesisService, GenesisStore } from "./platform/genesis/index.mjs";
+import { loopPolicyFromEnvironment } from "./platform/loop-policy.mjs";
 import { GenesisExecutor } from "./platform/genesis/executor.mjs";
 import { registerGenesisTools } from "./platform/genesis/tools.mjs";
 import { GenesisPublisher } from "./platform/genesis/publish.mjs";
@@ -67,6 +68,7 @@ import { PreviewManager } from "./platform/genesis/preview.mjs";
 import { createInspector } from "./platform/genesis/inspector.mjs";
 import { createVisionReviewer } from "./platform/genesis/vision.mjs";
 import { createGenesisCoder } from "./platform/genesis/coder.mjs";
+import { ArtifactStore, recordGenesisArtifact } from "./platform/artifacts/index.mjs";
 import { runCheck } from "./platform/self-improve/runtime.mjs";
 import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
 import { createVercelAdapter } from "./agent/infrastructure/vercel.mjs";
@@ -215,6 +217,8 @@ if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.len
 // A schedule that fell due while Atlas was stopped runs once now.
 automations.tick().catch((error) => console.error(`Automation catch-up failed: ${error.message}`));
 
+// What Atlas made (websites, apps, videos, 3D models), content-addressed under the data directory.
+const artifacts = new ArtifactStore({ root: join(dataDirectory, "artifacts") });
 // Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
 const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
 let genesisCreation = null;
@@ -224,6 +228,8 @@ const genesis = new GenesisService({
   onChange: (project) => {
     store.audit("genesis.transition", `${project.name}: ${project.state}`);
     if (project.state === "ready") genesisCreation?.onReady(project.id);
+    // A ready project is recorded as a website/app artifact; failing to record it never blocks the project.
+    if (project.state === "ready") recordGenesisArtifact({ artifacts, project }).catch((error) => store.audit("artifacts.error", `${project.name}: ${error.message}`));
     // Approved or resumed work starts (or continues) without the owner running anything.
     if ((project.state === "approved" || ACTIVE_STATES.includes(project.state)) && genesisExecutor && !genesisExecutor.isRunning(project.id)) genesisExecutor.run(project.id).catch(() => {});
   },
@@ -239,6 +245,8 @@ const genesisExecutor = new GenesisExecutor({
   coder: createGenesisCoder({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan, intelligence: genesis.intelligence }),
   preview: genesisPreviews,
   inspector: createInspector({ artifactsRoot: join(dataDirectory, "genesis", "inspections"), vision: createVisionReviewer() }),
+  // Repair loops stop at a time/token limit or when a failure stops moving (loop-policy.mjs).
+  loopPolicy: loopPolicyFromEnvironment(process.env, (line) => console.log(`Genesis: ${line}`)),
 });
 for (const project of genesis.recover()) console.log(`Genesis: ${project.name} was interrupted and is paused.`);
 // Publishing a finished project is external: it goes through the publish.remote policy and the normal approvals.
@@ -286,6 +294,7 @@ const server = createLocalControlServer({
   automations,
   world,
   goals,
+  artifacts,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },

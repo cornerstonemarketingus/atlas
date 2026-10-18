@@ -1,0 +1,109 @@
+name: Atlas eval
+
+# Dry-run validation on every pull request that touches the harness or its
+# tasks: each task must fail untouched and pass with its recorded solution, so
+# a broken fixture cannot silently skew a pass rate. No model, no secrets.
+#
+# Full runs (a real model against the tasks) happen only on manual dispatch,
+# never on pull requests, so background measurement cannot compete with
+# interactive capacity or spend a provider quota on every push.
+
+on:
+  pull_request:
+    paths:
+      - "packages/atlas-eval/**"
+      - "evals/**"
+      - ".github/workflows/atlas-eval.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/atlas-eval/**"
+      - "evals/**"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "provider:model:API_KEY_ENV (groq:llama-3.3-70b-versatile:GROQ_API_KEY)"
+        required: true
+        type: string
+      only:
+        description: "Run a single task id (blank for all)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-eval-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    name: eval fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Full history: each task checks out an old base commit.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Harness tests
+        working-directory: packages/atlas-eval
+        run: npm test
+
+      - name: Validate every task (fails untouched, passes with its solution)
+        run: node packages/atlas-eval/src/cli.mjs validate
+
+  run:
+    name: eval run
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/atlas-cli/package-lock.json
+
+      - name: Build the coder CLI
+        working-directory: packages/atlas-cli
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      # Provider keys are exposed to this step only; the harness hands the
+      # coder process just the one variable the target names. Inputs reach the
+      # shell through env, never interpolated into the script.
+      - name: Run the tasks
+        env:
+          TARGET: ${{ inputs.target }}
+          ONLY: ${{ inputs.only }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          args=(run --target "$TARGET" --out "$RUNNER_TEMP/eval-report")
+          if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
+          node packages/atlas-eval/src/cli.mjs "${args[@]}"
+          cat "$RUNNER_TEMP/eval-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: |
+            ${{ runner.temp }}/eval-report.json
+            ${{ runner.temp }}/eval-report.md

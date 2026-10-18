@@ -125,12 +125,31 @@ export function githubDispatchRequest({ token, workflow = "atlas-runner.yml", wo
   };
 }
 
-export async function dispatchGitHub(options, fetcher = fetch) {
+export async function dispatchGitHub(options, fetcher = fetch, { timeoutMs = 10_000 } = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) throw new RangeError("Invalid dispatch deadline");
   const request = githubDispatchRequest(options);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
+  let expired = false;
+  let timeout;
+  const deadline = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      expired = true;
+      controller.abort();
+      const error = new Error("Cloud dispatch acknowledgement timed out. Inspect the saved request before retrying.");
+      error.name = "TimeoutError";
+      reject(error);
+    }, timeoutMs);
+  });
+  const pending = Promise.resolve().then(() => fetcher(request.url, { ...request.init, redirect: "error", signal: controller.signal }));
+  // A transport may ignore cancellation. Its late acceptance must not change
+  // the saved uncertain outcome or retain a response body indefinitely.
+  pending.then(response => {
+    if (expired) {
+      try { Promise.resolve(response?.body?.cancel()).catch(() => {}); } catch { /* discard late response */ }
+    }
+  }, () => {});
   try {
-    return await fetcher(request.url, { ...request.init, signal: controller.signal });
+    return await Promise.race([pending, deadline]);
   } finally {
     clearTimeout(timeout);
   }
