@@ -602,3 +602,25 @@ Native source #322 follow-through: audited actual CODEOWNERS/PR paths. This cons
 Reused the original October 2 implementation and PR rather than duplicate it. Posted integration takeover after verifying the sole implementation commit was over 48 hours old, per PROGRAM section 4. Preserved the author code and current main, including source launcher #322 merged as 7bd3c74 after all CI39041528713 passed, and deletion recovery #326 merged as 90dbdce after green CI; recovery deployment39041436007 succeeded. Protected native workflow #320 remains separate and unmerged pending configured review. Resolved only appended PROGRESS conflicts by retaining both handoffs.
 
 The real migrated-DB cap regression fails against current main (30 admitted versus the 20 limit) and passes with the existing atomic upsert. Three focused plan cases pass; complete web build/typecheck/focused lint pass, full web498pass/3optional skips. This fixes concurrent monthly admission counting without changing plan limits, modes, billing credentials or existing authorization. It does not establish live business cash budgets or refund failed-task units. Fresh original PR CI is required before ordinary merge. Next: complete current-head CI and deployment acceptance, then continue persistent cloud/privacy/native release gaps using existing implementations and actual configured gates.
+
+## 2026-10-17 — bounded cloud coder process recovery (#331 / #333)
+
+Existing trusted cloud coder subprocess cleanup now retains SIGKILL after the group leader exits, closes inherited pipes at a bounded cleanup deadline, and isolates progress observer exceptions/rejected promises. Two new real-process regressions failed before the repair and pass after it. Complete Windows runner/local suite: 80 passed, one Linux-only skip; final process suite seven passed, one Linux-only skip. CI must verify the resistant-descendant process-group case before merge. Focused handoff: docs/CLOUD-PROCESS-RECOVERY.md. No production database, provider, credentials or workflow changed. Migration 0017 and its deployment remain paused for exact production approval. Next: complete #333 CI, then continue the existing task/claim/outcome/mission rollout in dependency order; persistent isolated workspace checkpoints remain unfinished.
+
+## 2026-10-17 — scoped business evidence receipts (#339)
+
+The existing production mission artifact verifier now persists a digest-bound
+receipt that separates verified patch bytes from unavailable test validation and
+unevaluated live outcomes. Executor verification claims are overwritten;
+non-patch evidence stays explicitly executor-reported. Dependency handoffs and
+durable mission snapshots carry the same scoped receipt. Required validation
+fails closed until a trusted test adapter exists. CLI validation remains internal;
+the daemon's exit code and combined text cannot establish test success.
+
+Two spoofed-success regressions failed before the change. Focused receipt,
+scheduler, mission service and business service suites: 24 passed. Full local
+suite was interrupted during Genesis fixtures amid shared Windows host load;
+it did not produce a complete passing result. Next: CI on this branch, then a
+trusted post-change test receipt adapter bound to reviewed patch digests and
+separate live-health/business outcome adapters. No live business action claimed.
+
