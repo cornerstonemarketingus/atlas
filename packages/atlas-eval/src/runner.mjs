@@ -37,6 +37,7 @@ export async function runTask({ task, target, agent, repoRoot }) {
     if (setup.files) await workspace.writeFiles(setup.files);
     await git(workspace.root, ["add", "-A"]);
     await git(workspace.root, ["-c", "user.name=atlas-eval", "-c", "user.email=eval@invalid", "commit", "--allow-empty", "--no-verify", "-q", "-m", "eval setup"]);
+    const baseline = (await git(workspace.root, ["rev-parse", "HEAD"])).trim();
 
     const controller = new AbortController();
     try {
@@ -48,7 +49,7 @@ export async function runTask({ task, target, agent, repoRoot }) {
     evidence.agentStatus = outcome.status ?? null;
     if (outcome.message) evidence.agentMessage = String(outcome.message).slice(0, 500);
 
-    const changed = await workspace.changedPaths();
+    const changed = await workspace.changedPaths(baseline);
     evidence.changedPaths = changed.slice(0, 50);
     const argv = task.verify.argv.map((part) => part.replaceAll("{workspace}", workspace.root).replaceAll("{repo}", repoRoot));
     const verify = await runVerify({ argv, cwd: workspace.root, timeoutMs: Math.min(task.timeoutMs, VERIFY_CAP_MS) });
