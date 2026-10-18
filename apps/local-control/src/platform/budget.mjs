@@ -1,7 +1,9 @@
 import { BUDGET_DIMENSIONS } from "../../../../packages/atlas-contracts/src/index.mjs";
 
 /**
- * Per-task budget enforcement over the durable task row.
+ * Task and ancestor budget enforcement over existing durable task rows.
+ * Delegated execution reserves/charges every ancestor atomically; this does
+ * not backfill descendant usage recorded before this accounting was enabled.
  *
  * Limits come from the task's `budget` and usage lives on the task's `usage`,
  * both persisted by the store, so a restarted control plane resumes with what
@@ -53,12 +55,30 @@ export class TaskBudget {
     return task;
   }
 
+  #tasks() {
+    const tasks = []; const seen = new Set(); let task = this.#task();
+    while (task) {
+      if (seen.has(task.id) || tasks.length >= 64) throw new Error("Budget parent chain is cyclic or exceeds 64 tasks.");
+      seen.add(task.id); tasks.push(task);
+      if (!task.parentTaskId) break;
+      task = this.#store.getTask(this.#tenantId, task.parentTaskId);
+      if (!task) throw new Error("Budget parent does not exist in this tenant.");
+    }
+    return tasks;
+  }
+
   snapshot() {
-    const { budget, usage = {} } = this.#task();
-    const remaining = Object.fromEntries(
-      BUDGET_DIMENSIONS.filter((d) => budget[d] !== undefined).map((d) => [d, Math.max(0, budget[d] - (usage[d] ?? 0))]),
-    );
-    return { limits: { ...budget }, used: { ...usage }, remaining };
+    return this.#store.transaction(() => {
+      const tasks = this.#tasks(); const { budget, usage = {} } = tasks[0];
+      const remaining = {};
+      for (const task of tasks) for (const dimension of BUDGET_DIMENSIONS) {
+        if (task.budget[dimension] === undefined) continue;
+        const left = Math.max(0, task.budget[dimension] - (task.usage?.[dimension] ?? 0));
+        remaining[dimension] = Math.min(remaining[dimension] ?? Infinity, left);
+      }
+      return { limits: { ...budget }, used: { ...usage }, remaining,
+        ...(tasks.length > 1 ? { ancestors: tasks.slice(1).map(task => ({ taskId: task.id, limits: task.budget, used: task.usage })) } : {}) };
+    });
   }
 
   /** Remaining allowance for one dimension, or Infinity when the task sets no limit on it. */
@@ -75,30 +95,29 @@ export class TaskBudget {
   reserve(amounts = { toolCalls: 1 }) {
     checkAmounts(amounts);
     const refusal = this.#store.transaction(() => {
-      const task = this.#task();
-      const usage = task.usage ?? {};
-      let over = null;
-      for (const dimension of BUDGET_DIMENSIONS) {
-        const limit = task.budget[dimension];
-        if (limit === undefined) continue;
-        const attempted = (usage[dimension] ?? 0) + (amounts[dimension] ?? 0);
-        // A dimension already at a positive limit is spent; a zero limit only
-        // forbids consuming it, so "no cost allowed" does not block free tools.
-        const used = usage[dimension] ?? 0;
-        const alreadySpent = (amounts[dimension] ?? 0) === 0 && (limit > 0 ? used >= limit : used > limit);
-        if (attempted > limit || alreadySpent) {
-          over = { dimension, attempted, limit };
-          break;
+      const tasks = this.#tasks();
+      // Validate every scope before writing any reservation.
+      for (const task of tasks) {
+        const usage = task.usage ?? {};
+        for (const dimension of BUDGET_DIMENSIONS) {
+          const limit = task.budget[dimension];
+          if (limit === undefined) continue;
+          const used = usage[dimension] ?? 0;
+          const attempted = used + (amounts[dimension] ?? 0);
+          const alreadySpent = (amounts[dimension] ?? 0) === 0 && (limit > 0 ? used >= limit : used > limit);
+          if (attempted > limit || alreadySpent) {
+            const over = { dimension, attempted, limit };
+            this.#emit(task, "budget.exceeded", { phase: "reserve", sourceTaskId: this.#taskId, ...over, usage });
+            return over;
+          }
         }
       }
-      if (over) {
-        this.#emit(task, "budget.exceeded", { phase: "reserve", ...over, usage });
-        return over;
+      for (const task of tasks) {
+        const next = { ...(task.usage ?? {}) };
+        for (const [dimension, value] of Object.entries(amounts)) next[dimension] = (next[dimension] ?? 0) + value;
+        this.#store.recordUsage(this.#tenantId, task.id, next);
+        this.#emit(task, "budget.charged", { phase: "reserve", sourceTaskId: this.#taskId, amounts, usage: next });
       }
-      const next = { ...usage };
-      for (const [dimension, value] of Object.entries(amounts)) next[dimension] = (next[dimension] ?? 0) + value;
-      this.#store.recordUsage(this.#tenantId, this.#taskId, next);
-      this.#emit(task, "budget.charged", { phase: "reserve", amounts, usage: next });
       return null;
     });
     if (refusal) throw new TaskBudgetExceededError(refusal.dimension, refusal.attempted, refusal.limit);
@@ -109,18 +128,57 @@ export class TaskBudget {
   charge(amounts = {}) {
     checkAmounts(amounts);
     const exceeded = this.#store.transaction(() => {
-      const task = this.#task();
-      const next = { ...(task.usage ?? {}) };
-      for (const [dimension, value] of Object.entries(amounts)) next[dimension] = (next[dimension] ?? 0) + value;
-      this.#store.recordUsage(this.#tenantId, this.#taskId, next);
-      this.#emit(task, "budget.charged", { phase: "charge", amounts, usage: next });
-      const over = BUDGET_DIMENSIONS
-        .filter((d) => task.budget[d] !== undefined && next[d] > task.budget[d])
-        .map((d) => ({ dimension: d, attempted: next[d], limit: task.budget[d] }));
-      if (over.length > 0) this.#emit(task, "budget.exceeded", { phase: "charge", over, usage: next });
+      const over = [];
+      for (const task of this.#tasks()) {
+        const next = { ...(task.usage ?? {}) };
+        for (const [dimension, value] of Object.entries(amounts)) next[dimension] = (next[dimension] ?? 0) + value;
+        this.#store.recordUsage(this.#tenantId, task.id, next);
+        this.#emit(task, "budget.charged", { phase: "charge", sourceTaskId: this.#taskId, amounts, usage: next });
+        const exceeded = BUDGET_DIMENSIONS
+          .filter(d => task.budget[d] !== undefined && next[d] > task.budget[d])
+          .map(d => ({ dimension: d, attempted: next[d], limit: task.budget[d] }));
+        if (exceeded.length) this.#emit(task, "budget.exceeded", { phase: "charge", sourceTaskId: this.#taskId, over: exceeded, usage: next });
+        over.push(...exceeded);
+      }
       return over;
     });
     return { exceeded, snapshot: this.snapshot() };
+  }
+
+  /**
+   * Returns the unused part of an earlier `reserve()` at every scope, e.g. a
+   * GPU reservation settled below its estimate. `ref` identifies the
+   * settlement so a caller resuming after a crash can tell whether it already
+   * happened (see `hasRelease`). Refuses, writing nothing, if any scope has
+   * less recorded usage than the amount returned: a release can only undo a
+   * reservation, never create allowance.
+   */
+  release(amounts, { ref } = {}) {
+    checkAmounts(amounts);
+    if (typeof ref !== "string" || !ref) throw new Error("A budget release must carry a settlement ref.");
+    this.#store.transaction(() => {
+      const tasks = this.#tasks();
+      for (const task of tasks) for (const [dimension, value] of Object.entries(amounts)) {
+        if ((task.usage?.[dimension] ?? 0) < value) throw new Error(`Budget release of '${dimension}' exceeds recorded usage.`);
+      }
+      for (const task of tasks) {
+        const next = { ...(task.usage ?? {}) };
+        for (const [dimension, value] of Object.entries(amounts)) next[dimension] = (next[dimension] ?? 0) - value;
+        this.#store.recordUsage(this.#tenantId, task.id, next);
+        this.#emit(task, "budget.charged", { phase: "release", sourceTaskId: this.#taskId, amounts: {}, released: amounts, ref, usage: next });
+      }
+    });
+    return this.snapshot();
+  }
+
+  /** True when a release with this settlement ref is already recorded on the task. */
+  hasRelease(ref) {
+    for (let afterSeq = 0; ;) {
+      const events = this.#store.listEvents(this.#tenantId, { taskId: this.#taskId, afterSeq, limit: 500 });
+      if (!events.length) return false;
+      if (events.some(event => event.type === "budget.charged" && event.payload?.phase === "release" && event.payload?.ref === ref)) return true;
+      afterSeq = events.at(-1).seq;
+    }
   }
 
   #emit(task, type, payload) {

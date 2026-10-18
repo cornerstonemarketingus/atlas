@@ -122,3 +122,43 @@ test("evaluates a tool's declared capability, not a hardcoded 'read'", async () 
 function hasCode(code: ReadOnlyToolRegistryError["code"]): (error: unknown) => boolean {
   return (error) => error instanceof ReadOnlyToolRegistryError && error.code === code;
 }
+
+import { RepositoryToolInputError } from "../src/infrastructure/repository-read-only-tools.js";
+
+test("input recovery keeps policy, scope and unexpected validator errors fatal", async () => {
+  for (const kind of ["policy", "scope", "internal"] as const) {
+    let validated = false;
+    const target = registry(kind === "policy" ? "deny" : "allow");
+    target.register({ name: "test", description: "test", risk: "low", validateInput: () => {
+      validated = true; throw new Error("internal validator fault");
+    }, execute: async () => { assert.fail("must not execute"); } });
+    await assert.rejects(target.execute({ name: "test", input: {},
+      scope: { kind: "repository", repositoryId: kind === "scope" ? "other" : "atlas" }, context: { repositoryId: "atlas" },
+    }), kind === "internal" ? /internal validator fault/u : hasCode(kind === "policy" ? "POLICY_DENIED" : "SCOPE_MISMATCH"));
+    assert.equal(validated, kind === "internal");
+  }
+});
+
+test("input errors are redacted and redactor failures stay fatal", async () => {
+  for (const broken of [false, true]) {
+    const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] },
+      redactor: { redact: async () => {
+        if (broken) throw new Error("redactor unavailable");
+        return { schemaVersion: 1, scannedCharacters: 15, text: "safe input error", redactionCount: 1, findings: [], truncated: false };
+      } },
+    });
+    target.register({ name: "test", description: "test", risk: "low", validateInput: () => {
+      throw new RepositoryToolInputError("sensitive input");
+    }, execute: async () => { assert.fail("must not execute"); } });
+    const request = target.execute({ name: "test", input: {}, scope: { kind: "global" }, context: { repositoryId: "atlas" } });
+    if (broken) await assert.rejects(request, /redactor unavailable/u);
+    else {
+      const result = await request;
+      assert.equal(result.status, "failed");
+      if (result.status === "failed") {
+        assert.equal(result.message, "safe input error");
+        assert.equal(result.errorCode, "INVALID_TOOL_INPUT");
+      }
+    }
+  }
+});

@@ -23,6 +23,15 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const COMMON_SHARED = ["src/http.mjs", "scripts/check.mjs"];
+/**
+ * Atlas backend primitives every generated app gets by default: sign-in,
+ * file storage, per-app secrets and scheduled jobs. The cron parser is the
+ * one Atlas automations use, copied in so the app stays dependency-free.
+ */
+const BACKEND = ["tests/backend.test.mjs", "src/backend.mjs", "src/auth.mjs", "src/files.mjs", "src/secrets.mjs", "scripts/secret.mjs", "src/jobs.mjs", "src/queue.mjs", { from: "../../automations/cron.mjs", target: "src/cron.mjs" }];
+
+/** Secret names for the integrations a spec asks for; values are set by the owner, never generated. */
+const INTEGRATION_SECRETS = { payments: ["PAYMENTS_SECRET_KEY"], email: ["EMAIL_API_KEY"], sms: ["SMS_API_KEY"], "google-oauth": ["GOOGLE_CLIENT_SECRET"], calendar: [] };
 
 const ACCENTS = { blue: "#2563eb", green: "#15803d", red: "#b91c1c", orange: "#c2410c", purple: "#7c3aed", teal: "#0f766e", earthy: "#8a5a2b", warm: "#c2410c", dark: "#334155", black: "#1f2937" };
 
@@ -70,6 +79,18 @@ function appConfig(spec) {
     home: booking ? "book" : "dashboard",
     booking,
     entities,
+    ...backendConfig(spec),
+  };
+}
+
+/** Which backend primitives the app turns on. Sign-in is on when the spec asks for email and password sign-in. */
+function backendConfig(spec) {
+  const password = Boolean(spec.auth?.required && spec.auth.method === "password");
+  return {
+    auth: { required: password, signup: "first-user" },
+    files: { enabled: true, maxBytes: 10 * 1024 * 1024 },
+    secrets: [...new Set((spec.integrations ?? []).flatMap((integration) => INTEGRATION_SECRETS[integration.id] ?? []))],
+    jobs: password ? [{ name: "purge-expired-sessions", schedule: "17 * * * *" }] : [],
   };
 }
 
@@ -90,7 +111,15 @@ ${commands.map((line) => line).join("\n")}
 
 ${[...spec.workflows.map((flow) => `- ${flow.title}`), ...(spec.pages?.length ? [`- Pages: ${spec.pages.map((page) => page.title).join(", ")}`] : [])].join("\n")}
 
-## Assumptions
+${template.shared.includes("src/auth.mjs") ? `## Built in
+
+- **Sign-in** (\`src/auth.mjs\`): email and password, scrypt hashes, HttpOnly session cookies. ${spec.auth?.required && spec.auth.method === "password" ? "On: the first person to sign up becomes the owner and adds everyone else." : "Off: set \`auth.required\` to \`true\` in app.config.json to require it."}
+- **Files** (\`src/files.mjs\`): uploads at \`/api/files\` with a size limit and checked file types, stored in \`data/files/\`.
+- **Secrets** (\`src/secrets.mjs\`): \`node scripts/secret.mjs set NAME\` stores a key in \`data/secrets.json\` (git-ignored); an environment variable of the same name wins. Never sent to the browser.
+- **Scheduled jobs** (\`src/jobs.mjs\`): cron schedules in app.config.json \`jobs\`, the work in server.mjs.
+- **Background queue** (\`src/queue.mjs\`): durable jobs that survive restarts, deduplicate by key and retry with backoff; \`backend.queue.enqueue(kind, payload)\` with handlers passed as \`queueHandlers\`.
+
+` : ""}## Assumptions
 
 ${spec.assumptions.map((line) => `- ${line}`).join("\n")}
 `;
@@ -111,38 +140,60 @@ function servicesFor(spec) {
   return list.map(([title, text]) => ({ title, text }));
 }
 
+/** Plain, factual one-liners for the services owners most often list. Anything else gets a neutral sentence, never a claim. */
+const SERVICE_BLURBS = [
+  [/fram/iu, "Wood framing for new-construction projects."],
+  [/window/iu, "Window installation for new construction."],
+  [/door/iu, "Exterior door installation for new construction."],
+  [/housewrap|house wrap|weather barrier/iu, "Housewrap installed as part of the building envelope."],
+];
+const blurbFor = (service) => SERVICE_BLURBS.find(([pattern]) => pattern.test(service))?.[1] ?? `${service}.`;
+
+const PLACEHOLDER = (what) => `[Add ${what} here before you publish.]`;
+
 function siteConfig(spec) {
+  const named = spec.services?.length > 0;
   const who = spec.business?.kind ? `${spec.business.kind[0].toUpperCase()}${spec.business.kind.slice(1)}` : spec.name;
-  const services = servicesFor(spec);
+  const services = named ? spec.services.map((title) => ({ title, text: blurbFor(title) })) : servicesFor(spec);
   const trade = spec.business?.phrase ?? "business";
+  const place = spec.location ? [spec.location.city, spec.location.region].filter(Boolean).join(", ") : "";
+  const related = (page) => {
+    const words = page.id.split("-").filter((word) => !["and", "the"].includes(word));
+    const matched = services.filter((service) => words.some((word) => service.title.toLowerCase().includes(word.replace(/s$/u, ""))));
+    return matched.length ? matched : services;
+  };
   const pages = spec.pages.map((page) => {
     const base = { id: page.id, title: page.title };
-    if (page.id === "home") return { ...base, headline: `${who} you can count on`, intro: `Dependable, professional ${spec.business?.kind ? `${spec.business.kind.toLowerCase()} ` : ""}work with clear quotes and friendly service.`, description: `${spec.name}: trusted ${trade} services. Get a free quote today.`.slice(0, 160), sections: [{ type: "cards", title: "What we do", items: services.slice(0, 3) }, { type: "steps", title: "How it works", items: [{ title: "Get in touch.", text: "Tell us what you need." }, { title: "Get a quote.", text: "We visit or call and send a clear price." }, { title: "Job done.", text: "We finish on schedule and tidy up after." }] }] };
-    if (page.id === "services") return { ...base, headline: "Our services", intro: `Everything ${spec.name} can help you with.`, description: `Services offered by ${spec.name}.`.slice(0, 160), sections: [{ type: "cards", title: "Services", items: services }] };
-    if (page.id === "about") return { ...base, headline: `About ${spec.name}`, intro: "Experienced, insured and focused on doing the job properly.", description: `About ${spec.name}: experience, values and service area.`.slice(0, 160), sections: [{ type: "text", title: "Our approach", paragraphs: ["We keep things simple: turn up on time, explain the options, and do work we are proud of.", "Every job gets a clear written quote before we start, and we stand behind our work."] }] };
-    if (page.id === "gallery") return { ...base, headline: "Recent work", intro: "A few of the projects we have completed.", description: `Recent projects by ${spec.name}.`.slice(0, 160), sections: [{ type: "gallery", title: "Projects", items: services.map((service) => service.title), note: "Add your own project photos to replace these tiles." }] };
-    if (page.id === "contact") return { ...base, headline: "Get a free quote", intro: "Send us a message and we will get back to you within one working day.", description: `Contact ${spec.name} for a free quote.`.slice(0, 160), sections: [{ type: "contact", title: "Contact us", text: "Tell us a little about the job and the best way to reach you." }] };
+    if (page.id === "home") return { ...base, headline: named ? `${spec.name}${place ? ` in ${place}` : ""}` : `${who} you can count on`, intro: named ? `${services.map((service) => service.title.replace(/^./u, (c) => c.toLowerCase())).join(", ").replace(/^./u, (c) => c.toUpperCase())}${place ? ` for projects in ${place} and nearby` : ""}.` : `Dependable, professional ${spec.business?.kind ? `${spec.business.kind.toLowerCase()} ` : ""}work with clear quotes and friendly service.`, description: `${spec.name}${place ? `, ${place}` : ""}: ${named ? services.map((service) => service.title.toLowerCase()).join(", ") : `${trade} services`}.`.slice(0, 160), sections: [{ type: "cards", title: "What we do", items: services.slice(0, 4) }, { type: "steps", title: "How it works", items: [{ title: "Get in touch.", text: "Tell us about your project." }, { title: "Get an estimate.", text: "We review the details and respond with next steps." }, { title: "Plan the work.", text: "We confirm scope and schedule with you." }] }] };
+    if (page.id === "services") return { ...base, headline: "Our services", intro: `Everything ${spec.name} can help you with.`, description: `Services offered by ${spec.name}${place ? ` in ${place}` : ""}.`.slice(0, 160), sections: [{ type: "cards", title: "Services", items: services }] };
+    if (page.id === "about") return { ...base, headline: `About ${spec.name}`, intro: `${spec.name}${place ? ` is based in ${place}` : ""}.`, description: `About ${spec.name}${place ? `, ${place}` : ""}.`.slice(0, 160), sections: [{ type: "text", title: "Our company", paragraphs: [PLACEHOLDER("your company story, years in business and crew details"), PLACEHOLDER("licensing, insurance and credentials, only if they are real")] }] };
+    if (page.id === "gallery") return { ...base, headline: "Our work", intro: "Project photos will appear here.", description: `Projects by ${spec.name}.`.slice(0, 160), sections: [{ type: "gallery", title: "Projects", items: services.map((service) => service.title), note: "Add your own project photos to replace these tiles." }] };
+    if (page.id === "contact") return { ...base, headline: "Request an estimate", intro: "Tell us about your project and we will get back to you.", description: `Request an estimate from ${spec.name}${place ? ` in ${place}` : ""}.`.slice(0, 160), sections: [{ type: "contact", title: "Contact us", text: "Tell us a little about the project and the best way to reach you." }] };
+    if (named && spec.services.length) {
+      const items = related(page);
+      return { ...base, headline: page.title, intro: `${page.title} from ${spec.name}${place ? ` in ${place}` : ""}.`, description: `${page.title}: ${items.map((item) => item.title.toLowerCase()).join(", ")} from ${spec.name}.`.slice(0, 160), sections: [{ type: "cards", title: page.title, items }, { type: "text", title: "Details", paragraphs: [PLACEHOLDER(`the materials, methods and project types you handle for ${page.title.toLowerCase()}`)] }] };
+    }
     return { ...base, headline: page.title, intro: page.purpose, description: `${page.title} · ${spec.name}`.slice(0, 160), sections: [{ type: "text", title: page.title, paragraphs: [page.purpose] }] };
   });
-  return { name: spec.name, tagline: `Trusted ${trade} services`, cta: "Get a free quote", contact: { phone: "", email: "", area: "" }, theme: { accent: accentFor(spec) }, pages };
+  return { name: spec.name, tagline: named ? `${services.map((service) => service.title).slice(0, 3).join(", ")}${place ? ` in ${place}` : ""}` : `Trusted ${trade} services`, cta: "Request an estimate", url: "", location: spec.location ?? null, contact: { phone: "", email: "", area: place }, theme: { accent: accentFor(spec) }, pages };
 }
 
 export const TEMPLATES = Object.freeze({
   "web-app": {
     id: "web-app",
-    version: "1.0.1",
+    version: "1.1.0",
     title: "Full-stack web application",
     description: "Dashboard, record screens with search, add/edit/delete, status tracking and an optional public booking form, backed by a local SQLite file.",
     archetypes: ["webapp", "dashboard"],
-    shared: [...COMMON_SHARED, "src/store.mjs"],
-    commands: { install: null, check: ["node", "scripts/check.mjs"], test: ["node", "--test"], build: ["node", "scripts/build.mjs"] },
+    shared: [...COMMON_SHARED, "src/store.mjs", ...BACKEND],
+    commands: { install: null, check: ["node", "scripts/check.mjs"], test: ["node", "--test", "--test-reporter=tap"], build: ["node", "scripts/build.mjs"] },
     preview: { prepare: null, command: ["node", "server.mjs"], env: { HOST: "127.0.0.1", PORT: "{port}" }, health: "/api/health", startupTimeoutMs: 15_000 },
-    structure: { "server.mjs": "HTTP server and JSON API", "app.config.json": "record types, fields, pages and theme", "public/": "the browser app", "src/": "storage, validation and HTTP helpers", "tests/": "API tests for every record type", "scripts/": "check and build" },
+    structure: { "server.mjs": "HTTP server and JSON API", "app.config.json": "record types, fields, pages, theme, sign-in, files, secrets and jobs", "public/": "the browser app", "src/": "storage, sign-in, files, secrets, jobs, validation and HTTP helpers", "tests/": "API tests for every record type", "scripts/": "check and build" },
     configure(spec) {
       const config = appConfig(spec);
       return {
         "app.config.json": `${JSON.stringify(config, null, 2)}\n`,
-        "package.json": packageJson(spec, { start: "node server.mjs", dev: "node --watch server.mjs", check: "node scripts/check.mjs", test: "node --test", build: "node scripts/build.mjs" }),
+        "package.json": packageJson(spec, { start: "node server.mjs", dev: "node --watch server.mjs", check: "node scripts/check.mjs", test: "node --test --test-reporter=tap", build: "node scripts/build.mjs" }),
         "README.md": readme(spec, this, ["npm start        # http://127.0.0.1:3000", "npm test", "npm run build"]),
         ".gitignore": GITIGNORE,
       };
@@ -155,14 +206,14 @@ export const TEMPLATES = Object.freeze({
     description: "Responsive multi-page site with SEO basics, a sitemap and a working enquiry form.",
     archetypes: ["website"],
     shared: COMMON_SHARED,
-    commands: { install: null, check: ["node", "scripts/check.mjs"], test: ["node", "--test"], build: ["node", "scripts/build.mjs"] },
+    commands: { install: null, check: ["node", "scripts/check.mjs"], test: ["node", "--test", "--test-reporter=tap"], build: ["node", "scripts/build.mjs"] },
     preview: { prepare: ["node", "scripts/build.mjs"], command: ["node", "server.mjs"], env: { HOST: "127.0.0.1", PORT: "{port}" }, health: "/api/health", startupTimeoutMs: 15_000 },
     structure: { "site.json": "pages, copy, contact details and theme", "scripts/build.mjs": "renders dist/", "server.mjs": "serves dist/ and records enquiries", "src/": "styles, form script, HTTP helpers", "tests/": "build and form tests" },
     configure(spec) {
       const site = siteConfig(spec);
       return {
         "site.json": `${JSON.stringify(site, null, 2)}\n`,
-        "package.json": packageJson(spec, { start: "node scripts/build.mjs && node server.mjs", check: "node scripts/check.mjs", test: "node --test", build: "node scripts/build.mjs" }),
+        "package.json": packageJson(spec, { start: "node scripts/build.mjs && node server.mjs", check: "node scripts/check.mjs", test: "node --test --test-reporter=tap", build: "node scripts/build.mjs" }),
         "README.md": readme(spec, this, ["npm start        # builds, then serves http://127.0.0.1:3000", "npm test", "npm run build     # static files in dist/"]),
         ".gitignore": GITIGNORE,
       };
@@ -170,19 +221,19 @@ export const TEMPLATES = Object.freeze({
   },
   "api-service": {
     id: "api-service",
-    version: "1.0.0",
+    version: "1.1.0",
     title: "REST API",
     description: "JSON API with create, list/search, read, update and delete for each record type, validation and a local SQLite file.",
     archetypes: ["api"],
-    shared: [...COMMON_SHARED, "src/store.mjs"],
-    commands: { install: null, check: ["node", "scripts/check.mjs"], test: ["node", "--test"], build: ["node", "scripts/build.mjs"] },
+    shared: [...COMMON_SHARED, "src/store.mjs", ...BACKEND],
+    commands: { install: null, check: ["node", "scripts/check.mjs"], test: ["node", "--test", "--test-reporter=tap"], build: ["node", "scripts/build.mjs"] },
     preview: { prepare: null, command: ["node", "server.mjs"], env: { HOST: "127.0.0.1", PORT: "{port}" }, health: "/api/health", startupTimeoutMs: 15_000 },
-    structure: { "server.mjs": "HTTP server and routes", "app.config.json": "record types and fields", "src/": "storage, validation and HTTP helpers", "tests/": "endpoint tests" },
+    structure: { "server.mjs": "HTTP server and routes", "app.config.json": "record types, fields, sign-in, files, secrets and jobs", "src/": "storage, sign-in, files, secrets, jobs, validation and HTTP helpers", "tests/": "endpoint tests" },
     configure(spec) {
       const config = appConfig(spec);
       return {
         "app.config.json": `${JSON.stringify({ ...config, home: null, booking: null }, null, 2)}\n`,
-        "package.json": packageJson(spec, { start: "node server.mjs", dev: "node --watch server.mjs", check: "node scripts/check.mjs", test: "node --test", build: "node scripts/build.mjs" }),
+        "package.json": packageJson(spec, { start: "node server.mjs", dev: "node --watch server.mjs", check: "node scripts/check.mjs", test: "node --test --test-reporter=tap", build: "node scripts/build.mjs" }),
         "README.md": readme(spec, this, ["npm start        # http://127.0.0.1:3000/api/…", "npm test"]),
         ".gitignore": GITIGNORE,
       };
@@ -209,6 +260,8 @@ function walk(directory, base = directory, out = []) {
 export function templateFiles(id) {
   const template = getTemplate(id);
   const own = walk(join(here, id, "files")).map((target) => ({ source: join(here, id, "files", target), target }));
-  const shared = template.shared.map((target) => ({ source: join(here, "shared", target), target }));
+  const shared = template.shared.map((entry) => (typeof entry === "string"
+    ? { source: join(here, "shared", entry), target: entry }
+    : { source: join(here, entry.from), target: entry.target }));
   return [...shared, ...own];
 }

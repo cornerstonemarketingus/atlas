@@ -21,6 +21,11 @@ on:
         required: true
         default: "0001"
         type: string
+      through_migration:
+        description: Optional inclusive final prefix; use the same as from_migration to repair only one missing migration
+        required: false
+        default: ""
+        type: string
       dry_run:
         description: List what would be applied without applying it
         required: true
@@ -55,25 +60,10 @@ jobs:
         id: select
         env:
           FROM_MIGRATION: ${{ github.event.inputs.from_migration }}
+          THROUGH_MIGRATION: ${{ github.event.inputs.through_migration }}
         run: |
           set -euo pipefail
-          # The name is compared, not interpolated into a glob, so an input like
-          # "*" selects nothing rather than everything.
-          case "$FROM_MIGRATION" in
-            [0-9][0-9][0-9][0-9]) ;;
-            *) echo "from_migration must be a four-digit prefix, e.g. 0001." >&2; exit 1 ;;
-          esac
-          selected=""
-          for file in $(ls drizzle/*.sql | sort); do
-            name=$(basename "$file")
-            if [ "${name%%_*}" \> "$FROM_MIGRATION" ] || [ "${name%%_*}" = "$FROM_MIGRATION" ]; then
-              selected="$selected $file"
-            fi
-          done
-          if [ -z "$selected" ]; then
-            echo "No migrations at or after $FROM_MIGRATION." >&2
-            exit 1
-          fi
+          selected=$(node ../../scripts/runner/select-migrations.mjs)
           echo "Will apply:$selected"
           echo "files=$selected" >> "$GITHUB_OUTPUT"
 
@@ -93,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$DATABASE_NAME" = "configured" ]; then echo "ATLAS_D1_DATABASE_NAME is missing." >&2; exit 1; fi
-          npx wrangler d1 execute "$DATABASE_NAME" --remote --command "SELECT name FROM sqlite_master WHERE type='table'; PRAGMA table_info(repositories);"
+          npx wrangler d1 execute "$DATABASE_NAME" --remote --command "SELECT name FROM sqlite_master WHERE type='table'; PRAGMA table_info(repositories); PRAGMA table_info(tasks);"
 
       - name: Apply migrations
         if: ${{ github.event.inputs.dry_run != 'true' }}

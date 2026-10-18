@@ -1,8 +1,9 @@
 /**
  * The local Atlas console, served by the daemon on loopback.
  *
- * Nine sections — Home, Missions, Agent families, Computer, Projects,
- * Knowledge, Connections, Approvals, Settings — over the daemon's own APIs.
+ * Sections — Home, Missions, Build, Artifacts, Agent families, Computer,
+ * Projects, Knowledge, Connections, Approvals, Settings and more — over the
+ * daemon's own APIs.
  * The page ships under a strict CSP (no inline script or style), so every
  * dynamic value is escaped with esc() and nothing is styled inline.
  */
@@ -17,7 +18,10 @@ export const LOCAL_UI_HTML = `<!doctype html>
  <a class="brand" href="#/home"><span class="mark" aria-hidden="true">A</span><span><strong>Atlas</strong><small>on this computer</small></span></a>
  <nav class="nav" aria-label="Sections">
   <a href="#/home" data-nav="home"><span class="ico" aria-hidden="true">⌂</span>Home</a>
+  <a href="#/command" data-nav="command"><span class="ico" aria-hidden="true">▦</span>Command center</a>
+  <a href="#/automations" data-nav="automations"><span class="ico" aria-hidden="true">⟳</span>Automations</a>
   <a href="#/build" data-nav="build"><span class="ico" aria-hidden="true">✚</span>Build</a>
+  <a href="#/artifacts" data-nav="artifacts"><span class="ico" aria-hidden="true">◧</span>Artifacts</a>
   <a href="#/missions" data-nav="missions"><span class="ico" aria-hidden="true">◎</span>Missions</a>
   <a href="#/improve" data-nav="improve"><span class="ico" aria-hidden="true">↻</span>Improve Atlas<span class="badge" id="improve-badge" hidden></span></a>
   <a href="#/models" data-nav="models"><span class="ico" aria-hidden="true">◈</span>Models</a>
@@ -75,6 +79,51 @@ export const LOCAL_UI_HTML = `<!doctype html>
   </div>
  </section>
 
+ <section class="view" data-view="command" hidden aria-labelledby="command-heading">
+  <div class="section-title"><div><p class="eyebrow">EVERYTHING ATLAS IS DOING</p><h2 id="command-heading">Command center</h2></div><button type="button" class="secondary" id="command-refresh">Refresh</button></div>
+  <p class="hint">Missions and their lanes, team missions, Genesis builds, coding tasks and Improve Atlas runs in one place. Pause, resume, cancel or retry a single lane without stopping the others. Updates every few seconds while open.</p>
+  <details class="panel" id="command-launch-panel"><summary>Launch agents in parallel</summary>
+   <form id="command-launch"><label>Repository folder<input id="launch-repository" required placeholder="C:\\path\\to\\project"></label>
+    <label>Model<select id="launch-model"><option>qwen2.5-coder:7b</option></select></label>
+    <label>How<select id="launch-mode"><option value="auto">One task: let Atlas decide how many versions to try</option><option value="tasks">Separate tasks, one per line</option><option value="variants">Several versions of one task, to compare</option></select></label>
+    <label>What to do<textarea id="launch-text" required maxlength="10000" rows="4" placeholder="Refactor the billing module so invoices can be retried"></textarea></label>
+    <label id="launch-count-label" hidden>How many versions<input id="launch-count" type="number" min="2" max="5" value="3"></label>
+    <div class="actions"><button>Start</button></div>
+    <p class="hint">Each agent works in its own copy of the repository and hands back a patch; nothing changes in your folder until you apply one.</p></form></details>
+  <details class="panel" id="command-goal-panel"><summary>Keep at it until a pull request merges</summary>
+   <form id="command-goal"><label>What to keep doing<textarea id="goal-text" required maxlength="4000" rows="3" placeholder="Get this pull request merged: fix failing checks and answer review comments"></textarea></label>
+    <label>Repository folder<input id="goal-repository" required placeholder="C:\\path\\to\\project"></label>
+    <label>GitHub repository<input id="goal-watch" required placeholder="owner/name" pattern="[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"></label>
+    <label>Pull request number<input id="goal-pr" type="number" min="1" required></label>
+    <label>Model<input id="goal-model" required value="qwen2.5-coder:7b"></label>
+    <div class="actions"><button>Start and keep watching</button></div>
+    <p class="hint">Atlas works now, then sleeps. It wakes when checks fail, a review arrives or someone comments, and stops when the pull request merges (at most 10 wakes, 14 days). Events arrive through a GitHub automation's webhook for that repository.</p></form></details>
+  <div class="chips" id="command-counts" aria-live="polite"></div>
+  <p id="command-notice" class="hint" role="status" aria-live="polite"></p>
+  <div id="command-items" class="list"><p class="empty">Unlock this tab to see what Atlas is doing.</p></div>
+ </section>
+
+ <section class="view" data-view="automations" hidden aria-labelledby="automations-heading">
+  <div class="section-title"><div><p class="eyebrow">RUNS WHILE YOU ARE AWAY</p><h2 id="automations-heading">Automations</h2></div><button type="button" class="secondary" id="automations-refresh">Refresh</button></div>
+  <p class="hint">A schedule, a webhook or a button starts the same kind of work you start by hand, with the same approvals and budgets. A run is skipped while the previous one is still going, each automation has a daily limit, and one that fails to start three times in a row pauses itself and tells you why.</p>
+  <details class="panel" id="automation-new-panel"><summary>New automation</summary>
+   <form id="automation-form"><label>Name<input id="auto-name" required maxlength="120" placeholder="Nightly dependency check"></label>
+    <label>Starts<select id="auto-trigger"><option value="schedule">On a schedule</option><option value="github">On a GitHub event</option><option value="file">When files in a folder change</option><option value="webhook">When a webhook is called</option><option value="manual">Only when I press Run now</option></select></label>
+    <label id="auto-cron-label">Schedule (minute hour day month weekday, this computer's time)<input id="auto-cron" value="0 9 * * 1-5" placeholder="0 9 * * 1-5"></label>
+    <label id="auto-github-label" hidden>GitHub events<select id="auto-github-events" multiple size="4"><option value="push" selected>push</option><option value="pull_request">pull_request</option><option value="issues">issues</option><option value="issue_comment">issue_comment</option><option value="release">release</option><option value="workflow_run">workflow_run</option><option value="check_suite">check_suite</option></select></label>
+    <label id="auto-branches-label" hidden>Only these branches (comma-separated, empty for all)<input id="auto-branches" placeholder="main"></label>
+    <label id="auto-path-label" hidden>Folder to watch (full path)<input id="auto-path" placeholder="C:\\path\\to\\inbox"></label>
+    <label>Does<select id="auto-kind"><option value="mission">Coding tasks in a repository</option><option value="team">A goal for the agent team</option></select></label>
+    <label class="auto-mission">Repository folder<input id="auto-repository" placeholder="C:\\path\\to\\project"></label>
+    <label class="auto-mission">Model<select id="auto-model"><option>qwen2.5-coder:7b</option></select></label>
+    <label>What to do (for coding tasks, one per line)<textarea id="auto-text" required maxlength="4000" rows="3" placeholder="Update dependencies and run the tests"></textarea></label>
+    <label>Most runs per day<input id="auto-max" type="number" min="1" max="288" value="24"></label>
+    <div class="actions"><button>Create</button></div></form></details>
+  <p id="automations-notice" class="hint" role="status" aria-live="polite"></p>
+  <div id="automation-secret" class="card" hidden></div>
+  <div id="automations-list" class="list"><p class="empty">Unlock this tab to see automations.</p></div>
+ </section>
+
  <section class="view" data-view="build" hidden aria-labelledby="build-heading">
   <div class="section-title"><div><p class="eyebrow">PROJECT GENESIS</p><h2 id="build-heading">Build something</h2></div><button type="button" class="secondary" id="build-refresh">Refresh</button></div>
   <form id="build-form" class="panel"><label for="build-prompt">What should Atlas build?</label><textarea id="build-prompt" rows="3" maxlength="4000" placeholder="Build me a simple CRM for my construction company"></textarea>
@@ -83,6 +132,13 @@ export const LOCAL_UI_HTML = `<!doctype html>
    <p class="hint">Atlas writes the requirements with sensible assumptions, plans the work, builds it on this computer, tests it, runs it, checks it in a browser and fixes problems. It asks only when an answer changes cost, data rules or who gets contacted, and it asks before publishing anything.</p></form>
   <div id="build-detail" hidden></div>
   <section aria-labelledby="build-projects-heading"><h3 id="build-projects-heading">Projects</h3><div id="build-projects" class="list"><p class="empty">Unlock this tab to see projects.</p></div></section>
+ </section>
+ <section class="view" data-view="artifacts" hidden aria-labelledby="artifacts-heading">
+  <div class="section-title"><div><p class="eyebrow">WHAT ATLAS MADE</p><h2 id="artifacts-heading">Artifacts</h2></div><button type="button" class="secondary" id="artifacts-refresh">Refresh</button></div>
+  <p class="hint">Websites, apps, videos and 3D models Atlas produced on this computer. Each is stored once, by the SHA-256 of its bytes, and opens here: videos play, 3D models turn, websites and apps open in their live preview.</p>
+  <label for="artifacts-kind">Show</label><select id="artifacts-kind"><option value="">Everything</option><option value="website">Websites</option><option value="app">Apps</option><option value="game">Games</option><option value="video">Videos</option><option value="model3d">3D models</option><option value="document">Documents</option><option value="file">Files</option></select>
+  <div id="artifact-detail" hidden></div>
+  <div id="artifacts-list" class="list"><p class="empty">Unlock this tab to see artifacts.</p></div>
  </section>
  <section class="view" data-view="missions" hidden aria-labelledby="missions-view-heading">
   <div class="hero"><h2 id="missions-view-heading">Missions</h2><p class="lede">Describe an outcome. The Product Executive plans it into steps, each step goes to the agent best placed to do it, and every step is checked against its own completion test before the mission counts as done.</p></div>
@@ -246,7 +302,7 @@ progress{width:100%;height:6px;accent-color:var(--accent);margin-top:10px}
 .composer-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}.composer-bar .actions{margin:0}
 .attach{display:inline-flex;align-items:center;gap:8px;margin:0;font-size:.85rem}.attach input{width:auto;padding:6px;border:0;background:none}
 details.more{margin-top:10px}details.more>summary{cursor:pointer;color:var(--muted);font-size:.88rem;padding:6px 0}
-.evidence summary{cursor:pointer;color:var(--muted)}.lane{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
+.evidence summary{cursor:pointer;color:var(--muted)}.lane{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.lane.recommended{border-top-color:var(--accent)}.trace summary{cursor:pointer;color:var(--muted)}.trace-steps{margin:6px 0 0;padding-left:20px;font-size:.9em}.trace-steps li{margin:2px 0}
 .toast{margin:0;padding:0 28px}.toast:not(:empty){padding:10px 28px;background:var(--accent-soft);color:var(--text);font-size:.9rem}
 .unlock{margin:24px 28px 0;max-width:560px}
 .error{border:1px solid var(--bad);color:var(--bad);border-radius:12px;padding:12px 14px}.error p{color:var(--text);margin:6px 0 0}
@@ -266,10 +322,12 @@ main{padding:16px 16px calc(96px + env(safe-area-inset-bottom))}.toast:not(:empt
 input,textarea,select{font-size:16px}
 .transcript{max-height:46vh}
 }
-@media (prefers-reduced-motion:reduce){*{transition:none!important}}.steps-list{list-style:none;padding:0;margin:12px 0}.steps-list .step{padding:4px 0;color:var(--muted)}.steps-list .step.done{color:var(--text)}.steps-list .step.running{color:var(--accent);font-weight:600}.steps-list .step.failed{color:var(--danger,#b42318)}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}button.chip{cursor:pointer;background:none}.row{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.row .grow{flex:1 1 240px}.pair-form{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.check{display:flex;gap:8px;align-items:center;margin:10px 0}.check input{width:auto}.log{max-height:360px;overflow:auto;margin:8px 0 0;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}.lanes{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:6px}.lane{padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}.lane .actions{margin-top:6px}.lane .actions:empty{display:none}.command-bucket{margin:18px 0 6px;font-size:.85rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.steps-list{list-style:none;padding:0;margin:12px 0}.steps-list .step{padding:4px 0;color:var(--muted)}.steps-list .step.done{color:var(--text)}.steps-list .step.running{color:var(--accent);font-weight:600}.steps-list .step.failed{color:var(--danger,#b42318)}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}button.chip{cursor:pointer;background:none}.row{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.row .grow{flex:1 1 240px}.pair-form{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.check{display:flex;gap:8px;align-items:center;margin:10px 0}.check input{width:auto}.log{max-height:360px;overflow:auto;margin:8px 0 0;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
+
+.artifact-view{margin:12px 0}.artifact-view video,.artifact-view img{display:block;width:100%;max-height:70vh;border-radius:12px;background:#000}.artifact-canvas{display:block;width:100%;height:min(60vh,520px);border-radius:12px;touch-action:none;cursor:grab}
 `;
 
-export const LOCAL_UI_JS = `/* Signed in by open-atlas: the owner token arrives in the URL fragment (never sent to a server) and is kept for this tab only. */{const m=/[#&]signin=([A-Za-z0-9_-]{32,128})/.exec(location.hash);if(m){sessionStorage.setItem('atlas-token',m[1]);history.replaceState(null,'',location.pathname+'#/home')}}/* A paired device keeps its own revocable token on this device. */try{const d=localStorage.getItem('atlas-device-token');if(d&&!sessionStorage.getItem('atlas-token'))sessionStorage.setItem('atlas-token',d)}catch{}const pairFromLink=(/[#&]pair=([0-9]{6})/.exec(location.hash)||[])[1]||'';if(pairFromLink)history.replaceState(null,'',location.pathname+'#/home');const q=s=>document.querySelector(s),tokenInput=q('#token'),tasks=q('#tasks'),notice=q('#notice');let knownApprovals=new Set;tokenInput.value=sessionStorage.getItem('atlas-token')||'';const headers=()=>({authorization:'Bearer '+sessionStorage.getItem('atlas-token')}),api=(url,options={})=>fetch(url,{...options,headers:{...headers(),...(options.headers||{})}});function esc(v){const d=document.createElement('div');d.textContent=v??'';return d.innerHTML}async function load(){const [tr,ar,pr,lr,dr]=await Promise.all(['/v1/tasks','/v1/approvals','/v1/policies','/v1/audit','/v1/devices'].map(u=>api(u)));if(tr.status===401){tasks.innerHTML='<p class="empty">Unlock this tab to load tasks.</p>';return}const list=(await tr.json()).tasks;tasks.innerHTML=list.length?list.map(t=>'<article class="task"><div class="task-top"><h3>'+esc(t.objective)+'</h3><span class="status '+t.status+'">'+t.status+'</span></div><p>'+esc(t.repository)+' · '+esc(t.model)+'</p>'+(t.message?'<p>'+esc(t.message)+'</p>':'')+'<time>'+new Date(t.createdAt).toLocaleString()+'</time></article>').join(''):'<p class="empty">No local tasks yet.</p>';const approvals=(await ar.json()).approvals,pending=approvals.filter(a=>a.status==='pending');if('Notification'in window&&Notification.permission==='granted')pending.filter(a=>!knownApprovals.has(a.id)).forEach(a=>new Notification('Atlas approval required',{body:a.capability+': '+a.summary,tag:a.id}));knownApprovals=new Set(pending.map(a=>a.id));q('#approvals').innerHTML=pending.map(a=>'<article class="task"><h3>'+esc(a.capability)+'</h3><p>'+esc(a.summary)+'</p><div class="actions"><button data-decision="approved" data-id="'+a.id+'">Approve</button><button class="secondary" data-decision="denied" data-id="'+a.id+'">Deny</button></div></article>').join('')||'<p class="empty">No pending approvals.</p>';q('#approvals').querySelectorAll('button').forEach(b=>b.onclick=()=>decide(b.dataset.id,b.dataset.decision));const policies=(await pr.json()).policies;q('#policies').innerHTML=policies.map(p=>'<div class="policy"><span>'+esc(p.capability)+'</span><select data-capability="'+esc(p.capability)+'"><option'+(p.decision==='allow'?' selected':'')+'>allow</option><option'+(p.decision==='ask'?' selected':'')+'>ask</option><option'+(p.decision==='deny'?' selected':'')+'>deny</option></select></div>').join('');q('#policies').querySelectorAll('select').forEach(s=>s.onchange=()=>api('/v1/policies',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({capability:s.dataset.capability,decision:s.value})}).then(load));const events=(await lr.json()).events;q('#audit').innerHTML=events.slice(0,50).map(e=>'<article class="task"><div class="task-top"><h3>'+esc(e.category)+'</h3><time>'+new Date(e.createdAt).toLocaleString()+'</time></div><p>'+esc(e.summary)+'</p></article>').join('')||'<p class="empty">No audit events.</p>';const devices=(await dr.json()).devices;q('#devices').innerHTML=devices.filter(d=>!d.revokedAt).map(d=>'<article class="task"><div class="task-top"><h3>'+esc(d.name)+'</h3><button class="secondary" data-device="'+d.id+'">Revoke</button></div><time>'+new Date(d.createdAt).toLocaleString()+'</time></article>').join('')||'<p class="empty">No paired devices.</p>';q('#devices').querySelectorAll('button').forEach(b=>b.onclick=()=>api('/v1/devices/'+b.dataset.device,{method:'DELETE'}).then(load))}async function decide(id,decision){await api('/v1/approvals/'+id+'/decision',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({decision})});load()}async function models(){const r=await api('/v1/models');if(!r.ok)return;const v=await r.json();if(v.models.length)q('#model').innerHTML=v.models.map(m=>'<option>'+esc(m)+'</option>').join('')}q('#save-token').onclick=()=>{sessionStorage.setItem('atlas-token',tokenInput.value);load();models();loadSessions();if(sessionId)selectSession(sessionId)};q('#refresh').onclick=load;q('#notify').onclick=async()=>{if(!('Notification'in window))return notice.textContent='Notifications are unavailable in this browser.';const result=await Notification.requestPermission();notice.textContent=result==='granted'?'Approval notifications enabled.':'Notification permission was not granted.'};q('#task-form').onsubmit=async e=>{e.preventDefault();notice.textContent='Queueing…';const r=await api('/v1/tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repository:q('#repository').value,objective:q('#objective').value,model:q('#model').value})});const data=await r.json();notice.textContent=r.ok?(data.approval?'Waiting for approval.':'Task queued in an isolated worktree.'):data.message;load()};q('#pair').onclick=async()=>{const r=await api('/v1/pair',{method:'POST'}),v=await r.json();q('#pair-code').textContent=r.ok?'Pairing code '+v.code+' expires '+new Date(v.expiresAt).toLocaleTimeString():v.message};q('#export').onclick=async()=>{const r=await api('/v1/export',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:q('#passphrase').value})}),v=await r.json();q('#backup').value=r.ok?JSON.stringify(v.backup):v.message};q('#import').onclick=async()=>{let backup;try{backup=JSON.parse(q('#backup').value)}catch{return notice.textContent='Backup JSON is invalid.'}const r=await api('/v1/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:q('#passphrase').value,backup})});notice.textContent=r.ok?'Backup imported.':'Import failed.';load()};fetch('/health').then(r=>r.json()).then(v=>q('#health').textContent=v.status==='ok'?'Atlas is running':'Atlas is not responding').catch(()=>q('#health').textContent='Unavailable');if(tokenInput.value){load();models()}setInterval(()=>{if(sessionStorage.getItem('atlas-token'))load()},5000);
+export const LOCAL_UI_JS = `/* Signed in by open-atlas: the owner token arrives in the URL fragment (never sent to a server) and is kept for this tab only. */{const m=/[#&]signin=([A-Za-z0-9_-]{32,128})/.exec(location.hash);if(m){sessionStorage.setItem('atlas-token',m[1]);history.replaceState(null,'',location.pathname+'#/home')}}/* A paired device keeps its own revocable token on this device. */try{const d=localStorage.getItem('atlas-device-token');if(d&&!sessionStorage.getItem('atlas-token'))sessionStorage.setItem('atlas-token',d)}catch{}const pairFromLink=(/[#&]pair=([0-9]{6})/.exec(location.hash)||[])[1]||'';if(pairFromLink)history.replaceState(null,'',location.pathname+'#/home');const q=s=>document.querySelector(s),tokenInput=q('#token'),tasks=q('#tasks'),notice=q('#notice');let knownApprovals=new Set;tokenInput.value=sessionStorage.getItem('atlas-token')||'';const headers=()=>({authorization:'Bearer '+sessionStorage.getItem('atlas-token')}),api=(url,options={})=>fetch(url,{...options,headers:{...headers(),...(options.headers||{})}});function esc(v){const d=document.createElement('div');d.textContent=v??'';return d.innerHTML}async function load(){const [tr,ar,pr,lr,dr]=await Promise.all(['/v1/tasks','/v1/approvals','/v1/policies','/v1/audit','/v1/devices'].map(u=>api(u)));if(tr.status===401){tasks.innerHTML='<p class="empty">Unlock this tab to load tasks.</p>';return}const list=(await tr.json()).tasks;tasks.innerHTML=list.length?list.map(t=>'<article class="task"><div class="task-top"><h3>'+esc(t.objective)+'</h3><span class="status '+t.status+'">'+t.status+'</span></div><p>'+esc(t.repository)+' · '+esc(t.model)+'</p>'+(t.message?'<p>'+esc(t.message)+'</p>':'')+'<time>'+new Date(t.createdAt).toLocaleString()+'</time></article>').join(''):'<p class="empty">No local tasks yet.</p>';const approvals=(await ar.json()).approvals,pending=approvals.filter(a=>a.status==='pending');if('Notification'in window&&Notification.permission==='granted')pending.filter(a=>!knownApprovals.has(a.id)).forEach(a=>new Notification('Atlas approval required',{body:a.capability+': '+a.summary,tag:a.id}));knownApprovals=new Set(pending.map(a=>a.id));q('#approvals').innerHTML=pending.map(a=>'<article class="task"><h3>'+esc(a.capability)+'</h3><p>'+esc(a.summary)+'</p>'+(a.riskLevel!=null?'<p class="hint">Risk level '+a.riskLevel+' of 5'+(a.riskLevel>=4?': you will be asked to confirm a second time':'')+'</p>':'')+'<div class="actions"><button data-decision="approved" data-level="'+(a.riskLevel??'')+'" data-id="'+a.id+'">Approve</button><button class="secondary" data-decision="denied" data-id="'+a.id+'">Deny</button></div></article>').join('')||'<p class="empty">No pending approvals.</p>';q('#approvals').querySelectorAll('button').forEach(b=>b.onclick=()=>decide(b.dataset.id,b.dataset.decision,Number(b.dataset.level||0)));const policies=(await pr.json()).policies;q('#policies').innerHTML=policies.map(p=>'<div class="policy"><span>'+esc(p.capability)+'</span><select data-capability="'+esc(p.capability)+'"><option'+(p.decision==='allow'?' selected':'')+'>allow</option><option'+(p.decision==='ask'?' selected':'')+'>ask</option><option'+(p.decision==='deny'?' selected':'')+'>deny</option></select></div>').join('');q('#policies').querySelectorAll('select').forEach(s=>s.onchange=()=>api('/v1/policies',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({capability:s.dataset.capability,decision:s.value})}).then(load));const events=(await lr.json()).events;q('#audit').innerHTML=events.slice(0,50).map(e=>'<article class="task"><div class="task-top"><h3>'+esc(e.category)+'</h3><time>'+new Date(e.createdAt).toLocaleString()+'</time></div><p>'+esc(e.summary)+'</p></article>').join('')||'<p class="empty">No audit events.</p>';const devices=(await dr.json()).devices;q('#devices').innerHTML=devices.filter(d=>!d.revokedAt).map(d=>'<article class="task"><div class="task-top"><h3>'+esc(d.name)+'</h3><button class="secondary" data-device="'+d.id+'">Revoke</button></div><time>'+new Date(d.createdAt).toLocaleString()+'</time></article>').join('')||'<p class="empty">No paired devices.</p>';q('#devices').querySelectorAll('button').forEach(b=>b.onclick=()=>api('/v1/devices/'+b.dataset.device,{method:'DELETE'}).then(load))}async function decide(id,decision,level=0){const strong=decision==='approved'&&level>=4;if(strong&&!confirm('This action can spend money, affect production, destroy data or handle a credential. Approve it?'))return;await api('/v1/approvals/'+id+'/decision',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(strong?{decision,confirm:true}:{decision})});load()}async function models(){const r=await api('/v1/models');if(!r.ok)return;const v=await r.json();if(v.models.length)q('#model').innerHTML=v.models.map(m=>'<option>'+esc(m)+'</option>').join('')}q('#save-token').onclick=()=>{sessionStorage.setItem('atlas-token',tokenInput.value);load();models();loadSessions();if(sessionId)selectSession(sessionId)};q('#refresh').onclick=load;q('#notify').onclick=async()=>{if(!('Notification'in window))return notice.textContent='Notifications are unavailable in this browser.';const result=await Notification.requestPermission();notice.textContent=result==='granted'?'Approval notifications enabled.':'Notification permission was not granted.'};q('#task-form').onsubmit=async e=>{e.preventDefault();notice.textContent='Queueing…';const r=await api('/v1/tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repository:q('#repository').value,objective:q('#objective').value,model:q('#model').value})});const data=await r.json();notice.textContent=r.ok?(data.approval?'Waiting for approval.':'Task queued in an isolated worktree.'):data.message;load()};q('#pair').onclick=async()=>{const r=await api('/v1/pair',{method:'POST'}),v=await r.json();q('#pair-code').textContent=r.ok?'Pairing code '+v.code+' expires '+new Date(v.expiresAt).toLocaleTimeString():v.message};q('#export').onclick=async()=>{const r=await api('/v1/export',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:q('#passphrase').value})}),v=await r.json();q('#backup').value=r.ok?JSON.stringify(v.backup):v.message};q('#import').onclick=async()=>{let backup;try{backup=JSON.parse(q('#backup').value)}catch{return notice.textContent='Backup JSON is invalid.'}const r=await api('/v1/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:q('#passphrase').value,backup})});notice.textContent=r.ok?'Backup imported.':'Import failed.';load()};fetch('/health').then(r=>r.json()).then(v=>q('#health').textContent=v.status==='ok'?'Atlas is running':'Atlas is not responding').catch(()=>q('#health').textContent='Unavailable');if(tokenInput.value){load();models()}setInterval(()=>{if(sessionStorage.getItem('atlas-token'))load()},5000);
 let sessionId=sessionStorage.getItem('atlas-session')||'',cursor=0,stream=null;
 const transcript=q('#transcript'),runStatus=q('#run-status');
 const WHO={assistant_message:'Atlas',status:'Progress',tool_proposal:'Proposed tool',tool_execution:'Tool',validation_result:'Validation',approval_request:'Approval needed',artifact:'Artifact',error:'Error',completion:'Result'};
@@ -476,7 +534,7 @@ if(sessionStorage.getItem('atlas-token')){loadMissions();loadMissionModels()}
 setInterval(()=>{if(sessionStorage.getItem('atlas-token'))loadMissions()},5000);
 
 /* ---- Shell: sections, theme, lock state, and the views built on the platform APIs. ---- */
-const VIEWS={home:'Home',build:'Build',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
+const VIEWS={home:'Home',command:'Command center',automations:'Automations',build:'Build',artifacts:'Artifacts',missions:'Missions',improve:'Improve Atlas',models:'Models',families:'Agent families',computer:'Computer',projects:'Projects',knowledge:'Knowledge',connections:'Connections',approvals:'Approvals',settings:'Settings'};
 const $=q,$$=s=>[...document.querySelectorAll(s)];
 const isUnlocked=()=>Boolean(sessionStorage.getItem('atlas-token'));
 let currentView='home',openMissionId=null,shownMission='';
@@ -513,6 +571,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeNav()});
 const viewFromHash=()=>location.hash.replace(/^#\\/?/,'').split('/')[0]||'home';
 function show(view){
  if(!VIEWS[view])view='home';currentView=view;
+ if(view!=='artifacts')clearArtifactView();
  $$('.view').forEach(v=>{v.hidden=v.dataset.view!==view});
  $$('[data-nav]').forEach(a=>a.setAttribute('aria-current',a.dataset.nav===view?'page':'false'));
  $('#view-title').textContent=VIEWS[view];document.title=VIEWS[view]+' · Atlas';
@@ -679,10 +738,119 @@ $('#build-refresh').onclick=()=>loadBuild();
 
 function refreshView(){
  if(!isUnlocked())return;
- const run={home:loadHome,missions:loadTeam,improve:loadImprove,models:loadModels,build:loadBuild,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections,settings:loadRemote}[currentView];
+ const run={home:loadHome,command:loadCommand,automations:loadAutomations,missions:loadTeam,improve:loadImprove,models:loadModels,build:loadBuild,artifacts:loadArtifacts,families:loadFamilies,computer:loadComputer,knowledge:loadKnowledge,connections:loadConnections,settings:loadRemote}[currentView];
  if(run)run().catch(()=>{});
  loadBadge().catch(()=>{});
 }
+
+/* ---- Command center: every running thing, with per-lane control. ---- */
+const COMMAND_KINDS={goal:'Goal (sleeps between events)',suggestion:'Suggestion',automation:'Automation',mission:'Coder lanes',team:'Team mission',genesis:'Genesis build',task:'Coding task',improve:'Improve Atlas'};
+const COMMAND_BUCKETS={attention:'Needs you',running:'Running',waiting:'Waiting',done:'Recently finished'};
+function commandButtons(actions,key){return (actions||[]).map((a,i)=>'<button type="button" class="'+(a.name==='cancel'?'ghost':'secondary')+'" data-command="'+esc(key)+'" data-index="'+i+'">'+esc(a.label)+'</button>').join('')}
+/* A lane's kernel run, step by step: what it set out to do, the capabilities it had, each action, and the check. */
+const openTraces=new Set();
+const TRACE_PHASES={goal:'Goal',mount:'Capabilities',perceive:'Looked at what Atlas knows',retrieve:'Recalled',plan:'Attempt',act:'Action',observe:'Observed',verify:'Check',decide:'Next',finish:'Finished'};
+function traceDetail(e){const d=e.data||{};
+ if(e.phase==='goal')return d.title||'';
+ if(e.phase==='mount')return (d.capabilities||[]).map(c=>c.name).join(', ')+((d.gaps||[]).length?' · missing: '+d.gaps.join(', '):'');
+ if(e.phase==='perceive')return (d.entities||0)+' related things';
+ if(e.phase==='retrieve')return (d.memories||0)+' memories'+(d.upstream?', earlier steps':'');
+ if(e.phase==='plan')return 'attempt '+(d.attempt||1);
+ if(e.phase==='act')return (d.tool||d.harness||'')+(d.status?' · '+d.status:'');
+ if(e.phase==='observe')return d.ok?'succeeded'+((d.artifacts||[]).length?' · '+d.artifacts.join(', '):''):(d.cancelled?'cancelled':'failed');
+ if(e.phase==='verify')return (d.passed?'passed':'not yet')+(d.reason?' · '+d.reason:'');
+ if(e.phase==='decide')return (d.next||'')+(d.reason?' · '+d.reason:'');
+ if(e.phase==='finish')return d.passed?'verified':'not verified';
+ return ''}
+async function loadTrace(d){const r=await getJson(d.dataset.trace);
+ d.querySelector('ol').innerHTML=(r.trace||[]).length?r.trace.map(e=>'<li><strong>'+esc(TRACE_PHASES[e.phase]||e.phase)+'</strong> <span class="hint">'+esc(traceDetail(e))+'</span></li>').join(''):'<li class="hint">No steps recorded.</li>'}
+async function loadCommand(){
+ const list=$('#command-items');
+ if(list.contains(document.activeElement)&&document.activeElement.matches('button'))return;
+ let view;
+ try{view=await getJson('/v1/command-center')}catch(error){list.innerHTML=problem(error);return}
+ const c=view.counts;
+ $('#command-counts').innerHTML=['attention','running','waiting'].map(b=>'<span class="chip">'+esc(COMMAND_BUCKETS[b])+' · '+c[b]+'</span>').join('')+'<span class="chip">Lanes running · '+c.lanesRunning+'</span>';
+ const registry=new Map();
+ let bucket='';
+ list.innerHTML=view.items.length?view.items.map((item,n)=>{
+  const key='i'+n;registry.set(key,item.actions||[]);
+  const heading=item.bucket!==bucket?'<h3 class="command-bucket">'+esc(COMMAND_BUCKETS[item.bucket])+'</h3>':'';bucket=item.bucket;
+  const lanes=(item.lanes||[]).map((lane,m)=>{const laneKey=key+'l'+m;registry.set(laneKey,lane.actions||[]);
+   return '<li class="lane'+(lane.recommended?' recommended':'')+'"><div class="task-top"><span>'+esc(lane.title)+(lane.agent?' <span class="hint">· '+esc(lane.agent)+'</span>':'')+(lane.recommended?' <span class="chip">Recommended</span>':'')+'</span>'+pill(lane.held?'paused':lane.state)+'</div>'+(lane.message&&lane.state!=='completed'?'<p class="hint">'+esc(lane.message)+'</p>':'')+(lane.result?'<details><summary>Result</summary>'+(lane.result.summary?'<pre class="log">'+esc(lane.result.summary)+'</pre>':'')+(lane.result.patch?'<p class="hint">Patch: <code>'+esc(lane.result.patch)+'</code></p>':'<p class="hint">No changes were produced.</p>')+'</details>':'')+(lane.trace?'<details class="trace" data-trace="'+esc(lane.trace)+'"'+(openTraces.has(lane.trace)?' open':'')+'><summary>How it ran</summary><ol class="trace-steps"><li class="hint">Loading…</li></ol></details>':'')+'<div class="actions">'+commandButtons(lane.actions,laneKey)+'</div></li>'}).join('');
+  return heading+'<article class="card"><div class="task-top"><h4><a href="'+esc(item.link)+'">'+esc(item.title)+'</a></h4>'+pill(item.state)+'</div>'
+   +'<div class="meta"><span>'+esc(COMMAND_KINDS[item.kind]||item.kind)+'</span>'+(item.progress?'<span>'+item.progress.done+' of '+item.progress.total+' done</span>':'')+'<time>'+when(item.updatedAt)+'</time></div>'
+   +(item.progress&&item.progress.total?'<progress max="'+item.progress.total+'" value="'+item.progress.done+'"></progress>':'')
+   +(item.detail?'<p class="hint">'+esc(item.detail)+'</p>':'')
+   +(item.modelChoice?'<p class="hint">Atlas chose the model '+esc(item.modelChoice.model)+': '+esc(item.modelChoice.reasons.join('; '))+'.</p>':'')
+   +(item.strategy?'<p class="hint">Atlas chose '+(item.strategy.branch?item.strategy.versions+' competing versions':'one attempt')+': '+esc(item.strategy.reasons.join('; '))+'.</p>':'')
+   +(lanes?'<ul class="lanes">'+lanes+'</ul>':'')
+   +'<div class="actions">'+commandButtons(item.actions,key)+'</div></article>'}).join(''):'<p class="empty">Atlas is not doing anything right now. Start something from Home, Build or Missions.</p>';
+ list.querySelectorAll('details.trace').forEach(d=>{
+  const show=()=>loadTrace(d).catch(e=>{d.querySelector('ol').innerHTML='<li class="hint">'+esc(e.message)+'</li>'});
+  d.addEventListener('toggle',()=>{if(d.open){openTraces.add(d.dataset.trace);show()}else openTraces.delete(d.dataset.trace)});
+  if(d.open)show();
+ });
+ list.querySelectorAll('[data-command]').forEach(b=>b.onclick=async()=>{
+  const act=(registry.get(b.dataset.command)||[])[Number(b.dataset.index)];if(!act)return;
+  if(act.name==='cancel'&&!confirm('Cancel this? Work already finished is kept.'))return;
+  const notice=$('#command-notice');b.disabled=true;notice.textContent='Asking Atlas to '+act.label.toLowerCase()+'…';
+  try{const r=await sendJson(act.path,act.method,act.body);notice.textContent=r.apply?(r.apply.status==='awaiting-approval'?'Waiting for your approval under Approvals.':r.apply.message||''):''}catch(error){notice.textContent=error.message}
+  b.blur();loadCommand().catch(()=>{});
+ });
+}
+$('#command-refresh').onclick=()=>loadCommand();
+$('#launch-mode').onchange=()=>{const mode=$('#launch-mode').value,v=mode==='variants';$('#launch-count-label').hidden=!v;$('#launch-text').placeholder=v?'Redesign the pricing page to make the Pro plan stand out':mode==='auto'?'Refactor the billing module so invoices can be retried':['Fix the login redirect','Add a CSV export to the reports page','Update the README'].join(String.fromCharCode(10))};
+$('#command-launch-panel').addEventListener('toggle',async()=>{if(!$('#command-launch-panel').open)return;const r=await api('/v1/models');if(!r.ok)return;const m=(await r.json()).models||[];if(m.length)$('#launch-model').innerHTML='<option value="auto">Let Atlas choose (from past results)</option>'+m.map(x=>'<option>'+esc(x)+'</option>').join('')});
+$('#command-launch').onsubmit=async e=>{e.preventDefault();const notice=$('#command-notice'),text=$('#launch-text').value.trim(),variants=$('#launch-mode').value==='variants';
+ const body={repository:$('#launch-repository').value.trim(),model:$('#launch-model').value};
+ if($('#launch-mode').value==='auto'){body.objective=text;body.strategy='auto'}else if(variants){body.objective=text;body.variants=Number($('#launch-count').value)}else{body.tasks=text.split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean)}
+ notice.textContent='Starting…';
+ try{await sendJson('/v1/missions','POST',body);notice.textContent='Started.';$('#launch-text').value='';$('#command-launch-panel').open=false}catch(error){notice.textContent=error.message}
+ loadCommand().catch(()=>{})};
+$('#command-goal').onsubmit=async e=>{e.preventDefault();const notice=$('#command-notice');
+ const body={objective:$('#goal-text').value.trim(),repository:$('#goal-repository').value.trim(),model:$('#goal-model').value.trim(),watch:{repository:$('#goal-watch').value.trim(),pullRequest:Number($('#goal-pr').value)}};
+ notice.textContent='Starting…';
+ try{await sendJson('/v1/goals','POST',body);notice.textContent='Started; Atlas will keep watching.';$('#goal-text').value='';$('#command-goal-panel').open=false}catch(error){notice.textContent=error.message}
+ loadCommand().catch(()=>{})};
+setInterval(()=>{if(currentView==='command'&&isUnlocked()&&!document.hidden)loadCommand().catch(()=>{})},4000);
+
+/* ---- Automations ---- */
+const triggerText=a=>a.trigger.kind==='schedule'?'Schedule '+a.trigger.cron:a.trigger.kind==='github'?'GitHub '+a.trigger.events.join(', ')+(a.trigger.branches.length?' on '+a.trigger.branches.join(', '):''):a.trigger.kind==='file'?'Files change in '+a.trigger.path:a.trigger.kind==='webhook'?'Webhook':'Run now only';
+async function loadAutomations(){
+ const list=$('#automations-list');
+ /* #/automations/new/<mission>: "Automate this?" from the Command Center prefills the form. */
+ const from=location.hash.split('/')[3];
+ if(from){history.replaceState(null,'','#/automations');getJson('/v1/missions/'+encodeURIComponent(from)).then(({mission})=>{const lanes=mission.children||[];$('#automation-new-panel').open=true;$('#auto-name').value=(mission.title||'Repeated task').slice(0,120);$('#auto-kind').value='mission';$('#auto-repository').value=mission.repository||'';$('#auto-text').value=lanes.map(l=>l.objective).join(String.fromCharCode(10));syncAutomationForm()}).catch(()=>{})}
+ let data;try{data=await getJson('/v1/automations')}catch(error){list.innerHTML=problem(error);return}
+ list.innerHTML=data.automations.length?data.automations.map(a=>'<article class="card"><div class="task-top"><h4>'+esc(a.name)+'</h4>'+pill(a.enabled?'active':'paused')+'</div>'
+  +'<div class="meta"><span>'+esc(triggerText(a))+'</span><span>'+esc(a.action.kind==='team'?'Team goal':a.action.tasks.length+' coding task(s)')+'</span>'+(a.nextRunAt&&a.enabled?'<span>Next '+when(a.nextRunAt)+'</span>':'')+'</div>'
+  +(a.pausedReason?'<p class="hint">'+esc(a.pausedReason)+'</p>':'')
+  +(a.lastRun?'<p class="hint">Last run '+when(a.lastRun.startedAt)+': '+esc(a.lastRun.status)+(a.lastRun.message?' · '+esc(a.lastRun.message):'')+'</p>':'')
+  +'<div class="actions"><button type="button" class="secondary" data-auto="run" data-id="'+esc(a.id)+'">Run now</button>'+(a.enabled?'<button type="button" class="secondary" data-auto="pause" data-id="'+esc(a.id)+'">Pause</button>':'<button type="button" data-auto="resume" data-id="'+esc(a.id)+'">Resume</button>')+'<button type="button" class="ghost" data-auto="history" data-id="'+esc(a.id)+'">History</button><button type="button" class="ghost" data-auto="delete" data-id="'+esc(a.id)+'">Delete</button></div>'
+  +'<div class="auto-history" data-history="'+esc(a.id)+'" hidden></div></article>').join(''):'<p class="empty">No automations yet. Create one above.</p>';
+ list.querySelectorAll('[data-auto]').forEach(b=>b.onclick=()=>automationAction(b.dataset.id,b.dataset.auto));
+}
+async function automationAction(id,action){
+ const notice=$('#automations-notice');
+ try{
+  if(action==='history'){const box=document.querySelector('[data-history="'+id+'"]');const {automation}=await getJson('/v1/automations/'+encodeURIComponent(id));box.hidden=false;box.innerHTML=automation.runs.length?'<table class="table"><thead><tr><th>Started</th><th>By</th><th>Result</th></tr></thead><tbody>'+automation.runs.map(r=>'<tr><td>'+when(r.startedAt)+'</td><td>'+esc(r.triggerKind)+'</td><td>'+esc(r.status)+(r.message?' · '+esc(r.message):'')+(r.missionId?' · <a href="#/command">see run</a>':'')+'</td></tr>').join('')+'</tbody></table>':'<p class="empty">No runs yet.</p>';return}
+  if(action==='delete'){if(!confirm('Delete this automation and its history?'))return;await getJson('/v1/automations/'+encodeURIComponent(id),{method:'DELETE'});notice.textContent='Deleted.'}
+  else{const r=await sendJson('/v1/automations/'+encodeURIComponent(id)+'/'+action,'POST',{});notice.textContent=action==='run'?(r.run.status==='running'?'Started. Follow it in the Command center.':(r.run.message||r.run.status)):''}
+ }catch(error){notice.textContent=error.message}
+ loadAutomations().catch(()=>{});
+}
+const syncAutomationForm=()=>{const t=$('#auto-trigger').value;$('#auto-cron-label').hidden=t!=='schedule';$('#auto-github-label').hidden=t!=='github';$('#auto-branches-label').hidden=t!=='github';$('#auto-path-label').hidden=t!=='file';const mission=$('#auto-kind').value==='mission';$$('.auto-mission').forEach(el=>{el.hidden=!mission})};
+$('#auto-trigger').onchange=syncAutomationForm;$('#auto-kind').onchange=syncAutomationForm;
+$('#automation-new-panel').addEventListener('toggle',async()=>{if(!$('#automation-new-panel').open)return;syncAutomationForm();const r=await api('/v1/models');if(!r.ok)return;const m=(await r.json()).models||[];if(m.length)$('#auto-model').innerHTML=m.map(x=>'<option>'+esc(x)+'</option>').join('')});
+$('#automation-form').onsubmit=async e=>{e.preventDefault();const notice=$('#automations-notice'),kind=$('#auto-kind').value,text=$('#auto-text').value.trim(),trigger=$('#auto-trigger').value;
+ const body={name:$('#auto-name').value.trim(),trigger:trigger==='schedule'?{kind:trigger,cron:$('#auto-cron').value.trim()}:trigger==='github'?{kind:trigger,events:[...$('#auto-github-events').selectedOptions].map(o=>o.value),branches:$('#auto-branches').value.split(',').map(b=>b.trim()).filter(Boolean)}:trigger==='file'?{kind:trigger,path:$('#auto-path').value.trim()}:{kind:trigger},maxRunsPerDay:Number($('#auto-max').value),
+  action:kind==='team'?{kind,goal:text}:{kind,repository:$('#auto-repository').value.trim(),model:$('#auto-model').value,tasks:text.split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean)}};
+ try{const r=await sendJson('/v1/automations','POST',body);notice.textContent='Created.';$('#automation-new-panel').open=false;$('#automation-form').reset();
+  const secret=$('#automation-secret');if(r.webhookPath){secret.hidden=false;secret.innerHTML='<h4>Webhook address</h4><p><code>'+esc(location.origin+r.webhookPath)+'</code></p>'+(r.githubSigningSecret?'<h4>GitHub signing secret</h4><p><code>'+esc(r.githubSigningSecret)+'</code></p>':'')+'<p class="hint">'+esc(r.note)+(r.githubSigningSecret?' GitHub must be able to reach this computer (Settings → Reach Atlas).':' Send a POST to it; an Idempotency-Key header makes retries safe.')+'</p>'}else secret.hidden=true}
+ catch(error){notice.textContent=error.message}
+ loadAutomations().catch(()=>{})};
+$('#automations-refresh').onclick=()=>loadAutomations();
 
 /* ---- Home ---- */
 async function loadBadge(){
@@ -772,18 +940,21 @@ function bindPolicies(root,after){root.querySelectorAll('[data-policy]').forEach
 async function loadComputer(){
  const box=$('#computer-tools');
  try{
-  const {tools}=await getJson('/v1/tools');
+  const [{tools},{suggestions}]=await Promise.all([getJson('/v1/tools'),getJson('/v1/autonomy').catch(()=>({suggestions:[]}))]);
   if(!tools.length){box.innerHTML='<p class="empty">No tools are registered in this process.</p>';return}
+  /* Precedent (Track B8): suggestions only; nothing changes until the owner accepts one. */
+  const suggested=suggestions.length?'<section class="panel group"><h3>Atlas could do more on its own</h3>'+suggestions.map(x=>'<div class="policy"><span>'+esc(x.reason)+'</span><button type="button" class="secondary" data-relax="'+esc(x.capability)+'">Let Atlas do this without asking</button></div>').join('')+'</section>':'';
   const used=new Set;
   const html=GROUPS.map(([prefix,title,blurb])=>{
    const group=tools.filter(t=>t.name.startsWith(prefix));group.forEach(t=>used.add(t.name));
    if(!group.length)return '';
    const caps=[...new Map(group.map(t=>[t.capability,t.decision])).entries()];
-   return '<section class="panel group"><h3>'+esc(title)+'</h3><p class="hint">'+esc(blurb)+'</p>'+caps.map(([cap,decision])=>'<div class="policy"><span><code>'+esc(cap)+'</code> '+pill(decision)+'</span>'+policySelect(cap,decision)+'</div>').join('')+'<details class="more"><summary>'+group.length+' tool'+(group.length===1?'':'s')+'</summary>'+group.map(t=>'<div class="tool"><code>'+esc(t.name)+'</code><span class="chip">'+esc(t.risk)+(t.requiresApproval?' · always asks':'')+'</span><p>'+esc(t.description)+'</p></div>').join('')+'</details></section>';
+   return '<section class="panel group"><h3>'+esc(title)+'</h3><p class="hint">'+esc(blurb)+'</p>'+caps.map(([cap,decision])=>'<div class="policy"><span><code>'+esc(cap)+'</code> '+pill(decision)+'</span>'+policySelect(cap,decision)+'</div>').join('')+'<details class="more"><summary>'+group.length+' tool'+(group.length===1?'':'s')+'</summary>'+group.map(t=>'<div class="tool"><code>'+esc(t.name)+'</code><span class="chip">'+esc(t.risk)+(t.requiresApproval?' · always asks':'')+'</span>'+(t.autonomy?'<span class="chip" title="'+esc(t.autonomy.reasons.join('; '))+'">level '+t.autonomy.level+': '+esc(t.autonomy.label)+'</span>':'')+'<p>'+esc(t.description)+'</p></div>').join('')+'</details></section>';
   }).join('');
   const other=tools.filter(t=>!used.has(t.name));
-  box.innerHTML=html+(other.length?'<section class="panel group"><h3>Other</h3>'+other.map(t=>'<div class="tool"><code>'+esc(t.name)+'</code>'+pill(t.decision)+'<p>'+esc(t.description)+'</p></div>').join('')+'</section>':'');
+  box.innerHTML=suggested+html+(other.length?'<section class="panel group"><h3>Other</h3>'+other.map(t=>'<div class="tool"><code>'+esc(t.name)+'</code>'+pill(t.decision)+'<p>'+esc(t.description)+'</p></div>').join('')+'</section>':'');
   bindPolicies(box,loadComputer);
+  box.querySelectorAll('[data-relax]').forEach(b=>b.onclick=async()=>{await setPolicy(b.dataset.relax,'allow');loadComputer()});
  }catch(error){box.innerHTML=problem(error)}
 }
 
@@ -822,6 +993,113 @@ async function loadConnections(){
   mcpBox.innerHTML=mcp.length?mcp.map(s=>{const cap='mcp.'+s.id,decision=decisions.get(cap)||'deny';return '<div class="card"><div class="task-top"><h4>'+esc(s.id)+'</h4>'+pill(s.status)+'</div>'+(s.message?'<p>'+esc(s.message)+'</p>':'')+(s.tools?'<p>'+(s.tools.length?esc(s.tools.join(', ')):'No allowed tools.')+'</p>':'')+(s.flagged?.length?'<p class="hint">Blocked because their descriptions look like instructions: '+esc(s.flagged.join(', '))+'</p>':'')+(s.status==='connected'?'<div class="policy"><span>Agents may use these tools</span>'+policySelect(cap,decision)+'</div>':'')+'</div>'}).join(''):'<p class="empty">No tool servers configured. Set ATLAS_MCP_SERVERS and restart Atlas to add one.</p>';
   bindPolicies(mcpBox,loadConnections);
  }catch(error){mcpBox.innerHTML=problem(error)}
+}
+
+/* ---- Artifacts: what Atlas made, with a viewer for each kind. ---- */
+/* Bytes are fetched with this tab's token and shown from a blob: URL, so no token ever appears in a URL. */
+const ARTIFACT_LABELS={website:'Website',app:'App',game:'Game',video:'Video',model3d:'3D model',document:'Document',file:'File'};
+let artifactUrl=null,artifactStop=null;
+function bytesText(n){return n<1024?n+' B':n<1048576?(Math.round(n/102.4)/10)+' KB':(Math.round(n/104857.6)/10)+' MB'}
+function clearArtifactView(){if(artifactStop){artifactStop();artifactStop=null}if(artifactUrl){URL.revokeObjectURL(artifactUrl);artifactUrl=null}const d=$('#artifact-detail');if(d){d.innerHTML='';d.hidden=true;delete d.dataset.sha}}
+async function artifactBlob(a){const r=await api('/v1/artifacts/'+a.sha256+'/content');if(!r.ok)throw new Error('Could not load the artifact ('+r.status+').');return r.blob()}
+function artifactName(a){return a.name||(a.kind+'-'+a.sha256.slice(0,12))}
+const safePreview=u=>typeof u==='string'&&/^(\\/(?!\\/)|https?:\\/\\/)/.test(u)?u:null;
+async function loadArtifacts(){
+ const list=$('#artifacts-list'),detail=$('#artifact-detail');
+ const sha=(location.hash.split('/')[2]||'').toLowerCase();
+ const kind=$('#artifacts-kind').value;
+ try{
+  const {artifacts}=await getJson('/v1/artifacts'+(kind?'?kind='+encodeURIComponent(kind):''));
+  list.innerHTML=artifacts.length?artifacts.map(a=>'<a class="card" href="#/artifacts/'+esc(a.sha256)+'"><div class="task-top"><h4>'+esc(artifactName(a))+'</h4>'+pill(ARTIFACT_LABELS[a.kind]||a.kind)+'</div><p class="hint">'+esc(a.mediaType)+' · '+esc(bytesText(a.size))+' · '+esc(a.provenance.source||'run')+' '+esc(a.provenance.runId)+' ('+esc(a.provenance.step)+')</p><time>'+when(a.createdAt)+'</time></a>').join(''):'<p class="empty">Nothing yet. Build something under Build and it appears here once it is ready.</p>';
+  if(!/^[0-9a-f]{64}$/.test(sha)){clearArtifactView();return}
+  /* Already showing this one: do not restart a playing video or a turning model. */
+  if(detail.dataset.sha===sha&&!detail.hidden)return;
+  const {artifact:a}=await getJson('/v1/artifacts/'+sha);
+  clearArtifactView();detail.dataset.sha=sha;detail.hidden=false;
+  const preview=safePreview(a.previewUrl);
+  const fromGenesis=a.provenance.source==='genesis'&&/^gen_[0-9a-f-]{36}$/.test(a.provenance.runId);
+  detail.innerHTML='<div class="panel"><div class="task-top"><h3>'+esc(artifactName(a))+'</h3>'+pill(ARTIFACT_LABELS[a.kind]||a.kind)+'</div>'
+   +'<div id="artifact-view" class="artifact-view"><p class="hint">Loading…</p></div>'
+   +'<div class="actions">'+(fromGenesis?'<a class="button" href="#/build/'+esc(a.provenance.runId)+'">Open the live preview</a>':preview?'<a class="button" href="'+esc(preview)+'"'+(preview.startsWith('/')?'':' target="_blank" rel="noopener"')+'>Open the preview</a>':'')+'<button type="button" class="secondary" id="artifact-download">Download</button></div>'
+   +'<table class="table"><tbody><tr><th>Kind</th><td>'+esc(a.kind)+'</td></tr><tr><th>Type</th><td>'+esc(a.mediaType)+'</td></tr><tr><th>Size</th><td>'+esc(bytesText(a.size))+'</td></tr><tr><th>SHA-256</th><td><code>'+esc(a.sha256)+'</code></td></tr><tr><th>Made by</th><td>'+esc(a.provenance.source||'run')+' '+esc(a.provenance.runId)+', step '+esc(a.provenance.step)+'</td></tr><tr><th>When</th><td>'+when(a.createdAt)+'</td></tr></tbody></table></div>';
+  $('#artifact-download').onclick=async()=>{try{const blob=await artifactBlob(a),u=URL.createObjectURL(blob),link=document.createElement('a');link.href=u;link.download=artifactName(a);document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(u),10000)}catch(error){setNotice(error.message)}};
+  const view=$('#artifact-view');
+  if(a.kind==='video'||a.mediaType.startsWith('image/')||a.kind==='model3d'||a.mediaType.startsWith('text/')||a.mediaType.endsWith('json')){
+   const blob=await artifactBlob(a);
+   if(detail.dataset.sha!==sha)return;
+   if(a.kind==='video'){artifactUrl=URL.createObjectURL(blob);const video=document.createElement('video');video.controls=true;video.playsInline=true;video.preload='metadata';video.src=artifactUrl;view.replaceChildren(video)}
+   else if(a.mediaType.startsWith('image/')){artifactUrl=URL.createObjectURL(blob);const img=document.createElement('img');img.alt=artifactName(a);img.src=artifactUrl;view.replaceChildren(img)}
+   else if(a.kind==='model3d'){try{artifactStop=showModel(view,parseGltf(await blob.arrayBuffer(),a.mediaType))}catch(error){view.innerHTML='<div class="error"><strong>'+esc(error.message)+'</strong><p>Download the model to open it in another viewer.</p></div>'}}
+   else if(a.mediaType==='application/vnd.atlas.site-manifest+json'){let m={};try{m=JSON.parse(await blob.text())}catch{}const files=Array.isArray(m.files)?m.files:[];view.innerHTML='<p>'+esc(m.name||'')+' · template '+esc(m.template||'unknown')+' · '+files.length+(m.truncated?'+':'')+' files</p><details><summary>Files</summary><ul class="hint">'+files.slice(0,200).map(f=>'<li><code>'+esc(f.path)+'</code> '+esc(bytesText(Number(f.size)||0))+'</li>').join('')+'</ul></details>'}
+   else{const text=await blob.text();view.innerHTML='<pre class="log">'+esc(text.slice(0,200000))+(text.length>200000?'\\n…':'')+'</pre>'}
+  }else view.innerHTML='<p class="hint">'+(a.kind==='website'||a.kind==='app'||a.kind==='game'?'Open the live preview to use it.':'No in-page viewer for this type; download it to open it.')+'</p>';
+ }catch(error){(sha?detail:list).innerHTML=problem(error);if(sha)detail.hidden=false}
+}
+$('#artifacts-kind').onchange=()=>loadArtifacts();
+$('#artifacts-refresh').onclick=()=>loadArtifacts();
+
+/* A small glTF 2.0 viewer (WebGL, no third-party code): triangle meshes with node transforms, flat shaded.
+   Materials, textures, skins and animation are not drawn. Buffers must be in the GLB or embedded as data: URIs. */
+function parseGltf(buf,mediaType){
+ let json=null,bin=null;
+ if(mediaType==='model/gltf-binary'){
+  const dv=new DataView(buf);if(buf.byteLength<20||dv.getUint32(0,true)!==0x46546C67)throw new Error('This is not a GLB file.');
+  const total=Math.min(dv.getUint32(8,true),buf.byteLength);let off=12;
+  while(off+8<=total){const len=dv.getUint32(off,true),type=dv.getUint32(off+4,true),start=off+8;if(start+len>total)break;if(type===0x4E4F534A)json=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,start,len)));else if(type===0x004E4942&&!bin)bin=buf.slice(start,start+len);off=start+len+((4-len%4)%4)}
+ }else json=JSON.parse(new TextDecoder().decode(buf));
+ if(!json||!Array.isArray(json.meshes))throw new Error('The model has no meshes to show.');
+ const buffers=(json.buffers||[]).map(b=>{if(b.uri===undefined)return bin;const m=/^data:[^;,]*;base64,(.*)$/.exec(b.uri);if(!m)throw new Error('This viewer reads models whose buffers are inside the file.');const s=atob(m[1]),u=new Uint8Array(s.length);for(let k=0;k<s.length;k++)u[k]=s.charCodeAt(k);return u.buffer});
+ const TYPES={5126:Float32Array,5125:Uint32Array,5123:Uint16Array,5121:Uint8Array},SIZES={SCALAR:1,VEC2:2,VEC3:3,VEC4:4};
+ function read(index){const acc=json.accessors&&json.accessors[index];if(!acc||acc.bufferView===undefined)throw new Error('The model uses a layout this viewer does not read.');const view=json.bufferViews[acc.bufferView],C=TYPES[acc.componentType],n=SIZES[acc.type]||1,buffer=buffers[view.buffer];if(!C||!buffer)throw new Error('The model uses a layout this viewer does not read.');const base=(view.byteOffset||0)+(acc.byteOffset||0),stride=view.byteStride||n*C.BYTES_PER_ELEMENT,out=new C(acc.count*n),dv=new DataView(buffer);const get={5126:o=>dv.getFloat32(o,true),5125:o=>dv.getUint32(o,true),5123:o=>dv.getUint16(o,true),5121:o=>dv.getUint8(o)}[acc.componentType];for(let i=0;i<acc.count;i++)for(let c=0;c<n;c++)out[i*n+c]=get(base+i*stride+c*C.BYTES_PER_ELEMENT);return out}
+ const mul=(a,b)=>{const o=new Array(16);for(let c=0;c<4;c++)for(let r=0;r<4;r++)o[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];return o};
+ function local(node){if(Array.isArray(node.matrix))return node.matrix;const [x,y,z,w]=node.rotation||[0,0,0,1],[sx,sy,sz]=node.scale||[1,1,1],[tx,ty,tz]=node.translation||[0,0,0];
+  return [(1-2*(y*y+z*z))*sx,2*(x*y+z*w)*sx,2*(x*z-y*w)*sx,0,2*(x*y-z*w)*sy,(1-2*(x*x+z*z))*sy,2*(y*z+x*w)*sy,0,2*(x*z+y*w)*sz,2*(y*z-x*w)*sz,(1-2*(x*x+y*y))*sz,0,tx,ty,tz,1]}
+ const tris=[];let count=0;const LIMIT=3000000;
+ function addMesh(mesh,m){for(const p of mesh.primitives||[]){if(p.mode!==undefined&&p.mode!==4)continue;if(p.attributes.POSITION===undefined)continue;const pos=read(p.attributes.POSITION),idx=p.indices!==undefined?read(p.indices):null,n=idx?idx.length:pos.length/3;if(count+n>LIMIT)throw new Error('The model is too large to show here; download it instead.');const out=new Float32Array(n*3);for(let i=0;i<n;i++){const v=(idx?idx[i]:i)*3,x=pos[v],y=pos[v+1],z=pos[v+2];out[i*3]=m[0]*x+m[4]*y+m[8]*z+m[12];out[i*3+1]=m[1]*x+m[5]*y+m[9]*z+m[13];out[i*3+2]=m[2]*x+m[6]*y+m[10]*z+m[14]}tris.push(out);count+=n}}
+ const seen=new Set;function visit(i,parent){if(seen.has(i)||!json.nodes||!json.nodes[i])return;seen.add(i);const node=json.nodes[i],m=mul(parent,local(node));if(node.mesh!==undefined&&json.meshes[node.mesh])addMesh(json.meshes[node.mesh],m);for(const c of node.children||[])visit(c,m)}
+ const I=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
+ const scene=json.scenes&&json.scenes[json.scene||0];
+ if(scene&&Array.isArray(scene.nodes))scene.nodes.forEach(i=>visit(i,I));else json.meshes.forEach(mesh=>addMesh(mesh,I));
+ if(!count)throw new Error('The model has no triangles to show.');
+ const positions=new Float32Array(count*3);let o=0;for(const t of tris){positions.set(t,o);o+=t.length}
+ const normals=new Float32Array(count*3);
+ for(let i=0;i+8<positions.length;i+=9){const ax=positions[i+3]-positions[i],ay=positions[i+4]-positions[i+1],az=positions[i+5]-positions[i+2],bx=positions[i+6]-positions[i],by=positions[i+7]-positions[i+1],bz=positions[i+8]-positions[i+2];let nx=ay*bz-az*by,ny=az*bx-ax*bz,nz=ax*by-ay*bx;const l=Math.hypot(nx,ny,nz)||1;nx/=l;ny/=l;nz/=l;for(let k=0;k<9;k+=3){normals[i+k]=nx;normals[i+k+1]=ny;normals[i+k+2]=nz}}
+ const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];for(let i=0;i<positions.length;i+=3)for(let c=0;c<3;c++){min[c]=Math.min(min[c],positions[i+c]);max[c]=Math.max(max[c],positions[i+c])}
+ return {positions,normals,count,center:[0,1,2].map(c=>(min[c]+max[c])/2),radius:Math.max(1e-6,Math.hypot(max[0]-min[0],max[1]-min[1],max[2]-min[2])/2),triangles:Math.floor(count/3)};
+}
+function showModel(view,model){
+ const canvas=document.createElement('canvas');canvas.className='artifact-canvas';canvas.setAttribute('aria-label','3D model, '+model.triangles+' triangles. Drag to turn it, scroll to zoom.');canvas.tabIndex=0;
+ const info=document.createElement('p');info.className='hint';info.textContent=model.triangles.toLocaleString()+' triangles · drag to turn, scroll to zoom, arrow keys to rotate. Shapes only: materials and textures are not drawn.';
+ view.replaceChildren(canvas,info);
+ const gl=canvas.getContext('webgl',{antialias:true});if(!gl){view.innerHTML='<div class="error"><strong>This browser cannot draw 3D (WebGL is off).</strong><p>Download the model to open it elsewhere.</p></div>';return null}
+ const shader=(type,src)=>{const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);return s};
+ const prog=gl.createProgram();
+ gl.attachShader(prog,shader(gl.VERTEX_SHADER,'attribute vec3 p;attribute vec3 n;uniform mat4 mvp;uniform mat4 rot;varying vec3 vn;void main(){gl_Position=mvp*vec4(p,1.0);vn=(rot*vec4(n,0.0)).xyz;}'));
+ gl.attachShader(prog,shader(gl.FRAGMENT_SHADER,'precision mediump float;varying vec3 vn;void main(){vec3 d=normalize(vec3(0.4,0.7,0.6));float l=abs(dot(normalize(vn),d));gl_FragColor=vec4(vec3(0.22+0.72*l)*vec3(0.86,0.96,0.78),1.0);}'));
+ gl.linkProgram(prog);gl.useProgram(prog);
+ const attr=(name,data)=>{const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);const loc=gl.getAttribLocation(prog,name);gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,3,gl.FLOAT,false,0,0)};
+ attr('p',model.positions);attr('n',model.normals);
+ gl.enable(gl.DEPTH_TEST);
+ let yaw=0.6,pitch=-0.35,zoom=2.6,raf=0,dragging=null;
+ const mul=(a,b)=>{const o=new Float32Array(16);for(let c=0;c<4;c++)for(let r=0;r<4;r++)o[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];return o};
+ function draw(){raf=0;const w=canvas.clientWidth||600,h=canvas.clientHeight||400,dpr=Math.min(2,window.devicePixelRatio||1);if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr)}
+  gl.viewport(0,0,canvas.width,canvas.height);gl.clearColor(0.06,0.08,0.07,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  const s=1/model.radius,[cx,cy,cz]=model.center,f=1/Math.tan(Math.PI/8),near=0.05,far=50,aspect=canvas.width/canvas.height;
+  const P=[f/aspect,0,0,0,0,f,0,0,0,0,(far+near)/(near-far),-1,0,0,2*far*near/(near-far),0];
+  const cyw=Math.cos(yaw),syw=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+  const R=mul([1,0,0,0,0,cp,sp,0,0,-sp,cp,0,0,0,0,1],[cyw,0,-syw,0,0,1,0,0,syw,0,cyw,0,0,0,0,1]);
+  const M=mul(R,[s,0,0,0,0,s,0,0,0,0,s,0,-cx*s,-cy*s,-cz*s,1]);
+  const V=mul([1,0,0,0,0,1,0,0,0,0,1,0,0,0,-zoom,1],M);
+  gl.uniformMatrix4fv(gl.getUniformLocation(prog,'mvp'),false,mul(P,V));gl.uniformMatrix4fv(gl.getUniformLocation(prog,'rot'),false,R);
+  gl.drawArrays(gl.TRIANGLES,0,model.count)}
+ const redraw=()=>{if(!raf)raf=requestAnimationFrame(draw)};
+ canvas.onpointerdown=e=>{dragging={x:e.clientX,y:e.clientY};canvas.setPointerCapture(e.pointerId)};
+ canvas.onpointermove=e=>{if(!dragging)return;yaw+=(e.clientX-dragging.x)*0.01;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-dragging.y)*0.01));dragging={x:e.clientX,y:e.clientY};redraw()};
+ canvas.onpointerup=()=>{dragging=null};
+ canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(1.2,Math.min(12,zoom*(e.deltaY>0?1.1:0.9)));redraw()};
+ canvas.onkeydown=e=>{const k={ArrowLeft:[-0.1,0],ArrowRight:[0.1,0],ArrowUp:[0,-0.1],ArrowDown:[0,0.1]}[e.key];if(!k)return;e.preventDefault();yaw+=k[0];pitch=Math.max(-1.5,Math.min(1.5,pitch+k[1]));redraw()};
+ const resize=()=>redraw();window.addEventListener('resize',resize);redraw();
+ return ()=>{if(raf)cancelAnimationFrame(raf);window.removeEventListener('resize',resize);const lose=gl.getExtension('WEBGL_lose_context');if(lose)lose.loseContext()};
 }
 
 syncLock();

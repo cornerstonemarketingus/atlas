@@ -59,7 +59,9 @@ export function createCloudflareAdapter({ token, fetchImpl = fetch }) {
       }
       // Read back rather than trusting the write's own response.
       const after = (await this.listDnsRecords({ zoneId, name: body.name, signal })).find((record) => record.type === body.type);
-      const verified = Boolean(after) && after.content === body.content;
+      const verified = Boolean(after) && after.type === body.type
+        && dnsName(after.name) === dnsName(body.name) && after.content === body.content
+        && after.ttl === body.ttl && after.proxied === body.proxied;
       return { verified, observed: after ?? null };
     },
 
@@ -122,3 +124,5 @@ function summarizeRecord(record) {
     proxied: Boolean(record.proxied),
   };
 }
+
+function dnsName(name) { return String(name ?? "").toLowerCase().replace(/\.$/u, ""); }
