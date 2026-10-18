@@ -1,0 +1,32 @@
+{
+  "id": "dns-readback-verification",
+  "category": "bug-localization",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "8ad577e3f138c0adedd6910cdd22d13f053bed5d",
+  "objective": "The Cloudflare adapter in apps/local-control/src/agent/infrastructure/cloudflare.mjs reports a DNS record as verified when only its content matches the read-back. applyDnsRecord must report verified: true only when the record read back from the provider matches the plan's type, name, content, ttl and proxied flag, comparing names case-insensitively and ignoring a trailing root dot (WWW.EXAMPLE.INVALID. equals www.example.invalid). Verification never repeats the write; the result's observed field carries the read-back values. The approved infrastructure.apply tool then fails with NOT_VERIFIED. apps/local-control/tests/dns-verification.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "a3b59322b57ec332f96ce28aeb93b568d405ae56",
+    "paths": [
+      "apps/local-control/tests/dns-verification.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/dns-verification.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "a3b59322b57ec332f96ce28aeb93b568d405ae56",
+    "paths": [
+      "apps/local-control/src/agent/infrastructure/cloudflare.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "infrastructure"
+  ]
+}
