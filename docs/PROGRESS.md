@@ -674,7 +674,6 @@ trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
 
 
-<<<<<<< HEAD
 ## 2026-10-17 — result ownership integration checkpoint (#282)
 
 Integrated main 482948b through #270/#274/#276/#278 into the existing result
@@ -693,7 +692,6 @@ Initial build/lint attempts before dependency completion failed to find binaries
 No production migration/deployment, live OIDC, paid infrastructure or secret
 transfer occurred. Migration 0019 and protected owner review remain required.
 Next: finish #282 web validation and fresh CI; then #289 trusted outcome receipts.
-=======
 ## 2026-10-17 coder context recovery (issue #287)
 
 - Live run 38819478158 confirms #269 repaired repo_browser aliases in production. The same run still failed on HTTP 413 after substantial context growth; alias repair alone is not task completion. Hosted authenticated inspection 38848539074 passed.
@@ -734,4 +732,16 @@ Account344 merged c746663 after ALL CI39087720052 passed, deployment39087988081 
 Repository settings GET/PUT/DELETE still returned raw storage errors or migration0015 instructions, and auth exceptions escaped their context boundary. Reused existing fixed customerFailure contract (503/reference/no-store); unchanged auth/tenant resolution, owner/admin management, deployment allowlist, default-tenant zero-gate policy, validation and scoped writes. Three actual TypeScript-handler privacy regressions fail prior main; all10focused actual account/settings/validation cases pass after repair, covering auth/tenant/list/default/write faults with private/path/token/table sentinels and successful denial/scoping/mutation behavior. No new tenant policy or credential permissions. Broad checks/CI/deployment pending at this checkpoint. Native329/320 remain held for the already reported protected-signing automatic-review rejection; no bypass or signing edit.
 
 Repository settings validation: production build/typecheck and direct installed ESLint pass; fullweb507tests504pass3optional skips0fail. Npm-wrapper lint was slow; direct installed binary completed successfully. No deployed adversarial settings acceptance claimed. Fresh PR CI remains required.
->>>>>>> origin/main
+
+
+## 2026-10-18 — cloud observer release integration (#372)
+
+Owner explicitly authorized merge and deployment. Preserved current main and
+callback-ownership #282, including its corrected claimed-run assertion.
+Reconciled Saved requests session fencing with reconciliation/observation actions;
+stale responses cannot update a closed or replaced history session. Consolidating
+#270/#274/#276/#278/#282/#289/#312/#335/#372 into one main release to avoid
+intermediate deployments. Original observer head passed 539 tests and all CI;
+combined-head validation is pending. Production D1 dry run39094365828 confirmed
+missing schema; authorized additive migrations0017-0020,0022-0023 applied
+successfully in39094569327. Cloud-mission migration0021 excluded. No code deploy yet.
