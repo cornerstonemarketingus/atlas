@@ -570,6 +570,13 @@ The real migrated-DB cap regression fails against current main (30 admitted vers
 
 Existing trusted cloud coder subprocess cleanup now retains SIGKILL after the group leader exits, closes inherited pipes at a bounded cleanup deadline, and isolates progress observer exceptions/rejected promises. Two new real-process regressions failed before the repair and pass after it. Complete Windows runner/local suite: 80 passed, one Linux-only skip; final process suite seven passed, one Linux-only skip. CI must verify the resistant-descendant process-group case before merge. Focused handoff: docs/CLOUD-PROCESS-RECOVERY.md. No production database, provider, credentials or workflow changed. Migration 0017 and its deployment remain paused for exact production approval. Next: complete #333 CI, then continue the existing task/claim/outcome/mission rollout in dependency order; persistent isolated workspace checkpoints remain unfinished.
 
+
+## 2026-10-18 — account overview customer privacy (#343)
+
+Independent of blocked native signing, the actual account overview GET still returned raw database/plan exception text and left auth exceptions outside its response boundary. Reused existing customerFailure fixed copy/support reference/no-store contract for all unexpected failures, moving unchanged authentication into the catch boundary. Signed-out, unrestricted owner and scoped account/usage success projections remain intact. Actual TypeScript-handler regression fails prior main on an adversarial auth exception; repaired handler tests cover auth/database/plan/usage failures and confirm user/period predicates and successful outputs. Focused account/billing/deletion checks pass5/5, production build passes; broad web/typecheck/lint results belong to the PR checkpoint. No live account fault injection, admin diagnostic console or universal privacy claim. Native320 remains blocked by automatic-review rejection of simulator signing changes pending configured owner review; no signing edit was applied.
+
+Account overview validation: production build passes; full web503 tests,500 pass/3 optional browser skips/0fail. Focused actual handler cases5/5 pass. Typecheck completed without diagnostics; focused ESLint still running at this checkpoint. No remote CI/deployment acceptance asserted.
+
 ## 2026-10-17 — scoped business evidence receipts (#339)
 
 The existing production mission artifact verifier now persists a digest-bound
@@ -586,6 +593,9 @@ suite was interrupted during Genesis fixtures amid shared Windows host load;
 it did not produce a complete passing result. Next: CI on this branch, then a
 trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
+
+
+Account overview344 integration: original d8678f0 ALL CI passed, but a concurrent main merge caused a documentation-only conflict before merge. Integrated current main482948b preserving both business and account progress entries. No runtime source conflicts. Focused lint/typecheck and fullweb500pass3optional skips were established before integration; fresh complete CI is required at the integrated head. No merge or deployment claimed.
 
 ## 2026-10-18 — eval harness, first slice (#128, PROGRAM 2.1)
 
