@@ -14,12 +14,18 @@ export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
 export const TIER_LIMITS: Readonly<Record<PlanTier, {
   readonly modes: readonly string[];
   readonly monthlyTasks: number;
+  /**
+   * Hosted chat messages per UTC day. This is the cost guard for the shared
+   * hosted model pool (Workers AI's free allowance is per account, not per
+   * user), not a quality tier. Starting values: tune them from measured usage.
+   */
+  readonly dailyChatMessages: number;
   /** Metered separately from tasks: a browser minute is a container, not a request. */
   readonly hostedBrowserMinutes: number;
 }>> = {
-  free: { modes: ["inspect", "debug"], monthlyTasks: 20, hostedBrowserMinutes: 0 },
-  pro: { modes: ["inspect", "debug", "coder"], monthlyTasks: 200, hostedBrowserMinutes: 300 },
-  team: { modes: ["inspect", "debug", "coder"], monthlyTasks: 1000, hostedBrowserMinutes: 2000 },
+  free: { modes: ["inspect", "debug"], monthlyTasks: 20, dailyChatMessages: 20, hostedBrowserMinutes: 0 },
+  pro: { modes: ["inspect", "debug", "coder"], monthlyTasks: 200, dailyChatMessages: 400, hostedBrowserMinutes: 300 },
+  team: { modes: ["inspect", "debug", "coder"], monthlyTasks: 1000, dailyChatMessages: 1500, hostedBrowserMinutes: 2000 },
 };
 
 export const users = sqliteTable("users", {
@@ -146,6 +152,7 @@ export const tasks = sqliteTable("tasks", {
   githubRunId: integer("github_run_id"),
   conversationId: text("conversation_id"),
   executionProvider: text("execution_provider").notNull().default("managed"),
+  dispatchState: text("dispatch_state").notNull().default("legacy"),
   // `cor_` + 32 lowercase hex; nullable because rows dispatched before
   // correlation ids existed have none (migration 0013).
   correlationId: text("correlation_id"),

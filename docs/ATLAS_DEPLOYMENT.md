@@ -18,6 +18,20 @@ containers. Register capabilities in the existing worker registry. Acceptance
 requires a task initiated remotely while the owner's PC is offline, worker kill
 and replacement, preserved checkpoints, bounded spending and one verified artifact.
 
+Request recovery checkpoint (2026-10-17): current main is propagated through
+existing #270/#274/#276. #276's final Worker build, full web suite (537 pass,
+four optional skips) and separately executed desktop/mobile browser fixture
+pass. Prior migrations 0017/0018 still precede deployment; this UI fix adds no
+migration or secret. Fresh integrated PR CI/review and configured live reads
+remain required. No production migration or deployment was performed here.
+
+Claims integration checkpoint: #278 contains the validated recovery parent and
+passes build/typecheck, 545 web tests (four optional skips), 83 runner/local
+tests and all ten workflow checks. Protected workflow/identity review and fresh
+CI remain required. Apply migration 0019 only after authorized 0017/0018 rollout,
+deploy the reviewed claim endpoint before enabling its reviewed workflow gate,
+and quiesce old cached runs. No such rollout or live identity journey occurred.
+
 Unresolved external dependencies: owner-selected execution host, authorized
 provider configuration, TLS/identity and artifact storage configuration, approved
 deployment and physical mobile acceptance. Never expose a Docker socket or host

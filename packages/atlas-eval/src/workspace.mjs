@@ -40,10 +40,11 @@ export async function createWorkspace({ repoRoot, baseCommit }) {
         await writeFile(target, content);
       }
     },
-    /** Paths with uncommitted changes versus the base, i.e. what the agent changed. */
-    async changedPaths() {
-      const out = await git(root, ["status", "--porcelain", "--untracked-files=all"]);
-      return out.split("\n").filter(Boolean).map((line) => line.slice(3));
+    /** Net file changes against prepared setup, including agent commits. */
+    async changedPaths(baseline = "HEAD") {
+      const tracked = await git(root, ["diff", "--name-only", "--no-renames", "-z", baseline, "--"]);
+      const untracked = await git(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+      return [...new Set([...tracked.split("\0"), ...untracked.split("\0")].filter(Boolean))].sort();
     },
     async cleanup() {
       if (cleaned) return;
