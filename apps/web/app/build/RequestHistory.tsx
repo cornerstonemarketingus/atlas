@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { readTaskRequests, requestExplanation } from "./request-inspection-client.mjs";
+import { readTaskRequests, requestExplanation, reconcileTaskRequest } from "./request-inspection-client.mjs";
 import "./request-history.css";
 
 type SavedRequest = {
@@ -52,6 +52,18 @@ export function RequestHistory({ version = 0 }: { version?: number }) {
     finally { setChecking(null); }
   }
 
+  async function reconcile(requestKey: string) {
+    setChecking(requestKey);
+    try {
+      const body = await reconcileTaskRequest({ requestKey });
+      setRequests(items => items.map(item => item.requestKey === requestKey ? body.request : item));
+      setNotice("Execution evidence checked. No task was started or retried.");
+    } catch {
+      setRequests([]); setNextCursor(null);
+      setNotice("Execution evidence is unavailable. Refresh saved requests before checking again. No task was started.");
+    } finally { setChecking(null); }
+  }
+
   return <details className="request-history" onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>Saved requests</summary>
     {open && <div className="request-history-body">
@@ -67,6 +79,7 @@ export function RequestHistory({ version = 0 }: { version?: number }) {
         <small>{request.createdAt} UTC{request.task ? ` · ${request.task.repository} · ${request.task.branch}` : ""}</small>
         <div className="request-history-actions">
           <button type="button" disabled={checking !== null} onClick={() => void check(request.requestKey)}>{checking === request.requestKey ? "Checking…" : "Check request"}</button>
+          {request.task?.execution && !request.task.execution.outcome && <button type="button" disabled={checking !== null} onClick={() => void reconcile(request.requestKey)}>Reconcile execution</button>}
           {request.task?.conversationId && <a href={`/?conversation=${encodeURIComponent(request.task.conversationId)}`}>Open task activity</a>}
         </div>
       </article>)}
