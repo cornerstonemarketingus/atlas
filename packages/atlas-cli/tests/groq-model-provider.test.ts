@@ -6,6 +6,23 @@ import { GroqModelProvider } from "../src/infrastructure/groq-model-provider.js"
 const model: ModelCapabilities = { model: "llama-3.3-70b-versatile", contextWindowTokens: 128_000, maxOutputTokens: 8_192, supportsTools: true, supportsJson: true, supportsStreaming: false };
 const request: ModelRequest = { model: "llama-3.3-70b-versatile", messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }] };
 
+test("provider refusal bodies never enter errors; capacity and retry timing remain actionable", async () => {
+  for (const status of [400, 401, 403, 413, 429, 503]) {
+    const provider = new GroqModelProvider({ apiKey: "test-key", models: [model],
+      fetchImplementation: fakeFetch(() => new Response("PRIVATE_PROMPT sk-private credential Please try again in 3s.", { status })),
+    });
+    await assert.rejects(provider.complete(request), (error: unknown) => {
+      assert.ok(error instanceof ModelProviderError);
+      assert.doesNotMatch(error.message, /PRIVATE_PROMPT|sk-private|credential/);
+      assert.equal(error.cause, undefined);
+      assert.equal(error.retryable, status === 429 || status >= 500);
+      if (status === 413) assert.match(error.message, /capacity/);
+      if (status === 429 || status >= 500) assert.equal(error.retryAfterMs, 3000);
+      return true;
+    });
+  }
+});
+
 function fakeFetch(handler: (input: string | URL | Request, init?: RequestInit) => Response): typeof fetch {
   return (async (input: string | URL | Request, init?: RequestInit) => handler(input, init)) as typeof fetch;
 }
@@ -158,7 +175,8 @@ test("still raises a 400 that is not a rejected tool call", async () => {
   ));
   await assert.rejects(provider.complete(request), (error: unknown) => {
     assert.ok(error instanceof ModelProviderError);
-    assert.match(error.message, /model does not exist/u);
+    assert.equal(error.message, "Groq endpoint returned HTTP 400");
+    assert.equal(error.retryable, false);
     return true;
   });
 });
