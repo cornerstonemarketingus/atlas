@@ -31,7 +31,7 @@ What holds it back:
 persistent, verified, bounded and visible, measured by cost per verified
 outcome, on one runtime that works the same locally and in the cloud.**
 
-## 2. North-star metrics (published weekly from Wave 0)
+## 2. North-star metrics (published weekly from the sprint onward)
 
 1. **Verified success rate** on the eval suite (`packages/atlas-eval`): a
    pass means the task's own checks pass, never the agent's claim.
@@ -202,61 +202,54 @@ User → Create → Execute → Inspect → Test → Improve → Deliver, with:
    repeated gap into a reviewed, digest-approved skill that every future
    run can use.
 
-## 5. Sequencing: four waves, each with an exit gate
+## 5. Sequencing: a one-week parallel sprint (owner-set 2026-10-18)
 
-Waves follow PROGRAM.md's rule that a gate must pass before the next wave
-starts. Phase 3 items are pulled forward only with the owner's explicit
-override (decision D1).
+The owner set the schedule to **one week, with multiple agents working in
+parallel**. Six agent lanes run at once, each in its own git worktree,
+branch and PR, on files that do not overlap. A lead session coordinates,
+merges green ordinary PRs and owns `docs/PROGRESS.md` (lanes never edit it,
+to avoid conflicts). Each lane ships the vertical slice that needs no new
+credentials: interfaces, local implementations, fake providers and real
+boundary tests. The cloud and paid adapters follow the owner decisions in
+section 7.
 
-### Wave 0: stabilize and measure (weeks 0–2)
+| Lane | Issue | Deliverable this week | Files it owns |
+|---|---|---|---|
+| A. Eval | #128 | Grow from 10 to 30 tasks: test repair, tool arguments, final synthesis, more history; all pass `validate` | `evals/**`, `packages/atlas-eval/**` |
+| B. Coder loop limits | #355 | LoopPolicy (iterations, time, tokens, no-progress fingerprint) in the atlas-cli verified repair loop, with a stop reason in the JSON receipt | `packages/atlas-cli/src/agent/verified-coder-session.ts` and new files beside it |
+| C. Persistent environments | #351 | `Environment` interface; local implementation over the Genesis workspace (git snapshot plus digest, restore into a fresh folder); resume receipt; a restart test that repeats no side effects | new `apps/local-control/src/platform/environments/**` |
+| D. Artifacts and viewers | #354 | `Artifact` contract in atlas-contracts; content-addressed local store; video and glTF viewers in the local UI; Genesis registers website artifacts | `packages/atlas-contracts/**`, new `platform/artifacts/**` |
+| E. Render execution | #352 | ffmpeg (then Blender) as a declared capability that runs only inside the container sandbox, bounded by time and output, writing artifacts. The sandbox is a protected path, so this PR waits on owner review | new `platform/render/**` (integrates with `platform/terminal/` only through its exported API) |
+| F. GPU manager | #353 | Provider interface, fake provider, budget reservation before provisioning, provider-side lifetime, idle stop, orphan reconciler; chaos test with zero orphans; **no real provider and no spend** | new `platform/compute/**` |
 
-- Owner unblockers: deploy, the GitHub dispatch credential, a provider key
-  as a repository secret, and reviews of the protected PRs (#349 eval
-  workflow, #320 native compile, #311 sandbox).
-- PR and issue triage: merge or close every open PR older than 7 days. Fold
-  the hosted-execution chain (#260 to #302) into as few PRs as possible.
-  Close issues duplicated by #351 to #355.
-- Wire or delete every module ROADMAP marks "built, not wired" (skills
-  registry, MCP gateway, Atlas MCP server, engineering review scans).
-- Eval: a baseline run against production, then grow from 10 to 30 tasks,
-  adding Genesis tasks (prompt to app that passes its tests), test repair,
-  tool arguments and final synthesis.
-- **Gate:** baseline published in `docs/EVALS.md`; fewer than 10 open PRs;
-  Phase 0 exit gate recorded.
+**Day by day**
 
-### Wave 1: one run contract and persistent environments (weeks 2–6)
+- **Day 1:** lanes start; each posts its claim on its issue.
+- **Days 2–4:** each lane opens its PR with real boundary tests and
+  mutation checks.
+- **Day 5:** integration. The lead merges green ordinary PRs in dependency
+  order (D before E, because renders produce artifacts) and resolves
+  conflicts.
+- **Days 6–7:** the cross-lane journey. One sentence becomes a Genesis
+  project in a persistent environment that renders a video artifact, viewed
+  in the UI. The loop stops on its limits, and a restart resumes the
+  project. Eval baseline once a key exists.
 
-- The Environment interface with local and Cloudflare Sandbox
-  implementations; snapshot and restore; the resume receipt (#351).
-- LoopPolicy in the coder CLI's repair loop and in automations (#355
-  continued).
-- MCP 2026-07-28 migration of the client and server.
-- **Gate:** a chaos test kills the daemon or container mid-task, resumes
-  locally and in the cloud, and repeats no external side effect. The eval
-  shows no regression.
+**Sprint gate:**
+- all six PRs are open with green CI, and ordinary ones are merged;
+- the eval suite has at least 30 valid tasks;
+- the cross-lane journey passes locally;
+- the GPU chaos test leaves zero orphans.
 
-### Wave 2: execution engines and artifacts (weeks 6–10)
+**What a week cannot do without the owner:**
+- the eval baseline (needs a provider key secret);
+- the Cloudflare Sandbox environment (D2 pilot);
+- a real GPU provider (D4);
+- merging protected PRs (#349 workflow, lane E sandbox);
+- the PR triage of other agents' open work (owner call).
 
-- ffmpeg and Blender images in the sandbox, then Godot web export (#352).
-- The Artifact contract, the content-addressed store, viewers for video,
-  glTF and game, and artifact viewers served as MCP Apps (#354).
-- Genesis templates for an HTML5 game and a rendered video.
-- **Gate:** one sentence to a playable game preview, and one sentence to a
-  rendered video, each verified by an inspector check (the game loads with
-  no console errors and accepts input; the video has the expected duration
-  and frames that are not blank).
-
-### Wave 3: GPU compute and cloud scale (weeks 10–14)
-
-- The GPU manager (#353): a fake provider first, then one real provider,
-  with all four stops.
-- Long cloud runs on durable execution (Cloudflare Workflows on Durable
-  Objects), so a run outlives any single request or container.
-- A2A agent card; OpenTelemetry export; a cost-per-verified-outcome
-  dashboard.
-- **Gate:** a GPU render job runs end to end within its budget, and a chaos
-  test (killing Atlas mid-job) leaves zero orphan instances after the
-  reconciler runs.
+Those follow immediately after each decision; the interfaces built this
+week are what they plug into.
 
 ## 6. Engineering rules for this plan
 
@@ -275,12 +268,12 @@ override (decision D1).
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D1 | Pull Phase 3 items (#351, #352, #354) forward before the Phase 2 exit gate? | Yes, through the waves above, once Wave 0's gate passes |
+| D1 | Pull Phase 3 items forward before the Phase 2 exit gate? | Decided by the owner's one-week sprint: yes, as interface and local slices |
 | D2 | Adopt Cloudflare Sandboxes as the cloud Environment? | Yes, behind the interface. Verify pricing on a 2-week pilot |
-| D3 | Move interactive hosted coding from GitHub Actions to Sandboxes plus Workflows? | Pilot in Wave 1, decided by eval and latency; keep Actions for CI |
-| D4 | GPU compute: confirm its phase, pick a provider and set a monthly cap | Confirm for Wave 3, starting with a small cap |
+| D3 | Move interactive hosted coding from GitHub Actions to Sandboxes plus Workflows? | Pilot right after the sprint, decided by eval and latency; keep Actions for CI |
+| D4 | GPU compute: confirm its phase, pick a provider and set a monthly cap | Pick a provider and cap so the lane F interface gets a real adapter after the sprint |
 | D5 | Adopt the WIP limit and weekly metrics? | Yes |
-| D6 | Amend PROGRAM.md to reference this plan? | After Wave 0, if the plan holds up |
+| D6 | Amend PROGRAM.md to reference this plan? | After the sprint gate, if the plan holds up |
 
 ## 8. Risks
 
