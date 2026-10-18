@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { readTaskRequests, requestExplanation, reconcileTaskRequest, configureTaskObservation, observationHealthExplanation } from "./request-inspection-client.mjs";
 import "./request-history.css";
 
@@ -19,12 +19,18 @@ export function RequestHistory({ version = 0 }: { version?: number }) {
   const [refresh, setRefresh] = useState(0);
   const [checking, setChecking] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const sessionRef = useRef<{ check: (requestKey: string, action?: "reconcile" | "observe", enabled?: boolean) => Promise<void>; cancel: () => void } | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
     let active = true;
+    let pageBusy = false;
+    let detailController: AbortController | null = null;
     const load = async () => {
+      if (!active || pageBusy || detailController) return;
+      pageBusy = true;
+      setChecking(null);
       setLoading(true);
       try {
         const body = await readTaskRequests({ cursor, signal: controller.signal });
@@ -32,53 +38,53 @@ export function RequestHistory({ version = 0 }: { version?: number }) {
       } catch {
         if (active) { setRequests([]); setNextCursor(null); setNotice("Saved requests are unavailable. Try again later."); }
       }
-      finally { if (active) setLoading(false); }
+      finally { pageBusy = false; if (active) setLoading(false); }
     };
+    const session = {
+      async check(requestKey: string, action?: "reconcile" | "observe", enabled = false) {
+        if (!active || pageBusy || detailController) return;
+        detailController = new AbortController();
+        setChecking(requestKey);
+        try {
+          const body = action === "reconcile" ? await reconcileTaskRequest({ requestKey, signal: detailController.signal })
+            : action === "observe" ? await configureTaskObservation({ requestKey, enabled, signal: detailController.signal })
+              : await readTaskRequests({ requestKey, signal: detailController.signal });
+          if (active) {
+            setRequests(items => items.map(item => item.requestKey === requestKey ? body.request : item));
+            setNotice(action ? "Status updated. No execution was started or retried." : "");
+          }
+        } catch {
+          if (active) {
+            setRequests([]); setNextCursor(null);
+            setNotice("This request is unavailable. Refresh its history to check access and status.");
+          }
+        } finally { detailController = null; if (active) setChecking(null); }
+      },
+      cancel() {
+        active = false;
+        controller.abort();
+        detailController?.abort();
+        if (sessionRef.current === session) sessionRef.current = null;
+      },
+    };
+    sessionRef.current = session;
     void load();
     const timer = setInterval(() => { if (!document.hidden) void load(); }, 12000);
-    return () => { active = false; controller.abort(); clearInterval(timer); };
+    return () => { session.cancel(); clearInterval(timer); };
   }, [open, cursor, refresh, version]);
 
-  async function check(requestKey: string) {
-    setChecking(requestKey);
-    try {
-      const body = await readTaskRequests({ requestKey });
-      setRequests(items => items.map(item => item.requestKey === requestKey ? body.request : item));
-      setNotice("");
-    } catch {
-      setRequests([]); setNextCursor(null);
-      setNotice("This request is unavailable. Refresh its history to check access and status.");
-    }
-    finally { setChecking(null); }
+  function invalidate() {
+    sessionRef.current?.cancel();
+    // Even if React batches navigation back to the same open/page state,
+    // cancellation must be followed by a fresh session on the next effect.
+    setRefresh(value => value + 1);
   }
 
-  async function reconcile(requestKey: string) {
-    setChecking(requestKey);
-    try {
-      const body = await reconcileTaskRequest({ requestKey });
-      setRequests(items => items.map(item => item.requestKey === requestKey ? body.request : item));
-      setNotice("Execution evidence checked. No task was started or retried.");
-    } catch {
-      setRequests([]); setNextCursor(null);
-      setNotice("Execution evidence is unavailable. Refresh saved requests before checking again. No task was started.");
-    } finally { setChecking(null); }
-  }
-
-  async function observe(requestKey: string, enabled: boolean) {
-    setChecking(requestKey);
-    try {
-      const body = await configureTaskObservation({ requestKey, enabled });
-      setRequests(items => items.map(item => item.requestKey === requestKey ? body.request : item));
-      setNotice(enabled ? "Automatic status checks enabled with fixed limits. Execution will not be retried." : "Future automatic checks stopped. An in-flight check may finish.");
-    } catch { setRequests([]); setNextCursor(null); setNotice("Observation settings unavailable. Refresh saved requests before trying again."); }
-    finally { setChecking(null); }
-  }
-
-  return <details className="request-history" onToggle={event => setOpen(event.currentTarget.open)}>
+  return <details className="request-history" onToggle={event => { if (!event.currentTarget.open) invalidate(); setOpen(event.currentTarget.open); }}>
     <summary>Saved requests</summary>
     {open && <div className="request-history-body">
       <p>Check an earlier request after reconnecting. These checks do not start or bill another task.</p>
-      <button type="button" disabled={loading} onClick={() => setRefresh(value => value + 1)}>Refresh requests</button>
+      <button type="button" disabled={loading} onClick={invalidate}>Refresh requests</button>
       {notice && <p role="status">{notice}</p>}
       {!loading && !notice && requests.length === 0 && <p>No saved requests in this workspace.</p>}
       {requests.map(request => <article key={request.requestKey}>
@@ -91,15 +97,15 @@ export function RequestHistory({ version = 0 }: { version?: number }) {
         {request.task?.execution?.observation?.health && <p>{observationHealthExplanation(request.task.execution.observation.health)}{request.task.execution.observation.health.lastCheckAt ? ` Last check: ${request.task.execution.observation.health.lastCheckAt} (${request.task.execution.observation.health.lastStatus}).` : ""}{request.task.execution.observation.health.eligibleAfter ? ` Eligible after ${request.task.execution.observation.health.eligibleAfter}; scheduled capacity may delay it.` : ""}</p>}
         <small>{request.createdAt} UTC{request.task ? ` · ${request.task.repository} · ${request.task.branch}` : ""}</small>
         <div className="request-history-actions">
-          <button type="button" disabled={checking !== null} onClick={() => void check(request.requestKey)}>{checking === request.requestKey ? "Checking…" : "Check request"}</button>
-          {request.task?.execution && !request.task.execution.outcome && <button type="button" disabled={checking !== null} onClick={() => void reconcile(request.requestKey)}>Reconcile execution</button>}
-          {request.task?.execution && !request.task.execution.outcome && <button type="button" disabled={checking !== null} onClick={() => void observe(request.requestKey, !request.task?.execution?.observation?.enabled)}>{request.task.execution.observation?.enabled ? "Stop automatic checks" : "Enable automatic checks"}</button>}
+          <button type="button" disabled={loading || checking !== null} onClick={() => void sessionRef.current?.check(request.requestKey)}>{checking === request.requestKey ? "Checking�" : "Check request"}</button>
+          {request.task?.execution && !request.task.execution.outcome && <button type="button" disabled={loading || checking !== null} onClick={() => void sessionRef.current?.check(request.requestKey, "reconcile")}>Reconcile execution</button>}
+          {request.task?.execution && !request.task.execution.outcome && <button type="button" disabled={loading || checking !== null} onClick={() => void sessionRef.current?.check(request.requestKey, "observe", !request.task?.execution?.observation?.enabled)}>{request.task.execution.observation?.enabled ? "Stop automatic checks" : "Enable automatic checks"}</button>}
           {request.task?.conversationId && <a href={`/?conversation=${encodeURIComponent(request.task.conversationId)}`}>Open task activity</a>}
         </div>
       </article>)}
       <nav aria-label="Request history pages">
-        <button type="button" disabled={loading || previous.length === 0} onClick={() => { setCursor(previous.at(-1) ?? null); setPrevious(items => items.slice(0, -1)); }}>Newer</button>
-        <button type="button" disabled={loading || !nextCursor} onClick={() => { setPrevious(items => [...items, cursor]); setCursor(nextCursor); }}>Older</button>
+        <button type="button" disabled={loading || previous.length === 0} onClick={() => { invalidate(); setCursor(previous.at(-1) ?? null); setPrevious(items => items.slice(0, -1)); }}>Newer</button>
+        <button type="button" disabled={loading || !nextCursor} onClick={() => { invalidate(); setPrevious(items => [...items, cursor]); setCursor(nextCursor); }}>Older</button>
       </nav>
     </div>}
   </details>;

@@ -73,17 +73,20 @@ test("built Worker result callback enforces claim ownership after signed run ver
   globalThis.__resultEnv = { DB: f.d1 };
   const originalFetch = globalThis.fetch; const previousToken = process.env.ATLAS_GITHUB_TOKEN; process.env.ATLAS_GITHUB_TOKEN = "fake-result-token";
   let attempt = 1;
+  let duringVerification = () => {};
   let jobStatus = "completed";
   let jobConclusion = "failure";
   let jobsStatus = 200;
   globalThis.fetch = async (url, options) => {
     if (String(url).includes("/.well-known/jwks")) return Response.json({ keys: [jwk] });
     assert.equal(options.redirect, "error");
+    duringVerification();
     if (String(url).includes("/jobs?")) {
       assert.ok(String(url).includes(`/attempts/${attempt}/jobs?per_page=100`));
       return Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 123, run_attempt: attempt, status: jobStatus, conclusion: jobConclusion, head_branch: "main", workflow_name: "Atlas Coder", head_sha: "a".repeat(40), completed_at: "2026-10-15T00:00:00Z" }] }, { status: jobsStatus });
     }
     return Response.json({ id: 123, head_sha: "a".repeat(40), run_attempt: attempt, event: "workflow_dispatch", head_branch: "main", path: ".github/workflows/atlas-coder.yml", display_title: `Atlas Coder · task ${taskId}` });
+
   };
   t.after(() => { globalThis.fetch = originalFetch; delete globalThis.__resultEnv; if (previousToken === undefined) delete process.env.ATLAS_GITHUB_TOKEN; else process.env.ATLAS_GITHUB_TOKEN = previousToken; });
   const { default: worker } = await import(new URL("../dist/server/index.js", import.meta.url));
@@ -99,6 +102,15 @@ test("built Worker result callback enforces claim ownership after signed run ver
   jobStatus = "completed"; jobsStatus = 429;
   assert.equal((await invoke(await sign())).status, 503);
   jobsStatus = 200;
+  // The initial task read is no longer authoritative after the remote run check.
+  const linkedRunBefore = f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id;
+  duringVerification = () => f.sqlite.exec("UPDATE tasks SET objective = 'Changed after callback admission'");
+  assert.equal((await invoke(await sign())).status, 409);
+  assert.deepEqual(counts(f), [0, 0]);
+  assert.equal(f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id, linkedRunBefore);
+  duringVerification = () => {};
+  f.sqlite.prepare("UPDATE tasks SET objective = ?").run(f.task.objective);
+
   assert.equal((await invoke(await sign())).status, 200);
   assert.equal((await invoke(await sign())).status, 200);
   assert.equal(f.sqlite.prepare("SELECT conclusion FROM task_execution_outcomes").get().conclusion, "failure");

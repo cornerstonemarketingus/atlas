@@ -105,3 +105,24 @@ Next add authenticated outcome attestation and audited claim resolution before
 automating recovery, then worker heartbeats/checkpoints. Billing settlement stays
 with the existing billing workstream. No new TODO file is introduced. This doc
 and issue #277 carry the handoff while active PRs own the shared progress log.
+
+## 2026-10-17 integrated parent verification
+
+Merged the updated #276 parent and its #274/#270 dependencies, including main
+1e0909f's atomic monthly cap and account/native changes. The merge retained the
+current coder's authorized provider fallback and the separate trusted claim,
+workload and reporting jobs. No claim, tenant or credential policy was relaxed.
+Saved-request race fencing and the execution metadata display coexist.
+
+Final Worker build, typecheck and full lint passed. Full web suite: 549 total, 545 passed,
+four optional browser skips, no failures. All nine inherited recovery race
+checks pass. Runner/local-script suite: 83/83 pass. The unchanged workflow
+checker passes all ten workflows using bundled Python, scratch PyYAML and
+installed Git Bash; no application dependency or checker source was changed.
+The inherited recovery parent #276 at 5a9ba04 also passed all 13 CI jobs.
+
+Real JWT signatures and SQLite transactions are exercised with controlled
+GitHub keys/run responses; these do not prove a live GitHub-issued identity or
+deployed claim journey. Fresh PR CI and protected workflow/identity review remain
+required. No production migration, workflow enablement, dispatch or deployment
+was performed. Next: integrate #282 result ownership before considering rollout.
