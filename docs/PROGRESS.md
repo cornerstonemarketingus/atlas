@@ -587,3 +587,11 @@ it did not produce a complete passing result. Next: CI on this branch, then a
 trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
 
+
+## 2026-10-18 — launch-readiness run (branch claude/genesis-named-business-site)
+
+Baseline on main 857577a: every package green locally (see docs/audits/ATLAS-LAUNCH-READINESS.md for commands and counts); daemon e2e 21/21. No live provider was configured, so no live-model mission ran.
+
+Sample A (Team Hahn website, real Genesis + Chromium, template path) exposed four Genesis defects, fixed with regression tests that failed before: ignored business name, dropped requested pages (reported `ready` anyway), invented credentials/promises in template copy, no local SEO. local-control suite after fix: 759 pass / 2 skipped / 0 fail.
+
+Confirmed on main: PR #235's 27 adversarial approval/credential tests give 26 failures; #235 is clean and fully green, awaiting protected owner review. Quota-ledger DO stack (#129-#160) is not in main and is ~330 commits stale. Next: owner reviews #235; rebuild the ledger on current main; supply a provider key to run samples B/C/F live; reconcile #270→#274→#276→#278→#282→#291. No PR opened from this branch; no production change.
