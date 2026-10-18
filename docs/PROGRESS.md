@@ -595,6 +595,12 @@ trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
 
 
+## 2026-10-17 coder context recovery (issue #287)
+
+- Live run 38819478158 confirms #269 repaired repo_browser aliases in production. The same run still failed on HTTP 413 after substantial context growth; alias repair alone is not task completion. Hosted authenticated inspection 38848539074 passed.
+- Extend existing context compaction to recognize offered aliases through the existing resolver. Associate results with their preceding call batch rather than a global ID set, preserving writes/errors when providers reuse call IDs. Ambiguous batch IDs and unpaired results remain intact. Original trace and arguments are unchanged.
+- Regression coverage includes oversized aliased reads through the real agent/registry, unoffered/ambiguous aliases, reused IDs across read/write turns and duplicate results. Earlier local suite at dee7942: 513 passed, 4 Windows failures, 4 skipped; those failures concern diffs, paths and file modes, not this patch. Final validation is tracked in the PR after integration with main 482948b. Do not infer that all tests passed locally.
+- This does not guarantee provider TPM compliance or add test-only task execution. Current main has separate cloud-provider/runner recovery; preserve it. No new TODO or execution architecture.
 Account overview344 integration: original d8678f0 ALL CI passed, but a concurrent main merge caused a documentation-only conflict before merge. Integrated current main482948b preserving both business and account progress entries. No runtime source conflicts. Focused lint/typecheck and fullweb500pass3optional skips were established before integration; fresh complete CI is required at the integrated head. No merge or deployment claimed.
 
 ## 2026-10-18 — eval harness, first slice (#128, PROGRAM 2.1)
@@ -612,3 +618,5 @@ Owner listed five upgrades; each is now a workstream issue with an audit of exis
 
 Evidence: local-control 764 pass / 2 skipped / 0 fail (7 new); e2e journey passes; mutation checks (no-progress rule, spend rule, fingerprint normalisation, rollback feedback) each fail tests. Not yet wired into the coder CLI's own repair loop (atlas-cli) or the self-improvement loop (protected). Eval: no model run available, so no measured delta. Next: same policy for the coder's repair loop; eval delta once a provider key exists; #349 owner review.
 
+
+Context recovery #360 verification: 33 focused tests passed. Replacing the compiled compactor with unchanged main makes all three new regressions fail; restoring it passes all eight compaction tests. Hosted inspection gate 38848539074 passed. Latest main integration preserved concurrent progress entries; final CI tracked on the PR.
