@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { addedLines, diffStats, git } from "../engineering/git.mjs";
 import { evaluateChange } from "../self-improve/policy.mjs";
+import { DEFAULT_LOOP_POLICY, decideIteration, failureFingerprint } from "../loop-policy.mjs";
 import { executionOrder } from "./planner.mjs";
 import { getTemplate } from "./templates/index.mjs";
 import { commitWorkspace, createWorkspace, projectFolderName } from "./workspace.mjs";
@@ -24,7 +25,9 @@ import { applyVisualEdits, pendingVisualContent, visualSourcePath } from "./visu
  * - repairing: a failure becomes a bounded repair objective carrying its
  *   evidence. A repair may not delete tests, reduce the number of tests or
  *   add secret-shaped text (the self-improvement change policy); otherwise it
- *   is rolled back. Repairs stop at the project's repair budget.
+ *   is rolled back. Repairs stop at the project's repair budget, the loop's
+ *   time and token limits, or as soon as the same failure has survived
+ *   `maxSameFailure` repairs (loop-policy.mjs); the stop says which.
  * - previewing / reviewing: the injected preview manager starts the app and
  *   the injected inspector checks it; their failures are repaired the same
  *   way. One bounded polish pass follows a clean review when a coder exists.
@@ -74,7 +77,7 @@ export class GenesisExecutor {
    *   kernel?: { begin: (spec: object) => { runId: string, act: Function, finish: Function } } | null,
    * }} options
    */
-  constructor({ genesis, projectsRoot, runCheck, coder = null, preview = null, inspector = null, checkTimeoutMs = 600_000, log = () => {}, now = () => Date.now(), kernel = null }) {
+  constructor({ genesis, projectsRoot, runCheck, coder = null, preview = null, inspector = null, checkTimeoutMs = 600_000, log = () => {}, now = () => Date.now(), kernel = null, loopPolicy = {} }) {
     this.genesis = genesis;
     this.store = genesis.store;
     this.tenantId = genesis.tenantId;
@@ -84,6 +87,7 @@ export class GenesisExecutor {
     this.preview = preview;
     this.inspector = inspector;
     this.checkTimeoutMs = checkTimeoutMs;
+    this.loopPolicy = { ...DEFAULT_LOOP_POLICY, ...loopPolicy };
     this.log = log;
     this.now = now;
     this.running = new Map();
@@ -324,12 +328,39 @@ export class GenesisExecutor {
       this.#move(project.id, "failed", `${failure.check ? `The ${failure.check} step` : "Verification"} failed and no coding model is available to repair it. Set one up under Models, then ask Atlas to try again.`, evidence);
       return false;
     }
-    if (project.repairsUsed >= project.repairBudget) {
-      this.#move(project.id, "failed", `Still failing after ${project.repairsUsed} repair attempt(s): ${explained.summary}`.slice(0, 900), evidence);
+    const fingerprint = failureFingerprint(failure);
+    evidence.failure.fingerprint = fingerprint;
+    const loop = this.#loopState(project);
+    const decision = decideIteration({
+      policy: { ...this.loopPolicy, maxIterations: Math.min(project.repairBudget, this.loopPolicy.maxIterations ?? Infinity) },
+      iterations: loop.iterations, startedAt: loop.startedAt, now: this.now(), fingerprint,
+    });
+    if (!decision.proceed) {
+      const { proceed, message, ...receipt } = decision;
+      this.#move(project.id, "failed", `${message}: ${explained.summary}`.slice(0, 900), { ...evidence, loop: receipt });
       return false;
     }
     this.#move(project.id, "repairing", `Fixing: ${explained.summary}`.slice(0, 900), evidence);
     return true;
+  }
+
+  /** The repairs made since this build cycle started (the last move to "building"). */
+  #loopState(project) {
+    const transitions = this.store.transitions(this.tenantId, project.id);
+    let start = 0;
+    for (let i = transitions.length - 1; i >= 0; i -= 1) if (transitions[i].to === "building") { start = i; break; }
+    const cycle = transitions.slice(start);
+    const iterations = [];
+    let target = null;
+    for (const t of cycle) {
+      if (t.to === "repairing" && t.evidence?.kind === "failure") target = t.evidence.failure?.fingerprint ?? null;
+      if (t.evidence?.kind === "repair-result") {
+        iterations.push({ fingerprint: target, tokens: Number.isFinite(t.evidence.tokens) ? t.evidence.tokens : null, changed: Boolean(t.evidence.commit) });
+        target = null;
+      }
+    }
+    const startedAt = Date.parse(cycle[0]?.at ?? "") || this.now();
+    return { iterations, startedAt };
   }
 
   async #repair(project) {
@@ -346,6 +377,7 @@ export class GenesisExecutor {
         failure?.findings ? `Observed in the running app:\n${JSON.stringify(failure.findings, null, 1).slice(0, 2500)}` : "",
         failure?.output ? `Output:\n${String(failure.output).slice(-2500)}` : "",
         "Do not delete or weaken tests, and do not change what the tests expect unless the test itself is wrong.",
+        previousRejection(transitions),
       ].filter(Boolean).join("\n\n");
     const result = await this.coder({ workspace: project.workspace, objective, task: { id: polish ? entry.evidence.task.id : "repair", title: polish ? "Polish" : "Repair" }, attempt: project.repairsUsed + 1, kind: polish ? "polish" : "repair" });
     const guard = await this.#guard(project.workspace, before);
@@ -354,6 +386,7 @@ export class GenesisExecutor {
     if (polish) this.#task(project.id, entry.evidence.task.id, { status: guard.allowed ? "passed" : "failed", attempt: true, evidence: { kind: "polish", ok: result.ok, commit, violations: guard.violations, summary: String(result.summary ?? "").slice(-1000) } });
     this.#move(project.id, "verifying", guard.allowed ? `${polish ? "Polish" : "Repair"} applied${commit ? "" : " (no changes)"}; checking again.` : `${polish ? "Polish" : "Repair"} rejected (${guard.violations.map((v) => v.rule).join(", ")}) and rolled back; checking again.`, {
       kind: polish ? "polish-result" : "repair-result", ok: result.ok, commit, model: result.model ?? null, violations: guard.violations, summary: String(result.summary ?? "").slice(-1500),
+      tokens: Number.isFinite(result.usage?.totalTokens) ? result.usage.totalTokens : null,
     }, polish ? {} : { repairsUsed: project.repairsUsed + 1 });
     return true;
   }
@@ -398,6 +431,13 @@ export class GenesisExecutor {
     this.#move(project.id, "ready", `Ready: ${project.spec.name} is running at ${project.preview?.url}.`, { kind: "ready", summary: readySummary(project, tasks, inspection) });
     return false;
   }
+}
+
+/** Tells the next repair why the last one was rolled back, so it does not repeat it. */
+function previousRejection(transitions) {
+  const last = [...transitions].reverse().find((t) => t.evidence?.kind === "repair-result");
+  const rules = last?.evidence?.violations?.map((v) => v.rule) ?? [];
+  return rules.length ? `Your previous repair was rolled back because it broke these rules: ${[...new Set(rules)].join(", ")}. Fix the code instead.` : "";
 }
 
 async function countTestsAt(folder, commit) {

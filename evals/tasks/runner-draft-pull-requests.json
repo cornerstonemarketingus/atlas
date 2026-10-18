@@ -1,0 +1,33 @@
+{
+  "id": "runner-draft-pull-requests",
+  "category": "multi-file-edit",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "9dd6619d0bbfc565c0760d770b0f7dd7c4bce8a9",
+  "objective": "Manually reviewed coder proposals should open as draft pull requests. Add scripts/runner/pull-request-policy.mjs exporting isDraftPullRequest(mergePolicy), true only for the 'manual' policy, then make scripts/runner/create-coder-pull-request.mjs use it: send the draft flag when creating the pull request, say 'draft' in the log line, and record draft in the completed status. The tests in scripts/runner/pull-request-policy.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "2195c14e2fdbc4b6fcc0cea6e71fd54f41db86a6",
+    "paths": [
+      "scripts/runner/pull-request-policy.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "scripts/runner/pull-request-policy.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "2195c14e2fdbc4b6fcc0cea6e71fd54f41db86a6",
+    "paths": [
+      "scripts/runner/pull-request-policy.mjs",
+      "scripts/runner/create-coder-pull-request.mjs"
+    ]
+  },
+  "timeoutMs": 120000,
+  "tags": [
+    "history",
+    "runner",
+    "git"
+  ]
+}

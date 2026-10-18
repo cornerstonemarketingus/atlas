@@ -42,6 +42,12 @@ export function reconcileTaskBudgets({ store, tenantId, apply = false }) {
         const own = credits.get(event.taskId);
         if (!own.has(source)) own.set(source, amounts({}));
         add(own.get(source), amounts(event.payload.amounts));
+        // A release returns part of an earlier reservation, so it reduces the credit.
+        if (event.payload.phase === "release") {
+          const released = amounts(event.payload.released); const credit = own.get(source);
+          for (const d of BUDGET_DIMENSIONS) credit[d] -= released[d];
+          if (Object.values(credit).some(n => n < 0)) throw new Error("Budget reconciliation found a release larger than its credit.");
+        }
       }
     }
     const direct = new Map();

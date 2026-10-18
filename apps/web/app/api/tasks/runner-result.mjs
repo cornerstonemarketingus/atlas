@@ -4,12 +4,13 @@ import { isCorrelationId } from "./correlation.mjs";
 export const RUNNER_AUDIENCE = "atlas-runner-results";
 const keys = createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"));
 
-export async function verifyRunnerIdentity(token, keySet = keys) {
+export async function verifyRunnerIdentity(token, keySet = keys, { audience = RUNNER_AUDIENCE } = {}) {
   const { payload } = await jwtVerify(token, keySet, {
     issuer: "https://token.actions.githubusercontent.com",
-    audience: RUNNER_AUDIENCE,
+    audience,
     algorithms: ["RS256"],
     maxTokenAge: "10m",
+    requiredClaims: ["exp", "iat"],
   });
   if (payload.event_name !== "workflow_dispatch" || payload.ref !== "refs/heads/main"
     || !/^\d+$/.test(String(payload.run_id)) || !/^\d+$/.test(String(payload.run_attempt))) {

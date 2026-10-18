@@ -5,6 +5,14 @@ import {
   describeNewFailures,
   type VerificationPlan,
 } from "./verification-planning.js";
+import {
+  DEFAULT_REPAIR_LOOP_POLICY,
+  decideRepair,
+  failureFingerprint,
+  type RepairDecision,
+  type RepairRecord,
+  type RepairStopReason,
+} from "./repair-loop-policy.js";
 
 export type ProposedEditOperation = "create" | "update" | "delete" | "rename";
 
@@ -44,6 +52,42 @@ export interface VerificationReport {
   readonly message: string;
   /** The pass at which repair moved to the escalation model, when it did. */
   readonly escalatedAtPass?: number;
+  /**
+   * Which repair-loop limit ended the loop with failures still present:
+   * iteration-limit, time-limit, spend-limit or no-progress. Null when no
+   * limit ended it (verified, inconclusive, unverified, not applicable).
+   */
+  readonly stopReason: RepairStopReason | null;
+  /** The facts behind the last repair decision; present once a repair was considered. */
+  readonly loop?: RepairLoopReport;
+}
+
+export interface RepairLoopReport {
+  /** Repairs made in total, across the primary and escalation models. */
+  readonly repairs: number;
+  readonly elapsedMs: number;
+  /** Model output tokens spent by the whole session at the decision, or null when unmetered. */
+  readonly tokensSpent: number | null;
+  /** How many repairs in the deciding tier targeted the failure that was still present. */
+  readonly sameFailure: number;
+  /** Normalised fingerprint of the failures the change introduced. */
+  readonly fingerprint: string;
+  readonly limits: {
+    readonly maxRepairAttempts: number;
+    readonly escalationAttempts: number | null;
+    readonly maxWallMs: number | null;
+    readonly maxTokens: number | null;
+    readonly maxSameFailure: number;
+  };
+}
+
+export interface RepairLoopLimits {
+  /** No repair starts once this much wall time has passed since the session started; null = no limit. Default 6 hours. */
+  readonly maxWallMs?: number | null;
+  /** No repair starts once `tokensSpent()` reaches this; null = no limit. */
+  readonly maxTokens?: number | null;
+  /** No repair starts once the same failure has survived this many repairs by one model. Default 2. */
+  readonly maxSameFailure?: number;
 }
 
 export interface VerifiedCoderResult {
@@ -72,6 +116,11 @@ export interface VerifiedCoderSessionOptions {
     readonly runAgent: (evidence: readonly AgentEvidence[]) => Promise<AgentPassResult>;
   };
   readonly compare?: (baseline: ValidationSnapshot, postChange: ValidationSnapshot) => ValidationComparison;
+  /** Wall-time, spend and no-progress limits, checked before every repair. */
+  readonly loopLimits?: RepairLoopLimits;
+  /** Model output tokens the session has spent so far (the shared budget ledger), or null when unmetered. */
+  readonly tokensSpent?: () => number | null;
+  readonly now?: () => number;
 }
 
 const DEFAULT_MAX_REPAIR_ATTEMPTS = 2;
@@ -97,6 +146,11 @@ export class VerifiedCoderSession {
   readonly #maxRepairAttempts: number;
   readonly #compare: NonNullable<VerifiedCoderSessionOptions["compare"]>;
   readonly #escalation: VerifiedCoderSessionOptions["escalation"];
+  readonly #maxWallMs: number | null;
+  readonly #maxTokens: number | null;
+  readonly #maxSameFailure: number;
+  readonly #tokensSpent: () => number | null;
+  readonly #now: () => number;
 
   public constructor(options: VerifiedCoderSessionOptions) {
     this.#plan = options.plan;
@@ -106,6 +160,20 @@ export class VerifiedCoderSession {
     this.#maxRepairAttempts = options.maxRepairAttempts ?? DEFAULT_MAX_REPAIR_ATTEMPTS;
     this.#compare = options.compare ?? compareValidationSnapshots;
     this.#escalation = options.escalation;
+    this.#maxWallMs = options.loopLimits?.maxWallMs === undefined ? DEFAULT_REPAIR_LOOP_POLICY.maxWallMs : options.loopLimits.maxWallMs;
+    this.#maxTokens = options.loopLimits?.maxTokens ?? DEFAULT_REPAIR_LOOP_POLICY.maxTokens;
+    this.#maxSameFailure = options.loopLimits?.maxSameFailure ?? DEFAULT_REPAIR_LOOP_POLICY.maxSameFailure;
+    this.#tokensSpent = options.tokensSpent ?? (() => null);
+    this.#now = options.now ?? Date.now;
+    if (this.#maxWallMs !== null && (!Number.isSafeInteger(this.#maxWallMs) || this.#maxWallMs < 1)) {
+      throw new RangeError("loopLimits.maxWallMs must be a positive integer or null.");
+    }
+    if (this.#maxTokens !== null && (!Number.isSafeInteger(this.#maxTokens) || this.#maxTokens < 1)) {
+      throw new RangeError("loopLimits.maxTokens must be a positive integer or null.");
+    }
+    if (!Number.isSafeInteger(this.#maxSameFailure) || this.#maxSameFailure < 1 || this.#maxSameFailure > 10) {
+      throw new RangeError("loopLimits.maxSameFailure must be an integer between 1 and 10.");
+    }
     if (this.#escalation && (!Number.isSafeInteger(this.#escalation.attempts) || this.#escalation.attempts < 1 || this.#escalation.attempts > 5)) {
       throw new RangeError("escalation.attempts must be an integer between 1 and 5.");
     }
@@ -138,8 +206,15 @@ export class VerifiedCoderSession {
     let last: AgentPassResult | null = null;
     let evidence: readonly AgentEvidence[] = this.#baseEvidence;
     let comparison: ValidationComparison | null = null;
-    let passBudget = this.#maxRepairAttempts + 1;
     let escalatedAtPass: number | undefined;
+    // Repairs made so far, oldest first, each with the failure it targeted.
+    // The escalation model starts a fresh tier: its own attempt budget and
+    // its own no-progress count, since a stronger model deserves its own try
+    // at a failure the first model could not move.
+    const repairs: RepairRecord[] = [];
+    let tierStart = 0;
+    let decision: RepairDecision | null = null;
+    const startedAt = this.#now();
 
     for (;;) {
       pass += 1;
@@ -154,6 +229,7 @@ export class VerifiedCoderSession {
           summary: null,
           newFailures: [],
           message: `The agent stopped with status '${last.status}', so no verification was attempted.`,
+          stopReason: null,
         });
       }
 
@@ -165,6 +241,7 @@ export class VerifiedCoderSession {
           summary: null,
           newFailures: [],
           message: "The agent proposed no file changes, so there was nothing to verify.",
+          stopReason: null,
         });
       }
 
@@ -176,37 +253,82 @@ export class VerifiedCoderSession {
           summary: null,
           newFailures: [],
           message: unverifiableReason ?? "This change was not verified.",
+          stopReason: null,
         });
       }
 
       const postChange = await this.#runValidation("post-change");
       comparison = this.#compare(baseline, postChange);
-      let action = decideVerificationAction(comparison, pass, passBudget);
-      if (action === "regressed" && this.#escalation && escalatedAtPass === undefined) {
-        // The repair budget is spent and the change still breaks checks: a
-        // stronger model continues from this checkpoint instead of giving up.
-        escalatedAtPass = pass + 1;
-        passBudget += this.#escalation.attempts;
-        action = "repair";
-      }
+      // The loop policy, not the attempt counter, decides whether to repair.
+      const action = decideVerificationAction(comparison, pass, Number.POSITIVE_INFINITY);
+      const loop = (current: RepairDecision | null) => (current === null ? undefined : this.#loopReport(current, repairs.length));
 
       if (action === "accept") {
-        return this.#result(last, accumulated, this.#report("verified", pass, comparison, escalatedAtPass,
+        return this.#result(last, accumulated, this.#report("verified", pass, comparison, escalatedAtPass, null, loop(decision),
           `Verified: the repository's own checks (${this.#plan.profiles.map((profile) => profile.id).join(", ")}) reported no failures that this change introduced${escalatedAtPass === undefined ? "" : ` (repaired by the escalation model from pass ${escalatedAtPass})`}.`));
       }
       if (action === "inconclusive") {
-        return this.#result(last, accumulated, this.#report("inconclusive", pass, comparison, escalatedAtPass,
+        return this.#result(last, accumulated, this.#report("inconclusive", pass, comparison, escalatedAtPass, null, loop(decision),
           "Inconclusive: checks could not be compared reliably (an infrastructure failure or a flaky result), so this change is unverified and needs a human look."));
       }
-      if (action === "regressed") {
-        return this.#result(last, accumulated, this.#report("regressed", pass, comparison, escalatedAtPass,
-          `Regressed: this change introduced ${comparison.summary.new} validation failure(s) that survived ${pass - 1} repair attempt(s)${escalatedAtPass === undefined ? "" : `, including ${pass - escalatedAtPass + 1} by the escalation model`}.`));
+
+      // The change introduced failures. Checked before every repair: the
+      // attempt budget, wall time, token spend, and whether the same failure
+      // keeps surviving repairs.
+      const fingerprint = failureFingerprint(newFailureLines(comparison));
+      decision = this.#decide(repairs.slice(tierStart), startedAt, fingerprint, escalatedAtPass !== undefined);
+      if (!decision.proceed && (decision.reason === "iteration-limit" || decision.reason === "no-progress") && this.#escalation && escalatedAtPass === undefined) {
+        // The normal model is out of attempts or not making progress and the
+        // change still breaks checks: a stronger model continues from this
+        // checkpoint instead of giving up. Escalation happens once.
+        escalatedAtPass = pass + 1;
+        tierStart = repairs.length;
+        decision = this.#decide(repairs.slice(tierStart), startedAt, fingerprint, true);
+      }
+
+      if (!decision.proceed) {
+        return this.#result(last, accumulated, this.#report("regressed", pass, comparison, escalatedAtPass, decision.reason, loop(decision),
+          `Regressed: this change introduced ${comparison.summary.new} validation failure(s) that survived ${pass - 1} repair attempt(s)${escalatedAtPass === undefined ? "" : `, including ${pass - escalatedAtPass + 1} by the escalation model`}. ${decision.message} (${decision.reason}).`));
       }
 
       // Repair: hand the model only what it broke, and go round again.
+      repairs.push({ fingerprint });
       const failureText = describeNewFailures(comparison);
       evidence = [...this.#baseEvidence, { label: REPAIR_EVIDENCE_LABEL, content: failureText }];
     }
+  }
+
+  #decide(tierRepairs: readonly RepairRecord[], startedAt: number, fingerprint: string, escalated: boolean): RepairDecision {
+    return decideRepair({
+      policy: {
+        maxRepairs: escalated && this.#escalation ? this.#escalation.attempts : this.#maxRepairAttempts,
+        maxWallMs: this.#maxWallMs,
+        maxTokens: this.#maxTokens,
+        maxSameFailure: this.#maxSameFailure,
+      },
+      repairs: tierRepairs,
+      startedAt,
+      now: this.#now(),
+      tokensSpent: this.#tokensSpent(),
+      fingerprint,
+    });
+  }
+
+  #loopReport(decision: RepairDecision, totalRepairs: number): RepairLoopReport {
+    return {
+      repairs: totalRepairs,
+      elapsedMs: decision.elapsedMs,
+      tokensSpent: decision.tokensSpent,
+      sameFailure: decision.sameFailure,
+      fingerprint: decision.fingerprint,
+      limits: {
+        maxRepairAttempts: this.#maxRepairAttempts,
+        escalationAttempts: this.#escalation?.attempts ?? null,
+        maxWallMs: this.#maxWallMs,
+        maxTokens: this.#maxTokens,
+        maxSameFailure: this.#maxSameFailure,
+      },
+    };
   }
 
   #report(
@@ -214,6 +336,8 @@ export class VerifiedCoderSession {
     attempts: number,
     comparison: ValidationComparison,
     escalatedAtPass: number | undefined,
+    stopReason: RepairStopReason | null,
+    loop: RepairLoopReport | undefined,
     message: string,
   ): VerificationReport {
     return {
@@ -222,10 +346,10 @@ export class VerifiedCoderSession {
       attempts,
       profileIds: this.#plan.profiles.map((profile) => profile.id),
       summary: comparison.summary,
-      newFailures: comparison.diagnostics
-        .filter((item) => item.classification === "new")
-        .map((item) => `[${item.kind}] ${item.caseId}: ${item.diagnostic.message}`),
+      newFailures: newFailureLines(comparison),
       message,
+      stopReason,
+      ...(loop === undefined ? {} : { loop }),
     };
   }
 
@@ -253,6 +377,12 @@ function mergeEdits(accumulated: Map<string, ProposedEditOperation>, edits: read
     const existing = accumulated.get(edit.path);
     accumulated.set(edit.path, existing === "create" ? "create" : edit.operation);
   }
+}
+
+function newFailureLines(comparison: ValidationComparison): string[] {
+  return comparison.diagnostics
+    .filter((item) => item.classification === "new")
+    .map((item) => `[${item.kind}] ${item.caseId}: ${item.diagnostic.message}`);
 }
 
 function isWhollyUnrunnable(snapshot: ValidationSnapshot): boolean {
