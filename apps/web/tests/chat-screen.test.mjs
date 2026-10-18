@@ -132,3 +132,20 @@ test("a truncated reply restores the draft and a completed reply does not", asyn
   assert.equal(chat.draft(), "");
   assert.equal(JSON.stringify(chat.render()).includes("Complete"), true);
 });
+
+test("hitting the daily cap shows the local model first, then plans, keeps the draft, and clears on the next send", async () => {
+  const chat = screen();
+  chat.type("One more question");
+  const first = chat.send();
+  chat.requests[0].resolve(Response.json({ message: "You have used today's 20 free messages.", code: "CHAT_CAP_REACHED" }, { status: 429 }));
+  await first;
+  const shown = JSON.stringify(chat.render());
+  assert.match(shown, /You have used today's 20 free messages/u);
+  assert.ok(shown.indexOf("/guide#local-model") > -1 && shown.indexOf("/guide#local-model") < shown.indexOf("/pricing"), "local model is offered before a plan");
+  assert.equal(chat.draft(), "One more question", "the unsent message is not lost");
+  const second = chat.send();
+  assert.doesNotMatch(JSON.stringify(chat.render()), /cap-options/u, "the options clear when the user tries again");
+  chat.requests[1].resolve(Response.json({ message: "Unavailable" }, { status: 503 }));
+  await second;
+  assert.doesNotMatch(JSON.stringify(chat.render()), /cap-options/u, "an unrelated failure does not show the cap options");
+});
