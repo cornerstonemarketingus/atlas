@@ -626,7 +626,6 @@ unchanged task/request/usage snapshots and zero external execution calls.
 No production migration, secret transfer, deployment, real dispatch or physical
 phone acceptance. Next: finish #276 CI/review, propagate to #278 claims and
 #282 result ownership; retain existing persistence/approval gates.
-<<<<<<< HEAD
 
 ## 2026-10-17 — integrated execution ownership gate (#277 / #278)
 
@@ -646,7 +645,6 @@ Fresh claims CI and protected workflow/identity review are required. Controlled
 signed-JWT/SQLite/GitHub fixtures are not live cloud execution or deployment.
 No production migration, credentials, dispatch or workflow enablement occurred.
 Next: #282 result callback ownership against this parent, then outcome recovery.
-=======
 ## 2026-10-17 — bounded cloud coder process recovery (#331 / #333)
 
 Existing trusted cloud coder subprocess cleanup now retains SIGKILL after the group leader exits, closes inherited pipes at a bounded cleanup deadline, and isolates progress observer exceptions/rejected promises. Two new real-process regressions failed before the repair and pass after it. Complete Windows runner/local suite: 80 passed, one Linux-only skip; final process suite seven passed, one Linux-only skip. CI must verify the resistant-descendant process-group case before merge. Focused handoff: docs/CLOUD-PROCESS-RECOVERY.md. No production database, provider, credentials or workflow changed. Migration 0017 and its deployment remain paused for exact production approval. Next: complete #333 CI, then continue the existing task/claim/outcome/mission rollout in dependency order; persistent isolated workspace checkpoints remain unfinished.
@@ -668,4 +666,3 @@ it did not produce a complete passing result. Next: CI on this branch, then a
 trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
 
->>>>>>> codex/task-request-inspection
