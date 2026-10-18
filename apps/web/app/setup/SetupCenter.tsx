@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AtlasShell } from "../AtlasShell.js";
 
 type SetupStep = { id: string; label: string; state: "complete" | "action-required" | "failed"; detail: string; action?: string };
-type SetupStatus = { overall: string; completedSteps: number; totalSteps: number; steps: SetupStep[]; optional: { stripeConfigured: boolean } };
+type SetupStatus = { audience?: "customer" | "owner"; overall: string; completedSteps: number; totalSteps: number; steps: SetupStep[]; optional: { stripeConfigured?: boolean } };
 type GitHub = { connected: boolean; method: string; installUrl: string | null };
 
 const MERGE_POLICIES = [
@@ -39,8 +39,8 @@ export function SetupCenter() {
       if (!response.ok) throw new Error("Setup readiness is temporarily unavailable.");
       setStatus(await response.json() as SetupStatus);
       setError("");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Setup readiness is temporarily unavailable.");
+    } catch {
+      setError("Connection status is temporarily unavailable. Refresh or contact support.");
     } finally {
       setRefreshing(false);
     }
@@ -98,7 +98,7 @@ export function SetupCenter() {
   }
 
   return <AtlasShell section="connections" headerContext={
-    <span className="context-chip">{status ? `${status.completedSteps}/${status.totalSteps} ready` : "Checking…"}</span>
+    <span className="context-chip">{status?.audience === "customer" ? "Account connected" : status ? `${status.completedSteps}/${status.totalSteps} ready` : "Checking…"}</span>
   }>
     <div className="section-scroll">
       <div className="section-page">
@@ -122,7 +122,7 @@ export function SetupCenter() {
               <strong>{model === null ? "Checking…" : model.configured ? "Model endpoint connected" : "No model endpoint"}</strong>
               <p>{model?.configured
                 ? "Chat is connected. Atlas works with any OpenAI-compatible model server, hosted or your own."
-                : model?.reason ?? "Chat cannot answer until a model endpoint is configured."}</p>
+                : status?.audience === "owner" ? model?.reason ?? "Chat cannot answer until a model endpoint is configured." : "Chat is temporarily unavailable. Refresh or contact support."}</p>
             </article>
             <article className="status-card">
               <small>COMPUTER</small>
@@ -153,7 +153,7 @@ export function SetupCenter() {
         </section>
 
         <section className="page-block">
-          <h2><span>03</span>Setup checklist</h2>
+          <h2><span>03</span>{status?.audience === "customer" ? "Account status" : "Setup checklist"}</h2>
           {error && <p className="page-notice" role="alert">{error}</p>}
           {!status && !error && <p className="block-hint">Checking the live environment…</p>}
           <div className="check-list">
@@ -162,7 +162,7 @@ export function SetupCenter() {
               <div><div className="check-state">{item.state.replace("-", " ")}</div><h3>{item.label}</h3><p>{item.detail}</p></div>
               {item.state !== "complete" && <span className="check-action">{item.action ?? "Action required"}</span>}
             </article>)}
-            {status && <article className="check-row optional">
+            {status?.audience === "owner" && <article className="check-row optional">
               <div className="check-number">+</div>
               <div><div className="check-state">Optional</div><h3>Stripe billing</h3>
                 <p>{status.optional.stripeConfigured ? "Billing credentials are configured." : "Add billing when you are ready to charge customers."}</p></div>

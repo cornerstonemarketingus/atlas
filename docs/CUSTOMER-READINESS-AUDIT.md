@@ -66,3 +66,8 @@ The account overview GET now reuses the fixed customer failure contract for auth
 ## Repository settings boundary — issue #357
 
 Unexpected repository-settings authentication, tenant resolution and storage failures now use the existing fixed503 customer failure response with a support reference and no-store. Raw database exceptions and schema/migration instructions no longer cross these handlers. Tenant/role/deployment allowlist/default-tenant merge-policy checks, input validation and scoped writes are unchanged and covered through actual handler tests. This is a response-boundary repair, not a new authorization model, migration deployment or completion of other privacy paths.
+
+
+## Customer Connections projection — issue #371
+
+Setup status uses the established deployment-owner check before any infrastructure probes. Customer responses contain only account-connected state and no database/migration/provider/governor/credential configuration; operator responses retain the existing diagnostics. The actual Connections component distinguishes account status from infrastructure readiness, hides operator billing setup from customers and renders fixed status/model failure copy for customers. Authentication and owner identity logic are consumed unchanged. The separately owned chat GET metadata contract remains outside this repair; no universal confidentiality, production acceptance or backend health claim follows from account-connected status.
