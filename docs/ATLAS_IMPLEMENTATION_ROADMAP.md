@@ -5,7 +5,8 @@ Do not overwrite files owned by pending workstreams. Claim each new issue.
 
 ## Dependency order
 
-1. P0: reliable inference transport and truthful completion (#300, this branch).
+1. P0: reliable inference transport and truthful completion (#300, #307 merged
+   as af500709 after all 13 exact-head CI jobs passed).
    Reject missing completion/empty responses and retain durable retry state.
 2. P0: reconcile existing provider repair #240 and credential/isolation work
    #233/#235/#253 through required reviews and CI. No protected auto-merge.
@@ -29,8 +30,18 @@ Do not overwrite files owned by pending workstreams. Claim each new issue.
    tests → phone/desktop preview → approved publish → live form/health checks.
 8. P3: configured mobile approval journey, onboarding, integrations, performance.
 
-First follow-up after this slice: current-main integration review of #270 and
-its stack, respecting active ownership. If held for review, implement an
+Current follow-up: #270 is integrated with main and adds an enforced dispatch
+deadline, with 505 web tests passing and two optional skips. #274 has received
+the updated parent and passes its full web suite (515 pass, two optional skips),
+build and typecheck. Main's atomic billing/account changes are now propagated
+through #276. Recovery #276 passes its final build/full web suite (537 pass,
+four optional skips), nine race cases and actual desktop/mobile browser acceptance.
+The updated parent is now integrated into #278: build/typecheck, full web suite
+(545 pass, four optional skips), 83 runner/local checks and all ten workflow
+checks and full web lint pass. #276 at 5a9ba04 has all 13 CI jobs green.
+Finish fresh claims CI/protected review, then propagate to
+#282 result ownership, respecting ownership.
+If held for review, implement an
 independent model-client cancellation/deadline regression without modifying
 #230-owned routing or #240-owned hosted transport.
 

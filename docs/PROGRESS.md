@@ -510,6 +510,29 @@ Customer prompt privacy follow-up (#310): found the system prompt unconditionall
 
 Prompt integration repair (#310): complete web validation caught an existing Genesis contract requiring publish policy ask in customer context. Restored only explicitly selected availability booleans and the known approval policy enum, preserving required approval semantics while excluding internal reason/credential/build fields. Existing project-tools tests remain unchanged. Fresh focused/full validation and CI required; do not merge the earlier failed web revision.
 
+## 2026-10-17 — durable cloud dispatch integration (#267 / #270)
+
+Merged current main 9443843 into the existing codex/durable-dispatch branch,
+preserving new-project routing and current chat privacy changes. Fixed the
+existing GitHub dispatch timeout: abort alone could leave a cancellation-ignoring
+transport pending indefinitely. A hard acknowledgement deadline now returns the
+saved request as uncertain, never automatically resends it, and discards/cancels
+late response bodies without changing the uncertain receipt.
+
+Two regressions pass against actual migrated SQLite and the existing dispatch
+helper. Fresh Worker build passed; complete web suite: 507 total, 505 passed,
+two optional skips, zero failures. Typecheck and whitespace check pass. Targeted
+lint passed; fresh remote CI and existing tenant-persistence
+review gate remain required. No production migration, dispatch, credential
+change or deployment performed. Next: complete #270 CI/review, then integrate
+the existing #274 → #276 → #278 → #282 stack in dependency order.
+
+Separate inference PR #307 integrated current main and resolved the shared
+handoff conflict. Original code CI 38995719143 passed all 13 jobs. Local full
+run: 707 pass, 6 fail, 20 skip; smaller integrated retest: 81 pass, 3 Genesis
+timeouts. The approval case passes individually on both unchanged main and
+the inference branch. Timing dependence is suspected; no local all-green
+claim. Fresh integrated PR CI is required before ordinary merge.
 ## 2026-10-17 — native Atlas branding (#317)
 
 Current-main branch codex/mobile-brand-assets replaces template native icons with sixteen raster assets derived directly from the existing Atlas favicon SVG. Adds a repeatable Chromium-based generator, source/artifact manifest, opaque 1024px iOS icon, five Android legacy/round/adaptive foreground densities and matching background color. No new artwork or runtime dependency. Real pixel checks caught and fixed SVG fill inheritance during visual QA; negative-space RGB regression failed before and passes after. Eleven mobile tests and syntax checks pass. Store icons were inspected visually. Device masking/launch assets, working bootstrap, signed builds and store submission remain incomplete; no App Store readiness claim. #316 native compatibility repair is a separate pending PR.
@@ -530,6 +553,20 @@ Privacy #310 deployment 39006513100 succeeded at 9443843; configured authenticat
 - Local runtime code merged to main is available for an installed daemon update/restart; no fleet rollout, signed installer release, production database maintenance, live CRM send or business deployment is asserted.
 - Next: finish #311's Windows/review gate; independently evaluated test/live receipts for business outcomes; actual configured Genesis/CRM acceptance; leased/deduplicated recurring business work and cumulative business-level spending. Reuse the existing task/kernel/approval/budget services and active PR ownership rather than introducing another scheduler. Generated local audit logs and worktree metadata are retained locally, not committed as product source.
 
+## 2026-10-17 — stacked request-deduplication integration (#273 / #274)
+
+Merged the updated #270 parent into existing codex/task-request-idempotency.
+Preserved current Genesis task routing, customer-safe chat changes and the hard
+dispatch acknowledgement deadline. Existing admission/receipt implementation is
+reused; no second scheduler, billing ledger or request-key mechanism added.
+
+Fresh Worker build and typecheck passed; full web suite: 517 total, 515 passed,
+two optional skips, zero failures. The rebuilt authenticated request endpoint
+replays after reconnect without another bill or dispatch; concurrent same-key
+requests enter admission once. Full web lint also passed.
+Fresh CI and tenant-persistence review remain required. No production migration,
+live GitHub dispatch, billing mutation, provisioning or deployment performed.
+Next: #270/#274 CI/review, then update #276 → #278 → #282 in dependency order.
 Native compatibility #316 merged as d96304bc28c21f08e436f0cac15cd4739139f599 after complete cross-platform CI passed (39007576511). Separate protected workflow PR #320 compiled both Android debug and unsigned iOS simulator successfully in run 39007793513, using the same repaired native project sources; actual APK and simulator ZIP artifacts exist (about 6.1MB / 1.9MB). This is compiler evidence, not product launch/physical-device/store acceptance. Workflow #320 awaits configured review before merge. Integrating the merged repair into icons #318; new combined CI is required.
 
 ## 2026-10-17 — native paired launch (#321)
@@ -566,6 +603,48 @@ Reused the original October 2 implementation and PR rather than duplicate it. Po
 
 The real migrated-DB cap regression fails against current main (30 admitted versus the 20 limit) and passes with the existing atomic upsert. Three focused plan cases pass; complete web build/typecheck/focused lint pass, full web498pass/3optional skips. This fixes concurrent monthly admission counting without changing plan limits, modes, billing credentials or existing authorization. It does not establish live business cash budgets or refund failed-task units. Fresh original PR CI is required before ordinary merge. Next: complete current-head CI and deployment acceptance, then continue persistent cloud/privacy/native release gaps using existing implementations and actual configured gates.
 
+## 2026-10-17 — safe saved-request reconnect and UI recovery (#275 / #276)
+
+Propagated main 1e0909f through #270 and #274 into the existing inspection
+branch, preserving atomic monthly admission and current account/native changes.
+Resolved appended handoff conflicts without replacing source implementations.
+Parents' preceding heads had all 13 CI jobs green; integrated heads need fresh CI.
+
+Fixed RequestHistory list/detail overlap and stale responses after close/reopen,
+refresh, pagination, version changes and unmount. A generation refresh also
+handles batched close/reopen without leaving a cancelled session inactive.
+No dispatch, admission, billing, auth or receipt policy changed.
+
+Six initial component regressions failed on original source; nine final cases
+pass. Actual headless Edge desktop/phone-width acceptance passes with keyboard
+opening, late responses, refresh, pagination, touch targets and GET-only traffic.
+Final build/typecheck/full lint pass; full web: 537 pass, four optional browser
+skips, no failures (541 total). The saved-request browser gate ran separately
+and passed. Migrated SQLite and rebuilt Worker inspection retain scoped access,
+unchanged task/request/usage snapshots and zero external execution calls.
+
+No production migration, secret transfer, deployment, real dispatch or physical
+phone acceptance. Next: finish #276 CI/review, propagate to #278 claims and
+#282 result ownership; retain existing persistence/approval gates.
+
+## 2026-10-17 — integrated execution ownership gate (#277 / #278)
+
+Merged updated #276 into existing codex/execution-claims. Current main 1e0909f,
+atomic monthly admission, coder fallback, trusted claim/report separation and
+the fixed Saved requests component coexist without source conflicts. Existing
+immutable task/run/attempt ownership and lease policy remain unchanged.
+
+Build/typecheck pass; full web 545 pass, four optional skips, zero failures
+(549 total). Runner/local scripts 83/83; inherited recovery race guards 9/9.
+All ten workflows pass the original checker using bundled Python, isolated
+scratch PyYAML and installed Git Bash. Full web lint passed. Parent #276 at
+5a9ba04 passed all 13 CI jobs; fresh integrated claims CI remains required.
+No checker, security assertion or approval was weakened.
+
+Fresh claims CI and protected workflow/identity review are required. Controlled
+signed-JWT/SQLite/GitHub fixtures are not live cloud execution or deployment.
+No production migration, credentials, dispatch or workflow enablement occurred.
+Next: #282 result callback ownership against this parent, then outcome recovery.
 ## 2026-10-17 — bounded cloud coder process recovery (#331 / #333)
 
 Existing trusted cloud coder subprocess cleanup now retains SIGKILL after the group leader exits, closes inherited pipes at a bounded cleanup deadline, and isolates progress observer exceptions/rejected promises. Two new real-process regressions failed before the repair and pass after it. Complete Windows runner/local suite: 80 passed, one Linux-only skip; final process suite seven passed, one Linux-only skip. CI must verify the resistant-descendant process-group case before merge. Focused handoff: docs/CLOUD-PROCESS-RECOVERY.md. No production database, provider, credentials or workflow changed. Migration 0017 and its deployment remain paused for exact production approval. Next: complete #333 CI, then continue the existing task/claim/outcome/mission rollout in dependency order; persistent isolated workspace checkpoints remain unfinished.
@@ -620,6 +699,29 @@ Evidence: local-control 764 pass / 2 skipped / 0 fail (7 new); e2e journey passe
 
 
 Context recovery #360 verification: 33 focused tests passed. Replacing the compiled compactor with unchanged main makes all three new regressions fail; restoring it passes all eight compaction tests. Hosted inspection gate 38848539074 passed. Latest main integration preserved concurrent progress entries; final CI tracked on the PR.
+## 2026-10-18 — launch-readiness run (branch claude/genesis-named-business-site)
+
+Baseline on main 857577a: every package green locally (see docs/audits/ATLAS-LAUNCH-READINESS.md for commands and counts); daemon e2e 21/21. No live provider was configured, so no live-model mission ran.
+
+Sample A (Team Hahn website, real Genesis + Chromium, template path) exposed four Genesis defects, fixed with regression tests that failed before: ignored business name, dropped requested pages (reported `ready` anyway), invented credentials/promises in template copy, no local SEO. local-control suite after fix: 759 pass / 2 skipped / 0 fail.
+
+Historical checkpoint correction during integration: #235 subsequently merged at c1ef3e3 after required CI passed. The quota ledger and hosted chat governor are already in main; the remaining gap is shared runner admission and durable waiting, not rebuilding the ledger. See docs/LAUNCH-REMEDIATION-2026-10-17.md and the corrected blocker section of docs/audits/ATLAS-LAUNCH-READINESS.md. Live-model samples and the hosted durability stack still require acceptance. This integration does not initiate a production deployment.
+
+## 2026-10-06 Workers AI through the Worker's own binding (no token)
+
+- Live check 37516955533 (19:10): still `validation valid, Workers AI denied → WRONG_ACCOUNT_OR_PERMISSION` (403, code 10000); chat answers 401 from Workers AI.
+- Fix that needs no token: the Worker gets `ai: { binding: "AI" }` (`apps/web/vite.config.ts`; `wrangler deploy --dry-run` lists `env.AI`). `apps/web/app/api/chat/workers-ai-binding.mjs` makes the binding look like an OpenAI-compatible server to chat (a fetch-shaped transport over `env.AI.run()`, accepting both OpenAI `choices` and native `response`/`tool_calls` answers, SSE for streaming callers); refusals become statuses (429 routes on to the next provider) and the binding's own text is never passed on. Chat prefers the binding over `ATLAS_WORKERS_AI_TOKEN` (route kind stays `workers-ai`; default model `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, `ATLAS_WORKERS_AI_MODEL` overrides). `/api/setup/providers` also reports `workersAIBinding` (a real inference) and "Verify hosted Atlas" prints it.
+- Evidence: 430 web tests pass (5 new: both answer shapes; a full chat turn with a tool round trip on the binding, streaming and not, no key anywhere; refusal statuses and routing to Groq with no leaked text; binding preferred over the token and selectable; health); lint, typecheck, `vinext build`; runner and local script tests 63/63. Not yet verified live: needs the deploy; then the chat check.
+
+
+
+## 2026-10-18 — repository settings customer privacy (#357)
+
+Account344 merged c746663 after ALL CI39087720052 passed, deployment39087988081 succeeded, live anonymous account GET exactly signedIn:false passed. Postdeploy configured authenticated inspect39088067813 passed; it is general inspection, not adversarial account fault/payment/deletion acceptance.
+
+Repository settings GET/PUT/DELETE still returned raw storage errors or migration0015 instructions, and auth exceptions escaped their context boundary. Reused existing fixed customerFailure contract (503/reference/no-store); unchanged auth/tenant resolution, owner/admin management, deployment allowlist, default-tenant zero-gate policy, validation and scoped writes. Three actual TypeScript-handler privacy regressions fail prior main; all10focused actual account/settings/validation cases pass after repair, covering auth/tenant/list/default/write faults with private/path/token/table sentinels and successful denial/scoping/mutation behavior. No new tenant policy or credential permissions. Broad checks/CI/deployment pending at this checkpoint. Native329/320 remain held for the already reported protected-signing automatic-review rejection; no bypass or signing edit.
+
+Repository settings validation: production build/typecheck and direct installed ESLint pass; fullweb507tests504pass3optional skips0fail. Npm-wrapper lint was slow; direct installed binary completed successfully. No deployed adversarial settings acceptance claimed. Fresh PR CI remains required.
 ## 2026-10-18 — shared governor for runner model calls (branch claude/shared-governor-runner)
 
 Closes the documented gap that coder inference did not share capacity with hosted chat. Worker gateway `/api/inference/governor` (own `ATLAS_GOVERNOR_TOKEN`, not the operator token) and CLI `GovernedModelProvider` wired around each coder route inside the retry layer; off unless `ATLAS_GOVERNOR_URL` and `ATLAS_GOVERNOR_TOKEN` are set. Evidence: gateway 4 tests over the real ledger core; CLI 555/555 (15 new, including a real HTTP socket proving a 429 on one runner makes a second runner on the same key wait without sending a provider request); web 506 pass/3 skipped; runner 81/81; workflows valid. Protected paths changed (deploy/coder/steward workflows, a new auth-gated route): owner review required. Not deployed. Next: owner adds the secret/variable and deploys, then verify with a real coder run; pass rate-limit headers through the provider contract.

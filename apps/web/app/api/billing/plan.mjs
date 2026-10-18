@@ -1,6 +1,6 @@
 import { eq, lt, sql } from "drizzle-orm";
 import { subscriptions, taskUsage, TIER_LIMITS } from "../../../db/schema";
-import { currentPeriodStart } from "./period.mjs";
+import { currentChatDayKey, currentPeriodStart, nextChatReset } from "./period.mjs";
 
 export async function currentPlan(db, dbUserId) {
   const [subscription] = await db.select().from(subscriptions).where(eq(subscriptions.userId, dbUserId));
@@ -41,4 +41,40 @@ export async function checkAndRecordUsage(db, dbUserId, mode, now = new Date()) 
     .returning({ taskCount: taskUsage.taskCount });
   if (!row) return denied;
   return { allowed: true, tier: plan.tier, used: row.taskCount, limit };
+}
+
+/**
+ * Counts one hosted chat message against the user's daily cap. Same shape as
+ * checkAndRecordUsage: one upsert that increments only while the count is
+ * below the plan's cap, so concurrent messages cannot overshoot it. A denial
+ * says when the cap resets and what upgrading changes; it never silently
+ * downgrades the reply.
+ */
+export async function checkAndRecordChatUsage(db, dbUserId, now = new Date()) {
+  const plan = await currentPlan(db, dbUserId);
+  const limit = plan.limits.dailyChatMessages;
+  const resetsAt = nextChatReset(now);
+  const denied = {
+    allowed: false,
+    code: "CHAT_CAP_REACHED",
+    tier: plan.tier,
+    limit,
+    resetsAt,
+    reason: plan.tier === "free"
+      ? `You have used today's ${limit} free messages. They reset at 00:00 UTC, or upgrade at /pricing for a higher daily limit.`
+      : `You have used today's ${limit} messages on the ${plan.tier} plan. They reset at 00:00 UTC.`,
+  };
+  if (limit < 1) return denied;
+
+  const [row] = await db
+    .insert(taskUsage)
+    .values({ userId: dbUserId, periodStart: currentChatDayKey(now), taskCount: 1 })
+    .onConflictDoUpdate({
+      target: [taskUsage.userId, taskUsage.periodStart],
+      set: { taskCount: sql`${taskUsage.taskCount} + 1` },
+      setWhere: lt(taskUsage.taskCount, limit),
+    })
+    .returning({ taskCount: taskUsage.taskCount });
+  if (!row) return denied;
+  return { allowed: true, code: null, reason: null, tier: plan.tier, used: row.taskCount, limit, remaining: limit - row.taskCount, resetsAt };
 }

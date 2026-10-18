@@ -28,10 +28,17 @@ export function suggestedWaitMs(body) {
   return match ? parseDurationMs(match[1]) : null;
 }
 
-/** `retry-after` as delta-seconds; the HTTP-date form is not used by model APIs. */
-export function retryAfterHeaderMs(headers) {
+/** `retry-after` as delta-seconds or an HTTP date. Past dates allow immediate recovery. */
+export function retryAfterHeaderMs(headers, now = Date.now()) {
   const value = headerValue(headers, "retry-after").trim();
-  return /^\d+(?:\.\d+)?$/u.test(value) ? Math.ceil(Number(value) * 1000) : null;
+  if (/^\d+(?:\.\d+)?$/u.test(value)) {
+    const ms = Math.ceil(Number(value) * 1000);
+    return Number.isSafeInteger(ms) ? ms : null;
+  }
+  // Avoid Date.parse's permissive interpretation of malformed numeric delays.
+  if (!/^[A-Za-z]{3},?\s/u.test(value)) return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - now) : null;
 }
 
 /** Reads a header from a Headers object or a plain record, case-insensitively. */

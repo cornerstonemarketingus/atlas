@@ -84,7 +84,7 @@ const USAGE = `Usage:
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|openai|workers-ai] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
-      [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N]
+      [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N] [--max-repair-ms N] [--max-same-failure N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
 
@@ -536,6 +536,12 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const tokenBudgetOption = readOptionalInteger(args, "--token-budget", 1, 1_000_000);
   const maximumTurnsOption = readOptionalInteger(args, "--max-turns", 1, 32);
   const repairAttemptsOption = readOptionalInteger(args, "--max-repair-attempts", 0, 5);
+  // Repair-loop limits checked before every repair (docs/PROGRAM.md 2.4):
+  // wall time since the session started, and how many repairs the same
+  // failure may survive. Token spend reuses --token-budget's shared ledger.
+  const repairWallOption = readOptionalInteger(args, "--max-repair-ms", 1_000, 86_400_000);
+  const sameFailureOption = readOptionalInteger(args, "--max-same-failure", 1, 10);
+  if (repairWallOption === null || sameFailureOption === null) return 2;
   const verifyTimeoutOption = readOptionalInteger(args, "--verify-timeout-ms", 1_000, 1_800_000);
   const retryAttemptsOption = readOptionalInteger(args, "--retry-attempts", 1, 5);
   const retryMaxDelayOption = readOptionalInteger(args, "--retry-max-delay-ms", 0, 120_000);
@@ -835,6 +841,12 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     runAgent: runAgentWith(agent),
     ...(escalationRoute ? { escalation: { attempts: escalationAttemptsOption ?? 2, runAgent: runAgentWith(makeAgent(escalationRoute.provider, escalationRoute.model)) } } : {}),
     runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),
+    loopLimits: {
+      ...(repairWallOption === undefined ? {} : { maxWallMs: repairWallOption }),
+      maxTokens: tokenBudget,
+      ...(sameFailureOption === undefined ? {} : { maxSameFailure: sameFailureOption }),
+    },
+    tokensSpent: () => budgetLedger.snapshot().used.outputTokens,
   });
   let result: Awaited<ReturnType<typeof session.run>>;
   // Only counters reach CI progress; never tool arguments, paths, prompts or provider bodies.

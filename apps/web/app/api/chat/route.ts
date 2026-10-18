@@ -5,6 +5,7 @@ import { conversationWritable, recallForMemory, tenantAllowlist } from "../../..
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
+import { checkAndRecordChatUsage } from "../billing/plan.mjs";
 import { isDeploymentOwner } from "../tasks/self-protection.mjs";
 import { POST as startTask } from "../tasks/route";
 import { allowedRepositories } from "../tasks/dispatch.mjs";
@@ -49,10 +50,26 @@ export async function POST(request: Request) {
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
   const selection = body.provider ?? "auto";
-  if (typeof selection !== "string" || !chatProviderChoices(process.env).some((choice) => choice.id === selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
-  const resolved = resolveChatProvider(process.env, selection);
+  const workersAI = { ai: (workerEnv as { AI?: unknown }).AI };
+  if (typeof selection !== "string" || !chatProviderChoices(process.env, workersAI).some((choice) => choice.id === selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
+  const resolved = resolveChatProvider(process.env, selection, workersAI);
   if (!resolved.configured) {
     return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
+  }
+  // The hosted model pool is shared, so each signed-in account has a daily
+  // message cap (owners and operator tokens are exempt). Counted before any
+  // write or model call; if usage cannot be read the message is allowed and
+  // the gap is logged, because a database fault must not take chat down.
+  if (account.dbUserId !== null && !isDeploymentOwner(account)) {
+    try {
+      const usage = await checkAndRecordChatUsage(getDb(), account.dbUserId);
+      if (!usage.allowed) {
+        const retryAfter = Math.max(1, Math.ceil((Date.parse(usage.resetsAt) - Date.now()) / 1000));
+        return Response.json({ message: usage.reason, code: usage.code, tier: usage.tier, limit: usage.limit, resetsAt: usage.resetsAt, upgradeUrl: "/pricing" }, { status: 429, headers: { "retry-after": String(retryAfter) } });
+      }
+    } catch (error) {
+      try { console.warn(JSON.stringify({ atlas: "chat", event: "chat.usage_unavailable", error: error instanceof Error ? error.name : "unknown" })); } catch { /* logging never breaks a reply */ }
+    }
   }
   // Every model call reserves through the provider scope's quota ledger (Phase 1.2); none when unbound.
   const endpoint = await governChain(resolved, workerEnv);
@@ -269,6 +286,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-  const endpoint = resolveChatProvider(process.env);
-  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null, providers: chatProviderChoices(process.env) }, { headers: { "cache-control": "no-store" } });
+  const bindings = { ai: (workerEnv as { AI?: unknown }).AI };
+  const endpoint = resolveChatProvider(process.env, "auto", bindings);
+  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null, providers: chatProviderChoices(process.env, bindings) }, { headers: { "cache-control": "no-store" } });
 }

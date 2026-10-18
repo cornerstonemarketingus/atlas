@@ -61,3 +61,8 @@ Appearance changes now update theme only, avoiding unnecessary account/status re
 ## Account overview boundary — issue #343
 
 The account overview GET now reuses the fixed customer failure contract for authentication, database, plan and usage exceptions. Unexpected failures return503 with no-store and a support reference, never raw backend text. Existing signed-out/owner/customer responses and account/period predicates are preserved and tested at the actual handler boundary. This does not close other chat/history/settings/provider disclosure paths or establish deployed adversarial acceptance.
+
+
+## Repository settings boundary — issue #357
+
+Unexpected repository-settings authentication, tenant resolution and storage failures now use the existing fixed503 customer failure response with a support reference and no-store. Raw database exceptions and schema/migration instructions no longer cross these handlers. Tenant/role/deployment allowlist/default-tenant merge-policy checks, input validation and scoped writes are unchanged and covered through actual handler tests. This is a response-boundary repair, not a new authorization model, migration deployment or completion of other privacy paths.
