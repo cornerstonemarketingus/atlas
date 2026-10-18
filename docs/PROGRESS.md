@@ -649,6 +649,12 @@ Next: #282 result callback ownership against this parent, then outcome recovery.
 
 Existing trusted cloud coder subprocess cleanup now retains SIGKILL after the group leader exits, closes inherited pipes at a bounded cleanup deadline, and isolates progress observer exceptions/rejected promises. Two new real-process regressions failed before the repair and pass after it. Complete Windows runner/local suite: 80 passed, one Linux-only skip; final process suite seven passed, one Linux-only skip. CI must verify the resistant-descendant process-group case before merge. Focused handoff: docs/CLOUD-PROCESS-RECOVERY.md. No production database, provider, credentials or workflow changed. Migration 0017 and its deployment remain paused for exact production approval. Next: complete #333 CI, then continue the existing task/claim/outcome/mission rollout in dependency order; persistent isolated workspace checkpoints remain unfinished.
 
+## 2026-10-17 — cumulative local business execution allowances (#338)
+
+BusinessService now reserves cumulative per-business execution upper bounds in an immediate SQLite transaction before MissionService creation. Smaller launch budgets and a percentage control permit repeated missions. Reserved allowances remain committed across restart, lost acknowledgement and terminal lane retry; observed durable scheduler usage is reported separately from spending receipts. Legacy history is explicitly uncertain and requires a newly authorized business record for new work. Ledger admission is bounded at 1,000 reservations. No new executor, external purchase, billing credential or spending authority was added.
+
+Evidence: 23 business/mission focused tests pass, including four worker/SQLite connection admission races, real mission-store restart, uncertain launch retention and ledger exhaustion. Removing the cumulative comparison made the race regression fail (four admitted versus one); restored code passes. Full local-control run was intentionally stopped under shared Windows host contention and is not claimed passing; isolated CI remains the full-suite gate. See BUSINESS-BUDGETS.md for limitations. Next: current-head CI, then actual receipt reconciliation and controlled allowance top-up/release design.
+
 
 ## 2026-10-18 — account overview customer privacy (#343)
 
@@ -672,6 +678,7 @@ suite was interrupted during Genesis fixtures amid shared Windows host load;
 it did not produce a complete passing result. Next: CI on this branch, then a
 trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
+
 
 
 ## 2026-10-17 coder context recovery (issue #287)
