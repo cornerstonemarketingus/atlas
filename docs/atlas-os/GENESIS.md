@@ -227,6 +227,58 @@ as unmetered in the receipt, not as free. The final `failed` transition carries
 fingerprint). A rolled-back repair's broken rules are fed into the next repair
 objective. Retrying a project from the UI starts a new cycle.
 
+## Persistent environments (`platform/environments/`, issue #351)
+
+A Genesis project is a persistent environment: it can stop and resume later
+with its files, state and checkpoints intact.
+
+- **Contract** (`environment.mjs`): `describe · exec · files · snapshot ·
+  restore · destroy`, with declared capabilities. `LocalEnvironment`
+  (`local.mjs`) is the only implementation. `cloudflare-sandbox` is a named
+  seam (`CLOUD_SEAM`) with no code behind it yet: asking for it returns
+  `UNAVAILABLE`.
+- **Snapshot.** When each stage starts (scaffolding on a change, building,
+  verifying, repairing, previewing, reviewing) and when the project becomes
+  ready, the executor commits the workspace. The commit is copied into
+  `<data>/genesis/snapshots/<projectId>.git` (ref
+  `refs/atlas/snapshots/<n>`), so deleting the folder loses nothing that was
+  snapshotted. Each snapshot records two digests:
+  - the tree digest: sha256 over every tracked path, its mode and the
+    sha256 of its bytes on disk;
+  - the manifest digest: the manifest in canonical JSON. The manifest holds
+    the state, plan, task statuses, repair count, last verified check, and
+    the side effects that are in flight or done.
+  The snapshots are rows in `genesis_snapshots`.
+- **Restore** puts the snapshot into a *fresh* folder, recomputes both
+  digests from what was written, and fails closed on any mismatch: it leaves
+  nothing behind and the project does not move. Git copies local objects
+  without re-hashing them, so this digest check is what catches a tampered
+  snapshot store.
+- **Resume receipt.** On daemon start, `executor.recover()` does two things:
+  - it pauses interrupted projects, as before;
+  - for each project whose latest snapshot was taken at the start of the
+    interrupted stage, it restores that snapshot, resets the task statuses
+    to the manifest, and moves `paused → <stage>`. That transition carries
+    `evidence.kind = "resume-receipt"`: the snapshot, both digests, the new
+    and previous folders, the last verified check, and the completed and
+    in-doubt effects.
+  The previous folder is kept for inspection. If verification fails, the
+  project goes to `blocked` with `resume-refused` evidence instead. Owners
+  can also call `POST /v1/genesis/:id/restore`. For a ready, published or
+  failed project, that returns to `building` on the restored files, so the
+  project is verified again.
+- **Side effects never repeat.** External actions go through
+  `executor.effect(projectId, key, perform)`, which is also passed to the
+  coder as `effect`. The ledger lives in `genesis_effects`:
+  - an effect recorded as done returns its receipt without running again;
+  - one claimed but never completed is *in doubt*, and the build is blocked
+    (`EFFECT_IN_DOUBT`) until `store.resolveEffect` settles it;
+  - one that failed may run again.
+- **Not in a snapshot:** ignored files (`node_modules/`, `dist/`, `data/`).
+  Verification reinstalls and rebuilds them, so a running app's local data
+  is not carried over. Digests are not signed: someone who can write both
+  the database and the snapshot store can forge both.
+
 ## Testing with the real coder and a browser
 
 `tests/genesis-coder.test.mjs` runs Atlas's **real** coder (`atlas code`),
