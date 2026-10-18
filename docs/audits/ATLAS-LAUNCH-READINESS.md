@@ -55,7 +55,7 @@ eye, not benchmarked. This does not demonstrate live-model quality.
 ## Blockers (launch)
 
 1. **Security: approval/credential boundary is open on main (P0).** The 27 adversarial tests from PR #235, run against main, give **26 failures**: approvals do not expire at the deadline, can cross principal/agent, adapters bypass credential resolution, outputs/evidence can carry credentials, and a lost acknowledgement can replay a consequential action after restart. PR #235 fixes all of them, is conflict-free, and all 14 CI checks are green (including Windows and real-coder Genesis). It is a protected path: **owner review required; I did not and will not bypass it.** Merge it first; PR #233 (credential broker) conflicts with main in 5 files and needs rebasing afterward.
-2. **Inference control plane not shared (P0).** The Durable Object quota ledger (#129-#133, #158, #160) is **not in main**: `apps/web` has no ledger or DO binding, CLI ledgers are in-memory per process, so chat and runner-side coder inference do not share capacity and cooldowns do not survive restart. PRs #129-#207 are ~330 commits behind main (squash-merged lineage); they need re-creation on current main, not a merge. PR #332 (merged) coordinates output-budget admission across CLI ledgers only.
+2. **Inference governor: partly verified (P0).** *Correction to an earlier draft of this report, which said the ledger was not in main.* It is: `InferenceGovernorObject` (`apps/web/worker/inference-governor.mjs`) is exported by the Worker and bound as `INFERENCE_GOVERNOR` with migration `v1-inference-governor` in `apps/web/vite.config.ts`, and hosted chat reserves through it (`governChain`). Not verified: whether production is actually bound (the client silently sends ungoverned when unbound; check the setup readiness / "Verify hosted Atlas" run), and whether runner-side CLI inference shares that ledger (PR #332 coordinates CLI ledgers with each other; I did not confirm a link to the Worker DO). Capacity cannot be created: Workers AI's free allowance is 10,000 Neurons/day for the whole account, so a free hosted tier needs the per-user cap below.
 3. **No live-model validation.** No Groq/OpenAI/Workers AI key or local model was available. Live chat/coder quality, cost, token use and rate-limit frequency are **unverified** by this run. Last hosted chat gate on record: PROGRESS 2026-10-17 (run 39006489138).
 4. **Hosted durability stack unmerged:** #270 -> #274 -> #276 -> #278 -> #282 -> #291 (persist-before-dispatch, dedupe, claims, result ownership, mission recovery). #276, #278, #291 conflict with main (1 each); #270, #274, #282 merge cleanly. Reconcile in that order.
 
@@ -67,7 +67,7 @@ eye, not benchmarked. This does not demonstrate live-model quality.
 | Rebase (small conflicts) then merge | #329 (1), #276 (1), #278 (1), #291 (1), #284 (3), #236 (1) |
 | Merge cleanly, in order | #270 -> #274 -> #282; #342, #344, #347 (small, 1 behind) |
 | Protected workflow, owner review | #320 (native build CI; 1 conflict) |
-| Rebuild on current main, then close old | #129-#133, #158, #160, #130 ledger stack; #178, #181, #191, #200, #202, #207 |
+| Likely superseded by squash-merged work (the ledger and chat governor are in main); confirm then close | #129-#133, #158, #160; review #178, #181, #191, #200, #202, #207 individually |
 | Stale or superseded, confirm then close | #308 (smoke doc only), #105/#101/#98/#97/#77/#69 (Copilot drafts, ~260 ahead / 50 behind), #223, #230, #233, #237, #240, #243, #252, #253, #266 |
 
 Conflict counts are from `git merge-tree` against `857577a`; I did not inspect every
@@ -84,7 +84,11 @@ document was found by filename search; treat it as nonexistent until shown.
 ## Next (acceptance criteria)
 
 1. Owner merges #235; re-run `approval-boundary` + `credential-boundary` on main: 27/27.
-2. Re-create the quota ledger on main (one PR: DO + binding in `deploy-cloudflare.yml`, chat reservations, CLI governor client); acceptance: concurrent chat + coder jobs on one quota never exceed it, cooldown survives Worker restart.
+2. Confirm the governor is bound in production; connect runner-side CLI inference to the same ledger if it is not; acceptance: concurrent chat + coder jobs on one quota never exceed it, cooldown survives Worker restart.
 3. Provide one funded provider key (or Ollama + a qualified model) in an isolated env; run samples B, C, F and a live Genesis run; record time, tokens, cost.
 4. Reconcile the hosted durability stack in order; add crash tests (before/after tool, before/after receipt) at the hosted boundary.
 5. Smallest safe launch scope: hosted chat + Genesis static-site/local builds with owner approvals, after 1-2 are closed.
+
+## Update: free-tier daily chat cap (branch `claude/free-tier-chat-cap`)
+
+Hosted chat now has a per-account daily message cap, before any subscription is required: free 20, pro 400, team 1500 per UTC day (`TIER_LIMITS.dailyChatMessages`; **starting values, not measured**: tune from real Neuron use). Owners and operator tokens are exempt. A denied message returns HTTP 429 with `retry-after`, `code: CHAT_CAP_REACHED`, the reset time and `/pricing`; the existing chat client already shows the message. Counting is one atomic upsert in `task_usage` under a `chat:YYYY-MM-DD` key (no migration, and account deletion already clears the rows). If usage cannot be read the message is allowed and a metadata-only warning is logged. Tests: 30-way concurrency stays at exactly 20, per-user isolation, UTC-day reset, paid-tier limit; full web suite 501 pass / 3 skipped. Not tested: the chat route itself (no route-level harness exists), and failed model calls still consume a message. Not done: a cap-reached screen with local-model / bring-your-own-key options.
