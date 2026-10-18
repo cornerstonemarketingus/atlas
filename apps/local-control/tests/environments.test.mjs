@@ -78,6 +78,26 @@ test("snapshot → destroy → restore recreates the same files in a fresh folde
   } finally { cleanup(); }
 });
 
+test("restore reproduces the exact bytes even when git is set to rewrite line endings (Windows' default autocrlf)", async () => {
+  const { root, cleanup } = tempRoot("atlas-env-crlf-");
+  const config = join(root, "crlf.gitconfig");
+  writeFileSync(config, "[core]\n\tautocrlf = true\n");
+  const previous = process.env.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_GLOBAL = config;
+  try {
+    const environment = await smallEnvironment(root);
+    writeFileSync(join(environment.folder, "src", "lines.mjs"), "export const a = 1;\nexport const b = 2;\n");
+    const snapshot = await environment.snapshot({ manifest: { state: "building" } });
+    await environment.destroy();
+    const { environment: restored, receipt } = await environment.restore(snapshot, { folder: join(root, "projects", "demo-crlf") });
+    assert.equal(receipt.treeDigest, snapshot.treeDigest);
+    assert.equal(readFileSync(join(restored.folder, "src", "lines.mjs"), "utf8"), "export const a = 1;\nexport const b = 2;\n");
+  } finally {
+    if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = previous;
+    cleanup();
+  }
+});
+
 test("a tampered snapshot is refused: changed stored content and an edited manifest both fail closed", async () => {
   const { root, cleanup } = tempRoot("atlas-env-");
   try {

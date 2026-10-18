@@ -141,6 +141,10 @@ export class LocalEnvironment {
   /** Commits the workspace, copies the commit into the snapshot repository and records both digests. */
   async snapshot({ manifest = {}, message = "Atlas snapshot" } = {}) {
     if (!existsSync(join(this.folder, ".git"))) throw new EnvironmentError("NOT_A_WORKSPACE", `${this.folder} is not a git workspace.`);
+    // Git must store the bytes that are on disk, so the tree digest (taken
+    // from disk) can be reproduced by a checkout. A global core.autocrlf
+    // (the default on Windows) would otherwise rewrite line endings.
+    await git(this.folder, ["config", "core.autocrlf", "false"]);
     await commitWorkspace(this.folder, message);
     const commit = (await git(this.folder, ["rev-parse", "HEAD"])).stdout.trim();
     await this.#ensureStore();
@@ -182,7 +186,8 @@ export class LocalEnvironment {
     try {
       mkdirSync(dirname(target), { recursive: true });
       // --no-hardlinks: the restored workspace never shares files with the snapshot repository.
-      await git(dirname(target), ["clone", "-q", "--no-checkout", "--no-hardlinks", this.store, target]);
+      // core.autocrlf=false: check out exactly the stored bytes, whatever the global git config says.
+      await git(dirname(target), ["clone", "-q", "--no-checkout", "--no-hardlinks", "--config", "core.autocrlf=false", this.store, target]);
       await git(target, ["-c", "advice.detachedHead=false", "checkout", "-q", "-B", "main", snapshot.commit]);
       await git(target, ["remote", "remove", "origin"]);
       const head = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
