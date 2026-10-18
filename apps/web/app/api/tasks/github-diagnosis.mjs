@@ -113,6 +113,7 @@ const githubHeaders = (token) => ({ accept: "application/vnd.github+json", autho
  * Returns the credential kind and, when something is missing, exactly which
  * permission and how to grant it for that kind. Never the token.
  */
+/** @returns {Promise<{ok: true, credential: string} | {ok: false, message: string, unblock: string, [key: string]: unknown}>} */
 export async function probeGitHubDispatch({ token, repository, workflow = "atlas-runner.yml", fetcher = fetch, githubApp = false }) {
   const kind = credentialKind(token, { githubApp });
   if (!token) return { ok: false, credential: kind, ...explainGitHubFailure(401, { workflow, repository }), message: "No GitHub credential is configured for task dispatch." };

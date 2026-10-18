@@ -30,7 +30,8 @@ export interface TransactionalRepositoryChangeSetEditorOptions {
  * Coordinates already-safe single-file edits into an ordered, compensating transaction.
  * This is intentionally not a general filesystem transaction: create, update, delete, and
  * rename plans are accepted, and a failed application is compensated in reverse order from
- * pre-edit checkpoints. Directories are never created or removed.
+ * pre-edit checkpoints. Approved creates may create parent directories; rollback
+ * restores file contents and may leave empty new directories.
  */
 export class TransactionalRepositoryChangeSetEditor implements RepositoryChangeSetEditor {
   private readonly maxPendingChangeSets: number;

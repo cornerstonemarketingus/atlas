@@ -11,6 +11,20 @@ const dist = join(root, "dist");
 const escape = (value) => String(value ?? "").replace(/[&<>"']/gu, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fileFor = (page) => (page.id === "home" ? "index.html" : `${page.id}.html`);
 const hrefFor = (page) => (page.id === "home" ? "/" : `/${page.id}.html`);
+// Canonical URLs and sitemap entries must be absolute. Set "url" in site.json to the live address; until then
+// they stay site-relative and the build says so.
+const origin = String(site.url ?? "").replace(/\/+$/u, "");
+const absolute = (page) => `${origin}${hrefFor(page)}`;
+// Structured data states only what site.json states: no address, phone, rating or hours are ever made up.
+const localBusiness = () => JSON.stringify({
+  "@context": "https://schema.org",
+  "@type": "LocalBusiness",
+  name: site.name,
+  ...(origin ? { url: origin } : {}),
+  ...(site.contact.phone ? { telephone: site.contact.phone } : {}),
+  ...(site.contact.email ? { email: site.contact.email } : {}),
+  ...(site.location?.city ? { areaServed: { "@type": "City", name: [site.location.city, site.location.region].filter(Boolean).join(", ") } } : {}),
+}).replace(/</gu, "\\u003c");
 
 const problems = [];
 if (!site.name) problems.push("site.json has no name");
@@ -56,7 +70,10 @@ function render(page) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escape(page.id === "home" ? `${site.name} · ${site.tagline}` : `${page.title} · ${site.name}`)}</title>
 <meta name="description" content="${escape(page.description)}">
-<link rel="canonical" href="${hrefFor(page)}">
+<link rel="canonical" href="${origin ? absolute(page) : hrefFor(page)}">
+<meta property="og:title" content="${escape(page.title)} · ${escape(site.name)}">
+<meta property="og:description" content="${escape(page.description)}">
+<meta property="og:type" content="website">${page.id === "home" ? `\n<script type="application/ld+json">${localBusiness()}</script>` : ""}
 <link rel="stylesheet" href="/styles.css">${hasForm ? '\n<script type="module" src="/contact.js"></script>' : ""}
 </head>
 <body>
@@ -77,6 +94,7 @@ mkdirSync(dist, { recursive: true });
 for (const page of site.pages) writeFileSync(join(dist, fileFor(page)), render(page));
 copyFileSync(join(root, "src", "styles.css"), join(dist, "styles.css"));
 copyFileSync(join(root, "src", "contact.js"), join(dist, "contact.js"));
-writeFileSync(join(dist, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${site.pages.map((page) => `  <url><loc>${escape(hrefFor(page))}</loc></url>`).join("\n")}\n</urlset>\n`);
-writeFileSync(join(dist, "robots.txt"), "User-agent: *\nAllow: /\nSitemap: /sitemap.xml\n");
+writeFileSync(join(dist, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${site.pages.map((page) => `  <url><loc>${escape(origin ? absolute(page) : hrefFor(page))}</loc></url>`).join("\n")}\n</urlset>\n`);
+writeFileSync(join(dist, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`);
+if (!origin) console.warn("Note: set \"url\" in site.json to your live address so canonical links and the sitemap are absolute.");
 console.log(`✓ Built ${site.pages.length} pages for ${site.name} into dist/`);

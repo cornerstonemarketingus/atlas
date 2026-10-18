@@ -40,9 +40,15 @@ export function suggestedWaitFromMessage(message: string): number | undefined {
   return match?.[1] === undefined ? undefined : parseDurationMs(match[1]);
 }
 
-/** `retry-after` as delta-seconds (the HTTP-date form is not used by model APIs). */
-export function retryAfterHeaderMs(headers: Headers): number | undefined {
+/** `retry-after` as delta-seconds or an HTTP date. */
+export function retryAfterHeaderMs(headers: Headers, now = Date.now()): number | undefined {
   const value = headers.get("retry-after")?.trim();
-  if (value === undefined || !/^\d+(?:\.\d+)?$/u.test(value)) return undefined;
-  return Math.ceil(Number.parseFloat(value) * 1000);
+  if (value === undefined) return undefined;
+  if (/^\d+(?:\.\d+)?$/u.test(value)) {
+    const ms = Math.ceil(Number(value) * 1000);
+    return Number.isSafeInteger(ms) ? ms : undefined;
+  }
+  if (!/^[A-Za-z]{3},?\s/u.test(value)) return undefined;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
 }

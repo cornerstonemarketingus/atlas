@@ -19,7 +19,6 @@ import type {
   RepositoryFileEditRequest,
   RepositoryFileEditor,
 } from "../src/domain/repository-file-edit.js";
-import { RepositoryToolInputError } from "../src/infrastructure/repository-read-only-tools.js";
 
 async function fixture(): Promise<string> {
   return mkdtemp(join(tmpdir(), "atlas-write-tools-"));
@@ -189,18 +188,14 @@ async function failedChangeSet(
   return { message: result.message, errorCode: result.errorCode };
 }
 
-/**
- * A change set that is MALFORMED — an unknown operation, a delete carrying
- * content, more edits than the schema allows — throws instead. Input validation
- * runs before the tool executes, and a call that does not match the advertised
- * schema is a broken caller rather than a repository state the model can work
- * around.
- */
+/** Malformed change sets stay rejected before execution, but the model can correct them. */
 async function malformedChangeSet(
   registry: PolicyEnforcedReadOnlyToolRegistry,
   edits: readonly unknown[],
 ): Promise<void> {
-  await assert.rejects(runChangeSet(registry, edits), (error: unknown) => error instanceof RepositoryToolInputError);
+  const result = await runChangeSet(registry, edits);
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") assert.equal(result.errorCode, "INVALID_TOOL_INPUT");
 }
 
 test("applies a multi-file create, update, delete, and rename atomically", async (t) => {

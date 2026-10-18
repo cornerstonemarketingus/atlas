@@ -21,6 +21,8 @@
  * dispatch.mjs.
  */
 
+import { githubRequestObservation, logGitHubObservation } from "./github-observability.mjs";
+
 const GITHUB_API = "https://api.github.com";
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const WORKFLOW_PATTERN = /^(?:[A-Za-z0-9_.-]{1,128}|[1-9][0-9]{0,18})$/u;
@@ -85,12 +87,13 @@ export function pullRequestForBranchRequest({ token, repository, branch }) {
 /** Only the fields the dashboard needs, so an unexpected payload can't leak through. */
 export function normalizeRun(value) {
   if (!value || typeof value !== "object" || typeof value.id !== "number") return null;
+  const title = value.display_title ?? value.name;
   return {
     id: value.id,
     // The workflow sets `run-name` to carry the dispatched task id; this is
     // what makes run matching exact rather than time-based. Older runs, and
     // runs triggered from the GitHub UI, carry the plain workflow name.
-    name: typeof value.name === "string" ? value.name : null,
+    name: typeof title === "string" ? title : null,
     createdAt: typeof value.created_at === "string" ? value.created_at : null,
     event: typeof value.event === "string" ? value.event : null,
     status: typeof value.status === "string" ? value.status : null,
@@ -114,16 +117,28 @@ export function normalizePullRequest(value) {
  * transient GitHub error must degrade the task list to "status unknown", never
  * fail it.
  */
-export async function fetchGitHubJson(request, fetcher = fetch, timeoutMs = 8_000) {
+export async function fetchGitHubJson(request, fetcher = fetch, timeoutMs = 8_000, { observe = logGitHubObservation, clock = Date.now } = {}) {
+  const startedAt = clock();
+  let response;
+  let outcome = "network_failure";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetcher(request.url, { ...request.init, signal: controller.signal });
+    response = await fetcher(request.url, { ...request.init, signal: controller.signal });
+    outcome = "http_failure";
     if (!response.ok) return null;
-    return await response.json();
+    outcome = "network_failure";
+    const body = await response.text();
+    outcome = "invalid_response";
+    const value = JSON.parse(body);
+    outcome = "success";
+    return value;
   } catch {
+    if (controller.signal.aborted) outcome = "timeout";
     return null;
   } finally {
     clearTimeout(timeout);
+    // Observability must not break the dashboard's existing failure handling.
+    try { observe(githubRequestObservation({ url: request.url, response, outcome, startedAt, endedAt: clock() })); } catch { /* best effort */ }
   }
 }

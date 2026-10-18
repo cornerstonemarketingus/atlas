@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, posix } from "node:path";
 import { ProviderReadOnlyToolAgent } from "./agent/provider-read-only-tool-agent.js";
 import { VerifiedCoderSession } from "./agent/verified-coder-session.js";
@@ -18,6 +18,7 @@ import { RepositorySecuritySurfaces } from "./infrastructure/repository-security
 import { RepositorySchemaMap } from "./infrastructure/repository-schema-map.js";
 import { RepositoryConfigReferences } from "./infrastructure/repository-config-references.js";
 import { BoundedRepositorySourceReader } from "./infrastructure/bounded-repository-source-reader.js";
+import { SessionCheckpointError, SessionCheckpointRecorder, undoSession } from "./infrastructure/session-checkpoint.js";
 import { RepositorySymbolReferenceFinder } from "./infrastructure/repository-symbol-reference-finder.js";
 import { BudgetedModelProvider } from "./infrastructure/budgeted-model-provider.js";
 import { InMemorySessionAuditLog } from "./infrastructure/in-memory-session-audit-log.js";
@@ -25,6 +26,7 @@ import { JsonLinesSessionAuditStore } from "./infrastructure/json-lines-session-
 import { persistSessionAudit } from "./infrastructure/persist-session-audit.js";
 import { InMemoryUsageBudgetLedger } from "./infrastructure/in-memory-usage-budget-ledger.js";
 import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-openai-compatible-model-provider.js";
+import { CloudModelProvider } from "./infrastructure/cloud-model-provider.js";
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
 import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provider.js";
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
@@ -77,11 +79,12 @@ const USAGE = `Usage:
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
-  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
+  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|openai|workers-ai] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
-      [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N]
-       [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]`;
+      [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N] [--max-repair-ms N] [--max-same-failure N]
+       [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]
+  atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
 
 export async function main(args: readonly string[]): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
@@ -102,7 +105,7 @@ export async function main(args: readonly string[]): Promise<number> {
       writeError: (text) => process.stderr.write(text),
     });
   }
-  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "ci" && args[0] !== "map" && args[0] !== "surfaces" && args[0] !== "schemas" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code") || args[1] === undefined) {
+  if ((args[0] !== "inspect" && args[0] !== "search" && args[0] !== "symbols" && args[0] !== "references" && args[0] !== "read" && args[0] !== "tree" && args[0] !== "tests-for" && args[0] !== "packages" && args[0] !== "env" && args[0] !== "ci" && args[0] !== "map" && args[0] !== "surfaces" && args[0] !== "schemas" && args[0] !== "github" && args[0] !== "chat" && args[0] !== "code" && args[0] !== "undo") || args[1] === undefined) {
     console.error(USAGE);
     return 2;
   }
@@ -341,6 +344,9 @@ export async function main(args: readonly string[]): Promise<number> {
     if (args[0] === "code") {
       return await runCode(args, format);
     }
+    if (args[0] === "undo") {
+      return await runUndo(args, format);
+    }
     const query = args[2];
     if (query === undefined) {
       console.error(USAGE);
@@ -528,6 +534,12 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const tokenBudgetOption = readOptionalInteger(args, "--token-budget", 1, 1_000_000);
   const maximumTurnsOption = readOptionalInteger(args, "--max-turns", 1, 32);
   const repairAttemptsOption = readOptionalInteger(args, "--max-repair-attempts", 0, 5);
+  // Repair-loop limits checked before every repair (docs/PROGRAM.md 2.4):
+  // wall time since the session started, and how many repairs the same
+  // failure may survive. Token spend reuses --token-budget's shared ledger.
+  const repairWallOption = readOptionalInteger(args, "--max-repair-ms", 1_000, 86_400_000);
+  const sameFailureOption = readOptionalInteger(args, "--max-same-failure", 1, 10);
+  if (repairWallOption === null || sameFailureOption === null) return 2;
   const verifyTimeoutOption = readOptionalInteger(args, "--verify-timeout-ms", 1_000, 1_800_000);
   const retryAttemptsOption = readOptionalInteger(args, "--retry-attempts", 1, 5);
   const retryMaxDelayOption = readOptionalInteger(args, "--retry-max-delay-ms", 0, 120_000);
@@ -565,8 +577,8 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   // Refused rather than ignored. A custom endpoint that silently did nothing
   // would send the repository to the vendor the operator was trying to avoid,
   // and they would have no way to tell from the output.
-  if (endpoint !== undefined && selection.selection.profile.providerId === "anthropic") {
-    console.error("--base-url applies to the OpenAI-compatible provider only; it cannot redirect the Anthropic client.");
+  if (endpoint !== undefined && selection.selection.profile.providerId !== "groq") {
+    console.error("--base-url applies only to the groq OpenAI-compatible server path; cloud vendor credentials cannot be redirected.");
     return 2;
   }
   const { profile, apiKeyEnvironmentVariable, maxOutputTokensPerTurn } = selection.selection;
@@ -615,6 +627,8 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     },
   ));
   const edits: CodeEditSummary[] = [];
+  // What each touched file held before the session, so `atlas undo` can put it back.
+  const checkpoint = new SessionCheckpointRecorder(summary.root);
   const writeTools = createRepositoryWriteTools(
     { repositoryId, repositoryRoot: summary.root },
     { editor: new SafeRepositoryFileEditor() },
@@ -629,6 +643,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     proposeFileEdit: {
       ...writeTools.proposeFileEdit,
       execute: async (input, context) => {
+        await checkpoint.recordBefore(editedPaths(input));
         const result = await writeTools.proposeFileEdit.execute(input, context);
         edits.push({ path: result.path, operation: result.operation });
         return result;
@@ -637,6 +652,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     proposeChangeSet: {
       ...writeTools.proposeChangeSet,
       execute: async (input, context) => {
+        await checkpoint.recordBefore(editedPaths(input));
         const result = await writeTools.proposeChangeSet.execute(input, context);
         // A rename moves a file, so the destination is what the pull request
         // has to describe; recording only the source would leave the new path
@@ -669,7 +685,9 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     }];
     const upstream = routeSelection.profile.providerId === "anthropic"
       ? new AnthropicModelProvider({ apiKey: routeApiKey, models: routeCapabilities, defaultMaxOutputTokens: routeSelection.maxOutputTokensPerTurn })
-      : new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
+      : routeSelection.profile.providerId === "groq"
+        ? new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) })
+        : new CloudModelProvider({ providerId: routeSelection.profile.providerId, apiKey: routeApiKey, models: routeCapabilities, ...(process.env["CLOUDFLARE_ACCOUNT_ID"] ? { accountId: process.env["CLOUDFLARE_ACCOUNT_ID"] } : {}) });
     return new RetryingModelProvider(new RedactingModelProvider(upstream, new PatternSecretRedactor()), retryOptions);
   };
   const routes = [{ provider: makeRoute(model, selection.selection, apiKey, endpoint), model }];
@@ -807,7 +825,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       edits: edits.slice(before),
     };
   };
-  const result = await new VerifiedCoderSession({
+  const session = new VerifiedCoderSession({
     plan,
     maxRepairAttempts,
     // Full repository detail remains available through bounded read tools. The
@@ -817,7 +835,36 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     runAgent: runAgentWith(agent),
     ...(escalationRoute ? { escalation: { attempts: escalationAttemptsOption ?? 2, runAgent: runAgentWith(makeAgent(escalationRoute.provider, escalationRoute.model)) } } : {}),
     runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),
-  }).run();
+    loopLimits: {
+      ...(repairWallOption === undefined ? {} : { maxWallMs: repairWallOption }),
+      maxTokens: tokenBudget,
+      ...(sameFailureOption === undefined ? {} : { maxSameFailure: sameFailureOption }),
+    },
+    tokensSpent: () => budgetLedger.snapshot().used.outputTokens,
+  });
+  let result: Awaited<ReturnType<typeof session.run>>;
+  // Only counters reach CI progress; never tool arguments, paths, prompts or provider bodies.
+  const progressTimer = setInterval(() => {
+    const events = audit.snapshot();
+    console.error("Atlas progress: " + JSON.stringify({
+      modelRequests: events.filter((event) => event.type === "model.requested").length,
+      toolCalls: events.filter((event) => event.type === "tool.requested").length,
+      failedTools: events.filter((event) => event.type === "tool.completed" && "outcome" in event.payload && event.payload.outcome === "failed").length,
+    }));
+  }, 15_000);
+  progressTimer.unref();
+  try {
+    result = await session.run();
+  } finally {
+    clearInterval(progressTimer);
+    // Saved however the session ended, so its edits can be taken back.
+    // stderr, never stdout: stdout is the result the runner parses.
+    const saved = await checkpoint.save(sessionId).catch((error: unknown) => {
+      console.error(`Undo checkpoint not saved: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
+    if (saved !== null) console.error(`To take back this session's edits: atlas undo ${JSON.stringify(summary.root)} --session ${saved}`);
+  }
 
   // Flushed after the run, not during it: the agent records events
   // synchronously mid-turn, and putting a disk write on that path to persist a
@@ -844,6 +891,50 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     new PatternSecretRedactor(),
   ));
   return result.status === "completed" ? 0 : 1;
+}
+
+/** Paths a write tool's raw input names; the tool itself validates them. */
+function editedPaths(input: unknown): string[] {
+  if (typeof input !== "object" || input === null) return [];
+  const record = input as Record<string, unknown>;
+  const paths: unknown[] = [record["path"]];
+  if (Array.isArray(record["edits"])) {
+    for (const edit of record["edits"] as unknown[]) {
+      if (typeof edit === "object" && edit !== null) paths.push((edit as Record<string, unknown>)["path"], (edit as Record<string, unknown>)["toPath"]);
+    }
+  }
+  return paths.filter((path): path is string => typeof path === "string");
+}
+
+async function runUndo(args: readonly string[], format: "text" | "json"): Promise<number> {
+  const sessionId = args.includes("--session") ? readRequiredOption(args, "--session") : undefined;
+  if (sessionId === null) return 2;
+  let root: string;
+  try { root = await realpath(args[1]!); } catch {
+    console.error(`Repository not found: ${args[1]}`);
+    return 2;
+  }
+  try {
+    const result = await undoSession(root, { ...(sessionId === undefined ? {} : { sessionId }), dryRun: args.includes("--dry-run") });
+    if (format === "json") {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      const lines = [`Session ${result.sessionId}${result.dryRun ? " (dry run)" : ""}`];
+      if (result.conflicts.length > 0) {
+        lines.push("Nothing was restored: these files changed after the session:", ...result.conflicts.map((path) => `  ${path}`));
+      } else {
+        lines.push(`${result.dryRun ? "Would restore" : "Restored"} ${result.restored.length} file(s)${result.unchanged.length > 0 ? `, ${result.unchanged.length} already as before` : ""}.`, ...result.restored.map((path) => `  ${path}`));
+      }
+      console.log(lines.join("\n"));
+    }
+    return result.conflicts.length > 0 ? 1 : 0;
+  } catch (error) {
+    if (error instanceof SessionCheckpointError) {
+      console.error(error.message);
+      return 1;
+    }
+    throw error;
+  }
 }
 
 function readRequiredOption(args: readonly string[], option: string): string | null {

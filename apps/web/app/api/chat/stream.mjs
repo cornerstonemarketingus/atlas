@@ -1,3 +1,5 @@
+import { customerEvent } from "./customer-events.mjs";
+
 /**
  * Streaming for chat: parse an OpenAI-compatible server-sent-event stream
  * into text deltas, and encode Atlas's own events for the browser.
@@ -92,7 +94,8 @@ export function createDeltaParser() {
 
 /** One server-sent event from Atlas to the browser. */
 export function encodeEvent(type, data) {
-  return `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+  const visible = customerEvent(type, data);
+  return visible === null ? "" : `event: ${type}\ndata: ${JSON.stringify(visible)}\n\n`;
 }
 
 /**

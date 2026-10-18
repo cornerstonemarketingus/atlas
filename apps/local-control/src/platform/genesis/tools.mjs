@@ -83,6 +83,9 @@ export function registerGenesisTools(registry, getGenesis, getPublisher = () => 
   registry.register({
     ...common,
     name: "genesis.publish",
+    // It only files a request; the publisher's own approval is the gate (and
+    // confirms a production deploy twice), so the call itself does not ask.
+    effects: { writes: true, reversible: true, sandboxed: true, requestOnly: true },
     description: "Publish a ready Genesis project: push it to a repository the person already created, create a new repository on their git host (GitHub, GitLab, Forgejo) and push to it, or deploy a built website to Vercel. This only files the request: the publish.remote / deploy.remote policies decide, and by default the owner approves it under Approvals before anything leaves this computer. Never call it unless the person asked to publish, push, create a repository, deploy or put it online, and never invent addresses.",
     inputSchema: {
       type: "object",

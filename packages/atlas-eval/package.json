@@ -1,0 +1,13 @@
+{
+  "name": "@atlas/eval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free eval harness: verified task completion for Atlas coding agents.",
+  "engines": { "node": ">=22.13.0" },
+  "exports": { ".": "./src/index.mjs" },
+  "bin": { "atlas-eval": "./src/cli.mjs" },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}
