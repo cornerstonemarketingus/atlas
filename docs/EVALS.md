@@ -129,7 +129,7 @@ the base commit, objective, verify command and solution and then runs
 | Grow to 30–50 tasks | Done: 35 tasks, 25 from history, all pass `validate` (issue #128) |
 | Test repair, tool arguments, final synthesis | Done: 3 tasks each, with `test-repair-check.mjs` and new answer checks |
 | Categories still without tasks | review, browser reasoning |
-| CI workflow (`atlas-eval.yml`, dry run per PR, `workflow_dispatch` for full runs) | Pending; protected path, needs owner review. `packages/atlas-eval` tests are not in `ci.yml` until then |
+| CI workflow (`atlas-eval.yml`): dry-run validation on PRs touching the harness, `workflow_dispatch` for full runs | Done in the workflow PR (#349, protected, owner review) |
 | Dogfood log `evals/dogfood/` (2.2): validated append-only log, recurring-failure drafts | Done in the dogfood PR; the log starts empty (no fabricated history) |
 | Groq Batch for background runs | Pending |
 | Baseline pass rate | **Pending: no provider credential is available to this environment.** Dry-run validation results only |

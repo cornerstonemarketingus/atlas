@@ -4,7 +4,7 @@ The platform executor already calls `TaskBudget` before and after a tool. That s
 
 Snapshots preserve a standalone task's shape. For child tasks, remaining allowance is the minimum across the task and its ancestors; an `ancestors` list explains inherited limits and usage. Parent audit records identify the source descendant. Cycles, missing tenant-scoped parents and chains longer than 64 tasks fail before reservation writes.
 
-Actual post-execution usage is recorded truthfully at every scope, including overruns, and later reservations are refused. The existing executor reserves tool-call counts and records monetary usage after execution. It does not reserve predicted monetary cost or settle/refund monetary reservations. Recording actual cost cannot undo the spend, so this is not a hard-dollar guarantee. Tools must report their own usage rather than re-report aggregated descendant costs.
+Actual post-execution usage is recorded truthfully at every scope, including overruns, and later reservations are refused. The existing executor reserves tool-call counts and records monetary usage after execution. It does not reserve predicted monetary cost or settle/refund monetary reservations. The GPU compute manager does (see `docs/atlas-os/COMPUTE.md`): it reserves worst-case `costMicroUsd` before provisioning. `TaskBudget.release(amounts, { ref })` then returns the unused part at every scope. Each release is idempotent by `ref`, cannot go below recorded usage, and is subtracted from descendant credits by the reconciliation command. Recording actual cost cannot undo the spend, so this is not a hard-dollar guarantee. Tools must report their own usage rather than re-report aggregated descendant costs.
 
 ## Review and rollout limits
 

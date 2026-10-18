@@ -85,8 +85,11 @@ test("workflow secrets are read only from expressions, never from comments", () 
 test("a read-only answer may only add ANSWER.json", async () => {
   const { changedSources } = await import(join(verifiers, "answer-check.mjs"));
   const { root } = await repairRepo();
+  git(root, "commit", "-q", "--allow-empty", "-m", "eval setup");
   await writeFile(join(root, "ANSWER.json"), "{}\n");
   assert.deepEqual(changedSources(root), []);
   await writeFile(join(root, "greet.mjs"), "export const greet = () => 'changed';\n");
   assert.deepEqual(changedSources(root), ["greet.mjs"]);
+  git(root, "add", "greet.mjs"); git(root, "commit", "-qm", "agent commit");
+  assert.deepEqual(changedSources(root), ["greet.mjs"], "a committed source change still counts");
 });

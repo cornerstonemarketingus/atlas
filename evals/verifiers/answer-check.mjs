@@ -25,10 +25,16 @@ const git = (root, ...args) => {
 export const secretsIn = (text) => [...new Set([...text.matchAll(/\$\{\{([\s\S]*?)\}\}/gu)]
   .flatMap((match) => [...match[1].matchAll(/\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)/gu)].map((secret) => secret[1])))].sort();
 
-/** Read-only tasks: the only change the agent may leave behind is ANSWER.json. */
+/**
+ * Read-only tasks: the only change the agent may leave behind is ANSWER.json.
+ * Compared with the runner's "eval setup" commit when there is one, so a
+ * change the agent committed still counts (like the runner's changedPaths).
+ */
 export function changedSources(root) {
-  return git(root, "status", "--porcelain", "--untracked-files=all").split("\n").filter(Boolean)
-    .map((line) => line.slice(3)).filter((path) => path !== "ANSWER.json");
+  const setup = git(root, "log", "-1", "--format=%H", "--fixed-strings", "--grep=eval setup").trim() || "HEAD";
+  const tracked = git(root, "diff", "--name-only", "--no-renames", "-z", setup, "--").split("\0");
+  const untracked = git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0");
+  return [...new Set([...tracked, ...untracked].filter((path) => path && path !== "ANSWER.json"))].sort();
 }
 
 export const CHECKS = {
