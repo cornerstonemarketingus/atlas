@@ -74,7 +74,7 @@ questions (navigation ×2, structured output ×2).
 | First 10 tasks | Done; history-derived tasks cover 6 of 10 |
 | Categories still without tasks | test repair, tool arguments, review, final synthesis, browser reasoning |
 | Grow to 30–50 tasks | Pending |
-| CI workflow (`atlas-eval.yml`, dry run per PR, `workflow_dispatch` for full runs) | Pending; protected path, needs owner review. `packages/atlas-eval` tests are not in `ci.yml` until then |
+| CI workflow (`atlas-eval.yml`): dry-run validation on PRs touching the harness, `workflow_dispatch` for full runs | Done in the follow-up workflow PR (protected, owner review) |
 | Dogfood log `evals/dogfood/` (2.2) | Pending |
 | Groq Batch for background runs | Pending |
 | Baseline pass rate | **Pending: no provider credential is available to this environment.** Dry-run validation results only |
