@@ -60,3 +60,9 @@ device or been submitted. Everything in `mobile/src/` and
 `apps/local-control/src/mobile/` is covered by tests. See
 [`../MOBILE-RELEASE.md`](../MOBILE-RELEASE.md) for the remaining store gates,
 including Sign in with Apple, which is still open.
+
+## Native icon artwork
+
+Native icons are rendered from the established apps/web/public/favicon.svg, preserving its paths and colors. Run npm run icons:render from mobile after installing browser-worker dependencies and Chromium, or configure ATLAS_TEST_PLAYWRIGHT and ATLAS_TEST_BROWSER for an existing browser installation. No runtime browser dependency is added to the app.
+
+The generator writes the opaque 1024px iOS catalog icon and five Android densities for legacy, round and transparent adaptive foreground icons. icon-manifest.json records the canonical SVG digest, renderer version and artifact hashes. Mobile tests check dimensions, Apple opacity, adaptive transparency, source freshness and real RGB pixels in the negative space; regenerate after changing the source vector. App Store screenshots, final launch screens and physical-device masking review remain release work.

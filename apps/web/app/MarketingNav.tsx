@@ -19,7 +19,7 @@ export function MarketingNav() {
 
 export function MarketingFooter() {
   return <footer className="marketing-footer">
-    <div><b>ATLAS</b><p>An AI assistant that writes code in your GitHub projects and does browser work on your computer, checking with you before anything important.</p></div>
+    <div><b>ATLAS</b><p>An autonomous software platform for repositories, websites and apps—with child agents, computer control and persistent automation. From idea to operation.</p></div>
     <div>{LINKS.map((link) => <Link key={link.href} href={link.href}>{link.label}</Link>)}<Link href="/investors">Vision</Link></div>
     <div><Link href="/setup">Connections</Link><Link href="/owner">Owner sign-in</Link><Link href="/legal/privacy">Privacy</Link><Link href="/legal/terms">Terms</Link><Link href="/delete-account">Delete account</Link></div>
     <small>© {new Date().getFullYear()} Atlas</small>

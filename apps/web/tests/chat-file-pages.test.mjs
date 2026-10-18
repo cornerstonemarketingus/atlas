@@ -64,7 +64,13 @@ test('real file previews retain distinct pages and render partial ranges without
     return 'data:text/javascript;base64,' + Buffer.from(js).toString('base64');
   }
   const messageBody = await component('MessageBody');
-  const { itemFromPreview, FilePreview } = await import(await component('Workspace', { './MessageBody.js': messageBody }));
+  const { itemFromPreview, FilePreview } = await import(await component('Workspace', {
+    './MessageBody.js': messageBody,
+    './scroll-follow.mjs': new URL('../app/chat/scroll-follow.mjs', import.meta.url).href,
+    // Static markup has no stylesheet loader; browser coverage uses the real CSS.
+    './scroll-follow.css': 'data:text/javascript,export {};',
+    './activity-disclosure.css': 'data:text/javascript,export {};',
+  }));
   const first = await runInstantTool(call({}), fixture('x'.repeat(3500)));
   const second = await runInstantTool(call({ offset: first.page.nextOffset, fileSha: sha }), fixture('x'.repeat(3500)));
   const items = [first, second].map(result => itemFromPreview(result.preview));

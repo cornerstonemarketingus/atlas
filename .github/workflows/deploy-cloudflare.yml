@@ -64,6 +64,9 @@ jobs:
           # Dispatch + operator access
           ATLAS_GITHUB_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
           ATLAS_OPERATOR_TOKEN: ${{ secrets.ATLAS_OPERATOR_TOKEN }}
+          # Deployment-owned Genesis node; account GitHub credentials remain on the node.
+          ATLAS_GENESIS_URL: ${{ secrets.ATLAS_GENESIS_URL }}
+          ATLAS_GENESIS_TOKEN: ${{ secrets.ATLAS_GENESIS_TOKEN }}
           # Sign-in. Without ATLAS_SESSION_SECRET no session can be issued at
           # all, so GitHub sign-in fails even with valid OAuth credentials.
           ATLAS_SESSION_SECRET: ${{ secrets.ATLAS_SESSION_SECRET }}
@@ -121,6 +124,8 @@ jobs:
           for name in \
             ATLAS_GITHUB_TOKEN \
             ATLAS_OPERATOR_TOKEN \
+            ATLAS_GENESIS_URL \
+            ATLAS_GENESIS_TOKEN \
             ATLAS_SESSION_SECRET \
             ATLAS_GITHUB_OAUTH_CLIENT_ID \
             ATLAS_GITHUB_OAUTH_CLIENT_SECRET \

@@ -89,6 +89,7 @@ test('real task POST refuses missing history schema before credentials, usage or
       resolveTenantContext: async () => ({ tenantId: 1, role: 'owner', principal: 'operator' }),
       tenantAllowlist: async () => new Set(['owner/repo']), allowedRepositories: () => new Set(['owner/repo']),
       validateTask: body => ({ task: body }), selfModificationDecision: () => ({ allowed: true }), taskStorageReadiness,
+      classifyIntent: () => ({ kind: 'chat' }), createProject: never, userWantsPublic: () => false,
     };
     const { POST } = new Function(...Object.keys(dependencies), compiled + '; return { POST };')(...Object.values(dependencies));
     const response = await POST(new Request('https://atlas.test/api/tasks', { method: 'POST', body: JSON.stringify({ repository: 'owner/repo', branch: 'main', mode: 'coder', objective: 'fixture' }) }));

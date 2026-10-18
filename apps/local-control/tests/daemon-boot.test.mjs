@@ -86,6 +86,22 @@ test("the daemon starts, registers its executors, and serves the session API", a
   const policies = await (await fetch(`${origin}/v1/policies`, { headers: admin })).json();
   assert.ok(policies.policies.length > 0);
 
+  // Exercise CRM discovery through the existing daemon, avoiding another boot
+  // competing with the Windows suite while preserving authenticated coverage.
+  assert.equal((await fetch(`${origin}/v1/tools`)).status, 401);
+  const catalogResponse = await fetch(`${origin}/v1/tools`, { headers: admin });
+  assert.equal(catalogResponse.status, 200);
+  const { tools } = await catalogResponse.json();
+  const crmLookup = tools.find(tool => tool.name === "crm.find_contact");
+  const crmCreate = tools.find(tool => tool.name === "crm.create_contact");
+  assert.equal(crmLookup?.decision, "deny");
+  assert.equal(crmCreate?.decision, "deny");
+  assert.equal(crmCreate.requiresApproval, true);
+  assert.equal(crmCreate.capability, "crm.write");
+  assert.equal("credentials" in crmCreate, false);
+  assert.equal(JSON.stringify([crmLookup, crmCreate]).includes(token), false);
+
+
   // Model health must answer on a machine with no model server running, and
   // must not leak a credential or a raw endpoint into customer-facing copy.
   const health2 = await fetch(`${origin}/v1/models/health`, { headers: admin });

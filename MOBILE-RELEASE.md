@@ -4,6 +4,18 @@ Updated 2026-09-15. This is the release gate for Apple App Store and Google
 Play distribution. The web app remains the product core; a native shell should
 be introduced only when it adds mobile value beyond a wrapped website.
 
+## Current release evidence — 2026-10-17
+
+Native iOS/Android projects exist. The earlier milestone statement saying they were never generated is superseded by this checkpoint. This remains an unsubmitted development app.
+
+- The package pins Capacitor 8.5.2. Native settings now align with its shipped templates: iOS 15, scene lifecycle/URL forwarding, Android SDK 36/minimum 24, and the matching Android build toolchain. Three compatibility tests failed on the previous projects and pass after repair; all ten mobile tests pass.
+- Real cap sync android completed and discovered five native plugins. Doctor confirms Android project configuration, but this host only has Java 8 and lacks an Android SDK. Local native compilation is unavailable. Independent CI run 39007793513 has since compiled the repaired Android debug app and unsigned iOS simulator app and stored both artifacts. Production signing, actual app launch and physical-device checks have not run.
+- The mobile web asset now boots a development paired-device dashboard using native HTTP and vault adapters. Hosted account login and exact mobile approval decisions remain incomplete. Browser and real local-daemon contract acceptance do not establish physical-device or production HTTPS acceptance. Complete those paths before treating a native package as releasable.
+- Public mobile association URLs returned 404 in the latest read-only website audit. Signing identifiers, real link handling, push delivery, biometric decisions, auth/account deletion and billing need end-to-end acceptance.
+- Pinned installation reported three moderate development-tool advisories through CLI/xcode/uuid. No forced downgrade or major override was applied. Review compatible upstream fixes; this is not a clean security audit.
+
+References: [Capacitor 8 migration](https://capacitorjs.com/docs/updating/8-0), [8.5 scene lifecycle](https://capacitorjs.com/docs/updating/8-5), and [customer readiness audit](docs/CUSTOMER-READINESS-AUDIT.md). Static compatibility checks and synchronization do not replace native builds or store review.
+
 ## Ready now
 
 - Responsive authenticated web control plane and phone-width setup center.
@@ -98,3 +110,7 @@ with Xcode and a machine with Android Studio:
 - [ ] Accessibility, rotation, dark mode and large-text passes on both
       platforms.
 - [ ] Sign in with Apple, which is still the open P0 item above.
+
+### Paired launch follow-through — 2026-10-17
+
+A bundled pairing/count dashboard now replaces the placeholder on the native launch branch. See docs/MOBILE-PAIRED-LAUNCH.md. It requires the existing daemon behind a trusted HTTPS endpoint and stores the paired-device credential in the platform vault. Exact mobile approval decisions and hosted account login are still unavailable; owner-device review remains required. Local Chromium acceptance uses native-adapter emulation, not a physical-device/live-service result. The earlier native compiler artifacts predate this launcher and do not validate it.
