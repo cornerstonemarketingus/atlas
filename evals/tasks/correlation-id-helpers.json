@@ -1,0 +1,32 @@
+{
+  "id": "correlation-id-helpers",
+  "category": "feature",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "ef5fc0875420592d478f715624a2aeaf02e9acf2",
+  "objective": "Add scripts/runner/correlation.mjs with the correlation-id helpers the runner scripts need: CORRELATION_ID_PATTERN (cor_ plus 32 lowercase hex), isCorrelationId, correlationIdFromEnv (reads ATLAS_CORRELATION_ID then CORRELATION_ID, null unless valid, never echoing bad input), correlationLogSuffix, correlationFooter and withCorrelationId. Invalid ids add nothing. scripts/runner/correlation.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "55db4bb979b74194081e4e83662d27969c54100f",
+    "paths": [
+      "scripts/runner/correlation.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "scripts/runner/correlation.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "55db4bb979b74194081e4e83662d27969c54100f",
+    "paths": [
+      "scripts/runner/correlation.mjs"
+    ]
+  },
+  "timeoutMs": 120000,
+  "tags": [
+    "history",
+    "runner",
+    "security"
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "id": "actions-budget-unknown-blocks",
+  "category": "bug-localization",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "64ae89a9949acda38752a7d8f757fc38de5c3aae",
+  "objective": "The Actions budget guard in scripts/runner/actions-budget.mjs fails open: when billing usage cannot be read the run proceeds. Make an unknown budget block by default, with ATLAS_ACTIONS_UNKNOWN_POLICY=allow as the explicit opt-out and any other value blocking. Export budgetVerdict(usage, environment) and runBudgetCheck(environment, read) as the tests in scripts/runner/actions-budget.test.mjs describe; negative or non-finite usage counts as unknown, and error text from the billing call must not be echoed. When ATLAS_OUTPUT_DIR is set the check writes budget.json (the verdict) and, when blocking, status.json with status 'blocked'; renderResult and renderRunSummary accept the budget and show a line 'Actions budget: <DECISION> \u2014 <action>. <reason>' (see the tests).",
+  "setup": {
+    "fromCommit": "5ca86f0ea16a59d018a0c01116caae9881844b54",
+    "paths": [
+      "scripts/runner/actions-budget.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "scripts/runner/actions-budget.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "5ca86f0ea16a59d018a0c01116caae9881844b54",
+    "paths": [
+      "scripts/runner/actions-budget.mjs",
+      "scripts/runner/report-result.mjs",
+      "scripts/runner/run-summary.mjs"
+    ]
+  },
+  "timeoutMs": 120000,
+  "tags": [
+    "history",
+    "runner",
+    "safety"
+  ]
+}

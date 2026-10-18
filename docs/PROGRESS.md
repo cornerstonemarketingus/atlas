@@ -596,3 +596,14 @@ separate live-health/business outcome adapters. No live business action claimed.
 
 
 Account overview344 integration: original d8678f0 ALL CI passed, but a concurrent main merge caused a documentation-only conflict before merge. Integrated current main482948b preserving both business and account progress entries. No runtime source conflicts. Focused lint/typecheck and fullweb500pass3optional skips were established before integration; fresh complete CI is required at the integrated head. No merge or deployment claimed.
+
+## 2026-10-18 — eval harness, first slice (#128, PROGRAM 2.1)
+
+Took over stale workstream #128 (claim from 2026-09-27, no code on main). Adds `packages/atlas-eval` (dependency-free): EvalTask/EvalResult validation, a runner that checks out each task's base commit into a throwaway worktree, runs an agent, then runs the task's own verify command (pass = verify exits 0 with files changed; agent claims are ignored), JSON/Markdown reports, an `atlas code` adapter (key passed by env-var name only, child gets no other env), and `validate`, a no-model dry run proving each task fails untouched and passes with its recorded solution. Ten tasks in `evals/tasks`: six from real commits, four repository questions checked by `evals/verifiers/answer-check.mjs`. Docs: docs/EVALS.md.
+
+Evidence: 16 package tests pass; `validate` 10/10 tasks valid; mutation checks (agent claim counted, env allowlist removed, cleanup removed, no-change guard removed) each make the matching tests fail. No baseline pass rate: no provider key in this environment, and nothing in this PR claims one. Open: CI wiring (`atlas-eval.yml`, protected, owner review), dogfood log (2.2), tasks for test repair/tool args/review/final synthesis/browser, growth to 30–50, Groq Batch. Next: CI workflow PR, then dogfood log, then a baseline run once a credential exists.
+
+## 2026-10-18 — eval workflow and dogfood log (#128, PROGRAM 2.1–2.2)
+
+Two follow-ups to the harness PR #348. #349 (protected, owner review): `atlas-eval.yml` validates every fixture on PRs touching the harness (no secrets) and runs a real target only on `workflow_dispatch`. Dogfood PR: `evals/dogfood/log.jsonl` is hash-chained and append-only; entries reject credential-shaped text; `dogfood drafts` turns failure classes seen 3+ times into non-runnable draft tasks with evidence. Tests: 19/19 in the package; mutation checks (chain check removed, secret guard removed, successes counted as failures) each fail tests. The log starts empty on purpose. Still open: baseline run (needs a provider key), tasks for test repair/tool args/review/final synthesis/browser, growth to 30–50, Groq Batch. Next: merge #348 → #349, then grow tasks.
+
