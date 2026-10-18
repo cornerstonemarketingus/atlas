@@ -28,7 +28,9 @@ function startDaemon(environment) {
   return { child, read: () => output };
 }
 
-async function waitForHealth(origin, read, child, timeoutMs = 15_000) {
+// A healthy boot takes about 8 s on a GitHub Windows runner and has exceeded
+// 15 s on a slow one with no change to boot; an exit still fails at once.
+async function waitForHealth(origin, read, child, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`The daemon exited with code ${child.exitCode}:\n${read()}`);
