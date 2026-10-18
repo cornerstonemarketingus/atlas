@@ -15,6 +15,8 @@ import { ReasoningAccumulator, publicErrorMessage, stripInlineReasoning } from "
 import { extractPdfText, loadAttachment, normalizeAttachment, toModelContent, AttachmentError } from "../src/agent/attachments.mjs";
 import { createSpeechTranscriber } from "../src/agent/speech.mjs";
 import { PlatformTaskStore } from "../src/platform/task-store.mjs";
+import { createKernel } from "../src/agent/kernel/kernel.mjs";
+import { WorldState } from "../src/agent/kernel/world-state.mjs";
 
 /** Builds an SSE body the way an OpenAI-compatible server streams one. */
 function sseResponse(frames) {
@@ -399,6 +401,58 @@ test("the conversation loop streams incrementally, calls a tool, and answers", a
 
   // The tool result was fed back to the model on the second call.
   assert.match(JSON.stringify(seen[1].messages), /file contents: 42/u);
+});
+
+test("each chat turn is a kernel run: traced, recorded in the world state, and the next turn perceives it", async (t) => {
+  const world = new WorldState();
+  t.after(() => world.close());
+  const registry = openRegistry();
+  registry.register({
+    name: "repository.read", description: "Read a file.", capability: "repository.read", risk: "low",
+    timeoutMs: 1000, maxOutputCharacters: 500, requiresApproval: false,
+    inputSchema: { type: "object", required: ["path"], properties: { path: { type: "string", maxLength: 100 } } },
+    execute: async () => "file contents: 42",
+  });
+  const { client, seen } = scriptedClient([
+    [{ choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "repository.read", arguments: '{"path":"a.txt"}' } }] } }] }, doneFrame("tool_calls")],
+    [textFrame("It says 42."), doneFrame("stop")],
+    [textFrame("Still 42."), doneFrame("stop")],
+  ]);
+  const executor = createConversationExecutor({ client, registry, kernel: createKernel({ toolRegistry: registry, world }) });
+  const { runtime } = await harness(t, { executor, registry });
+  const session = runtime.createSession({ title: "Chat", repository: "/tmp/repo", model: "local", executor: "conversation" });
+  runtime.submitTurn(session.id, { text: "What does a.txt say?" });
+  await runtime.drain();
+
+  const [run] = world.find({ type: "run" });
+  assert.equal(run.attrs.status, "answered");
+  assert.equal(run.attrs.goal, "What does a.txt say?");
+  assert.deepEqual(world.traceOf(run.key).map((e) => e.phase), ["goal", "mount", "perceive", "act", "verify", "finish"]);
+  assert.ok(world.relations(run.id).some((e) => e.relation === "part_of" && e.to === `task:chat:${session.id}`));
+  assert.equal(world.get("file:/tmp/repo:a.txt").attrs.lastStatus, "succeeded");
+  assert.doesNotMatch(JSON.stringify(seen[0].messages), /world state/u, "nothing to perceive on the first turn");
+
+  runtime.submitTurn(session.id, { text: "And now?" });
+  await runtime.drain();
+  assert.equal(world.find({ type: "run" }).length, 2);
+  assert.match(JSON.stringify(seen[2].messages), /world state[\s\S]*file:\/tmp\/repo:a.txt/u, "the next turn knows what the last one touched");
+});
+
+test("a chat turn that fails or waits for approval is recorded as such", async (t) => {
+  const world = new WorldState();
+  t.after(() => world.close());
+  const registry = openRegistry();
+  // The model server answers with an error: the turn fails.
+  const { client } = scriptedClient([() => new Response(JSON.stringify({ error: { message: "bad request" } }), { status: 400, headers: { "content-type": "application/json" } })]);
+  const executor = createConversationExecutor({ client, registry, kernel: createKernel({ toolRegistry: registry, world }) });
+  const { runtime } = await harness(t, { executor, registry });
+  const session = runtime.createSession({ title: "Chat", model: "local", executor: "conversation" });
+  runtime.submitTurn(session.id, { text: "Hello?" });
+  await runtime.drain();
+  const [run] = world.find({ type: "run" });
+  assert.equal(run.attrs.status, "unverified");
+  assert.ok(run.attrs.reason);
+  assert.equal(world.traceOf(run.key).at(-1).phase, "finish");
 });
 
 test("a platform-backed conversation keeps a durable task identity and lifecycle", async (t) => {

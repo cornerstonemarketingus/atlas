@@ -7,6 +7,7 @@ import type {
 import { ReadOnlyToolRegistryError } from "../domain/read-only-tool-registry.js";
 import { ModelProviderError, type ModelMessage, type ModelUsage } from "../model/model-provider.js";
 import { validateModelResponse } from "../model/model-contract-validation.js";
+import { resolveOfferedToolName } from "./tool-name-resolution.js";
 import { boundCoderContext } from "../model/bounded-coder-context.js";
 
 const EMPTY_USAGE: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -131,16 +132,23 @@ export class ProviderReadOnlyToolAgent {
           if (toolCalls > this.#maximumToolCalls) {
             return this.block(request.sessionId, "Tool-call limit reached.", trace());
           }
+          const canonicalName = resolveOfferedToolName(
+            call.name,
+            this.options.tools.map(tool => tool.name),
+            this.options.registry.list().map(tool => tool.name),
+          );
           this.options.audit.append("tool.requested", {
             requestId,
             toolCallId: call.id,
-            toolId: call.name,
+            toolId: canonicalName ?? call.name,
+            ...(canonicalName !== undefined && canonicalName !== call.name ? { requestedToolId: call.name, repair: "automatic" as const } : {}),
             argumentCount: Object.keys(call.arguments).length,
           });
           let result: Awaited<ReturnType<typeof this.options.registry.execute>>;
           try {
+            if (canonicalName === undefined) throw new ReadOnlyToolRegistryError("TOOL_NOT_FOUND", "Tool is not available for this run.");
             result = await this.options.registry.execute({
-              name: call.name,
+              name: canonicalName,
               input: call.arguments,
               scope: request.scope,
               context: { ...request.context, ...(request.signal === undefined ? {} : { signal: request.signal }) },
@@ -157,7 +165,7 @@ export class ProviderReadOnlyToolAgent {
             // decisions, and "try again with something else" is exactly the
             // wrong thing to invite after one.
             if (!(error instanceof ReadOnlyToolRegistryError) || error.code !== "TOOL_NOT_FOUND") throw error;
-            const availableTools = this.options.registry.list().map((tool) => tool.name);
+            const availableTools = this.options.tools.map((tool) => tool.name);
             this.options.audit.append("tool.completed", {
               toolCallId: call.id,
               outcome: "failed",
@@ -188,9 +196,13 @@ export class ProviderReadOnlyToolAgent {
           });
           if (result.status === "approval-required") {
             this.options.audit.append("session.blocked", { sessionId: request.sessionId, summary: "approval required" });
-            return { status: "approval-required", toolCallId: call.id, toolName: call.name, trace: trace() };
+            return { status: "approval-required", toolCallId: call.id, toolName: canonicalName ?? call.name, trace: trace() };
           }
           if (result.status === "failed") {
+            const properties = this.options.tools.find((tool) => tool.name === canonicalName)?.inputSchema["properties"];
+            const correction = result.errorCode === "INVALID_TOOL_INPUT"
+              ? { validFields: properties && typeof properties === "object" && !Array.isArray(properties) ? Object.keys(properties) : [] }
+              : {};
             this.options.audit.append("tool.completed", {
               toolCallId: call.id,
               outcome: "failed",
@@ -202,7 +214,7 @@ export class ProviderReadOnlyToolAgent {
               role: "tool",
               toolCallId: call.id,
               isError: true,
-              content: [{ type: "text", text: JSON.stringify({ error: result.message, ...(result.errorCode === undefined ? {} : { code: result.errorCode }) }) }],
+              content: [{ type: "text", text: JSON.stringify({ error: result.message, ...correction, ...(result.errorCode === undefined ? {} : { code: result.errorCode }) }) }],
             });
             continue;
           }

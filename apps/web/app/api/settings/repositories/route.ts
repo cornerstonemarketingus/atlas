@@ -5,6 +5,8 @@ import { allowedRepositories } from "../../tasks/dispatch.mjs";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { tenantRepositoryDecision, validateRepositoryReference, validateRepositorySetting } from "./validation.mjs";
 
+import { customerFailure } from "../../customer-failure.mjs";
+
 type Context = { tenantId: number; role: string; principal: string };
 
 /**
@@ -13,14 +15,14 @@ type Context = { tenantId: number; role: string; principal: string };
  * the deployment-wide upper bound on what any tenant can add.
  */
 async function context(request: Request): Promise<Context | Response> {
-  const account = await authenticatedAccount(request);
-  if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
   try {
+    const account = await authenticatedAccount(request);
+    if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
     const resolved = await resolveTenantContext(request, account, getD1());
     if (!resolved) return Response.json({ message: NO_TENANT_MESSAGE }, { status: 403 });
     return resolved;
-  } catch (error) {
-    return Response.json({ message: toErrorMessage(error) }, { status: 500 });
+  } catch {
+    return customerFailure("repository-settings");
   }
 }
 
@@ -36,8 +38,8 @@ export async function GET(request: Request) {
       defaultTenant: await isDefaultTenant(d1, resolved.tenantId),
       canManage: canManageTenant(resolved.role),
     }, { headers: { "cache-control": "no-store" } });
-  } catch (error) {
-    return Response.json({ message: toErrorMessage(error) }, { status: 500 });
+  } catch {
+    return customerFailure("repository-settings");
   }
 }
 
@@ -63,8 +65,8 @@ export async function PUT(request: Request) {
     if (!decision.allowed) return Response.json({ message: decision.error }, { status: decision.status });
     await upsertTenantRepository(d1, resolved.tenantId, validated.setting);
     return Response.json(validated.setting, { status: 200 });
-  } catch (error) {
-    return Response.json({ message: toErrorMessage(error) }, { status: 500 });
+  } catch {
+    return customerFailure("repository-settings");
   }
 }
 
@@ -84,14 +86,7 @@ export async function DELETE(request: Request) {
     const removed = await deleteTenantRepository(getD1(), resolved.tenantId, validated.reference);
     if (!removed) return Response.json({ message: "Repository not found." }, { status: 404 });
     return Response.json({ removed: true, ...validated.reference });
-  } catch (error) {
-    return Response.json({ message: toErrorMessage(error) }, { status: 500 });
+  } catch {
+    return customerFailure("repository-settings");
   }
-}
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.includes("no such")) {
-    return "The tenancy tables are unavailable. Apply D1 migration 0015_tenants before using repository settings.";
-  }
-  return error instanceof Error ? error.message : "Unexpected error.";
 }

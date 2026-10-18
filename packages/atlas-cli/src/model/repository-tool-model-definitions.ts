@@ -87,6 +87,7 @@ export const REPOSITORY_WRITE_MODEL_TOOLS: readonly ModelToolDefinition[] = [
       properties: {
         path: { type: "string", minLength: 1, maxLength: 4096 },
         content: { type: "string" },
+        allowGenerated: { type: "boolean" },
       },
       required: ["path", "content"],
       ...noAdditionalProperties,
@@ -138,6 +139,7 @@ export const REPOSITORY_WRITE_MODEL_TOOLS: readonly ModelToolDefinition[] = [
                 maxLength: 4096,
                 description: "Repository-relative destination path. Required for rename; must be omitted for every other operation.",
               },
+              allowGenerated: { type: "boolean" },
             },
             required: ["operation", "path"],
             oneOf: [

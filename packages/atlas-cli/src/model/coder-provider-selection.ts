@@ -7,7 +7,7 @@
  * observable in production.
  */
 
-export type CoderProviderId = "anthropic" | "groq";
+export type CoderProviderId = "anthropic" | "groq" | "openai" | "workers-ai";
 
 export interface CoderProviderProfile {
   readonly providerId: CoderProviderId;
@@ -23,6 +23,8 @@ export interface CoderProviderProfile {
 }
 
 const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
+  openai: { providerId: "openai", displayName: "OpenAI", defaultApiKeyEnvironmentVariable: "OPENAI_API_KEY", contextWindowTokens: 128_000, maxOutputTokensPerTurn: 8_192 },
+  "workers-ai": { providerId: "workers-ai", displayName: "Cloudflare Workers AI", defaultApiKeyEnvironmentVariable: "ATLAS_WORKERS_AI_TOKEN", contextWindowTokens: 131_072, maxOutputTokensPerTurn: 8_192 },
   groq: {
     providerId: "groq",
     displayName: "Groq",
@@ -49,10 +51,10 @@ const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
   },
 };
 
-export const CODER_PROVIDER_IDS: readonly CoderProviderId[] = ["anthropic", "groq"];
+export const CODER_PROVIDER_IDS: readonly CoderProviderId[] = ["anthropic", "groq", "openai", "workers-ai"];
 
 export function isCoderProviderId(value: string): value is CoderProviderId {
-  return value === "anthropic" || value === "groq";
+  return value === "anthropic" || value === "groq" || value === "openai" || value === "workers-ai";
 }
 
 /**
@@ -65,7 +67,10 @@ export function isCoderProviderId(value: string): value is CoderProviderId {
  * existing caller (including the workflow) already means.
  */
 export function inferCoderProviderId(model: string): CoderProviderId {
-  return /^(anthropic\/)?claude[-.]/iu.test(model.trim()) ? "anthropic" : "groq";
+  const name = model.trim();
+  if (name.startsWith("@cf/")) return "workers-ai";
+  if (/^(?:gpt-|o[134](?:-|$))/iu.test(name)) return "openai";
+  return /^(anthropic\/)?claude[-.]/iu.test(name) ? "anthropic" : "groq";
 }
 
 export interface CoderProviderSelectionInput {
