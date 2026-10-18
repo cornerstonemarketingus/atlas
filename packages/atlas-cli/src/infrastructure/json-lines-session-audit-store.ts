@@ -222,7 +222,7 @@ const payloadKeys: Record<SessionEventType, readonly string[]> = {
   "session.completed": ["sessionId", "summary"], "session.blocked": ["sessionId", "summary"], "session.failed": ["sessionId", "summary"],
   "model.requested": ["requestId", "providerId", "modelId", "messageCount", "inputCharacters", "toolsOffered", "contentDigest"],
   "model.responded": ["requestId", "responseId", "finishReason", "inputTokens", "outputTokens", "outputCharacters", "toolCallCount", "contentDigest"],
-  "tool.requested": ["requestId", "toolCallId", "toolId", "argumentCount", "argumentsDigest"],
+  "tool.requested": ["requestId", "toolCallId", "toolId", "argumentCount", "argumentsDigest", "requestedToolId", "repair"],
   "tool.policy_decided": ["toolCallId", "decision", "ruleId", "reason"],
   "tool.completed": ["toolCallId", "outcome", "durationMs", "resultCharacters", "resultDigest", "errorCode"],
   "budget.updated": ["inputTokens", "outputTokens", "toolCalls", "elapsedMs", "costMicrounits"],
@@ -261,7 +261,7 @@ function validatePayload(type: SessionEventType, p: Record<string, unknown>): bo
     case "session.completed": case "session.blocked": case "session.failed": return s("sessionId") && s("summary");
     case "model.requested": return s("requestId") && s("providerId") && s("modelId") && n("messageCount") && n("inputCharacters") && n("toolsOffered") && s("contentDigest", true);
     case "model.responded": return s("requestId") && s("responseId", true) && s("finishReason") && n("inputTokens") && n("outputTokens") && n("outputCharacters") && n("toolCallCount") && s("contentDigest", true);
-    case "tool.requested": return s("requestId") && s("toolCallId") && s("toolId") && n("argumentCount") && s("argumentsDigest", true);
+    case "tool.requested": return s("requestId") && s("toolCallId") && s("toolId") && n("argumentCount") && s("argumentsDigest", true) && ((p["requestedToolId"] === undefined && p["repair"] === undefined) || (s("requestedToolId") && p["repair"] === "automatic"));
     case "tool.policy_decided": return s("toolCallId") && ["allow", "ask", "deny"].includes(String(p["decision"])) && s("ruleId", true) && s("reason");
     case "tool.completed": return s("toolCallId") && ["succeeded", "failed", "cancelled"].includes(String(p["outcome"])) && n("durationMs") && n("resultCharacters") && s("resultDigest", true) && s("errorCode", true);
     case "budget.updated": return n("inputTokens") && n("outputTokens") && n("toolCalls") && n("elapsedMs") && n("costMicrounits");

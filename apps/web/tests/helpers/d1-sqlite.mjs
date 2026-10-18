@@ -32,6 +32,12 @@ export function d1FromSqlite(db) {
       return row;
     },
     all: async () => ({ success: true, results: db.prepare(sql).all(...params).map(plain) }),
+    // Drizzle's D1 driver reads rows as arrays of column values.
+    raw: async () => {
+      const prepared = db.prepare(sql);
+      prepared.setReturnArrays(true);
+      return prepared.all(...params).map((row) => [...row]);
+    },
     run: async () => {
       const result = db.prepare(sql).run(...params);
       return { success: true, meta: { changes: Number(result.changes), last_row_id: Number(result.lastInsertRowid) } };

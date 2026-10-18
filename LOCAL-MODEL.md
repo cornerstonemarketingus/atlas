@@ -1,5 +1,27 @@
 # Running Atlas on your own model
 
+## Free local web chat choices
+
+With Ollama running and the models installed, run from the repository root:
+
+```powershell
+node scripts/local/setup-chat.mjs --configure
+cd apps/web
+npm run dev
+```
+
+Setup checks real replies from installed Qwen 0.6B, Qwen 1.7B, and Qwen
+Coder 1.5B, then writes verified choices to ignored `apps/web/.dev.vars`.
+The chat's Model menu lists each configured model. Selecting one pins the
+reply to that model; Automatic retains the model pool and provider recovery.
+Local Ollama needs no provider account or API key and uses your PC's resources.
+Small local Qwen models disable reasoning so the reply budget reaches the answer.
+
+Set `ATLAS_CHAT_BASE_URL`, `ATLAS_CHAT_MODEL`, and comma-separated
+`ATLAS_CHAT_MODELS` for manual setup. A deployed Worker cannot reach your PC's
+localhost: use the existing authenticated model gateway and HTTPS tunnel for
+hosted self-hosted chat, or an already configured hosted provider.
+
 Atlas can drive a model you host instead of a vendor API. The agent's client is
 an ordinary OpenAI chat-completions client, so anything that speaks that
 protocol works: vLLM, Ollama, llama.cpp's server, TGI, LM Studio, or a rented
@@ -100,15 +122,16 @@ remaining Actions allowance before it starts and refuses if the run would eat
 into a reserve held back for ordinary CI:
 
 ```
-ATLAS_ESTIMATED_RUN_MINUTES   = 120   (what a CPU run costs; default)
+ATLAS_ESTIMATED_RUN_MINUTES   = 120   (conservative reservation; configurable)
 ATLAS_ACTIONS_MINUTES_RESERVE = 300   (kept free for CI; default)
 ```
 
-It **fails open**. If the budget cannot be read — the token has no billing
-permission, the API is down — the run proceeds and prints why it could not
-check. A permissions gap that silently blocked every run would get the guard
-switched off, and a guard that is off protects nothing. Hosted-API runs are
-not checked at all: three minutes does not need a guard.
+Unreadable usage is **UNKNOWN** and blocks self-hosted coder runs by default.
+Set `ATLAS_ACTIONS_UNKNOWN_POLICY=allow` explicitly for workloads permitted to
+continue without a verified budget. The UNKNOWN verdict remains in `budget.json`,
+the job summary, and the hosted task result. Invalid policy values block; this
+override never bypasses a known insufficient allowance. Hosted-API runs and
+ordinary CI do not invoke this guard.
 
 **Try it once by hand before trusting it to the schedule.** Dispatch
 `atlas-coder.yml` manually with the variables set and read the timings in the

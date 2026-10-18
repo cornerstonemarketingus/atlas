@@ -34,6 +34,9 @@ const SCENARIOS = [
   ["Build me a booking website for my landscaping company.", "web-app"],
   ["Build a website for my roofing company", "static-site"],
   ["Build a REST API for managing inventory items", "api-service"],
+  // Sign-in switched on: the generated tests run as the owner and check the gate.
+  ["Build a small app where my team can log in and track tasks", "web-app"],
+  ["Build a REST API for managing inventory items with user accounts and login", "api-service"],
 ];
 
 for (const [prompt, expected] of SCENARIOS) {
@@ -57,6 +60,9 @@ for (const [prompt, expected] of SCENARIOS) {
     if (expected !== "static-site") {
       const config = JSON.parse(readFileSync(join(workspace.folder, "app.config.json"), "utf8"));
       assert.deepEqual(config.entities.map((e) => e.name), spec.entities.map((e) => e.name));
+      assert.equal(config.auth.required, /log ?in/u.test(prompt), "sign-in is on exactly when asked for");
+      assert.deepEqual(config.jobs.map((job) => job.name), config.auth.required ? ["purge-expired-sessions"] : []);
+      for (const file of ["src/auth.mjs", "src/files.mjs", "src/secrets.mjs", "src/jobs.mjs", "src/cron.mjs", "tests/backend.test.mjs"]) assert.ok(existsSync(join(workspace.folder, file)), file);
       if (/booking/u.test(prompt)) {
         assert.equal(config.booking.entity, "bookings");
         assert.ok(config.entities[0].fields.find((f) => f.key === "date").required, "a booking needs a date");

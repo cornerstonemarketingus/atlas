@@ -85,7 +85,8 @@ test("plans are bounded tasks with dependencies, verification and a named execut
     assert.ok(plan.tasks.some((t) => t.executor === "browser"), "every plan opens the running app");
   }
   const withAuth = planProject(inferSpecification("Build a small app where my team can log in and track tasks, and email me reminders"));
-  assert.ok(withAuth.tasks.some((t) => /sign-in/u.test(t.title) && t.executor === "coder"));
+  assert.ok(withAuth.tasks.some((t) => /sign-in/u.test(t.title) && t.executor === "template"), "password sign-in is a template module");
+  assert.ok(planProject(inferSpecification("Build an app for my team with sign in with google")).tasks.some((t) => /google sign-in/iu.test(t.title) && t.executor === "coder"));
   assert.ok(withAuth.tasks.some((t) => /email/u.test(t.title) && /off by default/u.test(t.objective)));
   assert.equal(planProject(inferSpecification("Build a website for my roofing company")).template, "static-site");
   assert.equal(planProject(inferSpecification("Build a REST API for managing inventory items")).template, "api-service");

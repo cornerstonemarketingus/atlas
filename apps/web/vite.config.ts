@@ -55,6 +55,9 @@ export default defineConfig(async ({ command }) => {
     durable_objects: {
       bindings: [{ name: "INFERENCE_GOVERNOR", class_name: "InferenceGovernorObject" }],
     },
+    // Workers AI as the Worker's own account: no API token, cannot point at
+    // another account. Chat prefers it over ATLAS_WORKERS_AI_TOKEN.
+    ai: { binding: "AI" },
     migrations: [{ tag: "v1-inference-governor", new_sqlite_classes: ["InferenceGovernorObject"] }],
     r2_buckets: r2
       ? [
