@@ -140,20 +140,42 @@ function servicesFor(spec) {
   return list.map(([title, text]) => ({ title, text }));
 }
 
+/** Plain, factual one-liners for the services owners most often list. Anything else gets a neutral sentence, never a claim. */
+const SERVICE_BLURBS = [
+  [/fram/iu, "Wood framing for new-construction projects."],
+  [/window/iu, "Window installation for new construction."],
+  [/door/iu, "Exterior door installation for new construction."],
+  [/housewrap|house wrap|weather barrier/iu, "Housewrap installed as part of the building envelope."],
+];
+const blurbFor = (service) => SERVICE_BLURBS.find(([pattern]) => pattern.test(service))?.[1] ?? `${service}.`;
+
+const PLACEHOLDER = (what) => `[Add ${what} here before you publish.]`;
+
 function siteConfig(spec) {
+  const named = spec.services?.length > 0;
   const who = spec.business?.kind ? `${spec.business.kind[0].toUpperCase()}${spec.business.kind.slice(1)}` : spec.name;
-  const services = servicesFor(spec);
+  const services = named ? spec.services.map((title) => ({ title, text: blurbFor(title) })) : servicesFor(spec);
   const trade = spec.business?.phrase ?? "business";
+  const place = spec.location ? [spec.location.city, spec.location.region].filter(Boolean).join(", ") : "";
+  const related = (page) => {
+    const words = page.id.split("-").filter((word) => !["and", "the"].includes(word));
+    const matched = services.filter((service) => words.some((word) => service.title.toLowerCase().includes(word.replace(/s$/u, ""))));
+    return matched.length ? matched : services;
+  };
   const pages = spec.pages.map((page) => {
     const base = { id: page.id, title: page.title };
-    if (page.id === "home") return { ...base, headline: `${who} you can count on`, intro: `Dependable, professional ${spec.business?.kind ? `${spec.business.kind.toLowerCase()} ` : ""}work with clear quotes and friendly service.`, description: `${spec.name}: trusted ${trade} services. Get a free quote today.`.slice(0, 160), sections: [{ type: "cards", title: "What we do", items: services.slice(0, 3) }, { type: "steps", title: "How it works", items: [{ title: "Get in touch.", text: "Tell us what you need." }, { title: "Get a quote.", text: "We visit or call and send a clear price." }, { title: "Job done.", text: "We finish on schedule and tidy up after." }] }] };
-    if (page.id === "services") return { ...base, headline: "Our services", intro: `Everything ${spec.name} can help you with.`, description: `Services offered by ${spec.name}.`.slice(0, 160), sections: [{ type: "cards", title: "Services", items: services }] };
-    if (page.id === "about") return { ...base, headline: `About ${spec.name}`, intro: "Experienced, insured and focused on doing the job properly.", description: `About ${spec.name}: experience, values and service area.`.slice(0, 160), sections: [{ type: "text", title: "Our approach", paragraphs: ["We keep things simple: turn up on time, explain the options, and do work we are proud of.", "Every job gets a clear written quote before we start, and we stand behind our work."] }] };
-    if (page.id === "gallery") return { ...base, headline: "Recent work", intro: "A few of the projects we have completed.", description: `Recent projects by ${spec.name}.`.slice(0, 160), sections: [{ type: "gallery", title: "Projects", items: services.map((service) => service.title), note: "Add your own project photos to replace these tiles." }] };
-    if (page.id === "contact") return { ...base, headline: "Get a free quote", intro: "Send us a message and we will get back to you within one working day.", description: `Contact ${spec.name} for a free quote.`.slice(0, 160), sections: [{ type: "contact", title: "Contact us", text: "Tell us a little about the job and the best way to reach you." }] };
+    if (page.id === "home") return { ...base, headline: named ? `${spec.name}${place ? ` in ${place}` : ""}` : `${who} you can count on`, intro: named ? `${services.map((service) => service.title.replace(/^./u, (c) => c.toLowerCase())).join(", ").replace(/^./u, (c) => c.toUpperCase())}${place ? ` for projects in ${place} and nearby` : ""}.` : `Dependable, professional ${spec.business?.kind ? `${spec.business.kind.toLowerCase()} ` : ""}work with clear quotes and friendly service.`, description: `${spec.name}${place ? `, ${place}` : ""}: ${named ? services.map((service) => service.title.toLowerCase()).join(", ") : `${trade} services`}.`.slice(0, 160), sections: [{ type: "cards", title: "What we do", items: services.slice(0, 4) }, { type: "steps", title: "How it works", items: [{ title: "Get in touch.", text: "Tell us about your project." }, { title: "Get an estimate.", text: "We review the details and respond with next steps." }, { title: "Plan the work.", text: "We confirm scope and schedule with you." }] }] };
+    if (page.id === "services") return { ...base, headline: "Our services", intro: `Everything ${spec.name} can help you with.`, description: `Services offered by ${spec.name}${place ? ` in ${place}` : ""}.`.slice(0, 160), sections: [{ type: "cards", title: "Services", items: services }] };
+    if (page.id === "about") return { ...base, headline: `About ${spec.name}`, intro: `${spec.name}${place ? ` is based in ${place}` : ""}.`, description: `About ${spec.name}${place ? `, ${place}` : ""}.`.slice(0, 160), sections: [{ type: "text", title: "Our company", paragraphs: [PLACEHOLDER("your company story, years in business and crew details"), PLACEHOLDER("licensing, insurance and credentials, only if they are real")] }] };
+    if (page.id === "gallery") return { ...base, headline: "Our work", intro: "Project photos will appear here.", description: `Projects by ${spec.name}.`.slice(0, 160), sections: [{ type: "gallery", title: "Projects", items: services.map((service) => service.title), note: "Add your own project photos to replace these tiles." }] };
+    if (page.id === "contact") return { ...base, headline: "Request an estimate", intro: "Tell us about your project and we will get back to you.", description: `Request an estimate from ${spec.name}${place ? ` in ${place}` : ""}.`.slice(0, 160), sections: [{ type: "contact", title: "Contact us", text: "Tell us a little about the project and the best way to reach you." }] };
+    if (named && spec.services.length) {
+      const items = related(page);
+      return { ...base, headline: page.title, intro: `${page.title} from ${spec.name}${place ? ` in ${place}` : ""}.`, description: `${page.title}: ${items.map((item) => item.title.toLowerCase()).join(", ")} from ${spec.name}.`.slice(0, 160), sections: [{ type: "cards", title: page.title, items }, { type: "text", title: "Details", paragraphs: [PLACEHOLDER(`the materials, methods and project types you handle for ${page.title.toLowerCase()}`)] }] };
+    }
     return { ...base, headline: page.title, intro: page.purpose, description: `${page.title} · ${spec.name}`.slice(0, 160), sections: [{ type: "text", title: page.title, paragraphs: [page.purpose] }] };
   });
-  return { name: spec.name, tagline: `Trusted ${trade} services`, cta: "Get a free quote", contact: { phone: "", email: "", area: "" }, theme: { accent: accentFor(spec) }, pages };
+  return { name: spec.name, tagline: named ? `${services.map((service) => service.title).slice(0, 3).join(", ")}${place ? ` in ${place}` : ""}` : `Trusted ${trade} services`, cta: "Request an estimate", url: "", location: spec.location ?? null, contact: { phone: "", email: "", area: place }, theme: { accent: accentFor(spec) }, pages };
 }
 
 export const TEMPLATES = Object.freeze({

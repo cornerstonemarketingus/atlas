@@ -52,12 +52,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  claim:
+    name: Claim Atlas execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      granted: ${{ steps.claim.outputs.granted }}
+      expires_at: ${{ steps.claim.outputs.expires_at }}
+      run_id: ${{ steps.claim.outputs.run_id }}
+      run_attempt: ${{ steps.claim.outputs.run_attempt }}
+    env:
+      ATLAS_TASK_ID: ${{ inputs.task_id }}
+      ATLAS_REPOSITORY: ${{ inputs.repository }}
+      ATLAS_BRANCH: ${{ inputs.branch }}
+      ATLAS_MODE: ${{ inputs.mode }}
+      ATLAS_OBJECTIVE: ${{ inputs.objective }}
+      ATLAS_CORRELATION_ID: ${{ inputs.correlation_id }}
+      ATLAS_OUTPUT_DIR: ${{ github.workspace }}/atlas-claim
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: cornerstonemarketingus/atlas
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - run: node scripts/runner/validate-inputs.mjs
+      - name: Reserve saved task execution
+        id: claim
+        env:
+          ATLAS_CLAIM_URL: ${{ vars.ATLAS_CLAIM_URL }}
+          ATLAS_RESULT_URL: ${{ vars.ATLAS_RESULT_URL }}
+        run: node scripts/runner/claim-execution.mjs
   run:
+    needs: claim
+    if: ${{ needs.claim.outputs.granted == 'true' && needs.claim.outputs.run_attempt == github.run_attempt }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
+      id-token: none
     env:
+      ATLAS_CLAIM_GRANTED: ${{ needs.claim.outputs.granted }}
+      ATLAS_CLAIM_EXPIRES_AT: ${{ needs.claim.outputs.expires_at }}
+      ATLAS_CLAIM_RUN_ID: ${{ needs.claim.outputs.run_id }}
+      ATLAS_CLAIM_RUN_ATTEMPT: ${{ needs.claim.outputs.run_attempt }}
+      ATLAS_JOB_TIMEOUT_MINUTES: 10
       ATLAS_TASK_ID: ${{ github.event.inputs.task_id }}
       ATLAS_REPOSITORY: ${{ github.event.inputs.repository }}
       ATLAS_BRANCH: ${{ github.event.inputs.branch }}
@@ -77,6 +121,9 @@ jobs:
 
       - name: Validate dispatch inputs
         run: node scripts/runner/validate-inputs.mjs
+
+      - name: Check execution lease before tools
+        run: node scripts/runner/claim-execution.mjs check
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -113,8 +160,8 @@ jobs:
 
   report:
     name: Return results to Atlas
-    needs: run
-    if: always()
+    needs: [claim, run]
+    if: ${{ always() && needs.claim.outputs.granted == 'true' && needs.claim.outputs.run_attempt == github.run_attempt }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

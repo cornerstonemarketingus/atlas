@@ -8,6 +8,50 @@ import { fixtureRepo } from "./helpers.mjs";
 
 const worktrees = (root) => execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8" }).split("\n").filter((line) => line.startsWith("worktree ")).length;
 
+function commitAgentWork(root) {
+  execFileSync("git", ["add", "-A"], { cwd: root });
+  execFileSync("git", ["-c", "user.name=agent", "-c", "user.email=agent@invalid", "commit", "--allow-empty", "-qm", "agent work"], { cwd: root });
+}
+
+test("a committed correct solution counts against the prepared baseline", async () => {
+  const { root, task } = await fixtureRepo();
+  const result = await runTask({ task, target: "committer", repoRoot: root, agent: async (ctx) => {
+    await goldAgent(root)(ctx);
+    commitAgentWork(ctx.root);
+    return {};
+  } });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.evidence.changedPaths, ["add.mjs"]);
+});
+
+test("empty commits and committed changes reverted before verification do not count", async () => {
+  const { root, task } = await fixtureRepo();
+  for (const revert of [false, true]) {
+    const result = await runTask({ task: { ...task, baseCommit: task.solution.fromCommit, setup: {} }, target: "empty", repoRoot: root, agent: async (ctx) => {
+      if (revert) await writeFile(join(ctx.root, "add.mjs"), "temporary change\n");
+      commitAgentWork(ctx.root);
+      if (revert) execFileSync("git", ["checkout", "HEAD^", "--", "add.mjs"], { cwd: ctx.root });
+      return {};
+    } });
+    assert.equal(result.passed, false);
+    assert.equal(result.failureClass, "no_change");
+    assert.deepEqual(result.evidence.changedPaths, []);
+  }
+});
+
+test("change evidence retains exact staged and untracked filenames", async () => {
+  const { root, task } = await fixtureRepo();
+  const result = await runTask({ task, target: "mixed", repoRoot: root, agent: async (ctx) => {
+    await goldAgent(root)(ctx);
+    await writeFile(join(ctx.root, "staged space.txt"), "staged");
+    execFileSync("git", ["add", "staged space.txt"], { cwd: ctx.root });
+    await writeFile(join(ctx.root, "résumé.txt"), "untracked");
+    return {};
+  } });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.evidence.changedPaths, ["add.mjs", "résumé.txt", "staged space.txt"]);
+});
+
 test("the recorded solution passes and doing nothing fails: the dry run proves the task is a real test", async () => {
   const { root, task } = await fixtureRepo();
   const report = await validateFixture({ task, repoRoot: root });

@@ -208,7 +208,8 @@ function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetche
   const url = new URL(endpoint.baseUrl);
   const localQwen = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && /^qwen3:(0\.6b|1\.7b)$/iu.test(endpoint.model);
   reasoningEffort ??= localQwen ? "none" : undefined;
-  return fetcher(completionsUrl(endpoint.baseUrl), {
+  // A provider reached through a Worker binding brings its own transport; everything else is HTTP.
+  return (endpoint.transport ?? fetcher)(completionsUrl(endpoint.baseUrl), {
     method: "POST",
     signal: AbortSignal.timeout(endpoint.timeoutMs ?? REQUEST_TIMEOUT_MS),
     headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
