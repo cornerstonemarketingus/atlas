@@ -665,4 +665,3 @@ suite was interrupted during Genesis fixtures amid shared Windows host load;
 it did not produce a complete passing result. Next: CI on this branch, then a
 trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
-
