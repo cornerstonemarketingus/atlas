@@ -1,45 +1,155 @@
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-/** Expose only authenticated inference, never Ollama's management/download API. */
-export function createGateway({ token, model, upstream = "http://127.0.0.1:11434", fetcher = fetch }) {
-  if (!token || token.length < 32 || !model) throw new Error("A model and a 32+ character gateway token are required");
+/**
+ * The authenticated door between hosted Atlas and a model on your own machine
+ * (Ollama, or any OpenAI-compatible local server).
+ *
+ * Only inference is exposed: GET /v1/models and POST /v1/chat/completions,
+ * behind a 32+ character bearer token. Ollama's management API (pull, delete,
+ * create, copy, push) is never reachable through it.
+ *
+ * It carries what Atlas's chat needs to use the model as its main model:
+ * streaming, tool definitions and tool choice, and long conversations. A local
+ * machine runs a few generations at a time, so requests beyond `concurrency`
+ * wait in a short queue rather than being refused; a full queue, or a wait
+ * that runs out, answers 429 with a retry-after, which hosted Atlas treats like
+ * any provider's rate limit (it routes to its fallback, or waits).
+ */
+
+/** Request fields forwarded to the model server; anything else is dropped. */
+const FORWARDED = ["model", "messages", "stream", "stream_options", "tools", "tool_choice", "parallel_tool_calls", "temperature", "top_p", "max_tokens", "max_completion_tokens", "stop", "seed", "response_format", "reasoning_effort"];
+
+export function createGateway({
+  token,
+  model = null,
+  models = null,
+  upstream = "http://127.0.0.1:11434",
+  fetcher = fetch,
+  concurrency = 1,
+  queueLimit = 8,
+  queueWaitMs = 120_000,
+  maxBodyBytes = 4 * 1024 * 1024,
+  maxMessages = 400,
+  maxTokens = 8192,
+  generationTimeoutMs = 600_000,
+}) {
+  const allowed = new Set(String(models ?? model ?? "").split(",").map((name) => name.trim()).filter(Boolean));
+  if (!token || token.length < 32 || allowed.size === 0) throw new Error("A model and a 32+ character gateway token are required");
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("concurrency must be a whole number of at least 1");
   const expected = Buffer.from(`Bearer ${token}`);
-  let active = false;
+  let active = 0;
+  const waiting = [];
+
+  const release = () => {
+    active -= 1;
+    while (waiting.length && active < concurrency) {
+      const next = waiting.shift();
+      if (next.settled) continue;
+      next.settled = true;
+      clearTimeout(next.timer);
+      active += 1;
+      next.resolve(true);
+    }
+  };
+  /** Resolves true with a generation slot, or false when the wait ran out or the caller left. */
+  const acquire = (response) => {
+    if (active < concurrency) { active += 1; return Promise.resolve(true); }
+    if (waiting.length >= queueLimit) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const entry = { resolve, settled: false, timer: null };
+      const give = () => { if (!entry.settled) { entry.settled = true; clearTimeout(entry.timer); resolve(false); } };
+      entry.timer = setTimeout(give, queueWaitMs);
+      // The response, not the request: a request's "close" fires once its body is read.
+      response.once("close", give);
+      waiting.push(entry);
+    });
+  };
+
   return http.createServer(async (request, response) => {
-    const reply = (status, data) => { response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); response.end(JSON.stringify(data)); };
+    const reply = (status, message, headers = {}) => {
+      if (response.headersSent) { response.end(); return; }
+      response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...headers });
+      response.end(JSON.stringify({ error: { message } }));
+    };
     const supplied = Buffer.from(request.headers.authorization || "");
-    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return reply(401, { error: "Authentication required" });
-    if (request.method === "GET" && request.url === "/v1/models") return reply(200, { object: "list", data: [{ id: model, object: "model", owned_by: "local" }] });
-    if (request.method !== "POST" || request.url !== "/v1/chat/completions") return reply(404, { error: "Not found" });
-    if (active) return reply(429, { error: "Model is busy. Try again shortly." });
-    active = true;
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return reply(401, "Authentication required");
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      return response.end(JSON.stringify({ object: "list", data: [...allowed].map((id) => ({ id, object: "model", owned_by: "local" })) }));
+    }
+    if (request.method !== "POST" || request.url !== "/v1/chat/completions") return reply(404, "Not found");
+
+    let size = 0;
+    const chunks = [];
+    for await (const chunk of request) {
+      size += chunk.length;
+      if (size > maxBodyBytes) return reply(413, "Request too large");
+      chunks.push(chunk);
+    }
+    let body;
+    try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return reply(400, "Invalid JSON"); }
+    if (!body || !allowed.has(body.model) || !Array.isArray(body.messages) || body.messages.length === 0 || body.messages.length > maxMessages) return reply(400, "Unsupported model or request");
+    if (body.tools !== undefined && !Array.isArray(body.tools)) return reply(400, "tools must be a list");
+
+    const forwarded = Object.fromEntries(FORWARDED.filter((field) => body[field] !== undefined).map((field) => [field, body[field]]));
+    for (const field of ["max_tokens", "max_completion_tokens"]) {
+      if (forwarded[field] !== undefined) forwarded[field] = Math.min(maxTokens, Math.max(1, Math.floor(Number(forwarded[field]) || maxTokens)));
+    }
+    if (forwarded.max_tokens === undefined && forwarded.max_completion_tokens === undefined) forwarded.max_tokens = maxTokens;
+    forwarded.stream = body.stream === true;
+
+    if (!(await acquire(response))) {
+      if (response.destroyed) return undefined;
+      return reply(429, "The local model is busy. Try again shortly.", { "retry-after": "5" });
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), generationTimeoutMs);
+    const cancel = () => controller.abort();
+    response.once("close", cancel);
     try {
-      let size = 0;
-      const chunks = [];
-      for await (const chunk of request) {
-        size += chunk.length;
-        if (size > 128000) { reply(413, { error: "Request too large" }); return; }
-        chunks.push(chunk);
-      }
-      let body;
-      try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return reply(400, { error: "Invalid JSON" }); }
-      if (body.model !== model || !Array.isArray(body.messages) || body.messages.length > 30 || body.stream === true) return reply(400, { error: "Unsupported model or request" });
       const result = await fetcher(`${upstream}/v1/chat/completions`, {
-        method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(180000),
-        body: JSON.stringify({ model, messages: body.messages, stream: false, temperature: 0.2, max_tokens: Math.min(1200, Math.max(1, Number(body.max_tokens) || 1200)) }),
+        method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify(forwarded),
       });
-      if (!result.ok) return reply(502, { error: "Local model request failed" });
-      reply(200, await result.json());
-    } catch { reply(504, { error: "Local model did not answer in time" }); }
-    finally { active = false; }
+      if (!result.ok) {
+        // The model server's 4xx (an unsupported tool call, a bad request) goes
+        // back as it is, so Atlas can adapt; a server failure is not detailed.
+        if (result.status >= 400 && result.status < 500) {
+          const text = await result.text().catch(() => "");
+          response.writeHead(result.status, { "content-type": "application/json", "cache-control": "no-store" });
+          return response.end(text || JSON.stringify({ error: { message: "Local model refused the request" } }));
+        }
+        return reply(502, "Local model request failed");
+      }
+      const streaming = (result.headers.get("content-type") ?? "").includes("text/event-stream");
+      response.writeHead(200, { "content-type": streaming ? "text/event-stream" : "application/json", "cache-control": "no-store", ...(streaming ? { "x-accel-buffering": "no" } : {}) });
+      if (!result.body) return response.end();
+      for await (const chunk of Readable.fromWeb(result.body)) {
+        if (!response.write(chunk)) await new Promise((resolve) => response.once("drain", resolve));
+      }
+      return response.end();
+    } catch {
+      if (response.headersSent) return response.end();
+      return reply(504, "Local model did not answer in time");
+    } finally {
+      clearTimeout(timer);
+      response.off("close", cancel);
+      release();
+    }
   });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const server = createGateway({ token: process.env.ATLAS_MODEL_API_KEY, model: process.env.ATLAS_CHAT_MODEL });
-  server.requestTimeout = 30000;
+  const server = createGateway({
+    token: process.env.ATLAS_MODEL_API_KEY,
+    models: process.env.ATLAS_GATEWAY_MODELS || process.env.ATLAS_CHAT_MODEL,
+    upstream: process.env.ATLAS_GATEWAY_UPSTREAM || "http://127.0.0.1:11434",
+    concurrency: Number(process.env.ATLAS_GATEWAY_CONCURRENCY || 1),
+  });
+  // Receiving a request body is quick; generation time is bounded separately.
+  server.requestTimeout = 60_000;
   server.listen(Number(process.env.ATLAS_GATEWAY_PORT || 11435), "127.0.0.1", () => console.log("Atlas model gateway ready on loopback."));
 }

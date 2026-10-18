@@ -59,13 +59,15 @@ const VERDICTS = {
  * others, and that is exactly when a summary is most wanted — so a missing
  * file produces a thinner summary, never an error.
  */
-export function renderRunSummary({ task = null, status = null, code = null } = {}) {
+export function renderRunSummary({ task = null, status = null, code = null, budget = null } = {}) {
   const mode = task?.mode ?? "task";
   const verdict = VERDICTS[status?.status] ?? `❔ ${status?.status ?? "unknown"}`;
   const lines = [`## Atlas ${mode} — ${verdict}`, ""];
 
   const message = truncate(status?.message ?? code?.message ?? "");
   if (message) lines.push(`> ${message.replace(/\r?\n/gu, "\n> ")}`, "");
+
+  if (budget) lines.push(`Actions budget: **${cell(budget.decision).toUpperCase()}** — ${cell(budget.action)}. ${truncate(budget.reason, 400)}`, "");
 
   const rows = [];
   if (task?.task_id) rows.push(["Task", `\`${cell(task.task_id)}\``]);
@@ -171,6 +173,7 @@ function main() {
       task: readJson(directory, "task.json"),
       status,
       code: readJson(directory, "code.json"),
+      budget: readJson(directory, "budget.json"),
     }),
     status?.status,
   );

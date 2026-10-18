@@ -10,6 +10,8 @@ test("a run only belongs to the task whose id it carries in its name", () => {
   assert.equal(runBelongsToTask({ name: `Atlas Coder · task ${TASK}` }, TASK), true);
   assert.equal(runBelongsToTask({ name: "Atlas Coder · task 00000000-0000-4000-8000-000000000000" }, TASK), false);
   assert.equal(runBelongsToTask({ name: "Atlas Coder" }, TASK), false);
+  assert.equal(runBelongsToTask({ name: "Atlas Coder", display_title: `Atlas Coder · task ${TASK}` }, TASK), true);
+  assert.equal(runBelongsToTask({ name: `Atlas Coder · task ${TASK}`, display_title: "Manual run" }, TASK), false);
 });
 
 test("run steps become a readable timeline without plumbing steps", () => {

@@ -94,7 +94,7 @@ test("sends a valid correlation_id to both Atlas workflows, and never a malforme
 test("both Atlas workflows declare correlation_id as optional and pass it only through env", async () => {
   const fs = await import("node:fs");
   for (const name of ["atlas-runner.yml", "atlas-coder.yml"]) {
-    const text = fs.readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), "utf8");
+    const text = fs.readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), "utf8").replaceAll("\r\n", "\n");
     assert.match(text, /\n {6}correlation_id:\n(?: {8}#.*\n)* {8}description: .*\n {8}required: false\n {8}default: ""\n {8}type: string\n/, name);
     for (const line of text.split("\n").filter((entry) => entry.includes("correlation_id }}"))) {
       assert.match(line, /^\s+ATLAS_CORRELATION_ID: \$\{\{ (?:github\.event\.)?inputs\.correlation_id \}\}$/, `${name}: ${line}`);
