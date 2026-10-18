@@ -607,3 +607,12 @@ Evidence: 16 package tests pass; `validate` 10/10 tasks valid; mutation checks (
 
 Two follow-ups to the harness PR #348. #349 (protected, owner review): `atlas-eval.yml` validates every fixture on PRs touching the harness (no secrets) and runs a real target only on `workflow_dispatch`. Dogfood PR: `evals/dogfood/log.jsonl` is hash-chained and append-only; entries reject credential-shaped text; `dogfood drafts` turns failure classes seen 3+ times into non-runnable draft tasks with evidence. Tests: 19/19 in the package; mutation checks (chain check removed, secret guard removed, successes counted as failures) each fail tests. The log starts empty on purpose. Still open: baseline run (needs a provider key), tasks for test repair/tool args/review/final synthesis/browser, growth to 30–50, Groq Batch. Next: merge #348 → #349, then grow tasks.
 
+
+
+## 2026-10-18 — repository settings customer privacy (#357)
+
+Account344 merged c746663 after ALL CI39087720052 passed, deployment39087988081 succeeded, live anonymous account GET exactly signedIn:false passed. Postdeploy configured authenticated inspect39088067813 passed; it is general inspection, not adversarial account fault/payment/deletion acceptance.
+
+Repository settings GET/PUT/DELETE still returned raw storage errors or migration0015 instructions, and auth exceptions escaped their context boundary. Reused existing fixed customerFailure contract (503/reference/no-store); unchanged auth/tenant resolution, owner/admin management, deployment allowlist, default-tenant zero-gate policy, validation and scoped writes. Three actual TypeScript-handler privacy regressions fail prior main; all10focused actual account/settings/validation cases pass after repair, covering auth/tenant/list/default/write faults with private/path/token/table sentinels and successful denial/scoping/mutation behavior. No new tenant policy or credential permissions. Broad checks/CI/deployment pending at this checkpoint. Native329/320 remain held for the already reported protected-signing automatic-review rejection; no bypass or signing edit.
+
+Repository settings validation: production build/typecheck and direct installed ESLint pass; fullweb507tests504pass3optional skips0fail. Npm-wrapper lint was slow; direct installed binary completed successfully. No deployed adversarial settings acceptance claimed. Fresh PR CI remains required.
