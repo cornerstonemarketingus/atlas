@@ -6,6 +6,7 @@ import { dispatchSavedTask, persistTaskIntent, reconcileDispatchRuns, savedDispa
 import { taskStorageReadiness } from "../app/api/tasks/storage-readiness.mjs";
 import { signSession } from "../app/api/auth/session.mjs";
 import { currentPeriodStart } from "../app/api/billing/period.mjs";
+import { dispatchGitHub } from "../app/api/tasks/dispatch.mjs";
 
 const taskId = "11111111-1111-4111-8111-111111111111";
 function fixture(t) {
@@ -56,6 +57,31 @@ test("lost acknowledgement persists an uncertain task without retry or duplicate
   await assert.rejects(dispatchSavedTask(f.d1, f.data, send));
   assert.equal(calls, 1);
   assert.doesNotMatch(JSON.stringify(f.sqlite.prepare("SELECT detail FROM run_events").all()), /private provider detail/);
+});
+
+test("a cancellation-ignoring dispatch is bounded and remains saved as uncertain", { timeout: 5000 }, async t => {
+  const f = fixture(t); let calls = 0; let signal;
+  const outcome = await dispatchSavedTask(f.d1, f.data, () => dispatchGitHub({
+    token: "fixture-token", workflow: "atlas-coder.yml", task: f.data.task, taskId,
+  }, (_url, init) => { calls++; signal = init.signal; return new Promise(() => {}); }, { timeoutMs: 20 }));
+  assert.equal(outcome.state, "unknown");
+  assert.equal(calls, 1);
+  assert.equal(signal.aborted, true);
+  assert.equal(f.sqlite.prepare("SELECT dispatch_state FROM tasks").get().dispatch_state, "unknown");
+  await assert.rejects(dispatchSavedTask(f.d1, f.data, () => assert.fail("uncertain work must not dispatch again")));
+});
+
+test("a response arriving after the dispatch deadline is discarded without replay", { timeout: 5000 }, async t => {
+  const f = fixture(t); let finish; let cancelled = false; let calls = 0;
+  const outcome = await dispatchSavedTask(f.d1, f.data, () => dispatchGitHub({
+    token: "fixture-token", workflow: "atlas-coder.yml", task: f.data.task, taskId,
+  }, () => { calls++; return new Promise(resolve => { finish = resolve; }); }, { timeoutMs: 20 }));
+  assert.equal(outcome.state, "unknown");
+  finish(new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 200 }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cancelled, true);
+  assert.equal(calls, 1);
+  assert.equal(f.sqlite.prepare("SELECT dispatch_state FROM tasks").get().dispatch_state, "unknown");
 });
 
 test("server failures are uncertain; explicit refusals are rejected, with no implicit retry", async t => {

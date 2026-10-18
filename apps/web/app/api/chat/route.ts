@@ -22,6 +22,9 @@ import { governChain } from "../inference/governor-client.mjs";
 import { workerEnv } from "../inference/worker-env.mjs";
 import { createAgentTeam } from "./agent-team.mjs";
 import { instantToolDefinitions } from "./instant-tools.mjs";
+import { genesisBridge } from "../genesis/bridge.mjs";
+import { createProjectTools, userWantsPublic } from "./project-tools.mjs";
+import { classifyIntent } from "../../chat/intent.mjs";
 
 /** How much of a thread is replayed to the model. Enough for continuity, bounded so a long thread cannot grow a request without limit. */
 const HISTORY_TURNS = 20;
@@ -33,6 +36,8 @@ export async function POST(request: Request) {
 
   let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown; stream?: unknown; provider?: unknown };
   try { body = await request.json() as typeof body; } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ message: "Request body must be a JSON object." }, { status: 400 });
 
   const message = typeof body.message === "string" ? body.message.trim().slice(0, MAX_MESSAGE) : "";
   if (!message) return Response.json({ message: "Say something for Atlas to reply to." }, { status: 400 });
@@ -83,16 +88,21 @@ export async function POST(request: Request) {
   }
 
   // Stable prefix first (system prompt, then history) so the provider's prompt cache can reuse it; see turns.mjs.
-  const turns = chatTurns({ system: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository }), history, memory, message, historyTurns: HISTORY_TURNS });
+  const bridge = genesisBridge(process.env, { owner: isDeploymentOwner(account) });
+  const projectCapabilities = await bridge.capabilities({ visibility: userWantsPublic(message) ? "public" : "private" });
+  const projectTools = createProjectTools({ create: bridge.create, status: bridge.status, requestId: randomUUID(), userMessage: message });
+  const turns = chatTurns({ system: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository, projectCapabilities }), history, memory, message, historyTurns: HISTORY_TURNS });
 
-  const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => startRequestedTasks(request, calls, { repository, branch, conversationId });
+  const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => classifyIntent(message).kind === "new_project_task"
+    ? Promise.resolve(["This is a new project request. Use workspace_create_project; do not change the selected repository."])
+    : startRequestedTasks(request, calls, { repository, branch, conversationId });
   const toolContext = { environment: process.env as Record<string, string | undefined>, allowlist, githubToken: memoizedGitHubToken() };
   // The lead (this reply) can hand work to an agent team built on the daemon's planner; see agent-team.mjs.
   const team = createAgentTeam({ endpoint, toolContext });
   const loop = {
     endpoint, turns, toolContext, defaultRepository: repository || SELF_REPOSITORY, userMessage: message, startTasks,
-    tools: [TASK_TOOL, team.definition, ...instantToolDefinitions(toolContext.environment)],
-    handlers: { [team.definition.function.name]: team.handler },
+    tools: [...(classifyIntent(message).kind === "new_project_task" ? [] : [TASK_TOOL]), team.definition, ...instantToolDefinitions(toolContext.environment), ...projectTools.definitions],
+    handlers: { [team.definition.function.name]: team.handler, ...projectTools.handlers },
   };
 
   if (body.stream === true) {

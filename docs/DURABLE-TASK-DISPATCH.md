@@ -38,6 +38,10 @@ not apply production migrations or deploy anything.
 Intent writes cannot attach a task to another principal's conversation. Recovery
 writes cannot change another tenant's task or replace an established run identity.
 HTTP redirects are refused and external dispatch is bounded to ten seconds.
+The acknowledgement deadline is enforced even when an injected transport ignores
+its abort signal. An elapsed deadline leaves the saved task uncertain; no
+automatic retry follows. A late response is discarded and its body cancelled,
+without rewriting the uncertain receipt as success.
 No additional secrets, permissions or execution environments are introduced.
 Tenant-bound persistence requires owner review; this PR is not auto-merge eligible.
 
@@ -67,3 +71,11 @@ The external GitHub service is simulated; these tests do not prove deployment.
 Local validation passed: all 472 web tests, production build, TypeScript check,
 ESLint and `git diff --check`. Removing the conversation principal guard caused
 its negative test to fail; restoring the guard made the test pass again.
+
+2026-10-17 current-main integration: merged main 9443843 into the existing
+branch, retaining Genesis task routing and current chat privacy behavior.
+The cancellation-ignoring fixture exposed an indefinitely pending dispatch;
+the enforced deadline and late-response regressions now pass. Rebuilt Worker
+and full web suite: 507 total, 505 passed, two optional skips, zero failures.
+TypeScript check and whitespace check passed. Fresh PR CI remains required.
+No production migration, dispatch, publishing or credential change performed.

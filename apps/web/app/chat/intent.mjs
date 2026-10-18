@@ -31,7 +31,7 @@ function stripLeadIn(text) {
 /**
  * @param {string} message
  * @param {{ hasProject?: boolean }} [context]
- * @returns {{ kind: "chat" } | { kind: "project_task", mode: "coder"|"debug"|"inspect", reason: string } | { kind: "computer_task", reason: string }}
+ * @returns {{ kind: "chat" } | { kind: "new_project_task", reason: string } | { kind: "project_task", mode: "coder"|"debug"|"inspect", reason: string } | { kind: "computer_task", reason: string }}
  */
 export function classifyIntent(message, { hasProject = false } = {}) {
   const text = typeof message === "string" ? message.trim() : "";
@@ -45,6 +45,10 @@ export function classifyIntent(message, { hasProject = false } = {}) {
   // A question that is not a polite request for work is answered, never dispatched.
   if (!polite && (QUESTION_START.test(body) || (text.endsWith("?") && !COMPUTER_VERBS.test(request) && !Object.values(PROJECT_VERBS).some((verb) => verb.test(request))))) {
     return { kind: "chat" };
+  }
+
+  if (/^(?:create|start|build|make|set\s+up)\b/iu.test(request) && /\b(?:(?:new|separate|own)\s+(?:github\s+)?(?:repo(?:sitory)?|project|app|business|saas)|(?:a|an)\s+(?:github\s+)?repo(?:sitory)?|as\s+(?:its|their)\s+own\s+app)\b/iu.test(request)) {
+    return { kind: "new_project_task", reason: "This creates a separate Genesis workspace and GitHub repository under your publishing policy." };
   }
 
   if (COMPUTER_VERBS.test(request) && (COMPUTER_REFERENCE.test(text) || /^(?:go\s+to|visit|browse|navigate|log\s*in|sign\s+(?:in|up)|fill|apply|book|order|take\s+a\s+screenshot|screenshot)/iu.test(request))) {
