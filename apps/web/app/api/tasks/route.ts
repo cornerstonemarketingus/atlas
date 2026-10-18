@@ -24,6 +24,9 @@ import { selfModificationDecision } from "./self-protection.mjs";
 import { repositoryAccessDecision } from "./repository-access.mjs";
 import { platformGitHubToken } from "./github-token.mjs";
 import { taskStorageReadiness } from "./storage-readiness.mjs";
+import { classifyIntent } from "../../chat/intent.mjs";
+import { POST as createProject } from "../genesis/operations/route";
+import { userWantsPublic } from "../chat/project-tools.mjs";
 
 export async function POST(request: Request) {
   // A caller-supplied x-atlas-correlation-id is honoured only when it is
@@ -41,6 +44,11 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   if (!account) return Response.json({ message: "Sign in is required to create a task." }, { status: 401 });
   let body: unknown;
   try { body = await request.json(); } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
+  const candidate = (body && typeof body === "object" ? body : {}) as { mode?: string; objective?: string; description?: string; name?: string; template?: string; visibility?: string; requestId?: string };
+  if (candidate.mode === "new_project_task" || classifyIntent(candidate.objective ?? "").kind === "new_project_task") {
+    const objective = candidate.description ?? candidate.objective ?? "";
+    return createProject(new Request(request.url, { method: "POST", headers: request.headers, body: JSON.stringify({ requestId: candidate.requestId ?? correlationId, name: candidate.name ?? `atlas-project-${correlationId.slice(-8)}`, description: objective, template: candidate.template ?? "web-app", visibility: candidate.visibility === "public" && userWantsPublic(objective) ? "public" : "private", host: "github" }) }));
+  }
   // Tenancy (#71): the caller's tenant bounds which repositories they may use
   // (its allowlist within ATLAS_ALLOWED_REPOSITORIES) and owns what is recorded.
   let tenant: { tenantId: number; role: string; principal: string } | null;

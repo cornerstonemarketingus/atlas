@@ -21,7 +21,12 @@ returns 503 rather than an empty successful history.
 The existing Build view contains a collapsible **Saved requests** panel. Users can
 refresh, page through history, check an individual request and open a recovered
 task's activity. Opening it starts bounded polling; closing it stops polling and
-aborts the page read. Hidden tabs skip polls. Buttons have mobile-sized touch
+aborts page and individual detail reads. Each open/page generation owns its
+responses: close, refresh, paging, version changes and unmount fence late success
+and failure even if cancellation is ignored. Page/detail reads are single-flight;
+polls cannot overwrite a pending individual check. Batched close/reopen starts
+a new generation rather than leaving a cancelled session inactive.
+Hidden tabs skip polls. Buttons have mobile-sized touch
 targets and the content scrolls within a bounded panel.
 
 ## Evidence and recovery boundaries
@@ -76,3 +81,26 @@ requires owner review; auto-merge is disabled for this workstream.
 
 The shared progress log is owned by active PRs. This document and issue #275
 provide the implementation handoff without overwriting their work.
+
+## 2026-10-17 integrated recovery validation
+
+Updated the existing #270 → #274 → #276 stack with current main 1e0909f,
+including its atomic monthly cap and account/native changes. Resolved only
+appended progress conflicts, retaining both handoffs. No billing, tenant,
+credential or dispatch policy was weakened or reimplemented.
+
+Six component race regressions failed on the original RequestHistory. Nine
+final cases now pass, including an additional batched-toggle case that caught
+an intermediate cancellation/reopen bug. Tests run the actual TSX component
+and GET client with deferred, cancellation-ignoring responses.
+
+Final Worker build, typecheck and full lint passed. Complete web suite: 541 total, 537 passed, four
+optional browser skips, no failures. Actual headless Edge acceptance was run
+separately and passed at desktop and phone widths, covering close/reopen,
+refresh with late responses, keyboard opening, paging, 44-pixel controls,
+GET-only traffic and no page errors. Existing built Worker tests still prove
+scoped list/detail access and unchanged request/task/usage snapshots.
+
+Fresh PR CI and existing persistence review remain required. Browser fixtures
+and SQLite/fault-injected HTTP tests are not live provider, physical-phone,
+production migration or deployment acceptance.
