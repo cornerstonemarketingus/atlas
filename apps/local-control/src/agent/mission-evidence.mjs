@@ -12,12 +12,15 @@ export function createMissionEvidenceVerifier({ patchDirectory, maxBytes = 20 * 
     const required = child.metadata?.requiredEvidence ?? [];
     if (!Array.isArray(required)) throw fail("Evidence requirements must be an array.");
     if (!required.length || ["failed", "cancelled"].includes(result?.status)) return result;
+    if (required.includes("validation")) throw fail("Independent validation is unavailable; executor claims cannot satisfy required validation.");
     if (required.some(kind => kind !== "patch")) throw fail("This executor only verifies patch artifacts.");
     if (!Array.isArray(result?.evidence) || !result.evidence.some(item => item?.kind === "patch")) throw fail("The child returned no patch artifact.");
     const root = await realpath(patchDirectory);
     const evidence = [];
     for (const item of result.evidence) {
-      if (item?.kind !== "patch") { evidence.push(item); continue; }
+      // Preserve executor reports for inspection, but do not let them impersonate
+      // independently evaluated test or operational receipts.
+      if (item?.kind !== "patch") { evidence.push(item && typeof item === "object" ? { ...item, verification: "executor-reported" } : item); continue; }
       if (typeof item.path !== "string" || !isAbsolute(item.path)) throw fail("Patch artifacts require an absolute path.");
       const target = await realpath(resolve(item.path));
       const inside = relative(root, target);
@@ -41,6 +44,18 @@ export function createMissionEvidenceVerifier({ patchDirectory, maxBytes = 20 * 
         evidence.push({ ...item, path: target, bytes: length, sha256, verification: "artifact-verified", verifiedAt: new Date().toISOString() });
       } finally { await handle.close(); }
     }
-    return { ...result, evidence };
+    return {
+      ...result,
+      evidence,
+      // This authoritative receipt replaces executor prose/claims. Hashes bind
+      // the scope to exactly the bytes read here, not future worktree contents.
+      verification: {
+        schemaVersion: 1,
+        evaluator: "mission-artifact-verifier",
+        artifacts: evidence.filter(item => item?.kind === "patch").map(({ sha256, bytes }) => ({ kind: "patch", sha256, bytes })),
+        validation: { status: "unavailable", reason: "No independently evaluated test receipt is available at this boundary." },
+        liveOutcomes: { status: "not-evaluated", reason: "Preparation patches do not establish deployed health or business outcomes." },
+      },
+    };
   };
 }

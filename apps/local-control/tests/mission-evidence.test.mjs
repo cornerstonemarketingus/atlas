@@ -27,6 +27,45 @@ test("required patch evidence is read from disk and receives its actual digest",
   assert.equal(result.evidence[0].verification, "artifact-verified");
 });
 
+test("patch verification replaces executor test-success claims with scoped unavailable receipts", async t => {
+  const { path, verify } = await fixture(t);
+  const result = await verify({ child, result: {
+    verification: { validation: { status: "passed" }, liveOutcomes: { status: "passed" } },
+    evidence: [{ kind: "patch", path }, { kind: "validation", status: "passed", verification: "independently-verified" }],
+  } });
+  assert.equal(result.verification.validation.status, "unavailable");
+  assert.equal(result.verification.liveOutcomes.status, "not-evaluated");
+  assert.deepEqual(result.verification.artifacts, [{ kind: "patch", sha256: result.evidence[0].sha256, bytes: Buffer.byteLength(patch) }]);
+  assert.equal(result.evidence[1].verification, "executor-reported");
+});
+
+test("required validation fails closed even when executor supplies a passed receipt", async t => {
+  const { path, verify } = await fixture(t);
+  await assert.rejects(verify({
+    child: { metadata: { requiredEvidence: ["patch", "validation"] } },
+    result: { evidence: [{ kind: "patch", path }, { kind: "validation", path, bytes: 10, status: "passed" }] },
+  }), /Independent validation is unavailable/);
+});
+
+test("successful mission persists scoped receipts and hands them to descendants", async t => {
+  const { directory, path, verify } = await fixture(t);
+  const store = new LocalTaskStore(":memory:");
+  t.after(() => store.close());
+  let handoff;
+  const service = new MissionService({ store, verifyEvidence: verify, execute: async context => {
+    if (context.child.id === "review") handoff = context.dependencies[0].result;
+    return { verification: { validation: { status: "passed" } }, evidence: [{ kind: "patch", path }] };
+  } });
+  service.create({ id: "scoped", repository: directory, model: "local", children: [
+    { id: "build", dependencies: [], metadata: { requiredEvidence: ["patch"] } },
+    { id: "review", dependencies: ["build"] },
+  ] });
+  for (let count = 0; service.get("scoped").status === "running" && count < 100; count++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(service.get("scoped").status, "completed");
+  assert.equal(handoff.verification.validation.status, "unavailable");
+  assert.equal(store.mission("scoped").snapshot.children[0].result.verification.liveOutcomes.status, "not-evaluated");
+});
+
 test("outside, missing, empty, oversized and falsely described artifacts fail closed", async t => {
   const { directory, path, verify } = await fixture(t);
   const outside = join(directory, "outside.patch");
