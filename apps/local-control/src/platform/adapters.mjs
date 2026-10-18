@@ -1,5 +1,5 @@
 import { defineTool } from "../../../../packages/atlas-contracts/src/index.mjs";
-import { validateAgainstSchema } from "../agent/tool-registry.mjs";
+import { actionDigest, ToolError, validateAgainstSchema } from "../agent/tool-registry.mjs";
 import { registerRepositoryTools } from "../agent/tools/repository-tools.mjs";
 
 /**
@@ -23,7 +23,10 @@ export function adaptRegistryTool(legacy, { context = {}, risk = undefined, cons
     inputSchema: { ...legacy.inputSchema, additionalProperties: false },
     async execute(input, runtimeContext) {
       const prepared = validateAgainstSchema(legacy.inputSchema, input);
-      const output = await legacy.execute({ input: prepared, context: { ...context, ...runtimeContext, signal: runtimeContext.signal } });
+      const request = { input: prepared, context: { ...context, ...runtimeContext, signal: runtimeContext.signal }, signal: runtimeContext.signal,
+        digest: actionDigest({ sessionId: runtimeContext.taskId, tool: legacy.name, input: prepared }) };
+      if ((legacy.credentials?.length ?? 0) > 0 && typeof legacy.executeAuthorized !== "function") throw new ToolError("MISSING_CREDENTIAL", "This tool needs the registered credential resolver.");
+      const output = await (legacy.executeAuthorized ?? legacy.execute)(request);
       return { output, evidence: [{ kind: "legacy_tool", tool: legacy.name, capability: legacy.capability ?? null }] };
     },
   });

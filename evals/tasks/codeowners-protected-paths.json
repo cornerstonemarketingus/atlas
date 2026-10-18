@@ -1,0 +1,28 @@
+{
+  "id": "codeowners-protected-paths",
+  "category": "structured-output",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "857577a09175de1119e472060f81c6ab29be58ff",
+  "objective": "Without changing any source file: list the path patterns that .github/CODEOWNERS protects (the first token of each non-comment line). Write ANSWER.json as {\"paths\": [\"<pattern>\", ...]} sorted alphabetically with duplicates removed.",
+  "setup": {
+    "files": {}
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/answer-check.mjs",
+      "{workspace}",
+      "codeowners-paths"
+    ]
+  },
+  "solution": {
+    "files": {
+      "ANSWER.json": "{\n  \"paths\": [\n    \"/.github/CODEOWNERS\",\n    \"/.github/atlas/\",\n    \"/.github/workflows/\",\n    \"/CLAUDE.md\",\n    \"/apps/browser-worker/src/egress-proxy.mjs\",\n    \"/apps/local-control/src/agent/credential-vault.mjs\",\n    \"/apps/local-control/src/net/ssrf-guard.mjs\",\n    \"/apps/local-control/src/platform/memory/redaction.mjs\",\n    \"/apps/local-control/src/platform/policy.mjs\",\n    \"/apps/local-control/src/platform/self-improve/\",\n    \"/apps/local-control/src/platform/skills/approvals.mjs\",\n    \"/apps/local-control/src/platform/terminal/\",\n    \"/apps/local-control/src/platform/terminal/redaction.mjs\",\n    \"/apps/web/app/api/auth/\",\n    \"/apps/web/app/api/computer/approval-state.mjs\",\n    \"/apps/web/app/api/computer/approvals/\",\n    \"/apps/web/app/api/computer/companion-auth.ts\",\n    \"/apps/web/app/api/computer/companion/approval/\",\n    \"/apps/web/app/api/computer/computer-policy.mjs\",\n    \"/apps/web/app/api/computer/tenant.ts\",\n    \"/apps/web/app/api/tasks/github-app.mjs\",\n    \"/apps/web/app/api/tasks/github-token.mjs\",\n    \"/apps/web/app/api/tasks/operator-auth.mjs\",\n    \"/apps/web/app/api/tasks/self-protection.mjs\",\n    \"/apps/web/app/chatgpt-auth.ts\",\n    \"/apps/web/worker/security-headers.mjs\",\n    \"/apps/windows-companion/src/policy.mjs\",\n    \"/docs/PROGRAM.md\",\n    \"/docs/atlas-os/SECURITY-REVIEW.md\",\n    \"/packages/atlas-cli/src/domain/approval-resume.ts\",\n    \"/packages/atlas-cli/src/domain/change-set-approval.ts\",\n    \"/packages/atlas-cli/src/domain/secret-redaction.ts\",\n    \"/packages/atlas-cli/src/domain/tool-policy.ts\",\n    \"/packages/atlas-cli/src/infrastructure/pattern-secret-redactor.ts\",\n    \"/packages/atlas-cli/src/infrastructure/policy-enforced-read-only-tool-registry.ts\",\n    \"/packages/atlas-cli/src/infrastructure/redacting-model-provider.ts\",\n    \"/packages/atlas-cli/src/presentation/redacted-output.ts\",\n    \"/scripts/local/self-improve.mjs\",\n    \"/scripts/runner/create-coder-pull-request.mjs\",\n    \"/scripts/runner/merge-decision.mjs\",\n    \"/scripts/runner/pull-request-policy.mjs\",\n    \"/scripts/runner/push-repair.mjs\",\n    \"/scripts/runner/steward-plan.mjs\",\n    \"/scripts/runner/steward.mjs\"\n  ]\n}\n"
+    }
+  },
+  "timeoutMs": 120000,
+  "tags": [
+    "read-only",
+    "answer-file"
+  ]
+}
