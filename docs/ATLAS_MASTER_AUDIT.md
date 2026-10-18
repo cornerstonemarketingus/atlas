@@ -54,9 +54,14 @@ All ten workflow checks pass. Runner/local suite: 86 pass, one failure, one
 Linux-only skip (88 total); isolated process suite: five pass, two fail, one
 Linux-only skip. Windows inherited-pipe deadline and observer timing remain
 unresolved. Do not relabel these failures as a passing acceptance run.
-Fresh web validation is pending: npm ci stalled without an error, then was stopped;
-matching-lockfile dependencies are being copied from the verified parent checkout.
-Initial build/lint attempts before dependency completion failed to find binaries.
+Fresh validation: production Worker build and typecheck pass; complete web suite
+551 pass, four optional browser skips (555 total), including all six result tests
+and the callback race. Dependencies were copied from the verified parent after a
+stalled npm ci; lockfile SHA-256 values match. Initial incomplete-install checks
+failed to find binaries. Corrected regression preserves the run linkage already
+established by the claim. CI at 39cadb3 passes web build/tests/lint and eleven other
+jobs; Windows local-control remains pending at this checkpoint. Local full lint
+is still running. No live-provider or physical-phone acceptance is inferred.
 No production migration/deployment, live OIDC, paid infrastructure or secret
 transfer occurred. Migration 0019 and protected owner review remain required.
 Next: finish #282 web validation and fresh CI; then #289 trusted outcome receipts.
