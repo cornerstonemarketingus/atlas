@@ -215,3 +215,17 @@ Run them with:
 ```
 cd apps/local-control && npm test
 ```
+
+### Uncertain consequential outcomes
+
+Once a consequential platform tool starts, failure or timeout does not prove
+that the external action failed to commit. The executor retains an `uncertain`
+idempotency receipt across process restarts, reports the original error as
+nonretryable, and refuses automatic repeats with `ACTION_OUTCOME_UNKNOWN`.
+Read-only failures and actions refused before execution retain their existing
+retry behavior. Operators must reconcile the external state before deliberately
+starting a new action; no automatic expiry or receipt-clearing endpoint is added.
+An interrupted in-flight receipt also remains a barrier rather than expiring
+into another mutation. This protects identical task/principal/context actions;
+a different task or changed arguments require their own authorization and are
+not an external service's global idempotency guarantee.

@@ -6,7 +6,7 @@ import test from "node:test";
 import { idempotencyKey } from "../../../packages/atlas-contracts/src/index.mjs";
 import { AuthorizedToolExecutor, PlatformTaskStore, PolicyEngine } from "../src/platform/index.mjs";
 
-async function fixture(t, { consequential = true, execute = async () => ({ output: "done" }), knownSecrets = [] } = {}) {
+async function fixture(t, { consequential = true, execute = async () => ({ output: "done" }), knownSecrets = [], timeoutMs = 30000 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "atlas-approval-boundary-"));
   const filename = join(directory, "tasks.sqlite");
   let now = Date.parse("2030-01-01T00:00:00Z");
@@ -17,7 +17,7 @@ async function fixture(t, { consequential = true, execute = async () => ({ outpu
   const makeExecutor = () => {
     const executor = new AuthorizedToolExecutor({ store, policy, clock, approvalTtlMs: 1000, approvalContext: () => repository, knownSecrets });
     executor.register({ name: "demo.action", description: "Test action", risk: consequential ? "high" : "read", consequential,
-      inputSchema: { type: "object", properties: { text: { type: "string" } }, additionalProperties: false }, execute });
+      inputSchema: { type: "object", properties: { text: { type: "string" } }, additionalProperties: false }, execute }, { timeoutMs });
     return executor;
   };
   let executor = makeExecutor();
@@ -199,3 +199,27 @@ test("nested cookie collections cannot expose opaque session credentials", async
   assert.equal(result.result.output.credentialRef, "BROWSER_SESSION");
   assert.equal(JSON.stringify(h.store.getToolCalls("a", h.request.taskId)).includes("opaque-browser-session"), false);
 });
+
+for (const failure of ["lost acknowledgement", "timeout"]) {
+  test(`consequential ${failure} blocks automatic replay across restart`, async (t) => {
+    let effects = 0;
+    const h = await fixture(t, { timeoutMs: 20, execute: async () => {
+      effects += 1;
+      if (failure === "timeout") await new Promise(resolve => setTimeout(resolve, 60));
+      const error = new Error("Remote result unavailable after commit");
+      error.retryable = true;
+      throw error;
+    } });
+    const approvalId = await h.approve();
+    const first = await h.executor.invoke({ ...h.request, approvalId });
+    assert.equal(first.status, "failed");
+    assert.equal(first.result.error.code, failure === "timeout" ? "TIMEOUT" : "TOOL_ERROR");
+    assert.equal(first.result.error.retryable, false);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    h.reopen();
+    const retry = await h.executor.invoke(h.request);
+    assert.equal(retry.result.error.code, "ACTION_OUTCOME_UNKNOWN");
+    assert.equal(retry.result.error.retryable, false);
+    assert.equal(effects, 1);
+  });
+}

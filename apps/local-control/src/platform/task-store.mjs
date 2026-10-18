@@ -737,7 +737,14 @@ export class PlatformTaskStore {
       .run(JSON.stringify(result), this.#now(), key, tenantId);
   }
 
-  /** Releases a key whose call failed, so a genuine retry may run. */
+  /** A started mutation with no confirmed outcome must never be retried automatically. */
+  markIdempotencyUncertain(tenantId, key, result) {
+    requireTenant(tenantId);
+    this.#db.prepare("UPDATE idempotency SET status = 'uncertain', result_json = ?, updated_at = ? WHERE key = ? AND tenant_id = ? AND status = 'in_flight'")
+      .run(JSON.stringify(result), this.#now(), key, tenantId);
+  }
+
+  /** Releases a key whose call failed before execution, or was read-only. */
   releaseIdempotency(tenantId, key) {
     requireTenant(tenantId);
     this.#db.prepare("DELETE FROM idempotency WHERE key = ? AND tenant_id = ? AND status = 'in_flight'").run(key, tenantId);

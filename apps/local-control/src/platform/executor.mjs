@@ -143,6 +143,12 @@ export class AuthorizedToolExecutor {
       });
     }
 
+    if (!plaintextCredential && prior?.status === "uncertain") {
+      return this.#outcome("failed", prior.toolCallId, {
+        error: { code: "ACTION_OUTCOME_UNKNOWN", message: "A consequential action may already have completed. Reconcile its external outcome before submitting a new action.", retryable: false },
+      });
+    }
+
     // A verified approval may resume the very tool call that asked for it.
     let approvalContext = null;
     let approvalProblem = null;
@@ -299,6 +305,16 @@ export class AuthorizedToolExecutor {
       const finished = this.#finish(actor, call.id, "succeeded", { output: outcome.output, evidence: outcome.evidence, usage, durationMs });
       store.completeIdempotency(tenantId, key, finished.result);
       return { ...finished, decision };
+    }
+    if (tool.consequential) {
+      // Once execution starts, an exception cannot prove a remote mutation did
+      // not commit. Preserve a durable barrier rather than repeat it on retry.
+      outcome.error = { ...outcome.error, retryable: false };
+      return store.transaction(() => {
+        const finished = this.#finish(actor, call.id, "failed", { error: outcome.error, usage, durationMs });
+        store.markIdempotencyUncertain(tenantId, key, finished.result);
+        return { ...finished, decision };
+      });
     }
     store.releaseIdempotency(tenantId, key);
     return { ...this.#finish(actor, call.id, "failed", { error: outcome.error, usage, durationMs }), decision };
