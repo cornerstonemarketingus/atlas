@@ -73,9 +73,11 @@ test("built Worker result callback enforces claim ownership after signed run ver
   globalThis.__resultEnv = { DB: f.d1 };
   const originalFetch = globalThis.fetch; const previousToken = process.env.ATLAS_GITHUB_TOKEN; process.env.ATLAS_GITHUB_TOKEN = "fake-result-token";
   let attempt = 1;
+  let duringVerification = () => {};
   globalThis.fetch = async (url, options) => {
     if (String(url).includes("/.well-known/jwks")) return Response.json({ keys: [jwk] });
     assert.equal(options.redirect, "error");
+    duringVerification();
     return Response.json({ id: 123, run_attempt: attempt, event: "workflow_dispatch", head_branch: "main", path: ".github/workflows/atlas-coder.yml", display_title: `Atlas Coder · task ${taskId}` });
   };
   t.after(() => { globalThis.fetch = originalFetch; delete globalThis.__resultEnv; if (previousToken === undefined) delete process.env.ATLAS_GITHUB_TOKEN; else process.env.ATLAS_GITHUB_TOKEN = previousToken; });
@@ -86,6 +88,13 @@ test("built Worker result callback enforces claim ownership after signed run ver
   assert.deepEqual(counts(f), [0, 0]);
   await grantTaskExecution(f.d1, f.task, identity);
   assert.equal((await invoke(await sign({ ...claims, repository_id: "999" }))).status, 403);
+  // The initial task read is no longer authoritative after the remote run check.
+  duringVerification = () => f.sqlite.exec("UPDATE tasks SET objective = 'Changed after callback admission'");
+  assert.equal((await invoke(await sign())).status, 409);
+  assert.deepEqual(counts(f), [0, 0]);
+  assert.equal(f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id, null);
+  duringVerification = () => {};
+  f.sqlite.prepare("UPDATE tasks SET objective = ?").run(f.task.objective);
   assert.equal((await invoke(await sign())).status, 200);
   assert.equal((await invoke(await sign())).status, 200);
   attempt = 2;
