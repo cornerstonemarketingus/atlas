@@ -23,6 +23,8 @@ function seconds(step: Step) {
 
 function headline(task: Task) {
   const status = task.status ?? "dispatched";
+  if (status === "dispatch-unknown") return "Request saved. Checking whether the run started…";
+  if (status === "dispatch-pending") return "Request saved. Dispatch has not started.";
   if (["succeeded", "completed"].includes(status)) return task.mode === "coder" ? "Done. The change is ready." : "Done.";
   if (["failed", "timed_out"].includes(status)) return "This run did not finish successfully.";
   if (status === "cancelled") return "Cancelled.";

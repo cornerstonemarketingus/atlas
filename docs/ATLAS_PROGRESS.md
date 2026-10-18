@@ -1,5 +1,24 @@
 # Atlas master implementation progress
 
+## 2026-10-17 — inference merged; durable cloud stack integration
+
+PR #307 merged as af500709 after exact-head CI 39007161939 passed all 13
+jobs. Its source/test changes are now on main. Historical local failures below
+remain recorded; passing CI is not a claim that the local broad run passed.
+The same Genesis approval test passed alone on both main and the inference branch.
+
+Existing PR #270 now integrates main, preserves Genesis/privacy routing, and
+enforces dispatch acknowledgement deadlines even when a transport ignores abort.
+It retains uncertain state without retry and cancels/discards late responses.
+Worker build, typecheck, targeted lint and whitespace checks passed; full web
+suite: 507 total, 505 pass, 2 optional skips, no failures. Runtime fix: f131c34.
+Fresh CI and the existing tenant-persistence review gate remain required.
+
+The updated parent was merged into existing #274 for stacked validation;
+its build/tests are in progress. No replacement deduplication/billing system,
+production migration, live task dispatch, paid provisioning or deployment.
+Next: complete #270/#274 CI and review, then propagate into #276, #278, #282.
+
 ## 2026-10-16 — inference stream integrity (#300)
 
 Base main `1c3be5b`, isolated branch `codex/inference-quota-reliability`, worktree
@@ -25,7 +44,8 @@ CI run 38995719143 finished with all 13 jobs passing, including Windows.
 Local full suite finished: 707 passed, 6 failed, 20 skipped (733 total).
 Current-main focused retest: 81 passed, 3 Genesis timeouts (84 total).
 The inference and desktop cases pass; Genesis timing/load causality remains
-unresolved. See ATLAS_TEST_RESULTS.md. No PR merge performed.
+unresolved. See ATLAS_TEST_RESULTS.md. This checkpoint preceded the #307 merge
+recorded above.
 
 Current-main CI is green; historical Windows startup failure is not reproduced
 as a current production defect. The first sandboxed boot attempt could not

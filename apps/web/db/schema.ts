@@ -152,6 +152,7 @@ export const tasks = sqliteTable("tasks", {
   githubRunId: integer("github_run_id"),
   conversationId: text("conversation_id"),
   executionProvider: text("execution_provider").notNull().default("managed"),
+  dispatchState: text("dispatch_state").notNull().default("legacy"),
   // `cor_` + 32 lowercase hex; nullable because rows dispatched before
   // correlation ids existed have none (migration 0013).
   correlationId: text("correlation_id"),
