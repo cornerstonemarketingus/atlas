@@ -57,7 +57,8 @@ export async function runTask({ task, target, agent, repoRoot }) {
     if (verify.spawnError) { failureClass = "infra"; evidence.verify.spawnError = verify.spawnError; }
     else {
       verified = true;
-      if (verify.exitCode === 0 && changed.length > 0) { passed = true; failureClass = null; }
+      if (verify.timedOut) failureClass = "timeout";
+      else if (verify.exitCode === 0 && changed.length > 0) { passed = true; failureClass = null; }
       else if (verify.exitCode === 0) failureClass = failureClass ?? "no_change";
       else failureClass = failureClass ?? "tests_failed";
     }
