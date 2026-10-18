@@ -89,10 +89,11 @@ test("built Worker result callback enforces claim ownership after signed run ver
   await grantTaskExecution(f.d1, f.task, identity);
   assert.equal((await invoke(await sign({ ...claims, repository_id: "999" }))).status, 403);
   // The initial task read is no longer authoritative after the remote run check.
+  const linkedRunBefore = f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id;
   duringVerification = () => f.sqlite.exec("UPDATE tasks SET objective = 'Changed after callback admission'");
   assert.equal((await invoke(await sign())).status, 409);
   assert.deepEqual(counts(f), [0, 0]);
-  assert.equal(f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id, null);
+  assert.equal(f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id, linkedRunBefore);
   duringVerification = () => {};
   f.sqlite.prepare("UPDATE tasks SET objective = ?").run(f.task.objective);
   assert.equal((await invoke(await sign())).status, 200);
