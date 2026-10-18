@@ -39,7 +39,7 @@ test("a failure class that recurs becomes a draft that is not a runnable task", 
   const file = await logFile();
   for (const task of ["a", "b", "c"]) await appendEntry(file, entry({ task: `task ${task}` }));
   await appendEntry(file, entry({ task: "once", failureClass: "wrong-path" }));
-  await appendEntry(file, entry({ task: "fine", outcome: "success", failureClass: null, humanIntervention: false }));
+  for (const task of ["fine 1", "fine 2", "fine 3"]) await appendEntry(file, entry({ task, outcome: "success", failureClass: null, humanIntervention: false }));
   const groups = recurringFailures(await readLog(file));
   assert.deepEqual(groups.map((g) => [g.failureClass, g.count, g.interventions]), [["empty-model-response", 3, 3]]);
   const draft = draftTask(groups[0]);
