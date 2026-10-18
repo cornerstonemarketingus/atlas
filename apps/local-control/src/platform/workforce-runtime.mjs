@@ -69,7 +69,11 @@ export function createWorkforceRoutes(runtime) {
       if (!path.startsWith("/v1/workforce")) return false;
       const send = (status, body) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body)); return true; };
       if (identity.role !== "admin") return send(403, { message: "Only the local owner can access workforce execution." });
-      if (request.method === "GET" && path === "/v1/workforce") return send(200, { agents: runtime.registry.listAgents(LOCAL_TENANT_ID), tools: runtime.tools, repository: runtime.repository, ...runtime.workforce });
+      if (request.method === "GET" && path === "/v1/workforce") return send(200, { agentDetails: runtime.registry.listAgents(LOCAL_TENANT_ID), tools: runtime.tools, repository: runtime.repository, ...runtime.workforce });
+      if (request.method === "GET" && path === "/v1/workforce/runs") {
+        const limit = Number(new URL(request.url, "http://local.atlas").searchParams.get("limit") ?? 50);
+        return send(200, { runs: runtime.coordinator.list(LOCAL_TENANT_ID, { limit }) });
+      }
       const match = /^\/v1\/workforce\/runs\/(tsk_[0-9a-f]{32})(\/(?:resume|cancel))?$/.exec(path);
       if (match && request.method === "GET" && !match[2]) {
         const run = runtime.coordinator.get(LOCAL_TENANT_ID, match[1]);

@@ -24,6 +24,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
   <a href="#/improve" data-nav="improve"><span class="ico" aria-hidden="true">↻</span>Improve Atlas<span class="badge" id="improve-badge" hidden></span></a>
   <a href="#/models" data-nav="models"><span class="ico" aria-hidden="true">◈</span>Models</a>
   <a href="#/families" data-nav="families"><span class="ico" aria-hidden="true">⋔</span>Agent families</a>
+  <a href="/workforce"><span class="ico" aria-hidden="true">⇢</span>Workforce</a>
   <a href="#/computer" data-nav="computer"><span class="ico" aria-hidden="true">▣</span>Computer</a>
   <a href="#/projects" data-nav="projects"><span class="ico" aria-hidden="true">▤</span>Projects</a>
   <a href="#/knowledge" data-nav="knowledge"><span class="ico" aria-hidden="true">✦</span>Knowledge</a>

@@ -8,6 +8,7 @@ import { createAgentRoutes } from "./agent/routes.mjs";
 import { createMissionRoutes } from "./agent/mission-routes.mjs";
 import { createBusinessRoutes } from "./agent/business-routes.mjs";
 import { createWorkforceRoutes } from "./platform/workforce-runtime.mjs";
+import { WORKFORCE_UI_HTML, WORKFORCE_UI_JS } from "./platform/workforce-ui.mjs";
 import { BUSINESS_UI_HTML, BUSINESS_UI_JS } from "./agent/business-ui.mjs";
 import { createPlatformRoutes, LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
 import { createInnovationRoutes, describeInnovationError } from "./platform/innovation/routes.mjs";
@@ -74,6 +75,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
     if (request.method === "GET" && (request.url === "/icon.svg" || request.url === "/favicon.ico")) return sendText(response, 200, "image/svg+xml", LOCAL_UI_ICON);
     if (request.method === "GET" && request.url === "/app.js") return sendText(response, 200, "text/javascript; charset=utf-8", LOCAL_UI_JS);
+    if (workforceRuntime && request.method === "GET" && request.url === "/workforce") return sendText(response, 200, "text/html; charset=utf-8", WORKFORCE_UI_HTML);
+    if (workforceRuntime && request.method === "GET" && request.url === "/workforce.js") return sendText(response, 200, "text/javascript; charset=utf-8", WORKFORCE_UI_JS);
     if (businessService && request.method === "GET" && request.url === "/businesses") return sendText(response, 200, "text/html; charset=utf-8", BUSINESS_UI_HTML);
     if (businessService && request.method === "GET" && request.url === "/businesses.js") return sendText(response, 200, "text/javascript; charset=utf-8", BUSINESS_UI_JS);
     if (platformRoutes?.handlePage(request, response)) return;
