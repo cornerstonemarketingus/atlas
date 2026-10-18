@@ -620,3 +620,9 @@ Evidence: local-control 764 pass / 2 skipped / 0 fail (7 new); e2e journey passe
 
 
 Context recovery #360 verification: 33 focused tests passed. Replacing the compiled compactor with unchanged main makes all three new regressions fail; restoring it passes all eight compaction tests. Hosted inspection gate 38848539074 passed. Latest main integration preserved concurrent progress entries; final CI tracked on the PR.
+## 2026-10-06 Workers AI through the Worker's own binding (no token)
+
+- Live check 37516955533 (19:10): still `validation valid, Workers AI denied → WRONG_ACCOUNT_OR_PERMISSION` (403, code 10000); chat answers 401 from Workers AI.
+- Fix that needs no token: the Worker gets `ai: { binding: "AI" }` (`apps/web/vite.config.ts`; `wrangler deploy --dry-run` lists `env.AI`). `apps/web/app/api/chat/workers-ai-binding.mjs` makes the binding look like an OpenAI-compatible server to chat (a fetch-shaped transport over `env.AI.run()`, accepting both OpenAI `choices` and native `response`/`tool_calls` answers, SSE for streaming callers); refusals become statuses (429 routes on to the next provider) and the binding's own text is never passed on. Chat prefers the binding over `ATLAS_WORKERS_AI_TOKEN` (route kind stays `workers-ai`; default model `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, `ATLAS_WORKERS_AI_MODEL` overrides). `/api/setup/providers` also reports `workersAIBinding` (a real inference) and "Verify hosted Atlas" prints it.
+- Evidence: 430 web tests pass (5 new: both answer shapes; a full chat turn with a tool round trip on the binding, streaming and not, no key anywhere; refusal statuses and routing to Groq with no leaked text; binding preferred over the token and selectable; health); lint, typecheck, `vinext build`; runner and local script tests 63/63. Not yet verified live: needs the deploy; then the chat check.
+
