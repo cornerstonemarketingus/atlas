@@ -1,0 +1,28 @@
+{
+  "id": "find-merge-decision-usage",
+  "category": "navigation",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "857577a09175de1119e472060f81c6ab29be58ff",
+  "objective": "Without changing any source file: find which file under scripts/ defines decideMergeAction and which non-test files import it. Write ANSWER.json as {\"definedIn\": \"<path>\", \"importedBy\": [\"<path>\", ...]} with repository-relative forward-slash paths, importedBy sorted.",
+  "setup": {
+    "files": {}
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/answer-check.mjs",
+      "{workspace}",
+      "merge-decision-usage"
+    ]
+  },
+  "solution": {
+    "files": {
+      "ANSWER.json": "{\n  \"definedIn\": \"scripts/runner/merge-decision.mjs\",\n  \"importedBy\": [\n    \"scripts/runner/create-coder-pull-request.mjs\"\n  ]\n}\n"
+    }
+  },
+  "timeoutMs": 120000,
+  "tags": [
+    "read-only",
+    "answer-file"
+  ]
+}
