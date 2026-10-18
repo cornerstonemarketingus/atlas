@@ -219,6 +219,9 @@ jobs:
           ATLAS_WORKERS_AI_TOKEN: ${{ secrets.ATLAS_WORKERS_AI_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ATLAS_WORKERS_AI_MODEL: ${{ vars.ATLAS_WORKERS_AI_MODEL }}
+          # Shared capacity: model calls reserve on the Worker's inference governor when both are set (unset = unchanged).
+          ATLAS_GOVERNOR_URL: ${{ vars.ATLAS_GOVERNOR_URL }}
+          ATLAS_GOVERNOR_TOKEN: ${{ secrets.ATLAS_GOVERNOR_TOKEN }}
           ATLAS_CODER_PROVIDER: ${{ vars.ATLAS_CODER_PROVIDER }}
           ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
           ATLAS_CODER_FALLBACKS: ${{ vars.ATLAS_CODER_FALLBACKS }}

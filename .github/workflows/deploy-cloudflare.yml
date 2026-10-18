@@ -64,6 +64,9 @@ jobs:
           # Dispatch + operator access
           ATLAS_GITHUB_TOKEN: ${{ secrets.ATLAS_GITHUB_TOKEN }}
           ATLAS_OPERATOR_TOKEN: ${{ secrets.ATLAS_OPERATOR_TOKEN }}
+          # Narrow token for runner/daemon model calls to reserve capacity on the
+          # shared inference governor (/api/inference/governor). Not an operator token.
+          ATLAS_GOVERNOR_TOKEN: ${{ secrets.ATLAS_GOVERNOR_TOKEN }}
           # Deployment-owned Genesis node; account GitHub credentials remain on the node.
           ATLAS_GENESIS_URL: ${{ secrets.ATLAS_GENESIS_URL }}
           ATLAS_GENESIS_TOKEN: ${{ secrets.ATLAS_GENESIS_TOKEN }}
@@ -124,6 +127,7 @@ jobs:
           for name in \
             ATLAS_GITHUB_TOKEN \
             ATLAS_OPERATOR_TOKEN \
+            ATLAS_GOVERNOR_TOKEN \
             ATLAS_GENESIS_URL \
             ATLAS_GENESIS_TOKEN \
             ATLAS_SESSION_SECRET \
