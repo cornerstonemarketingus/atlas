@@ -7,6 +7,31 @@ automated coverage, real sessions and deployed evidence. Historical rows below
 are retained for traceability and are superseded by this queue. No duplicate
 TODO is introduced. Check current ownership before each implementation.
 
+## Reliability slice — shared CLI output-budget admission (#330, 2026-10-17)
+
+The existing `BudgetedModelProvider` read remaining tokens before awaiting the
+provider and recorded usage afterward. Two wrappers sharing a five-token ledger
+could each dispatch with a five-token limit; the real HTTP regression spent six
+tokens before accounting rejected the second response. Queued cancellation also
+failed its original regression.
+
+Finite-output calls now serialize admission per ledger object, recompute the
+remaining limit after the preceding call settles, and keep cancellation prompt
+without permitting bypass of active work. Failures release admission; exhausted
+output prevents dispatch. Failed post-response accounting blocks later calls on
+that ledger instead of spending an incomplete snapshot. Direct same-ledger
+nesting is rejected rather than deadlocking. Existing CLI primary/repair routes
+already instantiate these wrappers; provider and credential ownership is intact.
+
+This is process-local coordination of participating wrappers, not a replacement
+for the hosted governor or a cross-process provider quota. Independent ledgers
+and unlimited-output calls remain parallel. Providers must honor output caps;
+input/cost are still measured afterward, so the first unestimated overrun cannot
+be prevented here. Already-active unlimited-output calls cannot be recalled.
+An adapter that never settles retains admission. A failed accounting ledger
+requires a new task/ledger; no automatic budget reset or durable cloud recovery
+is introduced. The focused PR/#330 records final tests, CI and review evidence.
+
 ## Reliability slice — CLI retry cancellation (#305, 2026-10-17)
 
 The existing `RetryingModelProvider` is instantiated by the CLI's actual

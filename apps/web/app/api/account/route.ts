@@ -3,17 +3,18 @@ import { getDb } from "../../../db";
 import { taskUsage, users } from "../../../db/schema";
 import { currentPlan } from "../billing/plan.mjs";
 import { currentPeriodStart } from "../billing/period.mjs";
+import { customerFailure } from "../customer-failure.mjs";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
 
 export async function GET(request: Request) {
-  const account = await authenticatedAccount(request);
-  if (!account) return Response.json({ signedIn: false });
-
-  if (account.dbUserId === null) {
-    return Response.json({ signedIn: true, userId: account.userId, unrestricted: true });
-  }
-
   try {
+    const account = await authenticatedAccount(request);
+    if (!account) return Response.json({ signedIn: false });
+
+    if (account.dbUserId === null) {
+      return Response.json({ signedIn: true, userId: account.userId, unrestricted: true });
+    }
+
     const db = getDb();
     const [user] = await db.select().from(users).where(eq(users.id, account.dbUserId));
     const plan = await currentPlan(db, account.dbUserId);
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
       usage: { used: usageRow?.taskCount ?? 0, limit: plan.limits.monthlyTasks },
       modes: plan.limits.modes,
     });
-  } catch (error) {
-    return Response.json({ message: error instanceof Error ? error.message : "Unexpected error." }, { status: 500 });
+  } catch {
+    return customerFailure("account-overview");
   }
 }

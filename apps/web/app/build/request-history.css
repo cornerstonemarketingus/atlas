@@ -1,0 +1,12 @@
+.request-history{margin:0 auto 18px;width:100%;max-width:780px;border:1px solid var(--ws-line);border-radius:12px;font-size:13px}
+.request-history summary{padding:14px;cursor:pointer;font-weight:600}
+.request-history-body{padding:0 14px 14px;max-height:360px;overflow:auto}
+.request-history p{line-height:1.5;margin:10px 0}
+.request-history article{border-top:1px solid var(--ws-line);padding:12px 0;overflow-wrap:anywhere}
+.request-history h3{font-size:14px;margin:0}
+.request-history small{display:block;line-height:1.5;opacity:.85}
+.request-history-actions,.request-history nav{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px}
+.request-history button,.request-history a{min-height:44px;padding:10px 12px;border:1px solid var(--ws-line);border-radius:8px;background:transparent;color:inherit;font:inherit}
+.request-history button:disabled{opacity:.55;cursor:default}
+.request-history :is(button,a,summary):focus-visible{outline:2px solid var(--ws-accent);outline-offset:3px}
+@media(max-width:600px){.request-history-body{max-height:300px}.request-history-actions>*{flex:1;text-align:center}}

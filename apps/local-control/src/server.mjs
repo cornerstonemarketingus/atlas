@@ -26,10 +26,11 @@ import { createGoalRoutes } from "./agent/goal-routes.mjs";
 import { choosePath, localModelCandidates } from "./agent/kernel/economics.mjs";
 import { AUTONOMY_LEVELS, assessAction, suggestRelaxations } from "./agent/kernel/autonomy.mjs";
 import { createAutomationRoutes, createWebhookRoute } from "./platform/automations/routes.mjs";
+import { createArtifactRoutes } from "./platform/artifacts/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -58,6 +59,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const webhookRoute = automations ? createWebhookRoute({ automations, limiter, send: (response, status, value) => { send(response, status, value); return true; },
     readRaw: async (request, response) => { try { return await readBody(request); } catch (error) { send(response, error?.code === "BODY_TOO_LARGE" ? 413 : 400, { message: error.message }); return null; } } }) : null;
   const worldRoutes = world ? createWorldRoutes({ world, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const artifactRoutes = artifacts ? createArtifactRoutes({ artifacts, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const goalRoutes = goals ? createGoalRoutes({ goals, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, automations, goals, send: (response, status, value) => { send(response, status, value); return true; } });
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
@@ -70,7 +72,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
 
   return createServer(async (request, response) => {
     response.setHeader("cache-control", "no-store");
-    response.setHeader("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");
+    response.setHeader("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; media-src 'self' blob:; base-uri 'none'; frame-ancestors 'none'");
     if (request.method === "GET" && request.url === "/") return sendText(response, 200, "text/html; charset=utf-8", LOCAL_UI_HTML);
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
     if (request.method === "GET" && (request.url === "/icon.svg" || request.url === "/favicon.ico")) return sendText(response, 200, "image/svg+xml", LOCAL_UI_ICON);
@@ -121,6 +123,10 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if ((request.url ?? "").startsWith("/v1/genesis")) {
       if (!genesisRoutes) return send(response, 503, { message: "Project Genesis is not running in this process." });
       if (await genesisRoutes(request, response, identity)) return;
+    }
+    if (/^\/v1\/artifacts(\/|\?|$)/u.test(request.url ?? "")) {
+      if (!artifactRoutes) return send(response, 503, { message: "The artifact store is not running in this process." });
+      if (await artifactRoutes(request, response, identity)) return;
     }
     if (remoteRoutes && (request.url ?? "").startsWith("/v1/remote")) { if (await remoteRoutes(request, response, identity)) return; }
 

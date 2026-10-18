@@ -1,6 +1,7 @@
 import type { ReadOnlyToolAgentResult } from "../agent/read-only-tool-agent.js";
 import type {
   ProposedEditOperation,
+  RepairLoopReport,
   VerificationReport,
   VerifiedCoderResult,
 } from "../agent/verified-coder-session.js";
@@ -16,6 +17,10 @@ export interface CodeVerificationSummary {
   readonly checks: readonly string[];
   readonly newFailures: readonly string[];
   readonly message: string;
+  /** Which repair-loop limit stopped a still-failing change; null when none did. */
+  readonly stopReason: VerificationReport["stopReason"];
+  readonly escalatedAtPass?: number;
+  readonly loop?: RepairLoopReport;
 }
 
 export interface CodeOutput {
@@ -73,6 +78,9 @@ export function toVerifiedCodeOutput(
       checks: result.verification.profileIds,
       newFailures: result.verification.newFailures,
       message: result.verification.message,
+      stopReason: result.verification.stopReason,
+      ...(result.verification.escalatedAtPass === undefined ? {} : { escalatedAtPass: result.verification.escalatedAtPass }),
+      ...(result.verification.loop === undefined ? {} : { loop: result.verification.loop }),
     },
     ...usage,
   };
@@ -95,10 +103,23 @@ export function renderCodeText(output: CodeOutput): string {
       `Verification: ${output.verification.status}`,
       `  ${output.verification.message}`,
       ...(output.verification.checks.length === 0 ? [] : [`  Checks: ${output.verification.checks.join(", ")}`]),
+      ...(output.verification.loop === undefined ? [] : [renderRepairLoop(output.verification)]),
       ...output.verification.newFailures.map((failure) => `  ! ${failure}`),
     ]),
     `Turns: ${output.turns}`,
     `Tool calls: ${output.toolCalls}`,
     `Tokens: ${output.inputTokens} input / ${output.outputTokens} output`,
   ].join("\n");
+}
+
+function renderRepairLoop(verification: CodeVerificationSummary): string {
+  const loop = verification.loop!;
+  const facts = [
+    `${loop.repairs} repair(s)`,
+    `${(loop.elapsedMs / 1000).toFixed(1)}s`,
+    ...(loop.tokensSpent === null ? [] : [`${loop.tokensSpent}${loop.limits.maxTokens === null ? "" : `/${loop.limits.maxTokens}`} output tokens`]),
+    `same failure ${loop.sameFailure}/${loop.limits.maxSameFailure}`,
+    ...(verification.escalatedAtPass === undefined ? [] : [`escalated at pass ${verification.escalatedAtPass}`]),
+  ].join(", ");
+  return `  Repair loop: ${verification.stopReason === null ? "finished" : `stopped (${verification.stopReason})`}; ${facts}`;
 }
