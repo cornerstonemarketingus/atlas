@@ -66,6 +66,26 @@ Ten tasks, all validated by dry run: six from Atlas's own commits
 (multi-file edit ×2, bug localisation ×2, feature ×2) and four repository
 questions (navigation ×2, structured output ×2).
 
+## Dogfood log
+
+Every Atlas-on-Atlas task is recorded in `evals/dogfood/log.jsonl`: outcome
+(`success`, `failed`, `abandoned`), failure class (a kebab-case slug, `null` on
+success), model, tokens, and whether a person had to step in.
+
+```bash
+node packages/atlas-eval/src/cli.mjs dogfood add --task "PR #350 retry" \
+  --outcome failed --failure-class empty-model-response --model llama-3.3-70b \
+  --input-tokens 900 --output-tokens 40 --intervention yes --notes "short, no secrets"
+node packages/atlas-eval/src/cli.mjs dogfood check                    # verifies the hash chain
+node packages/atlas-eval/src/cli.mjs dogfood drafts --write-drafts evals/drafts   # classes seen 3+ times
+```
+
+Entries are validated, credential-shaped text is refused, and the log is
+append-only (hash-chained). A recurring failure class becomes a draft task
+skeleton with its evidence. A draft is deliberately not runnable: a person adds
+the base commit, objective, verify command and solution and then runs
+`validate`, so only proven tasks enter the suite.
+
 ## Status
 
 | Item | State |
@@ -74,7 +94,7 @@ questions (navigation ×2, structured output ×2).
 | First 10 tasks | Done; history-derived tasks cover 6 of 10 |
 | Categories still without tasks | test repair, tool arguments, review, final synthesis, browser reasoning |
 | Grow to 30–50 tasks | Pending |
-| CI workflow (`atlas-eval.yml`): dry-run validation on PRs touching the harness, `workflow_dispatch` for full runs | Done in the follow-up workflow PR (protected, owner review) |
-| Dogfood log `evals/dogfood/` (2.2) | Pending |
+| CI workflow (`atlas-eval.yml`): dry-run validation on PRs touching the harness, `workflow_dispatch` for full runs | Done in the workflow PR (#349, protected, owner review) |
+| Dogfood log `evals/dogfood/` (2.2): validated append-only log, recurring-failure drafts | Done in the dogfood PR; the log starts empty (no fabricated history) |
 | Groq Batch for background runs | Pending |
 | Baseline pass rate | **Pending: no provider credential is available to this environment.** Dry-run validation results only |

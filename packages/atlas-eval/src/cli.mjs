@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { atlasCliAgent, loadTasks, runTask, toJson, toMarkdown, validateFixture } from "./index.mjs";
+import { appendEntry, atlasCliAgent, draftTask, loadTasks, readLog, recurringFailures, runTask, toJson, toMarkdown, validateFixture } from "./index.mjs";
 
 const USAGE = `atlas-eval validate [--tasks dir] [--only id]
+atlas-eval dogfood add --task <text> --outcome success|failed|abandoned [--failure-class slug] --model <name> --input-tokens N --output-tokens N --intervention yes|no [--notes text]
+atlas-eval dogfood check | drafts [--threshold N] [--write-drafts dir]
 atlas-eval run --target provider:model:API_KEY_ENV[:base-url] [--target ...] [--tasks dir] [--only id] [--out report-prefix]`;
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
@@ -12,8 +14,38 @@ const repoRoot = resolve(here, "../../..");
 function option(args, name) { const i = args.indexOf(name); return i === -1 ? undefined : args[i + 1]; }
 function options(args, name) { return args.flatMap((arg, i) => (arg === name ? [args[i + 1]] : [])); }
 
+async function dogfood(args) {
+  const file = resolve(option(args, "--log") ?? join(repoRoot, "evals/dogfood/log.jsonl"));
+  const [, action] = args;
+  if (action === "add") {
+    const outcome = option(args, "--outcome");
+    const record = await appendEntry(file, {
+      task: option(args, "--task"), outcome, failureClass: outcome === "success" ? null : option(args, "--failure-class") ?? null, model: option(args, "--model"),
+      tokens: { input: Number(option(args, "--input-tokens")), output: Number(option(args, "--output-tokens")) },
+      humanIntervention: option(args, "--intervention") === "yes", notes: option(args, "--notes"),
+    });
+    console.log(`recorded #${record.sequence}`);
+    return 0;
+  }
+  const entries = await readLog(file);
+  if (action === "check") { console.log(`${entries.length} entries, chain intact`); return 0; }
+  if (action === "drafts") {
+    const groups = recurringFailures(entries, Number(option(args, "--threshold") ?? 3));
+    const out = option(args, "--write-drafts");
+    for (const group of groups) {
+      console.log(`${group.failureClass}: ${group.count} failures, ${group.interventions} needed a person (${group.models.join(", ")})`);
+      if (out) { await mkdir(resolve(out), { recursive: true }); await writeFile(join(resolve(out), `${draftTask(group).id}.json`), JSON.stringify(draftTask(group), null, 2) + "\n"); }
+    }
+    if (groups.length === 0) console.log("no recurring failures");
+    return 0;
+  }
+  console.error(USAGE);
+  return 2;
+}
+
 async function main(args) {
   const [command] = args;
+  if (command === "dogfood") return dogfood(args);
   const dir = resolve(option(args, "--tasks") ?? join(repoRoot, "evals/tasks"));
   const only = option(args, "--only");
   const tasks = (await loadTasks(dir)).filter((task) => only === undefined || task.id === only);

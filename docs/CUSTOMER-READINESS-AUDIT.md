@@ -56,3 +56,8 @@ All three actual-handler regression cases failed against unchanged origin/main b
 An uncertain deletion response now blocks another submission until an explicit status read succeeds. A missing, failed, malformed or stalled initial status response also blocks mutation and offers a safe refresh action. Reads and writes have bounded deadlines; an expired POST is treated as uncertain, never automatically retried. A subsequent pending receipt recovers the existing request without another POST. This is client recovery, not a new server-wide exactly-once guarantee across devices.
 
 Appearance changes now update theme only, avoiding unnecessary account/status requests that could overwrite the deletion view. Status reads use cancellation and generation fencing; pending receipts are validated and projected before display. The actual phone-width component regression fails against unchanged main (it previously enabled retry after failure) and passes with the repair, including lost acknowledgement recovery, initial failure, bounded stalled reads and theme isolation. Server authentication, scoping, confirmation and deletion processing are unchanged. No real customer deletion was executed.
+
+
+## Account overview boundary — issue #343
+
+The account overview GET now reuses the fixed customer failure contract for authentication, database, plan and usage exceptions. Unexpected failures return503 with no-store and a support reference, never raw backend text. Existing signed-out/owner/customer responses and account/period predicates are preserved and tested at the actual handler boundary. This does not close other chat/history/settings/provider disclosure paths or establish deployed adversarial acceptance.

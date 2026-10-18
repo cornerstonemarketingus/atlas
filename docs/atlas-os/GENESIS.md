@@ -208,6 +208,25 @@ the owner's applied model plan by difficulty (through the existing
 local model. The endpoint is the local model server unless the owner sets
 `ATLAS_GENESIS_BASE_URL`, so paid APIs are never used silently.
 
+### Repair loop limits (`platform/loop-policy.mjs`, issue #355)
+
+Before each repair starts, `decideIteration` checks, in order:
+
+| Stop reason | When |
+|---|---|
+| `iteration-limit` | the project's repair budget (default 3) is used |
+| `time-limit` | the build cycle has run `ATLAS_REPAIR_MAX_MINUTES` (default 360) |
+| `spend-limit` | repairs used `ATLAS_REPAIR_MAX_TOKENS` model tokens (default: no token limit) |
+| `no-progress` | the same failure has survived 2 repairs |
+
+"The same failure" is a fingerprint of stage, check, exit code and the failure
+output with timings, line numbers, hashes and paths removed. Token use comes
+from the coder's own audit trace; a repair whose trace is unreadable is counted
+as unmetered in the receipt, not as free. The final `failed` transition carries
+`evidence.loop` (reason, iterations, elapsed time, tokens, unmetered count,
+fingerprint). A rolled-back repair's broken rules are fed into the next repair
+objective. Retrying a project from the UI starts a new cycle.
+
 ## Testing with the real coder and a browser
 
 `tests/genesis-coder.test.mjs` runs Atlas's **real** coder (`atlas code`),
