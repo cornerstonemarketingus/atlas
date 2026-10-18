@@ -19,8 +19,13 @@ test("finds the suggested wait in an error message", () => {
   assert.equal(suggestedWaitFromMessage("rate limited"), undefined);
 });
 
-test("reads retry-after in seconds only", () => {
+test("reads retry-after seconds and HTTP dates without accepting malformed delays", () => {
   assert.equal(retryAfterHeaderMs(new Headers({ "retry-after": "3" })), 3_000);
-  assert.equal(retryAfterHeaderMs(new Headers({ "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" })), undefined);
+  const now = Date.parse("Wed, 21 Oct 2026 07:27:00 GMT");
+  assert.equal(retryAfterHeaderMs(new Headers({ "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" }), now), 60_000);
+  assert.equal(retryAfterHeaderMs(new Headers({ "retry-after": "Wed, 21 Oct 2026 07:26:00 GMT" }), now), 0);
+  for (const value of ["-1", "1e3", "1junk", "soon", "9".repeat(400)]) {
+    assert.equal(retryAfterHeaderMs(new Headers({ "retry-after": value }), now), undefined);
+  }
   assert.equal(retryAfterHeaderMs(new Headers()), undefined);
 });

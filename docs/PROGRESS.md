@@ -649,6 +649,13 @@ Next: #282 result callback ownership against this parent, then outcome recovery.
 
 Existing trusted cloud coder subprocess cleanup now retains SIGKILL after the group leader exits, closes inherited pipes at a bounded cleanup deadline, and isolates progress observer exceptions/rejected promises. Two new real-process regressions failed before the repair and pass after it. Complete Windows runner/local suite: 80 passed, one Linux-only skip; final process suite seven passed, one Linux-only skip. CI must verify the resistant-descendant process-group case before merge. Focused handoff: docs/CLOUD-PROCESS-RECOVERY.md. No production database, provider, credentials or workflow changed. Migration 0017 and its deployment remain paused for exact production approval. Next: complete #333 CI, then continue the existing task/claim/outcome/mission rollout in dependency order; persistent isolated workspace checkpoints remain unfinished.
 
+
+## 2026-10-18 — account overview customer privacy (#343)
+
+Independent of blocked native signing, the actual account overview GET still returned raw database/plan exception text and left auth exceptions outside its response boundary. Reused existing customerFailure fixed copy/support reference/no-store contract for all unexpected failures, moving unchanged authentication into the catch boundary. Signed-out, unrestricted owner and scoped account/usage success projections remain intact. Actual TypeScript-handler regression fails prior main on an adversarial auth exception; repaired handler tests cover auth/database/plan/usage failures and confirm user/period predicates and successful outputs. Focused account/billing/deletion checks pass5/5, production build passes; broad web/typecheck/lint results belong to the PR checkpoint. No live account fault injection, admin diagnostic console or universal privacy claim. Native320 remains blocked by automatic-review rejection of simulator signing changes pending configured owner review; no signing edit was applied.
+
+Account overview validation: production build passes; full web503 tests,500 pass/3 optional browser skips/0fail. Focused actual handler cases5/5 pass. Typecheck completed without diagnostics; focused ESLint still running at this checkpoint. No remote CI/deployment acceptance asserted.
+
 ## 2026-10-17 — scoped business evidence receipts (#339)
 
 The existing production mission artifact verifier now persists a digest-bound
@@ -665,3 +672,53 @@ suite was interrupted during Genesis fixtures amid shared Windows host load;
 it did not produce a complete passing result. Next: CI on this branch, then a
 trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
+
+
+## 2026-10-17 coder context recovery (issue #287)
+
+- Live run 38819478158 confirms #269 repaired repo_browser aliases in production. The same run still failed on HTTP 413 after substantial context growth; alias repair alone is not task completion. Hosted authenticated inspection 38848539074 passed.
+- Extend existing context compaction to recognize offered aliases through the existing resolver. Associate results with their preceding call batch rather than a global ID set, preserving writes/errors when providers reuse call IDs. Ambiguous batch IDs and unpaired results remain intact. Original trace and arguments are unchanged.
+- Regression coverage includes oversized aliased reads through the real agent/registry, unoffered/ambiguous aliases, reused IDs across read/write turns and duplicate results. Earlier local suite at dee7942: 513 passed, 4 Windows failures, 4 skipped; those failures concern diffs, paths and file modes, not this patch. Final validation is tracked in the PR after integration with main 482948b. Do not infer that all tests passed locally.
+- This does not guarantee provider TPM compliance or add test-only task execution. Current main has separate cloud-provider/runner recovery; preserve it. No new TODO or execution architecture.
+Account overview344 integration: original d8678f0 ALL CI passed, but a concurrent main merge caused a documentation-only conflict before merge. Integrated current main482948b preserving both business and account progress entries. No runtime source conflicts. Focused lint/typecheck and fullweb500pass3optional skips were established before integration; fresh complete CI is required at the integrated head. No merge or deployment claimed.
+
+## 2026-10-18 — eval harness, first slice (#128, PROGRAM 2.1)
+
+Took over stale workstream #128 (claim from 2026-09-27, no code on main). Adds `packages/atlas-eval` (dependency-free): EvalTask/EvalResult validation, a runner that checks out each task's base commit into a throwaway worktree, runs an agent, then runs the task's own verify command (pass = verify exits 0 with files changed; agent claims are ignored), JSON/Markdown reports, an `atlas code` adapter (key passed by env-var name only, child gets no other env), and `validate`, a no-model dry run proving each task fails untouched and passes with its recorded solution. Ten tasks in `evals/tasks`: six from real commits, four repository questions checked by `evals/verifiers/answer-check.mjs`. Docs: docs/EVALS.md.
+
+Evidence: 16 package tests pass; `validate` 10/10 tasks valid; mutation checks (agent claim counted, env allowlist removed, cleanup removed, no-change guard removed) each make the matching tests fail. No baseline pass rate: no provider key in this environment, and nothing in this PR claims one. Open: CI wiring (`atlas-eval.yml`, protected, owner review), dogfood log (2.2), tasks for test repair/tool args/review/final synthesis/browser, growth to 30–50, Groq Batch. Next: CI workflow PR, then dogfood log, then a baseline run once a credential exists.
+
+## 2026-10-18 — eval workflow and dogfood log (#128, PROGRAM 2.1–2.2)
+
+Two follow-ups to the harness PR #348. #349 (protected, owner review): `atlas-eval.yml` validates every fixture on PRs touching the harness (no secrets) and runs a real target only on `workflow_dispatch`. Dogfood PR: `evals/dogfood/log.jsonl` is hash-chained and append-only; entries reject credential-shaped text; `dogfood drafts` turns failure classes seen 3+ times into non-runnable draft tasks with evidence. Tests: 19/19 in the package; mutation checks (chain check removed, secret guard removed, successes counted as failures) each fail tests. The log starts empty on purpose. Still open: baseline run (needs a provider key), tasks for test repair/tool args/review/final synthesis/browser, growth to 30–50, Groq Batch. Next: merge #348 → #349, then grow tasks.
+## 2026-10-18 — bounded improvement loop for Genesis repairs (#355, PROGRAM 2.4/3.8)
+
+Owner listed five upgrades; each is now a workstream issue with an audit of existing code: #351 persistent creation environments, #352 universal execution, #353 GPU compute manager, #354 artifacts and previews, #355 bounded improvement loop. Took #355 first because it is in the current phase. `platform/loop-policy.mjs` checks before every Genesis repair: repair budget, wall time (`ATLAS_REPAIR_MAX_MINUTES`, default 6h), tokens (`ATLAS_REPAIR_MAX_TOKENS`), and no progress (the same normalised failure fingerprint survived 2 repairs). The stop reason and receipt go in the failed transition's `evidence.loop`. The Genesis coder now reports token use from its audit trace. A rolled-back repair's broken rules feed the next objective. Behaviour change: a repair that cannot move the failure stops after 2 attempts instead of 3.
+
+Evidence: local-control 764 pass / 2 skipped / 0 fail (7 new); e2e journey passes; mutation checks (no-progress rule, spend rule, fingerprint normalisation, rollback feedback) each fail tests. Not yet wired into the coder CLI's own repair loop (atlas-cli) or the self-improvement loop (protected). Eval: no model run available, so no measured delta. Next: same policy for the coder's repair loop; eval delta once a provider key exists; #349 owner review.
+
+
+Context recovery #360 verification: 33 focused tests passed. Replacing the compiled compactor with unchanged main makes all three new regressions fail; restoring it passes all eight compaction tests. Hosted inspection gate 38848539074 passed. Latest main integration preserved concurrent progress entries; final CI tracked on the PR.
+## 2026-10-18 — launch-readiness run (branch claude/genesis-named-business-site)
+
+Baseline on main 857577a: every package green locally (see docs/audits/ATLAS-LAUNCH-READINESS.md for commands and counts); daemon e2e 21/21. No live provider was configured, so no live-model mission ran.
+
+Sample A (Team Hahn website, real Genesis + Chromium, template path) exposed four Genesis defects, fixed with regression tests that failed before: ignored business name, dropped requested pages (reported `ready` anyway), invented credentials/promises in template copy, no local SEO. local-control suite after fix: 759 pass / 2 skipped / 0 fail.
+
+Historical checkpoint correction during integration: #235 subsequently merged at c1ef3e3 after required CI passed. The quota ledger and hosted chat governor are already in main; the remaining gap is shared runner admission and durable waiting, not rebuilding the ledger. See docs/LAUNCH-REMEDIATION-2026-10-17.md and the corrected blocker section of docs/audits/ATLAS-LAUNCH-READINESS.md. Live-model samples and the hosted durability stack still require acceptance. This integration does not initiate a production deployment.
+
+## 2026-10-06 Workers AI through the Worker's own binding (no token)
+
+- Live check 37516955533 (19:10): still `validation valid, Workers AI denied → WRONG_ACCOUNT_OR_PERMISSION` (403, code 10000); chat answers 401 from Workers AI.
+- Fix that needs no token: the Worker gets `ai: { binding: "AI" }` (`apps/web/vite.config.ts`; `wrangler deploy --dry-run` lists `env.AI`). `apps/web/app/api/chat/workers-ai-binding.mjs` makes the binding look like an OpenAI-compatible server to chat (a fetch-shaped transport over `env.AI.run()`, accepting both OpenAI `choices` and native `response`/`tool_calls` answers, SSE for streaming callers); refusals become statuses (429 routes on to the next provider) and the binding's own text is never passed on. Chat prefers the binding over `ATLAS_WORKERS_AI_TOKEN` (route kind stays `workers-ai`; default model `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, `ATLAS_WORKERS_AI_MODEL` overrides). `/api/setup/providers` also reports `workersAIBinding` (a real inference) and "Verify hosted Atlas" prints it.
+- Evidence: 430 web tests pass (5 new: both answer shapes; a full chat turn with a tool round trip on the binding, streaming and not, no key anywhere; refusal statuses and routing to Groq with no leaked text; binding preferred over the token and selectable; health); lint, typecheck, `vinext build`; runner and local script tests 63/63. Not yet verified live: needs the deploy; then the chat check.
+
+
+
+## 2026-10-18 — repository settings customer privacy (#357)
+
+Account344 merged c746663 after ALL CI39087720052 passed, deployment39087988081 succeeded, live anonymous account GET exactly signedIn:false passed. Postdeploy configured authenticated inspect39088067813 passed; it is general inspection, not adversarial account fault/payment/deletion acceptance.
+
+Repository settings GET/PUT/DELETE still returned raw storage errors or migration0015 instructions, and auth exceptions escaped their context boundary. Reused existing fixed customerFailure contract (503/reference/no-store); unchanged auth/tenant resolution, owner/admin management, deployment allowlist, default-tenant zero-gate policy, validation and scoped writes. Three actual TypeScript-handler privacy regressions fail prior main; all10focused actual account/settings/validation cases pass after repair, covering auth/tenant/list/default/write faults with private/path/token/table sentinels and successful denial/scoping/mutation behavior. No new tenant policy or credential permissions. Broad checks/CI/deployment pending at this checkpoint. Native329/320 remain held for the already reported protected-signing automatic-review rejection; no bypass or signing edit.
+
+Repository settings validation: production build/typecheck and direct installed ESLint pass; fullweb507tests504pass3optional skips0fail. Npm-wrapper lint was slow; direct installed binary completed successfully. No deployed adversarial settings acceptance claimed. Fresh PR CI remains required.

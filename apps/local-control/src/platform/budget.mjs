@@ -145,6 +145,42 @@ export class TaskBudget {
     return { exceeded, snapshot: this.snapshot() };
   }
 
+  /**
+   * Returns the unused part of an earlier `reserve()` at every scope, e.g. a
+   * GPU reservation settled below its estimate. `ref` identifies the
+   * settlement so a caller resuming after a crash can tell whether it already
+   * happened (see `hasRelease`). Refuses, writing nothing, if any scope has
+   * less recorded usage than the amount returned: a release can only undo a
+   * reservation, never create allowance.
+   */
+  release(amounts, { ref } = {}) {
+    checkAmounts(amounts);
+    if (typeof ref !== "string" || !ref) throw new Error("A budget release must carry a settlement ref.");
+    this.#store.transaction(() => {
+      const tasks = this.#tasks();
+      for (const task of tasks) for (const [dimension, value] of Object.entries(amounts)) {
+        if ((task.usage?.[dimension] ?? 0) < value) throw new Error(`Budget release of '${dimension}' exceeds recorded usage.`);
+      }
+      for (const task of tasks) {
+        const next = { ...(task.usage ?? {}) };
+        for (const [dimension, value] of Object.entries(amounts)) next[dimension] = (next[dimension] ?? 0) - value;
+        this.#store.recordUsage(this.#tenantId, task.id, next);
+        this.#emit(task, "budget.charged", { phase: "release", sourceTaskId: this.#taskId, amounts: {}, released: amounts, ref, usage: next });
+      }
+    });
+    return this.snapshot();
+  }
+
+  /** True when a release with this settlement ref is already recorded on the task. */
+  hasRelease(ref) {
+    for (let afterSeq = 0; ;) {
+      const events = this.#store.listEvents(this.#tenantId, { taskId: this.#taskId, afterSeq, limit: 500 });
+      if (!events.length) return false;
+      if (events.some(event => event.type === "budget.charged" && event.payload?.phase === "release" && event.payload?.ref === ref)) return true;
+      afterSeq = events.at(-1).seq;
+    }
+  }
+
   #emit(task, type, payload) {
     this.#store.appendEvent({
       type, tenantId: task.tenantId, correlationId: task.correlationId, taskId: task.id,
