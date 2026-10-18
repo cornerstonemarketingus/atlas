@@ -587,3 +587,9 @@ it did not produce a complete passing result. Next: CI on this branch, then a
 trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
 
+## 2026-10-18 — eval harness, first slice (#128, PROGRAM 2.1)
+
+Took over stale workstream #128 (claim from 2026-09-27, no code on main). Adds `packages/atlas-eval` (dependency-free): EvalTask/EvalResult validation, a runner that checks out each task's base commit into a throwaway worktree, runs an agent, then runs the task's own verify command (pass = verify exits 0 with files changed; agent claims are ignored), JSON/Markdown reports, an `atlas code` adapter (key passed by env-var name only, child gets no other env), and `validate`, a no-model dry run proving each task fails untouched and passes with its recorded solution. Ten tasks in `evals/tasks`: six from real commits, four repository questions checked by `evals/verifiers/answer-check.mjs`. Docs: docs/EVALS.md.
+
+Evidence: 16 package tests pass; `validate` 10/10 tasks valid; mutation checks (agent claim counted, env allowlist removed, cleanup removed, no-change guard removed) each make the matching tests fail. No baseline pass rate: no provider key in this environment, and nothing in this PR claims one. Open: CI wiring (`atlas-eval.yml`, protected, owner review), dogfood log (2.2), tasks for test repair/tool args/review/final synthesis/browser, growth to 30–50, Groq Batch. Next: CI workflow PR, then dogfood log, then a baseline run once a credential exists.
+
