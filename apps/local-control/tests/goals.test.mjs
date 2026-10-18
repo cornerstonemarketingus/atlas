@@ -15,6 +15,7 @@ function missions() {
     created, status,
     create(input) { const id = `m${created.length + 1}`; created.push({ id, ...input }); status.set(id, "running"); return { id }; },
     get(id) { return status.has(id) ? { id, status: status.get(id) } : null; },
+    control(id, action) { assert.equal(action, "cancel"); status.set(id, "cancelled"); return this.get(id); },
   };
 }
 

@@ -142,3 +142,24 @@ test("an update keeps a UTF-8 byte-order mark; hashes stay over the text without
   const next = await editor.preview(root, { operation: "update", path: "src/bom.cs", content: "class C {}\n", expectedSha256: hash("class B {}\r\n") });
   assert.equal(next.beforeSha256, hash("class B {}\r\n"), "a follow-up edit sees the same hash the result reported");
 });
+
+test("nested file creation previews without directories and creates them only after exact approval", async () => {
+  const root = await fixture();
+  const editor = new SafeRepositoryFileEditor();
+  const plan = await editor.preview(root, { operation: "create", path: "apps/web/services/wood-framing-mn/index.html", content: "<h1>Wood framing</h1>\n", mustNotExist: true });
+  await assert.rejects(stat(join(root, "apps")), { code: "ENOENT" });
+  await assert.rejects(editor.apply(plan, { approved: true, planDigest: "wrong" }), (error) => code(error) === "APPROVAL_MISMATCH");
+  await assert.rejects(stat(join(root, "apps")), { code: "ENOENT" });
+  await editor.apply(plan, { approved: true, planDigest: plan.planDigest });
+  assert.match(await readFile(join(root, plan.path), "utf8"), /Wood framing/);
+});
+
+test("a parent replaced by a symlink after preview cannot receive a nested create", async (t) => {
+  const root = await fixture();
+  const outside = await fixture();
+  const editor = new SafeRepositoryFileEditor();
+  const plan = await editor.preview(root, { operation: "create", path: "new/nested/index.html", content: "safe", mustNotExist: true });
+  try { await symlink(outside, join(root, "new"), "junction"); } catch { t.skip("Symlink creation unavailable"); return; }
+  await assert.rejects(editor.apply(plan, { approved: true, planDigest: plan.planDigest }), (error) => code(error) === "SYMLINK_NOT_ALLOWED");
+  await assert.rejects(stat(join(outside, "nested")), { code: "ENOENT" });
+});

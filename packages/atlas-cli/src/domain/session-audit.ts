@@ -51,6 +51,9 @@ export interface ToolRequestedPayload {
   readonly toolId: string;
   readonly argumentCount: number;
   readonly argumentsDigest?: string;
+  /** Original model spelling when toolId was deterministically repaired. */
+  readonly requestedToolId?: string;
+  readonly repair?: "automatic";
 }
 
 export interface ToolPolicyDecidedPayload {

@@ -1,13 +1,8 @@
+import { registerCrmTools } from "./crm-tools.mjs";
 /**
- * Business workflows.
- *
- * These are preparation tools. Each produces a structured brief the operator
- * reads and acts on; none of them sends, submits, or applies. That split is
- * the point: the useful and time-consuming part of this work is the research
- * and the draft, and the part that needs a human is the moment it goes out.
- *
- * Each one writes its brief through the filesystem workspace so the result is
- * a durable artifact rather than a wall of chat text.
+ * Business workflow brief builders prepare research and drafts without sending.
+ * CRM tools share this live registration but declare separate capabilities,
+ * credentials and explicit write approvals; their outcomes require read-back.
  */
 const SECTIONS = {
   job_application: [
@@ -90,6 +85,7 @@ export function registerWorkflowTools(registry) {
       },
     });
   }
+  registerCrmTools(registry);
   return registry;
 }
 

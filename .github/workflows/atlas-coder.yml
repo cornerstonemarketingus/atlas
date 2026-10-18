@@ -60,7 +60,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  claim:
+    name: Claim Atlas execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      granted: ${{ steps.claim.outputs.granted }}
+      expires_at: ${{ steps.claim.outputs.expires_at }}
+      run_id: ${{ steps.claim.outputs.run_id }}
+      run_attempt: ${{ steps.claim.outputs.run_attempt }}
+    env:
+      ATLAS_TASK_ID: ${{ inputs.task_id }}
+      ATLAS_REPOSITORY: ${{ inputs.repository }}
+      ATLAS_BRANCH: ${{ inputs.branch }}
+      ATLAS_MODE: ${{ inputs.mode }}
+      ATLAS_OBJECTIVE: ${{ inputs.objective }}
+      ATLAS_MERGE_POLICY: ${{ inputs.merge_policy }}
+      ATLAS_CORRELATION_ID: ${{ inputs.correlation_id }}
+      ATLAS_OUTPUT_DIR: ${{ github.workspace }}/atlas-claim
+    steps:
+      # This job never checks out the target branch or runs repository commands.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: cornerstonemarketingus/atlas
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - run: node scripts/runner/validate-inputs.mjs
+      - name: Reserve saved task execution
+        id: claim
+        env:
+          ATLAS_CLAIM_URL: ${{ vars.ATLAS_CLAIM_URL }}
+          ATLAS_RESULT_URL: ${{ vars.ATLAS_RESULT_URL }}
+        run: node scripts/runner/claim-execution.mjs
   run:
+    needs: claim
+    if: ${{ needs.claim.outputs.granted == 'true' && needs.claim.outputs.run_attempt == github.run_attempt }}
     runs-on: ubuntu-latest
     # 15 minutes for the model run itself, plus headroom for ci-gated's own
     # bounded poll loop (create-coder-pull-request.mjs times out that loop
@@ -76,7 +116,13 @@ jobs:
     # here at all.
     permissions:
       contents: read
+      id-token: none
     env:
+      ATLAS_CLAIM_GRANTED: ${{ needs.claim.outputs.granted }}
+      ATLAS_CLAIM_EXPIRES_AT: ${{ needs.claim.outputs.expires_at }}
+      ATLAS_CLAIM_RUN_ID: ${{ needs.claim.outputs.run_id }}
+      ATLAS_CLAIM_RUN_ATTEMPT: ${{ needs.claim.outputs.run_attempt }}
+      ATLAS_JOB_TIMEOUT_MINUTES: ${{ vars.ATLAS_SELF_HOSTED_MODEL != '' && 330 || 25 }}
       ATLAS_TASK_ID: ${{ github.event.inputs.task_id }}
       ATLAS_REPOSITORY: ${{ github.event.inputs.repository }}
       ATLAS_BRANCH: ${{ github.event.inputs.branch }}
@@ -97,6 +143,9 @@ jobs:
 
       - name: Validate dispatch inputs
         run: node scripts/runner/validate-inputs.mjs
+
+      - name: Check execution lease before tools
+        run: node scripts/runner/claim-execution.mjs check
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -209,12 +258,16 @@ jobs:
 
       - name: Run Atlas task
         env:
-          # Both vendor keys are exposed; the runner reads only the one the
-          # selected provider needs, and an unset key for the *other* vendor is
-          # not an error. Set ATLAS_CODER_PROVIDER to pick explicitly, or leave
-          # it empty and let a claude-* ATLAS_CODER_MODEL select Anthropic.
+          # Provider credentials stay in this trusted CLI step. Validation
+          # children receive the CLI's existing scrubbed environment.
+          # Explicit primary wins; configured cross-vendor routes can recover
+          # capacity failures. ATLAS_CODER_FALLBACKS=none disables fallbacks.
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ATLAS_WORKERS_AI_TOKEN: ${{ secrets.ATLAS_WORKERS_AI_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ATLAS_WORKERS_AI_MODEL: ${{ vars.ATLAS_WORKERS_AI_MODEL }}
           ATLAS_CODER_PROVIDER: ${{ vars.ATLAS_CODER_PROVIDER }}
           ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
           ATLAS_CODER_FALLBACKS: ${{ vars.ATLAS_CODER_FALLBACKS }}
@@ -286,8 +339,8 @@ jobs:
 
   report:
     name: Return results to Atlas
-    needs: run
-    if: always()
+    needs: [claim, run]
+    if: ${{ always() && needs.claim.outputs.granted == 'true' && needs.claim.outputs.run_attempt == github.run_attempt }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

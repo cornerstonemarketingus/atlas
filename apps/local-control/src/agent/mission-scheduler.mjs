@@ -469,7 +469,7 @@ export class MissionScheduler {
     };
 
     try {
-      const result = await this.#execute({ child: publicChild(child), signal: controller.signal, budget, checkpoint });
+      const result = await this.#execute({ child: publicChild(child), dependencies: child.dependencies.map(id => publicChild(this.#children.get(id))), signal: controller.signal, budget, checkpoint });
       checkpoint();
       if (result?.usage) budget.record(result.usage);
       if (result?.status === "failed" && this.#requeueIfRateLimited(child, result)) {
@@ -481,6 +481,10 @@ export class MissionScheduler {
         child.state = "cancelled";
         child.error = { code: result.code ?? "CHILD_CANCELLED", message: String(result.summary ?? "Child agent cancelled.") };
       } else {
+        const required = child.metadata?.requiredEvidence ?? [];
+        if (!Array.isArray(required) || required.some(kind => !Array.isArray(result?.evidence) || !result.evidence.some(item => item?.kind === kind && typeof item.path === "string" && item.path.length > 0 && Number.isSafeInteger(item.bytes) && item.bytes > 0))) {
+          throw new MissionPlanError("MISSING_EVIDENCE", `Child '${child.id}' did not return the required artifact evidence.`);
+        }
         child.state = "completed";
         child.result = jsonValue(result ?? null, `Result for '${child.id}'`);
         this.#consecutiveLimits = 0;

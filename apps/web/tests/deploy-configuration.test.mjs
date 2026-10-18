@@ -31,6 +31,16 @@ function uploadedNames() {
   return new Set(loop[1].split(/\\\n/u).map((line) => line.trim()).filter(Boolean));
 }
 
+test("Genesis bridge connection variables are mapped and uploaded to the Worker", () => {
+  const source = readFileSync(join(root, "apps/web/app/api/genesis/bridge.mjs"), "utf8");
+  const runtime = new Set([...source.matchAll(/environment\.(ATLAS_[A-Z0-9_]+)/gu)].map((match) => match[1]));
+  assert.deepEqual([...runtime].sort(), ["ATLAS_GENESIS_TOKEN", "ATLAS_GENESIS_URL"]);
+  for (const name of runtime) {
+    assert.ok(uploadStepEnvironment().has(name), `${name} must be sourced from its repository secret`);
+    assert.ok(uploadedNames().has(name), `${name} must reach the Worker`);
+  }
+});
+
 /** Runtime variables the chat code reads. */
 function chatRuntimeVariables() {
   const names = new Set();

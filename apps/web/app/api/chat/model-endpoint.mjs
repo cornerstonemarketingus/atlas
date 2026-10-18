@@ -120,7 +120,7 @@ export function chatReadiness(environment = process.env) {
 
 /** The absolute chat-completions URL for a resolved endpoint. */
 export function completionsUrl(baseUrl) {
-  return new URL("chat/completions", baseUrl).toString();
+  return new URL("chat/completions", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }
 
 /**

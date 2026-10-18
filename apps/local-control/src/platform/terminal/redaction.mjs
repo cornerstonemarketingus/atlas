@@ -43,6 +43,23 @@ const RULES = [
 const SECRET_KEY_PATTERN = /(SECRET|PASSWORD|PASSWD|TOKEN|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIAL|AUTH)/i;
 const MIN_KNOWN_SECRET_LENGTH = 8;
 
+/** Structured credential payloads are removed even when their values have no
+ * recognizable vendor prefix. References and capability metadata survive.
+ */
+const CREDENTIAL_FIELD = /^(?:password|passwd|secret|token|api[_-]?key|(?:access|refresh|session)[_-]?token|private[_-]?key|session[_-]?cookie|cookies?|set[_-]?cookie|authorization)$/iu;
+export function redactStructured(value, redactText = createRedactor()) {
+  const text = (input) => {
+    const result = redactText(input);
+    return typeof result === "string" ? result : result.text;
+  };
+  if (typeof value === "string") return text(value);
+  if (Array.isArray(value)) return value.map((entry) => redactStructured(entry, redactText));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [text(key),
+    CREDENTIAL_FIELD.test(key) && ((typeof entry === "string" && entry.length > 0) || (entry !== null && typeof entry === "object"))
+      ? "[redacted:credential-field]" : redactStructured(entry, redactText)]));
+  return value;
+}
+
 /**
  * Values of secret-named variables in the daemon's own environment. The child
  * never receives them (the environment is rebuilt from nothing), but a command

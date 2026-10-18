@@ -1,0 +1,49 @@
+# Atlas deployment status
+
+Updated 2026-10-16. This branch is not deployed. No infrastructure provisioned,
+production database migrated, credentials transferred or live business actions
+performed. The existing Cloudflare web app and GitHub Actions execution adapter
+remain the integration targets. Cloudflare Workers coordinate tasks; full Linux
+coding/container workloads require an execution host.
+
+For this transport slice: pass focused and full local tests, required branch CI,
+then follow normal review/merge policy. Verify a configured OpenAI-compatible
+server using actual text/tool/usage responses and an interrupted stream. Existing
+hosted chat release checks remain necessary for changes to hosted transport.
+
+For independent cloud workers: first integrate the durable dispatch/claim/result
+stack and existing mission persistence. Then deploy a Linux service with scoped
+identity, outbound control-plane connection, private artifact storage and isolated
+containers. Register capabilities in the existing worker registry. Acceptance
+requires a task initiated remotely while the owner's PC is offline, worker kill
+and replacement, preserved checkpoints, bounded spending and one verified artifact.
+
+Request recovery checkpoint (2026-10-17): current main is propagated through
+existing #270/#274/#276. #276's final Worker build, full web suite (537 pass,
+four optional skips) and separately executed desktop/mobile browser fixture
+pass. Prior migrations 0017/0018 still precede deployment; this UI fix adds no
+migration or secret. Fresh integrated PR CI/review and configured live reads
+remain required. No production migration or deployment was performed here.
+
+Claims integration checkpoint: #278 contains the validated recovery parent and
+passes build/typecheck, 545 web tests (four optional skips), 83 runner/local
+tests and all ten workflow checks. Protected workflow/identity review and fresh
+CI remain required. Apply migration 0019 only after authorized 0017/0018 rollout,
+deploy the reviewed claim endpoint before enabling its reviewed workflow gate,
+and quiesce old cached runs. No such rollout or live identity journey occurred.
+
+Unresolved external dependencies: owner-selected execution host, authorized
+provider configuration, TLS/identity and artifact storage configuration, approved
+deployment and physical mobile acceptance. Never expose a Docker socket or host
+credentials to an untrusted repository. Protected changes require CODEOWNERS review.
+
+## Cost status
+
+This change adds no dependency or hosted service and incurred no provisioned
+infrastructure cost. Ongoing cloud estimates have not been priced against a
+selected current vendor/region, so no unverified monthly figure is asserted.
+Track CPU-hours, storage, egress and model input/output tokens against configured
+caps before rollout. User-owned local inference has hardware/electricity costs;
+hosted free allocations are finite; GPU serving adds rental and storage costs.
+Vendor pricing comparison remains a deployment-planning task once candidates are
+selected. Do not rent compute or increase API budgets automatically.

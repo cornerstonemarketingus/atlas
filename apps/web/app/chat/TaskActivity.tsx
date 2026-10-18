@@ -4,7 +4,7 @@ import { AtlasMark } from "../AtlasMark.js";
 import { DiffLines } from "./MessageBody.js";
 import type { LogLine, WorkItem } from "./Workspace.js";
 
-type Task = { taskId: string; objective: string; mode: string; status?: string; run?: { id?: number; url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
+type Task = { taskId: string; objective: string; mode: string; status?: string; executionProvider?: string; run?: { id?: number; url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
 type Step = { label: string; state: "done" | "running" | "pending" | "failed"; startedAt: string | null; completedAt: string | null };
 type Activity = { status: string | null; conclusion: string | null; url: string | null; steps: Step[] };
 type ChangedFile = { path: string; previousPath: string | null; status: string; additions: number; deletions: number; patch: string | null; truncated: boolean };
@@ -23,6 +23,8 @@ function seconds(step: Step) {
 
 function headline(task: Task) {
   const status = task.status ?? "dispatched";
+  if (status === "dispatch-unknown") return "Request saved. Checking whether the run started…";
+  if (status === "dispatch-pending") return "Request saved. Dispatch has not started.";
   if (["succeeded", "completed"].includes(status)) return task.mode === "coder" ? "Done. The change is ready." : "Done.";
   if (["failed", "timed_out"].includes(status)) return "This run did not finish successfully.";
   if (status === "cancelled") return "Cancelled.";
@@ -44,6 +46,9 @@ export function TaskActivity({ task, onLog, onChanges, onOpenFile }: {
   const [activity, setActivity] = useState<Activity | null>(null);
   const [changes, setChanges] = useState<Changes | null>(null);
   const [openDiff, setOpenDiff] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelState, setCancelState] = useState<string | null>(null);
+  const [cancelMessage, setCancelMessage] = useState<string | null>(null);
   const logged = useRef(new Map<string, string>());
   // The parent's callbacks change identity every render; effects read the latest through refs instead of re-running.
   const callbacks = useRef({ onLog, onChanges });
@@ -51,6 +56,27 @@ export function TaskActivity({ task, onLog, onChanges, onOpenFile }: {
   const [open, setOpen] = useState(true);
   const live = !TERMINAL.has(task.status ?? "dispatched");
   const runId = task.run?.id;
+
+  async function cancelRun() {
+    setCancelling(true);
+    try {
+      const response = await fetch(`/api/tasks/${encodeURIComponent(task.taskId)}/cancel`, { method: "POST", credentials: "same-origin", cache: "no-store" });
+      const result = await response.json() as { status?: string; message?: string };
+      if (!response.ok) {
+        setCancelState(null);
+        setCancelMessage(result.message ?? "Cancellation is unavailable. Try again after checking progress.");
+      } else if (result.status === "cancellation-requested") {
+        setCancelState(result.status);
+        setCancelMessage("Cancellation requested. Watching for the run to stop…");
+      } else {
+        setCancelState(null);
+        setCancelMessage(result.status === "completed" ? "The run has already finished." : "Cancellation is unconfirmed. Check progress or request it again.");
+      }
+    } catch {
+      setCancelState(null);
+      setCancelMessage("Cancellation is unconfirmed. Check progress or request it again.");
+    } finally { setCancelling(false); }
+  }
 
   useEffect(() => {
     let active = true;
@@ -132,9 +158,13 @@ export function TaskActivity({ task, onLog, onChanges, onOpenFile }: {
         })}</ul>
       </div>}
       <div className="result-links">
+        {live && task.executionProvider !== "private" && activity?.status !== "completed" && <button type="button" className="result-link" disabled={cancelling || cancelState === "cancellation-requested"} onClick={() => { void cancelRun(); }}>
+          {cancelling ? "Requesting cancellation…" : cancelState === "cancellation-requested" ? "Cancellation requested" : "Cancel run"}
+        </button>}
         {task.pullRequest?.url && <a className="result-link" href={task.pullRequest.url} target="_blank" rel="noreferrer">Review the pull request ↗</a>}
         {runUrl && <a className="result-link" href={runUrl} target="_blank" rel="noreferrer">Full log ↗</a>}
       </div>
+      {cancelMessage && activity?.status !== "completed" && <p role="status" className="activity-objective">{cancelMessage}</p>}
     </div>
   </div>;
 }

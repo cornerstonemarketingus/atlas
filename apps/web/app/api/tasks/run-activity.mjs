@@ -28,7 +28,9 @@ const NOISE = [/^Set up job$/u, /^Complete job$/u, /^Post /u, /^Set up Node/u, /
 
 /** The run belongs to this task only when its run name carries the task id. */
 export function runBelongsToTask(run, taskId) {
-  const named = taskIdFromRunName(run?.name ?? run?.display_title ?? null);
+  // GitHub's name is the workflow label; run-name is display_title. A
+  // conflicting title must never fall back to a misleading workflow name.
+  const named = taskIdFromRunName(run?.display_title ?? run?.name ?? null);
   return named !== null && named === String(taskId).toLowerCase();
 }
 

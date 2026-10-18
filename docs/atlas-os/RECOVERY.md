@@ -58,3 +58,37 @@ in `src/` called `claimOutbox`, so events were durable but never delivered.
 **Fixed:** `platform/outbox-dispatcher.mjs` runs in the daemon, delivers
 at-least-once with retry and a visible dead-letter state, and feeds the live
 dashboard stream (`tests/platform-outbox.test.mjs`).
+
+## 6. Ended goals left their missions executing (#255)
+
+Cancelling, expiring, or achieving a persistent goal previously changed only
+the goal record. Its active mission could continue executing, even though
+the goal appeared finished.
+
+`agent/goals.mjs` now saves the terminal goal, clears queued wakes, and persists
+`missionStopPending` before calling the existing mission cancellation control.
+That control aborts running agent signals and cancels pending lanes. The goal
+retains its mission identity and records the stop outcome in its history.
+Already-terminal or missing missions require no control; repeated cancellation
+is idempotent.
+
+A refused or unacknowledged stop stays pending in SQLite. The daemon's existing
+goal tick retries it after restart without waking the ended goal; one refused
+expiry stop does not prevent other goals expiring. An achieved-goal stop
+failure does not prevent other goals processing the same
+deduplicated GitHub event. An owner HTTP cancellation
+returns `503 MISSION_STOP_FAILED` when the stop is pending, with an actionable
+message and no backend error details. Retrying DELETE also retries the stop.
+Authentication and the owner-only mutation boundary remain in force.
+
+Verification: `tests/goal-cancellation.test.mjs` covers lifecycle termination,
+unrelated missions, completed/missing missions, queued wakes, durable database
+reopen/retry, failure isolation, and real owner HTTP cancellation reaching a
+mission AbortSignal. It also checks anonymous/device refusal and the HTTP
+failure/retry contract. Existing `tests/goals.test.mjs` covers normal waking.
+
+Limits: cancellation is cooperative and cannot undo an action already executed.
+Historical terminal goals without a persisted stop intent are not retroactively
+cancelled. This repairs local daemon goals; hosted persistent goal execution
+still requires separate infrastructure. Live model execution is not exercised
+by these deterministic tests.

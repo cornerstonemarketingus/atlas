@@ -47,6 +47,10 @@ export class GenesisStore {
     this.#db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA busy_timeout = 5000;
+      CREATE TABLE IF NOT EXISTS genesis_operations (
+        id TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS genesis_projects (
         id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
@@ -113,6 +117,19 @@ export class GenesisStore {
   }
 
   close() { this.#db.close(); }
+
+  operation(id) {
+    return parse(this.#db.prepare("SELECT value_json FROM genesis_operations WHERE id = ?").get(id)?.value_json);
+  }
+
+  operations() {
+    return this.#db.prepare("SELECT value_json FROM genesis_operations").all().map((row) => parse(row.value_json));
+  }
+
+  saveOperation(value) {
+    this.#db.prepare("INSERT INTO genesis_operations(id, value_json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value_json = excluded.value_json").run(value.id, json(value));
+    return value;
+  }
 
   #stamp() { return this.#now().toISOString(); }
 
