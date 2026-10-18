@@ -53,6 +53,9 @@ export function renderRequirements(tool) {
   return { terminal: "container", render: [tool] };
 }
 
+/** Render outputs that go to the artifact store (kind "video"); see platform/artifacts/. */
+const VIDEO_MEDIA_TYPES = Object.freeze({ ".mp4": "video/mp4", ".webm": "video/webm" });
+
 const STAGING_PREFIX = "atlas-render-";
 const STAGING_TMP = ".tmp";
 const DEFAULTS = Object.freeze({ maxLogBytes: 64 * 1024, pollIntervalMs: 500, killGraceMs: 5_000 });
@@ -141,6 +144,7 @@ export class RenderRunner {
   #killContainer;
   #options;
   #redact;
+  #artifactStore;
 
   /**
    * @param options.container   the container sandbox option ({ runtime, cpus, memoryBytes, ... }); required to run anything
@@ -159,7 +163,10 @@ export class RenderRunner {
     pollIntervalMs = DEFAULTS.pollIntervalMs,
     killGraceMs = DEFAULTS.killGraceMs,
     knownSecrets = hostSecretValues(),
+    artifactStore = null,
   } = {}) {
+    if (artifactStore !== null && typeof artifactStore?.put !== "function") throw new RenderError("INVALID_CONFIG", "artifactStore must have a put() method.");
+    this.#artifactStore = artifactStore;
     this.#containerOption = container;
     this.#resolveSandbox = resolveSandbox;
     this.#images = normalizeImages(images);
@@ -215,9 +222,15 @@ export class RenderRunner {
    * Runs one job. Throws RenderPolicyError/RenderError before anything runs
    * (invalid job, no sandbox, no image); returns a result for anything that
    * happened after the container started.
+   *
+   * @param context.tenantId  required when an artifactStore is configured
+   * @param context.runId     provenance run id for stored artifacts (default: the job id)
    */
-  async run(workspaceRoot, jobInput) {
+  async run(workspaceRoot, jobInput, context = {}) {
     const job = validateRenderJob(jobInput);
+    if (this.#artifactStore && (typeof context.tenantId !== "string" || !context.tenantId)) {
+      throw new RenderError("TENANT_REQUIRED", "A tenantId is required to store render outputs as artifacts.");
+    }
     const toolImage = this.#images[job.tool];
     if (!toolImage) throw new RenderError("IMAGE_NOT_CONFIGURED", `${RENDER_CAPABILITIES[job.tool]} needs a configured image (images.${job.tool}).`);
     const image = job.image ?? toolImage.image;
@@ -249,13 +262,13 @@ export class RenderRunner {
         await copyFile(real, target, fsConstants.COPYFILE_FICLONE);
       }
       for (const rel of job.outputs) await mkdir(dirname(join(staging, ...rel.split("/"))), { recursive: true });
-      return await this.#execute({ job, jobId, image, toolImage, sandbox, staging, workspace });
+      return await this.#execute({ job, jobId, image, toolImage, sandbox, staging, workspace, context });
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
   }
 
-  async #execute({ job, jobId, image, toolImage, sandbox, staging, workspace }) {
+  async #execute({ job, jobId, image, toolImage, sandbox, staging, workspace, context }) {
     const argv = toolImage.entrypointRunsTool ? [...job.args] : [job.tool, ...job.args];
     const name = `atlas-render-${jobId.slice(4, 20)}`;
     const args = containerRunArguments({ sandbox: { ...sandbox, image }, name, workspaceRoot: staging, cwd: staging, argv, env: {}, network: false });
@@ -370,8 +383,30 @@ export class RenderRunner {
       result.files = await this.#publish({ job, staging, workspace });
       result.ok = true;
       result.status = "succeeded";
+      if (this.#artifactStore) await this.#storeArtifacts({ result, workspace, runId: context.runId ?? jobId, tenantId: context.tenantId });
     }
     return result;
+  }
+
+  /**
+   * Puts published video outputs into the artifact store. The store sniffs
+   * content itself; a refusal is recorded on the file, not thrown, because
+   * the render already succeeded and its outputs are in the workspace.
+   */
+  async #storeArtifacts({ result, workspace, runId, tenantId }) {
+    for (const file of result.files) {
+      const mediaType = VIDEO_MEDIA_TYPES[file.path.slice(file.path.lastIndexOf(".")).toLowerCase()];
+      if (!mediaType) continue;
+      try {
+        const { artifact, created } = await this.#artifactStore.put({
+          tenantId, kind: "video", mediaType, provenance: { runId, step: "render", source: result.capability },
+          path: join(workspace, ...file.path.split("/")), name: file.path.slice(file.path.lastIndexOf("/") + 1),
+        });
+        file.artifact = { id: artifact.id, sha256: artifact.sha256, created };
+      } catch (error) {
+        file.artifactError = { code: error.code ?? "ARTIFACT_STORE_FAILED", message: error.message };
+      }
+    }
   }
 
   #logs(stdout, stderr) {

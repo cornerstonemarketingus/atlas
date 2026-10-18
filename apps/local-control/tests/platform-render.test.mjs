@@ -12,6 +12,7 @@ import {
   RENDER_CAPABILITIES, RENDER_TOOLS, RenderError, RenderPolicyError, RenderRunner, assertContainerInvocation, blenderFramePath,
   buildBlenderJob, normalizeWorkspacePath, renderRequirements, validateRenderJob,
 } from "../src/platform/render/index.mjs";
+import { ArtifactStore } from "../src/platform/artifacts/index.mjs";
 import { containerRunArguments, resolveContainerSandbox } from "../src/platform/terminal/container-sandbox.mjs";
 import { RENDER_TOOLS as REGISTRY_RENDER_TOOLS, WorkerRegistry, capabilityGaps, normalizeCapabilities } from "../src/platform/workers/registry.mjs";
 
@@ -491,6 +492,40 @@ test("a runtime that fails to start is reported, not retried on the host", async
   assert.equal(spawner.calls.length, 1);
   assert.equal(spawner.calls[0].file, SANDBOX.runtime);
   await rm(ws, { recursive: true, force: true });
+});
+
+test("with an artifact store, published video outputs are stored as kind 'video' with render provenance", async () => {
+  const ws = await workspace();
+  const storeRoot = await mkdtemp(join(tmpdir(), "atlas-render-store-"));
+  const store = new ArtifactStore({ root: storeRoot });
+  const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypisom"), Buffer.alloc(32)]);
+  const spawner = fakeSpawner({ run: async ({ staging }) => {
+    await writeIn(staging, "out/a.mp4", mp4);
+    await writeIn(staging, "out/fake.webm", "not really webm");
+    await writeIn(staging, "out/poster.png", "png-ish");
+    return 0;
+  } });
+  const { r } = runner(spawner, { artifactStore: store });
+  const job = { tool: "ffmpeg", args: ["-i", "media/in.mov", "out/a.mp4", "out/fake.webm", "out/poster.png"], inputs: ["media/in.mov"], outputs: ["out/a.mp4", "out/fake.webm", "out/poster.png"] };
+  await assert.rejects(r.run(ws, job), code("TENANT_REQUIRED"), "a store needs a tenant, checked before anything runs");
+  assert.equal(spawner.calls.length, 0);
+
+  const result = await r.run(ws, job, { tenantId: "t1", runId: "run_1" });
+  assert.equal(result.ok, true, result.error);
+  const [video, fake, poster] = result.files;
+  assert.equal(video.artifactError, undefined, JSON.stringify(video.artifactError));
+  assert.equal(video.artifact.sha256, video.sha256, "the store and the render agree on the digest");
+  assert.equal(video.artifact.created, true);
+  const record = store.get("t1", video.sha256);
+  assert.equal(record.kind, "video");
+  assert.equal(record.mediaType, "video/mp4");
+  assert.deepEqual(record.provenance, { runId: "run_1", step: "render", source: "render.ffmpeg" });
+  assert.equal(fake.artifactError.code, "CONTENT_MISMATCH", "the store's content sniffing still applies; the render result records it");
+  assert.equal(poster.artifact, undefined, "only video outputs go to the store");
+  assert.equal(poster.artifactError, undefined);
+  store.close?.();
+  await rm(ws, { recursive: true, force: true });
+  await rm(storeRoot, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------- real container
