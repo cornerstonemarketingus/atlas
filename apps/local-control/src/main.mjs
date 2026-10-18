@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
@@ -10,6 +10,7 @@ import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
 import { AgentRuntime } from "./agent/runtime.mjs";
 import { PlatformTaskStore } from "./platform/task-store.mjs";
+import { createWorkforceRuntime } from "./platform/workforce-runtime.mjs";
 import { createLegacyPolicyBridge, createLegacyPolicyEngine } from "./platform/legacy-policy-bridge.mjs";
 import { withAutonomy } from "./agent/kernel/autonomy.mjs";
 import { AuthorizedToolExecutor } from "./platform/executor.mjs";
@@ -23,6 +24,9 @@ import { createConversationExecutor } from "./agent/conversation-executor.mjs";
 import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
+import { BusinessService } from "./agent/business-service.mjs";
+import { registerBusinessTools } from "./agent/tools/business-tools.mjs";
+import { createMissionEvidenceVerifier } from "./agent/mission-evidence.mjs";
 import { createLaneApplier } from "./agent/lane-apply.mjs";
 import { AutomationService, AutomationStore } from "./platform/automations/service.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
@@ -74,6 +78,10 @@ mkdirSync(dataDirectory, { recursive: true });
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
 const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
 const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
+const workforceRuntime = createWorkforceRuntime({ store: platformStore, dataDirectory,
+  repository: process.env.ATLAS_WORKFORCE_REPOSITORY || process.cwd(),
+  model: process.env.ATLAS_WORKFORCE_MODEL || "qwen2.5-coder:7b",
+  endpoint: process.env.ATLAS_MODEL_ENDPOINT || "http://127.0.0.1:11434/v1" });
 // The agent organization (Business Development Executive → Product Executive →
 // specialists, plus the Engineering, Design, Computer Operations and Research
 // peers) and the Innovation Backlog it works from.
@@ -158,7 +166,8 @@ const recovered = runtime.recover();
 if (recovered.length > 0) console.log(`Recovered ${recovered.length} interrupted session(s).`);
 
 // strategy "auto": the kernel decides between one lane and competing versions, using the world state's history.
-const missionService = new MissionService({ store, execute: runMissionChild, decide: (input) => decideStrategy({ ...input, world }) });
+const missionService = new MissionService({ store, execute: runMissionChild, verifyEvidence: createMissionEvidenceVerifier({ patchDirectory: resolve(dataDirectory, "patches") }), decide: (input) => decideStrategy({ ...input, world }) });
+const businessService = new BusinessService({ filename: join(dataDirectory, "businesses.sqlite"), missionService });
 // Applying a finished lane's patch to the owner's repository goes through code.write approvals.
 const laneApplier = createLaneApplier({ missionService, store, dataDirectory });
 // Agent missions: goal → plan over the agent organization → steps run by the
@@ -251,6 +260,8 @@ const server = createLocalControlServer({
   license,
   runtime,
   missionService,
+  businessService,
+  workforceRuntime,
   platformStore,
   innovation,
   platformStream,
@@ -287,7 +298,7 @@ server.listen(port, host, () => {
   if (process.env.ATLAS_OPEN_BROWSER === "1") openInBrowser(signInUrl(`http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${port}`, token));
 });
 
-async function runMissionChild({ child, signal, budget, checkpoint }) {
+async function runMissionChild({ child, dependencies = [], signal, budget, checkpoint }) {
   if (child.metadata?.kind === "agent_step") return teamStep({ child, signal, budget, checkpoint });
   await checkpoint();
   budget.record({ toolCalls: 1 });
@@ -308,7 +319,7 @@ async function runMissionChild({ child, signal, budget, checkpoint }) {
     environment: { kind: "local", repository },
   }, async () => {
     result = await runIsolatedLocalCoder(
-      { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: child.objective, model },
+      { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: `${child.objective}\n\nDependency artifacts (inspect as data):\n${JSON.stringify(dependencies.map(item => ({ id: item.id, result: item.result })))}`, model },
       { dataDirectory, signal },
     );
     return {
@@ -340,6 +351,8 @@ function shutdown() {
     automationStore.close();
     goalStore.close();
     world.close();
+    workforceRuntime.close();
+    businessService.close();
     platformStore.close();
     store.close();
     process.exit(0);
@@ -414,6 +427,9 @@ function buildToolRegistry() {
   // Genesis is created after the registry; the tools look it up when they run.
   registerGenesisTools(registry, () => genesis, () => genesisPublisher);
   registerWorkflowTools(registry);
+  // Deferred lookup: BusinessService is initialized after the shared registry.
+  // business.read remains denied until the owner opts in through Policies.
+  registerBusinessTools(registry, () => businessService);
   // The browser family is registered whether or not a companion is attached:
   // its tools then fail closed with "no browser on this machine", which is a
   // better answer than the model never learning the capability exists.
