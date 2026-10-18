@@ -131,10 +131,11 @@ export function planProject(spec) {
   if (spec.auth.required) {
     featureTasks.push(add({
       title: `Add ${spec.auth.method === "password" ? "email and password" : spec.auth.method} sign-in`,
-      kind: "code",
-      executor: "coder",
+      kind: spec.auth.method === "password" ? "generate" : "code",
+      // Email and password sign-in is a tested template module (src/auth.mjs), switched on by the configuration.
+      executor: spec.auth.method === "password" ? "template" : "coder",
       objective: spec.auth.method === "password"
-        ? "Add sign-in with email and a hashed password (scrypt), a session cookie (HttpOnly, SameSite=Lax), sign-out, and require sign-in for every private page and API route. Add tests."
+        ? "Sign-in with email and a hashed password (scrypt), a session cookie (HttpOnly, SameSite=Lax), sign-out, an owner account that adds others, and sign-in required for every private page and API route."
         : `Add ${spec.auth.method} sign-in behind configuration (switched off until a client id is set), keep the app usable locally, require sign-in for private routes when enabled, and add tests.`,
       inputs: ["specification.auth"],
       outputs: ["sign-in page", "session handling", "auth tests"],

@@ -1,5 +1,5 @@
 "use client";
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 
 /**
  * Renders Markdown from Atlas's replies and from files it reads: paragraphs,
@@ -9,14 +9,16 @@ import { useState, type ReactNode } from "react";
  * the text is untrusted, so nothing in it can become markup, and links are
  * limited to http(s) and paths on this site.
  */
-export function MessageBody({ text }: { text: string }) {
+export const MessageBody = memo(RenderMessageBody);
+
+function RenderMessageBody({ text }: { text: string }) {
   const blocks: ReactNode[] = [];
   const lines = text.replace(/\r\n/gu, "\n").split("\n");
   let index = 0;
   let key = 0;
   while (index < lines.length) {
     const line = lines[index];
-    const fence = /^\s*(```|~~~)\s*([\w+#.-]*)\s*$/u.exec(line);
+    const fence = /^\s*(`{3,}|~{3,})[ \t]*([\w+#.-]*)(?:[ \t]+.*)?$/u.exec(line);
     if (fence) {
       const code: string[] = [];
       index += 1;
@@ -70,6 +72,8 @@ export function MessageBody({ text }: { text: string }) {
     if (!line.trim()) { index += 1; continue; }
     const paragraph: string[] = [];
     while (index < lines.length && lines[index].trim() && !/^(\s*```|\s*~~~|#{1,6}\s|\s*[-*•+]\s+|\s*\d+[.)]\s+|\s*>)/u.test(lines[index]) && !isTableStart(lines, index)) paragraph.push(lines[index++]);
+    // Incomplete streamed fences and unsupported Markdown must always advance.
+    if (paragraph.length === 0) paragraph.push(lines[index++]);
     blocks.push(<p key={key++}>{inline(paragraph.join("\n"))}</p>);
   }
   return <div className="md-body">{blocks}</div>;

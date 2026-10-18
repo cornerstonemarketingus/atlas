@@ -143,5 +143,5 @@ exfiltrate via URL.
 | 12 | **Low** | `local_audit` has no immutability trigger and is overwritten by `/v1/import` | `store.mjs:33`, `server.mjs:105` | **Fixed 2026-09-26**: append-only triggers; imports labelled and their approvals spent |
 | 13 | **Low** | No security headers configured for the web app (CSP, frame-ancestors) | `apps/web/next.config.ts` (empty) | **Fixed 2026-09-26** (framing, sniffing, referrer, HSTS, permissions); script-src CSP still needs renderer nonces |
 | 14 | **Low** | `deploy-cloudflare.yml` and `provision-d1.yml` have no top-level `permissions:` block (default token scope) | `.github/workflows/deploy-cloudflare.yml`, `provision-d1.yml` | **Fixed 2026-09-25**; `check-workflows.py` now requires a top-level block (P1-7) |
-| 15 | **Low** | Actions-minutes guard fails open | `scripts/runner/actions-budget.mjs:12-15` | Documented trade-off; surface in dashboard (P7-5) |
+| 15 | **Low** | Actions-minutes usage may be unavailable | `scripts/runner/actions-budget.mjs` | UNKNOWN blocks by default; explicit allow remains visible in artifacts and task results |
 | 16 | **Info** | Secret redaction is pattern-based; unknown formats pass | HANDOFF.md §9 | Keep secrets out of repos; add entropy check for artifacts only |

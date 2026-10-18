@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, link, lstat, open, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, open, readFile, realpath, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
@@ -10,6 +10,7 @@ import {
   type RepositoryFileEditRequest,
   type RepositoryFileEditResult,
 } from "../domain/repository-file-edit.js";
+import { unifiedLineDiff } from "./line-diff.js";
 
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const DEFAULT_MAX_DIFF_BYTES = 128 * 1024;
@@ -48,7 +49,7 @@ export class SafeRepositoryFileEditor implements RepositoryFileEditor {
   public async preview(repositoryPath: string, request: RepositoryFileEditRequest): Promise<RepositoryFileEditPlan> {
     validateRequest(request);
     const root = await canonicalRoot(repositoryPath);
-    const target = await validatePath(root, request.path);
+    const target = await validatePath(root, request.path, request.operation === "create");
     const before = await readCurrent(target, this.maxFileBytes);
     const path = relative(root, target).replaceAll("\\", "/");
 
@@ -95,7 +96,7 @@ export class SafeRepositoryFileEditor implements RepositoryFileEditor {
     const content = this.pendingContent(plan);
     const root = await canonicalRoot(plan.root);
     if (root !== plan.root) throw editError("INVALID_PLAN", "Repository root changed after preview.");
-    const target = await validatePath(root, plan.path);
+    const target = await validatePath(root, plan.path, plan.operation === "create");
     const before = await readCurrent(target, this.maxFileBytes);
     const currentHash = before === null ? null : sha(before);
     if (currentHash !== plan.beforeSha256) throw editError("STALE_FILE", "The target changed after preview.");
@@ -109,7 +110,17 @@ export class SafeRepositoryFileEditor implements RepositoryFileEditor {
       await this.applyRename(root, plan, target);
     } else {
       if (content === null) throw editError("INVALID_PLAN", "Edit plan content is unavailable or invalid.");
-      await writeAtomically(target, content);
+      const created: string[] = [];
+      try {
+        if (plan.operation === "create") {
+          await createParents(root, target, created);
+        }
+        await validatePath(root, plan.path);
+        await writeAtomically(target, content);
+      } catch (error) {
+        for (const directory of created.reverse()) await rmdir(directory).catch(() => undefined);
+        throw error;
+      }
     }
     this.contents.delete(plan.planDigest);
     return { schemaVersion: 1, root, operation: plan.operation, path: plan.path, toPath: plan.toPath,
@@ -195,7 +206,7 @@ async function canonicalRoot(repositoryPath: string): Promise<string> {
   catch (error) { throw editError("IO_ERROR", "Repository root is unavailable.", error); }
 }
 
-async function validatePath(root: string, path: string): Promise<string> {
+async function validatePath(root: string, path: string, allowMissingParents = false): Promise<string> {
   const target = resolve(root, path);
   const rel = relative(root, target);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw editError("PATH_OUTSIDE_REPOSITORY", "Edit path resolves outside the repository.");
@@ -204,13 +215,30 @@ async function validatePath(root: string, path: string): Promise<string> {
   for (let index = 0; index < parts.length - 1; index += 1) {
     cursor = resolve(cursor, parts[index]!);
     let info;
-    try { info = await lstat(cursor); } catch (error) { throw editError("PARENT_NOT_DIRECTORY", "Every parent directory must already exist.", error); }
+    try { info = await lstat(cursor); } catch (error) {
+      if (allowMissingParents && (error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw editError("PARENT_NOT_DIRECTORY", "An edit parent is unavailable or not a directory.", error);
+    }
     if (info.isSymbolicLink()) throw editError("SYMLINK_NOT_ALLOWED", "Edit paths cannot traverse symbolic links.");
     if (!info.isDirectory()) throw editError("PARENT_NOT_DIRECTORY", "An edit parent is not a directory.");
   }
   try { if ((await lstat(target)).isSymbolicLink()) throw editError("SYMLINK_NOT_ALLOWED", "Symbolic-link targets cannot be edited."); }
   catch (error) { if (error instanceof RepositoryFileEditError) throw error; if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw editError("IO_ERROR", "Could not inspect edit target.", error); }
   return target;
+}
+
+/** Called only after the exact file plan is approved; preview never creates directories. */
+async function createParents(root: string, target: string, created: string[]): Promise<void> {
+  let cursor = root;
+  for (const part of relative(root, dirname(target)).split(sep).filter(Boolean)) {
+    cursor = resolve(cursor, part);
+    await validatePath(root, relative(root, resolve(cursor, ".atlas-parent-check")), true);
+    try { await mkdir(cursor); created.push(cursor); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw editError("IO_ERROR", "Could not create an edit parent directory.", error); }
+    const info = await lstat(cursor);
+    if (info.isSymbolicLink()) throw editError("SYMLINK_NOT_ALLOWED", "Edit paths cannot traverse symbolic links.");
+    if (!info.isDirectory()) throw editError("PARENT_NOT_DIRECTORY", "An edit parent is not a directory.");
+  }
 }
 
 async function assertAbsent(path: string, message: string): Promise<void> {
@@ -274,13 +302,10 @@ function validateText(value: string, maxBytes: number): void {
 function sha(value: string): string { return createHash("sha256").update(value, "utf8").digest("hex"); }
 function positiveLimit(value: number): number { if (!Number.isSafeInteger(value) || value < 1) throw new TypeError("Limits must be positive integers."); return value; }
 function unifiedDiff(path: string, before: string, after: string, maxBytes: number, created: boolean): { text: string; truncated: boolean } {
-  const oldLines = before.replace(/\r\n/g, "\n").split("\n"); const newLines = after.replace(/\r\n/g, "\n").split("\n");
-  return boundedDiff([`--- ${created ? "/dev/null" : `a/${path}`}`, `+++ b/${path}`, `@@ -1,${created ? 0 : oldLines.length} +1,${newLines.length} @@`,
-    ...(!created ? oldLines.map((line) => `-${line}`) : []), ...newLines.map((line) => `+${line}`)], maxBytes);
+  return boundedDiff(unifiedLineDiff(before, after, created ? null : `a/${path}`, `b/${path}`), maxBytes);
 }
 function deleteDiff(path: string, before: string, maxBytes: number): { text: string; truncated: boolean } {
-  const oldLines = before.replace(/\r\n/g, "\n").split("\n");
-  return boundedDiff([`--- a/${path}`, "+++ /dev/null", `@@ -1,${oldLines.length} +1,0 @@`, ...oldLines.map((line) => `-${line}`)], maxBytes);
+  return boundedDiff(unifiedLineDiff(before, "", `a/${path}`, null), maxBytes);
 }
 function renameDiff(path: string, toPath: string, maxBytes: number): { text: string; truncated: boolean } {
   return boundedDiff([`--- a/${path}`, `+++ b/${toPath}`, "@@ rename with unchanged contents @@"], maxBytes);

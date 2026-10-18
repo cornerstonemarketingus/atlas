@@ -45,7 +45,8 @@ test("a plain answer is one round with the tools offered", async () => {
   const { fetcher, requests } = scripted([[say("Hello "), say("there")]]);
   const { promise, events } = run(fetcher);
   const outcome = await promise;
-  assert.deepEqual(outcome, { reply: "Hello there", steps: [] });
+  // The test endpoint is neither Groq nor OpenAI, so it counts as self-hosted.
+  assert.deepEqual(outcome, { reply: "Hello there", steps: [], servedBy: { provider: "self-hosted", model: "m" } });
   assert.equal(requests.length, 1);
   assert.ok(requests[0].tools.some((tool) => tool.function.name === "read_web_page"));
   assert.equal(requests[0].tool_choice, "auto");
@@ -75,7 +76,7 @@ test("Atlas reads a page, sees the result, then answers", async () => {
   assert.match(second.at(-1).content, /<data source="web page https:\/\/example.com\/">[\s\S]*Example body/u);
 });
 
-test("tasks the model starts run once, after the reply", async () => {
+test("tasks the model selects dispatch once with its introduction", async () => {
   const { fetcher } = scripted([[say("Starting it."), callTool("s1", "start_atlas_task", { mode: "coder", objective: "Fix the login bug", repository: "cornerstonemarketingus/atlas" })]]);
   const { promise, started } = run(fetcher);
   const outcome = await promise;
@@ -145,10 +146,35 @@ test("a long retry-after skips straight to the fallback; no fallback means a cle
   const withFallback = scripted([limited, [say("ok")]]);
   assert.equal((await run(withFallback.fetcher, { endpoint: { ...endpoint, fallbackModel: "small" }, sleep: async (ms) => { waits.push(ms); } }).promise).reply, "ok");
   assert.deepEqual(waits, []);
-  const without = scripted([limited]);
-  const failed = await run(without.fetcher, { sleep: async () => {} }).promise;
+  // With nowhere to route, a per-minute reset is waited out (twice at most), not given up on at once.
+  const without = scripted([limited, limited, limited]);
+  const slept = [];
+  const failed = await run(without.fetcher, { sleep: async (ms) => { slept.push(ms); } }).promise;
+  assert.deepEqual(slept, [60_000, 60_000]);
   assert.equal(failed.status, 429);
-  assert.match(failed.error, /rate limit/u);
+  assert.match(failed.error, /rate limit was reached \(429\): m \(model\.test\) is rate-limited for about 60 s/u);
+});
+
+test("a reset longer than about a minute (a daily quota) is not waited for, and the error says when it ends", async () => {
+  const daily = () => new Response("", { status: 429, headers: { "retry-after": "600" } });
+  const slept = [];
+  const failed = await run(scripted([daily]).fetcher, { sleep: async (ms) => { slept.push(ms); } }).promise;
+  assert.deepEqual(slept, []);
+  assert.equal(failed.status, 429);
+  assert.match(failed.error, /m \(model\.test\) is rate-limited for about 10 min/u);
+});
+
+test("refusals name each model and a fixed reason, never the provider's text", async () => {
+  const { describeRefusals } = await import("../app/api/chat/agent-loop.mjs");
+  assert.equal(describeRefusals([
+    { model: "big", host: "api.groq.com", status: 429, category: "rate_limit", retryAfterMs: 40_000 },
+    { model: "big", host: "api.groq.com", status: 429, category: "rate_limit", retryAfterMs: 30_000 },
+    { model: "gpt-5.4-mini", host: "api.openai.com", status: 429, category: "billing", retryAfterMs: null },
+    { model: "small", host: "api.groq.com", status: 503, category: "unavailable", retryAfterMs: null },
+    { model: "x", host: "h", status: 429, category: "input_too_large", retryAfterMs: 1 },
+    { model: "y", host: "h", status: 429, category: "rate_limit", retryAfterMs: 3 * 3_600_000 },
+  ]), "big (api.groq.com) is rate-limited for about 30 s; gpt-5.4-mini (api.openai.com) has no API credits or reached a billing limit; small (api.groq.com) answered 503; x (h) refused a request larger than its per-minute token allowance; y (h) is rate-limited for about 3 h");
+  assert.equal(describeRefusals([]), "");
 });
 
 test("a Groq minute-long wait in the body or reset header goes to the fallback instead of retrying into it", async () => {

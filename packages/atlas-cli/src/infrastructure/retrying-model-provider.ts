@@ -51,10 +51,14 @@ export class RetryingModelProvider implements ModelProvider {
   public async complete(request: ModelRequest, options: ModelCompletionOptions = {}): Promise<ModelResponse> {
     let attempt = 0;
     for (;;) {
+      this.#throwIfCancelled(options.signal);
       attempt += 1;
       try {
-        return await this.#provider.complete(request, options);
+        const response = await this.#provider.complete(request, options);
+        this.#throwIfCancelled(options.signal);
+        return response;
       } catch (error: unknown) {
+        this.#throwIfCancelled(options.signal);
         if (!(error instanceof ModelProviderError) || !error.retryable || attempt >= this.#maximumAttempts) {
           throw error;
         }
@@ -74,6 +78,17 @@ export class RetryingModelProvider implements ModelProvider {
       }
     }
   }
+
+  #throwIfCancelled(signal?: AbortSignal): void {
+    if (signal?.aborted) {
+      throw new ModelProviderError({
+        message: "Model request cancelled",
+        code: "cancelled",
+        providerId: this.metadata.id,
+        retryable: false,
+      });
+    }
+  }
 }
 
 function defaultSleep(delayMs: number, signal?: AbortSignal): Promise<void> {
@@ -82,10 +97,15 @@ function defaultSleep(delayMs: number, signal?: AbortSignal): Promise<void> {
       reject(new DOMException("aborted", "AbortError"));
       return;
     }
-    const timer = setTimeout(resolve, delayMs);
-    signal?.addEventListener("abort", () => {
+    const onAbort = () => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       reject(new DOMException("aborted", "AbortError"));
-    }, { once: true });
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
