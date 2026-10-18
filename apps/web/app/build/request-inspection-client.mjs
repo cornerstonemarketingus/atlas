@@ -44,3 +44,19 @@ export async function configureTaskObservation({ requestKey, enabled, fetcher = 
   if (!response.ok) throw new Error("Observation settings unavailable. Refresh saved requests before trying again.");
   return response.json();
 }
+
+export function observationHealthExplanation(health) {
+  const messages = {
+    observed: "A verified execution-job receipt is saved.", stopped: "Automatic checks are stopped.", expired: "Automatic-check consent expired.",
+    exhausted: "The automatic-check allowance is used. Manual reconciliation remains available.",
+    budget_wait: "A daily observation budget is exhausted. Automatic checks are waiting.",
+    check_backoff: "The last check could not confirm evidence. Atlas is waiting before another status check.",
+    unconfirmed_reservation: "The last check has no completion receipt; its reservation remains counted.",
+    scheduled: "Waiting for eligible scheduled capacity.",
+  };
+  if (health?.state === "provider_cooldown") return health.reason === "rate_limit"
+    ? "GitHub rate limits paused automatic checks."
+    : ["authentication", "permission"].includes(health.reason) ? "GitHub access needs operator attention. Automatic checks are paused."
+      : "GitHub is temporarily unavailable. Automatic checks are paused.";
+  return messages[health?.state] ?? "Automatic-check health is unavailable.";
+}

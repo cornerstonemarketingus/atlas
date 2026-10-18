@@ -1,7 +1,9 @@
+import { safeObserverFailure } from "./observer-health.mjs";
 import { inspectTaskRequest } from "./request-inspection.mjs";
 import { reconcileSavedRequest } from "./claim-reconciliation.mjs";
 
-export const OBSERVATION_POLICY = Object.freeze({ intervalMs: 900000, lifetimeMs: 86400000, perTask: 8, perTenantDay: 8, globalDay: 48, perTick: 2, activeTenant: 32, activeGlobal: 256 });
+import { OBSERVATION_POLICY } from "./observation-policy.mjs";
+export { OBSERVATION_POLICY } from "./observation-policy.mjs";
 const membership = `(w.requested_by = 'operator' AND w.tenant_id = 1 AND w.user_id IS NULL
   OR w.user_id IS NOT NULL AND w.user_id = t.user_id AND EXISTS
     (SELECT 1 FROM tenant_members m WHERE m.tenant_id = w.tenant_id AND m.user_id = w.user_id))`;
@@ -18,8 +20,9 @@ const eligible = `w.enabled = 1 AND w.expires_at > ? AND w.created_at <= ? AND $
   AND (SELECT COUNT(*) FROM tasks x WHERE x.tenant_id = w.tenant_id AND x.requested_by = w.requested_by AND x.correlation_id = r.correlation_id) = 1
   AND (SELECT COUNT(*) FROM task_outcome_observations a WHERE a.day = ?) < ${OBSERVATION_POLICY.globalDay}
   AND (SELECT COUNT(*) FROM task_outcome_observations a WHERE a.day = ? AND a.tenant_id = w.tenant_id) < ${OBSERVATION_POLICY.perTenantDay}
-  AND (SELECT COUNT(*) FROM task_outcome_observations a WHERE a.task_id = w.task_id) < ${OBSERVATION_POLICY.perTask}`;
-const timing = now => [now, now, Math.floor(now / OBSERVATION_POLICY.intervalMs), Math.floor(now / 86400000), Math.floor(now / 86400000)];
+  AND (SELECT COUNT(*) FROM task_outcome_observations a WHERE a.task_id = w.task_id) < ${OBSERVATION_POLICY.perTask}
+  AND w.next_check_at <= ? AND NOT EXISTS (SELECT 1 FROM task_observer_provider_state p WHERE p.provider = 'github-actions' AND p.retry_at > ?)`;
+const timing = now => [now, now, Math.floor(now / OBSERVATION_POLICY.intervalMs), Math.floor(now / 86400000), Math.floor(now / 86400000), now, now];
 
 async function persistConsent(d1, statement, scope, saved, enabled, now) {
   const results = await d1.batch([statement,
@@ -103,14 +106,17 @@ export async function observeOutcomes(d1, verify, clock = Date.now) {
     if (clock() - started >= 55000) break;
     const slot = await reserveObservation(d1, candidate, clock()); if (slot === null) continue;
     summary.reserved++;
-    let status = "unconfirmed";
+    let status = "unconfirmed"; let failure = null; let stop = false;
     try {
       const result = await reconcileSavedRequest(d1, { tenantId: candidate.tenantId, principal: candidate.principal }, candidate.requestKey, verify);
       if (result.status === "observed") { status = "observed"; summary.observed++; }
-    } catch { status = "unavailable"; summary.unavailable++; }
-    await d1.prepare(`UPDATE task_outcome_observations SET status = ?, finished_at = ?
+    } catch (error) { status = "unavailable"; summary.unavailable++; failure = safeObserverFailure(error, clock()); stop = error?.observerStop === true; }
+    await d1.prepare(`UPDATE task_outcome_observations SET status = ?, finished_at = ?, reason = ?, retry_at = ?
       WHERE task_id = ? AND tenant_id = ? AND requested_by = ? AND slot = ? AND status = 'reserved'`)
-      .bind(status, clock(), candidate.taskId, candidate.tenantId, candidate.principal, slot).run();
+      .bind(status, clock(), failure?.category ?? null, failure?.retryAt ?? null, candidate.taskId, candidate.tenantId, candidate.principal, slot).run();
+    if (failure) await d1.prepare("UPDATE task_outcome_watches SET next_check_at = MAX(next_check_at, ?) WHERE task_id = ? AND tenant_id = ? AND requested_by = ?")
+      .bind(failure.retryAt, candidate.taskId, candidate.tenantId, candidate.principal).run();
+    if (stop) break;
   }
   return summary;
 }
