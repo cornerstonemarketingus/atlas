@@ -14,13 +14,13 @@ import { ToolRegistry } from "../src/agent/tool-registry.mjs";
 
 const LEAD_TRACKER = "Build a simple customer lead tracker with: add customer, name/email/phone, status, notes, dashboard, search";
 
-async function harness(run, { coder = null, inspector = undefined, kernel = null } = {}) {
+async function harness(run, { coder = null, inspector = undefined, kernel = null, loopPolicy = {}, now = undefined } = {}) {
   const root = mkdtempSync(join(tmpdir(), "atlas-genesis-run-"));
   const store = new GenesisStore(join(root, "genesis.sqlite"));
   const genesis = new GenesisService({ store, policy: () => ({ decision: "allow" }) });
   const preview = new PreviewManager({ registryPath: join(root, "previews.json"), runPrepare: runCheck });
   const executor = new GenesisExecutor({
-    genesis, projectsRoot: join(root, "projects"), runCheck, coder, preview, kernel,
+    genesis, projectsRoot: join(root, "projects"), runCheck, coder, preview, kernel, loopPolicy, ...(now ? { now } : {}),
     inspector: inspector === undefined ? createInspector({ artifactsRoot: join(root, "inspections") }) : inspector,
   });
   try {
@@ -115,18 +115,64 @@ test("a failed check is repaired with its evidence and verified again", async ()
   }, { coder, inspector: async (project, preview) => inspectOverHttp(project, preview) });
 });
 
-test("a repair that deletes tests is rolled back, and the budget ends the loop", async () => {
+test("a repair that deletes tests is rolled back, told why, and the loop stops when the failure does not move", async () => {
   const coder = scriptedCoder({ breakTests: true });
   await harness(async ({ genesis, executor }) => {
     const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
     const done = await executor.run(project.id);
     assert.equal(done.state, "failed");
-    assert.match(done.transitions.at(-1).reason, /Still failing after 3 repair attempt/u);
+    const last = done.transitions.at(-1);
+    assert.match(last.reason, /same failure survived 2 repair attempt/u);
+    assert.equal(last.evidence.loop.reason, "no-progress");
+    assert.equal(last.evidence.loop.iterations, 2);
     const rejected = done.transitions.filter((t) => t.evidence.kind === "repair-result");
-    assert.equal(rejected.length, 3);
+    assert.equal(rejected.length, 2, "the third repair attempt was not paid for");
     assert.ok(rejected.every((t) => t.evidence.violations.some((v) => v.rule === "deleted-test")));
+    const repairs = coder.calls.filter((c) => c.kind === "repair");
+    assert.doesNotMatch(repairs[0].objective, /rolled back/u);
+    assert.match(repairs[1].objective, /previous repair was rolled back because it broke these rules: deleted-test/u);
     assert.ok(existsSync(join(done.workspace, "tests", "app.test.mjs")), "the tests are still there");
   }, { coder, inspector: async () => ({ ok: true, findings: [], evidence: {} }) });
+});
+
+test("a repair loop that keeps changing the failure runs to its budget, then names the limit", async () => {
+  // Each attempt leaves a different kind of error, so every failure is new.
+  const broken = ["export function notify( {\n", "export const = 1;\n", "export function f() { return }}\n", "let let = 1;\n"];
+  let n = 0;
+  const coder = async ({ workspace, kind }) => {
+    writeFileSync(join(workspace, "src", "notify.mjs"), broken[n++] ?? broken.at(-1));
+    return { ok: true, summary: kind, model: "scripted", usage: { totalTokens: 100 } };
+  };
+  coder.available = async () => true;
+  await harness(async ({ genesis, executor }) => {
+    const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
+    const done = await executor.run(project.id);
+    assert.equal(done.state, "failed");
+    assert.equal(done.transitions.at(-1).evidence.loop.reason, "iteration-limit");
+    assert.equal(done.transitions.at(-1).evidence.loop.tokens, 300);
+    assert.equal(done.repairsUsed, 3);
+  }, { coder, inspector: async () => ({ ok: true, findings: [], evidence: {} }) });
+});
+
+test("spend and time limits stop repairs before the next model call", async () => {
+  const spendCoder = scriptedCoder({ breakTests: true });
+  const metered = async (input) => ({ ...(await spendCoder(input)), usage: { totalTokens: 5000 } });
+  metered.available = async () => true;
+  await harness(async ({ genesis, executor }) => {
+    const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
+    const done = await executor.run(project.id);
+    assert.equal(done.transitions.at(-1).evidence.loop.reason, "spend-limit");
+    assert.equal(spendCoder.calls.filter((c) => c.kind === "repair").length, 1);
+  }, { coder: metered, inspector: async () => ({ ok: true, findings: [], evidence: {} }), loopPolicy: { maxTokens: 4000 } });
+
+  const timeCoder = scriptedCoder();
+  await harness(async ({ genesis, executor }) => {
+    const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
+    const done = await executor.run(project.id);
+    assert.equal(done.state, "failed");
+    assert.equal(done.transitions.at(-1).evidence.loop.reason, "time-limit");
+    assert.equal(timeCoder.calls.filter((c) => c.kind === "repair").length, 0);
+  }, { coder: timeCoder, inspector: async () => ({ ok: true, findings: [], evidence: {} }), loopPolicy: { maxWallMs: 1000 }, now: () => Date.now() + 5000 });
 });
 
 test("a task that needs a model blocks with the reason, then continues when resumed", async () => {

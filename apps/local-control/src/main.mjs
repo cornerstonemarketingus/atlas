@@ -59,6 +59,7 @@ import { createCredentialVault } from "./agent/credential-vault.mjs";
 import { openInBrowser, ownerAccount, resolveOwnerToken, signInUrl } from "./identity/owner.mjs";
 import { RemoteAccess } from "./remote/access.mjs";
 import { ACTIVE_STATES, GenesisService, GenesisStore } from "./platform/genesis/index.mjs";
+import { loopPolicyFromEnvironment } from "./platform/loop-policy.mjs";
 import { GenesisExecutor } from "./platform/genesis/executor.mjs";
 import { registerGenesisTools } from "./platform/genesis/tools.mjs";
 import { GenesisPublisher } from "./platform/genesis/publish.mjs";
@@ -239,6 +240,8 @@ const genesisExecutor = new GenesisExecutor({
   coder: createGenesisCoder({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan, intelligence: genesis.intelligence }),
   preview: genesisPreviews,
   inspector: createInspector({ artifactsRoot: join(dataDirectory, "genesis", "inspections"), vision: createVisionReviewer() }),
+  // Repair loops stop at a time/token limit or when a failure stops moving (loop-policy.mjs).
+  loopPolicy: loopPolicyFromEnvironment(process.env, (line) => console.log(`Genesis: ${line}`)),
 });
 for (const project of genesis.recover()) console.log(`Genesis: ${project.name} was interrupted and is paused.`);
 // Publishing a finished project is external: it goes through the publish.remote policy and the normal approvals.
