@@ -14,8 +14,10 @@ Worker build, typecheck, targeted lint and whitespace checks passed; full web
 suite: 507 total, 505 pass, 2 optional skips, no failures. Runtime fix: f131c34.
 Fresh CI and the existing tenant-persistence review gate remain required.
 
-The updated parent was merged into existing #274 for stacked validation;
-its build/tests are in progress. No replacement deduplication/billing system,
+The updated parent was merged into existing #274. Its fresh Worker build and
+typecheck and full web lint pass; full web suite: 517 total, 515 passed, two optional skips, no
+failures. Same-key admission and authenticated reconnect/replay checks pass.
+Fresh CI and tenant-persistence review remain open. No replacement deduplication/billing system,
 production migration, live task dispatch, paid provisioning or deployment.
 Next: complete #270/#274 CI and review, then propagate into #276, #278, #282.
 

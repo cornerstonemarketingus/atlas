@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { statusLine } from "./task-presentation.mjs";
+import { submitTaskRequest } from "./task-request-client.mjs";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
@@ -156,14 +157,10 @@ export function BuildSection() {
     if (!objective.trim() || submitting) return;
     setSubmitting(true); setNotice("");
     try {
-      const response = await fetch("/api/tasks", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ repository, branch, mode, objective, conversationId }),
-      });
-      const result = await response.json() as { message?: string; taskId?: string; conversationId?: string };
+      const { response, body: result } = await submitTaskRequest({ repository, branch, mode, objective, conversationId }, { storage: window.localStorage });
       if (!response.ok) { setNotice(result.message ?? "Atlas could not start this build."); return; }
-      setNotice(`Sent. Atlas is working on it${result.taskId ? ` · ${result.taskId.slice(0, 8)}` : ""}.`);
+      if (!result.taskId) { setNotice(result.message ?? "Request saved. Send it again to check its status."); return; }
+      setNotice(result.message ?? `Request saved · ${result.taskId.slice(0, 8)}.`);
       setObjective("");
       if (result.conversationId) {
         window.location.href = `/?conversation=${encodeURIComponent(result.conversationId)}`;
@@ -172,7 +169,7 @@ export function BuildSection() {
       setVersion((value) => value + 1);
       void refreshTasks();
     } catch {
-      setNotice("The task dispatcher is temporarily unavailable.");
+      setNotice("The request could not be confirmed. Send it again to check its saved status. Browser storage must be available.");
     } finally {
       setSubmitting(false);
     }
