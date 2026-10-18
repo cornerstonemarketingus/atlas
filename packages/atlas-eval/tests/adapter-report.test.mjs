@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { atlasCliAgent, loadTasks, measureAuditLog, parseTarget, summarize, toMarkdown } from "../src/index.mjs";
 
@@ -50,7 +51,7 @@ test("reports count verified passes per target and category", () => {
 });
 
 test("the checked-in tasks all load and have unique ids matching their files", async () => {
-  const tasks = await loadTasks(new URL("../../../evals/tasks/", import.meta.url).pathname);
+  const tasks = await loadTasks(fileURLToPath(new URL("../../../evals/tasks/", import.meta.url)));
   assert.ok(tasks.length >= 10);
   assert.ok(new Set(tasks.map((task) => task.category)).size >= 4);
 });

@@ -626,4 +626,20 @@ Baseline on main 857577a: every package green locally (see docs/audits/ATLAS-LAU
 
 Sample A (Team Hahn website, real Genesis + Chromium, template path) exposed four Genesis defects, fixed with regression tests that failed before: ignored business name, dropped requested pages (reported `ready` anyway), invented credentials/promises in template copy, no local SEO. local-control suite after fix: 759 pass / 2 skipped / 0 fail.
 
-Confirmed on main: PR #235's 27 adversarial approval/credential tests give 26 failures; #235 is clean and fully green, awaiting protected owner review. Quota-ledger DO stack (#129-#160) is not in main and is ~330 commits stale. Next: owner reviews #235; rebuild the ledger on current main; supply a provider key to run samples B/C/F live; reconcile #270→#274→#276→#278→#282→#291. No PR opened from this branch; no production change.
+Historical checkpoint correction during integration: #235 subsequently merged at c1ef3e3 after required CI passed. The quota ledger and hosted chat governor are already in main; the remaining gap is shared runner admission and durable waiting, not rebuilding the ledger. See docs/LAUNCH-REMEDIATION-2026-10-17.md and the corrected blocker section of docs/audits/ATLAS-LAUNCH-READINESS.md. Live-model samples and the hosted durability stack still require acceptance. This integration does not initiate a production deployment.
+
+## 2026-10-06 Workers AI through the Worker's own binding (no token)
+
+- Live check 37516955533 (19:10): still `validation valid, Workers AI denied → WRONG_ACCOUNT_OR_PERMISSION` (403, code 10000); chat answers 401 from Workers AI.
+- Fix that needs no token: the Worker gets `ai: { binding: "AI" }` (`apps/web/vite.config.ts`; `wrangler deploy --dry-run` lists `env.AI`). `apps/web/app/api/chat/workers-ai-binding.mjs` makes the binding look like an OpenAI-compatible server to chat (a fetch-shaped transport over `env.AI.run()`, accepting both OpenAI `choices` and native `response`/`tool_calls` answers, SSE for streaming callers); refusals become statuses (429 routes on to the next provider) and the binding's own text is never passed on. Chat prefers the binding over `ATLAS_WORKERS_AI_TOKEN` (route kind stays `workers-ai`; default model `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, `ATLAS_WORKERS_AI_MODEL` overrides). `/api/setup/providers` also reports `workersAIBinding` (a real inference) and "Verify hosted Atlas" prints it.
+- Evidence: 430 web tests pass (5 new: both answer shapes; a full chat turn with a tool round trip on the binding, streaming and not, no key anywhere; refusal statuses and routing to Groq with no leaked text; binding preferred over the token and selectable; health); lint, typecheck, `vinext build`; runner and local script tests 63/63. Not yet verified live: needs the deploy; then the chat check.
+
+
+
+## 2026-10-18 — repository settings customer privacy (#357)
+
+Account344 merged c746663 after ALL CI39087720052 passed, deployment39087988081 succeeded, live anonymous account GET exactly signedIn:false passed. Postdeploy configured authenticated inspect39088067813 passed; it is general inspection, not adversarial account fault/payment/deletion acceptance.
+
+Repository settings GET/PUT/DELETE still returned raw storage errors or migration0015 instructions, and auth exceptions escaped their context boundary. Reused existing fixed customerFailure contract (503/reference/no-store); unchanged auth/tenant resolution, owner/admin management, deployment allowlist, default-tenant zero-gate policy, validation and scoped writes. Three actual TypeScript-handler privacy regressions fail prior main; all10focused actual account/settings/validation cases pass after repair, covering auth/tenant/list/default/write faults with private/path/token/table sentinels and successful denial/scoping/mutation behavior. No new tenant policy or credential permissions. Broad checks/CI/deployment pending at this checkpoint. Native329/320 remain held for the already reported protected-signing automatic-review rejection; no bypass or signing edit.
+
+Repository settings validation: production build/typecheck and direct installed ESLint pass; fullweb507tests504pass3optional skips0fail. Npm-wrapper lint was slow; direct installed binary completed successfully. No deployed adversarial settings acceptance claimed. Fresh PR CI remains required.
