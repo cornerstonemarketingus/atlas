@@ -2,6 +2,60 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { boundCoderContext } from "../src/model/bounded-coder-context.js";
 import type { ModelMessage, ModelRequest } from "../src/model/model-provider.js";
+import { ProviderReadOnlyToolAgent } from "../src/agent/provider-read-only-tool-agent.js";
+import { MockModelProvider } from "../src/infrastructure/mock-model-provider.js";
+import { InMemorySessionAuditLog } from "../src/infrastructure/in-memory-session-audit-log.js";
+import { PolicyEnforcedReadOnlyToolRegistry } from "../src/infrastructure/policy-enforced-read-only-tool-registry.js";
+
+test("agent continues after an oversized aliased read with full audit retained", async () => {
+  const provider = new MockModelProvider({
+    metadata: { id: "mock", displayName: "Mock", models: [{ model: "test", contextWindowTokens: 10000, maxOutputTokens: 1000, supportsTools: true, supportsJson: true, supportsStreaming: false }] },
+    responses: [
+      { id: "one", providerId: "mock", model: "test", message: { role: "assistant", content: [{ type: "tool-call", id: "read", name: "repo_browser.inspect", arguments: {} }] }, finishReason: "tool-calls", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { id: "two", providerId: "mock", model: "test", message: { role: "assistant", content: [{ type: "text", text: "Read a smaller range next." }] }, finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+    ],
+  });
+  const registry = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
+  let executions = 0;
+  registry.register({ name: "repository.inspect", description: "Inspect", risk: "low", validateInput: input => input,
+    execute: async () => { executions++; return { source: "x".repeat(8000) }; } });
+  const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry,
+    tools: [{ name: "repository.inspect", description: "Inspect", inputSchema: {} }], audit: new InMemorySessionAuditLog(), maximumRequestBytes: 2000 });
+  const result = await agent.run({ sessionId: "context", objective: "Inspect", evidence: [], scope: { kind: "repository", repositoryId: "atlas" }, context: { repositoryId: "atlas" } });
+  assert.equal(result.status, "completed");
+  assert.equal(executions, 1);
+  assert.equal(provider.requests.length, 2);
+  assert.match(JSON.stringify(provider.requests[1]), /Read result omitted/);
+  assert.match(JSON.stringify(result.trace.messages), /x{8000}/);
+});
+
+test("compacts offered repaired aliases without changing original evidence", () => {
+  const messages: ModelMessage[] = [
+    { role: "assistant", content: [{ type: "tool-call", id: "alias", name: "repo_browser.read_source", arguments: { path: "app.ts" } }] },
+    { role: "tool", toolCallId: "alias", isError: false, content: [{ type: "text", text: "x".repeat(8000) }] },
+  ];
+  const request: ModelRequest = { model: "test", messages, tools: [{ name: "repository.read_source", description: "Read", inputSchema: {} }] };
+  const before = structuredClone(request);
+  assert.match(JSON.stringify(boundCoderContext(request, 2000)), /Read result omitted/);
+  assert.deepEqual(request, before);
+  assert.equal(boundCoderContext({ ...request, tools: [] }, 2000), undefined);
+  assert.equal(boundCoderContext({ ...request, tools: [...request.tools!, { name: "repository_read_source", description: "Other", inputSchema: {} }] }, 2000), undefined);
+});
+
+test("reused IDs never make write results or unmatched duplicate results compactable", () => {
+  const call = (name: string): ModelMessage => ({ role: "assistant", content: [{ type: "tool-call", id: "reused", name, arguments: {} }] });
+  const result = (text: string): ModelMessage => ({ role: "tool", toolCallId: "reused", isError: false, content: [{ type: "text", text }] });
+  const write = [call("repository.propose_change_set"), result("applied".repeat(1000))];
+  const readPair = [call("repository.read_source"), result("small read")];
+  for (const messages of [[...readPair, ...write], [...write, ...readPair], [...readPair, result("unknown".repeat(1000))]]) {
+    assert.equal(boundCoderContext({ model: "test", messages }, 2000), undefined);
+  }
+  const duplicate: ModelMessage = { role: "assistant", content: [
+    { type: "tool-call", id: "reused", name: "repository.read_source", arguments: {} },
+    { type: "tool-call", id: "reused", name: "repository.propose_change_set", arguments: {} },
+  ] };
+  assert.equal(boundCoderContext({ model: "test", messages: [duplicate, result("uncertain".repeat(1000))] }, 2000), undefined);
+});
 
 function read(id: string, text: string): ModelMessage[] {
   return [

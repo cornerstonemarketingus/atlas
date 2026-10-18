@@ -1,0 +1,28 @@
+{
+  "id": "summarize-workflows",
+  "category": "structured-output",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "857577a09175de1119e472060f81c6ab29be58ff",
+  "objective": "Without changing any source file: for every YAML file in .github/workflows, read its top-level name. Write ANSWER.json as {\"workflows\": [{\"file\": \"<file name>\", \"name\": \"<workflow name>\"}, ...]} sorted by file name.",
+  "setup": {
+    "files": {}
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/answer-check.mjs",
+      "{workspace}",
+      "workflow-names"
+    ]
+  },
+  "solution": {
+    "files": {
+      "ANSWER.json": "{\n  \"workflows\": [\n    {\n      \"file\": \"atlas-coder.yml\",\n      \"name\": \"Atlas Coder\"\n    },\n    {\n      \"file\": \"atlas-pr-steward.yml\",\n      \"name\": \"Atlas PR Steward\"\n    },\n    {\n      \"file\": \"atlas-runner.yml\",\n      \"name\": \"Atlas Runner\"\n    },\n    {\n      \"file\": \"atlas-self-improve.yml\",\n      \"name\": \"Atlas self-improvement\"\n    },\n    {\n      \"file\": \"ci.yml\",\n      \"name\": \"CI\"\n    },\n    {\n      \"file\": \"deploy-cloudflare.yml\",\n      \"name\": \"Deploy Atlas web to Cloudflare Workers\"\n    },\n    {\n      \"file\": \"migrate-d1.yml\",\n      \"name\": \"Apply Atlas D1 migrations\"\n    },\n    {\n      \"file\": \"provision-d1.yml\",\n      \"name\": \"Provision Atlas D1 database\"\n    },\n    {\n      \"file\": \"release-sovereign.yml\",\n      \"name\": \"Sovereign release\"\n    },\n    {\n      \"file\": \"verify-hosted.yml\",\n      \"name\": \"Verify hosted Atlas\"\n    }\n  ]\n}\n"
+    }
+  },
+  "timeoutMs": 120000,
+  "tags": [
+    "read-only",
+    "answer-file"
+  ]
+}
