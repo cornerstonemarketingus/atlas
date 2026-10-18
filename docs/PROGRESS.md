@@ -578,3 +578,20 @@ The existing local workforce API is now reachable through /workforce and the dae
 Two HTTP regressions failed before implementation. Affected workforce unit/HTTP suite passed 12/12; final expanded console suite passed all four cases including a real phone-width Edge browser: actual repository plan execution and interrupted-run resume, no DOM injection from an objective, no token storage, no layout overflow, malformed intake receipt recovery and explicit-refresh gating before retry. No timeout or authorization assertion was weakened. Full Linux/Windows CI remains the merge gate. No model-backed semantic review, external operation or hosted workforce execution is claimed.
 
 Parallel continuation: approved terminal PR #311 merged as 912a7eb after green CI. #340 patch-bound truthful receipts and #341 explicit-opt-in business conversation previews merged after all CI passed. #342 cumulative business allowance admission has passing race/restart tests and is undergoing integration of appended documentation. Next: finish current-head CI/ordinary merges, independently evaluated test/live receipts, principal-safe conversational mutations and leased/deduplicated recurring business execution using existing services.
+
+## 2026-10-17 — scoped business evidence receipts (#339)
+
+The existing production mission artifact verifier now persists a digest-bound
+receipt that separates verified patch bytes from unavailable test validation and
+unevaluated live outcomes. Executor verification claims are overwritten;
+non-patch evidence stays explicitly executor-reported. Dependency handoffs and
+durable mission snapshots carry the same scoped receipt. Required validation
+fails closed until a trusted test adapter exists. CLI validation remains internal;
+the daemon's exit code and combined text cannot establish test success.
+
+Two spoofed-success regressions failed before the change. Focused receipt,
+scheduler, mission service and business service suites: 24 passed. Full local
+suite was interrupted during Genesis fixtures amid shared Windows host load;
+it did not produce a complete passing result. Next: CI on this branch, then a
+trusted post-change test receipt adapter bound to reviewed patch digests and
+separate live-health/business outcome adapters. No live business action claimed.
