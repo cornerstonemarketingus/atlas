@@ -1,0 +1,28 @@
+{
+  "id": "list-coder-pr-env-vars",
+  "category": "navigation",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "857577a09175de1119e472060f81c6ab29be58ff",
+  "objective": "Without changing any source file: list every environment variable that scripts/runner/create-coder-pull-request.mjs reads through process.env.NAME. Write ANSWER.json as {\"variables\": [\"NAME\", ...]} sorted alphabetically, without duplicates.",
+  "setup": {
+    "files": {}
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/answer-check.mjs",
+      "{workspace}",
+      "coder-pr-env-vars"
+    ]
+  },
+  "solution": {
+    "files": {
+      "ANSWER.json": "{\n  \"variables\": [\n    \"ATLAS_BRANCH\",\n    \"ATLAS_MERGE_POLICY\",\n    \"ATLAS_OUTPUT_DIR\",\n    \"ATLAS_REPOSITORY\",\n    \"ATLAS_REPOSITORY_ROOT\",\n    \"ATLAS_TASK_ID\",\n    \"GITHUB_TOKEN\"\n  ]\n}\n"
+    }
+  },
+  "timeoutMs": 120000,
+  "tags": [
+    "read-only",
+    "answer-file"
+  ]
+}
