@@ -587,3 +587,10 @@ it did not produce a complete passing result. Next: CI on this branch, then a
 trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
 
+
+## 2026-10-17 coder context recovery (issue #287)
+
+- Live run 38819478158 confirms #269 repaired repo_browser aliases in production. The same run still failed on HTTP 413 after substantial context growth; alias repair alone is not task completion. Hosted authenticated inspection 38848539074 passed.
+- Extend existing context compaction to recognize offered aliases through the existing resolver. Associate results with their preceding call batch rather than a global ID set, preserving writes/errors when providers reuse call IDs. Ambiguous batch IDs and unpaired results remain intact. Original trace and arguments are unchanged.
+- Regression coverage includes oversized aliased reads through the real agent/registry, unoffered/ambiguous aliases, reused IDs across read/write turns and duplicate results. Earlier local suite at dee7942: 513 passed, 4 Windows failures, 4 skipped; those failures concern diffs, paths and file modes, not this patch. Final validation is tracked in the PR after integration with main 482948b. Do not infer that all tests passed locally.
+- This does not guarantee provider TPM compliance or add test-only task execution. Current main has separate cloud-provider/runner recovery; preserve it. No new TODO or execution architecture.
