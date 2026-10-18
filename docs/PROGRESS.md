@@ -575,3 +575,20 @@ Existing trusted cloud coder subprocess cleanup now retains SIGKILL after the gr
 BusinessService now reserves cumulative per-business execution upper bounds in an immediate SQLite transaction before MissionService creation. Smaller launch budgets and a percentage control permit repeated missions. Reserved allowances remain committed across restart, lost acknowledgement and terminal lane retry; observed durable scheduler usage is reported separately from spending receipts. Legacy history is explicitly uncertain and requires a newly authorized business record for new work. Ledger admission is bounded at 1,000 reservations. No new executor, external purchase, billing credential or spending authority was added.
 
 Evidence: 23 business/mission focused tests pass, including four worker/SQLite connection admission races, real mission-store restart, uncertain launch retention and ledger exhaustion. Removing the cumulative comparison made the race regression fail (four admitted versus one); restored code passes. Full local-control run was intentionally stopped under shared Windows host contention and is not claimed passing; isolated CI remains the full-suite gate. See BUSINESS-BUDGETS.md for limitations. Next: current-head CI, then actual receipt reconciliation and controlled allowance top-up/release design.
+
+## 2026-10-17 — scoped business evidence receipts (#339)
+
+The existing production mission artifact verifier now persists a digest-bound
+receipt that separates verified patch bytes from unavailable test validation and
+unevaluated live outcomes. Executor verification claims are overwritten;
+non-patch evidence stays explicitly executor-reported. Dependency handoffs and
+durable mission snapshots carry the same scoped receipt. Required validation
+fails closed until a trusted test adapter exists. CLI validation remains internal;
+the daemon's exit code and combined text cannot establish test success.
+
+Two spoofed-success regressions failed before the change. Focused receipt,
+scheduler, mission service and business service suites: 24 passed. Full local
+suite was interrupted during Genesis fixtures amid shared Windows host load;
+it did not produce a complete passing result. Next: CI on this branch, then a
+trusted post-change test receipt adapter bound to reviewed patch digests and
+separate live-health/business outcome adapters. No live business action claimed.

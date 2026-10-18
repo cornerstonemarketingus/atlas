@@ -75,10 +75,46 @@ preparation artifacts exist, not that hosting is live, CRM delivery succeeded or
 outreach was sent. Evidence checks validate patch contents, not test
 results or business performance. The daemon verifies required patch files;
 custom MissionService embedders must supply their own evidence verifier.
+After artifact verification the persisted child result includes an authoritative
+`verification` receipt: schema version, evaluator, and actual patch digests/sizes.
+It always records validation as `unavailable` and live outcomes as
+`not-evaluated`; executor-provided `verification` claims are replaced, and
+non-patch evidence is labeled `executor-reported`. Dependency handoffs receive
+the same receipt. Requiring `validation` evidence fails closed even if an
+executor reports passing tests. Ordinary missions without artifact requirements
+retain their existing behavior.
+
+The existing CLI has structured validation internally, but the local daemon
+runner receives a process exit code and bounded combined text. Neither is an
+independent test receipt: an exit-zero run can have no applicable checks.
+A future trusted adapter must evaluate actual post-change validation results
+and bind them to the reviewed patch before this boundary can report test
+success. Live deployment and business checks require their own adapters.
 Existing tool approvals remain authoritative;
 plan instructions are not an authorization boundary for future executors.
 
-Next integration work: connect conversation intake and a business UI, route
+### Local conversation previews
+
+The daemon's shared conversation tool registry now offers `business.list`,
+`business.inspect`, `business.due` and `business.plan`. They reuse the same
+BusinessService records as `/businesses`. To opt in, the local owner sets
+`business.read` to `allow` (or `ask` for exact action approval) through the
+existing `PUT /v1/policies` endpoint with
+`{"capability":"business.read","decision":"allow"}`. The default is deny;
+registration does not silently grant access. Paired devices cannot change this
+policy or submit conversation turns, and retain their existing HTTP read access.
+
+After opt-in, ask Atlas to list businesses, inspect an exact business ID, check
+due responsibilities or preview its construction-launch/self-improvement plan.
+Tool receipts label previews read-only and `executed:false`. No mission starts,
+review is recorded, purchase occurs or outbound operation is performed.
+Creation and launch remain available to the owner through `/businesses` and the
+existing HTTP endpoints. Conversational mutations are intentionally deferred:
+the shared registry also feeds the authorized platform executor and does not
+carry a verified owner/device principal into every tool invocation. Adding a
+model-supplied role argument would not establish that identity.
+
+Next integration work: connect owner-scoped conversation mutations, route
 operational steps through the authorized tool executor, verify receipts and live
 health checks, reconcile actual business spending receipts, dispatch recurring reviews
 with leases and deduplication, and connect improvement proposals to protected
