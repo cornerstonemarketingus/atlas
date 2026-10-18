@@ -365,7 +365,12 @@ export class TerminalController {
       npm_config_update_notifier: "false",
       npm_config_fund: "false",
     };
-    if (process.platform === "win32" && process.env.SystemRoot) environment.SYSTEMROOT = process.env.SystemRoot;
+    if (process.platform === "win32") {
+      environment.SYSTEMROOT = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+      environment.USERPROFILE = workspaceRoot;
+      environment.TEMP = environment.TMPDIR;
+      environment.TMP = environment.TMPDIR;
+    }
     for (const [key, value] of Object.entries(extra)) {
       if (!this.#allowedEnvKeys.has(key)) throw new TerminalError("ENV_KEY_NOT_ALLOWED", `Environment variable '${key}' is not on the allowlist.`);
       if (typeof value !== "string" || value.length > 4096 || value.includes("\0")) {
@@ -706,11 +711,11 @@ function segment(value) {
 }
 
 function defaultPathDirectories() {
-  const platformPaths = process.platform === "win32"
-    ? String(process.env.PATH ?? "").split(delimiter)
-    : ["/usr/local/bin", "/usr/bin", "/bin"];
-  const candidates = [dirname(process.execPath), ...platformPaths];
-  return [...new Set(candidates.map((item) => item.trim()).filter((item) => isAbsolute(item)))];
+  if (process.platform !== "win32") return [...new Set([dirname(process.execPath), "/usr/local/bin", "/usr/bin", "/bin"])];
+  // Fixed installation directories, never the daemon's arbitrary PATH or cwd.
+  const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+  const windows = process.env.SystemRoot || "C:\\Windows";
+  return [...new Set([dirname(process.execPath), join(programFiles, "Git", "cmd"), join(programFiles, "Git", "usr", "bin"), join(windows, "System32")])];
 }
 
 function executableCandidates(name) {

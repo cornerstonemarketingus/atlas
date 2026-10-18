@@ -57,7 +57,7 @@ export function createApp({ dataFile = join(here, "data", "app.sqlite"), publicD
       return sendJson(response, status, { error: status >= 500 ? "Something went wrong." : error.message, ...(error.errors ? { errors: error.errors } : {}) });
     }
   });
-  if (runJobs) backend.scheduler.start();
+  if (runJobs) backend.start();
   server.on("close", () => {
     backend.close();
     store.close();

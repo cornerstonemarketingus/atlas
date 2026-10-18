@@ -83,10 +83,16 @@ export function createModelClient({ baseUrl = DEFAULT_BASE_URL, apiKey = null, f
       if (!response.body) throw new ModelRequestError("MODEL_REQUEST_FAILED", "The model endpoint returned no body.");
 
       const calls = new Map();
-      let finishReason = "stop";
+      let finishReason = null;
       let usage = null;
+      let completed = false;
+      let hasText = false;
 
       for await (const payload of readServerSentJson(response.body, signal)) {
+        if (payload === STREAM_DONE) { completed = true; break; }
+        if (!payload || typeof payload !== "object" || Array.isArray(payload) || payload.error) {
+          throw new ModelRequestError("MODEL_INVALID_RESPONSE", "The model server returned an invalid stream event. Check the endpoint and retry the saved task.");
+        }
         const choice = payload.choices?.[0];
         if (payload.usage) usage = payload.usage;
         if (!choice) continue;
@@ -96,7 +102,10 @@ export function createModelClient({ baseUrl = DEFAULT_BASE_URL, apiKey = null, f
         // are private and none of them are forwarded verbatim.
         const reasoning = delta.reasoning_content ?? delta.reasoning ?? null;
         if (typeof reasoning === "string" && reasoning.length > 0) yield { type: "reasoning", delta: reasoning };
-        if (typeof delta.content === "string" && delta.content.length > 0) yield { type: "text", delta: delta.content };
+        if (typeof delta.content === "string" && delta.content.length > 0) {
+          if (delta.content.trim()) hasText = true;
+          yield { type: "text", delta: delta.content };
+        }
 
         for (const call of delta.tool_calls ?? []) {
           const index = call.index ?? 0;
@@ -106,18 +115,26 @@ export function createModelClient({ baseUrl = DEFAULT_BASE_URL, apiKey = null, f
           if (call.function?.arguments) current.arguments += call.function.arguments;
           calls.set(index, current);
         }
-        if (choice.finish_reason) finishReason = choice.finish_reason;
+        if (choice.finish_reason) { finishReason = choice.finish_reason; completed = true; }
       }
 
+      // EOF alone is not a receipt. In particular, never release a partially
+      // received tool call to the executor after a dropped connection.
+      if (!completed) throw new ModelRequestError("MODEL_STREAM_INTERRUPTED", "The model stream ended before confirming completion. The response is incomplete; retry from the saved task state.");
+      if (!hasText && calls.size === 0) throw new ModelRequestError("MODEL_EMPTY_RESPONSE", "The model returned no answer or tool call. Check the model and output budget, then retry the saved task.");
       for (const call of [...calls.entries()].sort(([a], [b]) => a - b).map(([, value]) => value)) {
+        if (!call.name.trim()) throw new ModelRequestError("MODEL_INVALID_RESPONSE", "The model returned an unnamed tool call. No tool was executed.");
         yield { type: "tool_call", id: call.id, name: call.name, arguments: call.arguments };
       }
-      yield { type: "done", finishReason, usage };
+      yield { type: "done", finishReason: finishReason ?? "stop", usage };
     },
   };
 }
 
-/** Parses an SSE body into the JSON payloads of its `data:` lines. */
+const STREAM_DONE = Symbol("stream-done");
+const MAX_EVENT_CHARACTERS = 1_048_576;
+
+/** Parses complete SSE events, retaining split CRLF and UTF-8 sequences. */
 async function* readServerSentJson(body, signal) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -128,27 +145,29 @@ async function* readServerSentJson(body, signal) {
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      let boundary = buffer.indexOf("\n\n");
-      while (boundary !== -1) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        boundary = buffer.indexOf("\n\n");
-        for (const rawLine of frame.split("\n")) {
-          const line = rawLine.trim();
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (data === "[DONE]" || data.length === 0) continue;
-          try {
-            yield JSON.parse(data);
-          } catch {
-            // A truncated frame is not fatal; the stream carries on.
-          }
-        }
+      let boundary;
+      while ((boundary = /\r\n\r\n|\n\n|\r\r/u.exec(buffer))) {
+        if (boundary.index > MAX_EVENT_CHARACTERS) throw invalidEvent();
+        const frame = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        const data = frame.split(/\r\n|\r|\n/u).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /u, "")).join("\n");
+        if (!data.trim()) continue;
+        if (data.trim() === "[DONE]") { yield STREAM_DONE; return; }
+        let payload;
+        try { payload = JSON.parse(data); } catch { throw invalidEvent(); }
+        yield payload;
       }
+      if (buffer.length > MAX_EVENT_CHARACTERS) throw invalidEvent();
     }
+    if (buffer.trim()) throw new ModelRequestError("MODEL_STREAM_INTERRUPTED", "The model stream ended inside an event. The response is incomplete; retry from the saved task state.");
   } finally {
     await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
+}
+
+function invalidEvent() {
+  return new ModelRequestError("MODEL_INVALID_RESPONSE", "The model server returned a malformed or oversized stream event. Check the endpoint and retry the saved task.");
 }
 
 function summarize(detail) {

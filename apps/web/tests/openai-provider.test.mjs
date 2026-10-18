@@ -61,3 +61,66 @@ test("OpenAI selection completes a streaming chat turn", async () => {
   assert.equal(outcome.reply, "Hello");
   assert.ok(emitted.some((event) => event.type === "delta"));
 });
+
+test("selected OpenAI recovers through configured models with the same context and isolated credentials", async () => {
+  const calls = [];
+  const context = [...turns, { role: "assistant", content: null, tool_calls: [{ id: "read-1", type: "function", function: { name: "read_file", arguments: "{}" } }] }, { role: "tool", tool_call_id: "read-1", content: "Saved repository evidence" }];
+  const response = await callModel(resolveChatProvider(env, "openai"), context, { stream: false, sleep: async () => {}, fetcher: async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push({ url, body, key: init.headers.authorization });
+    return body.model === "openai/gpt-oss-20b" ? Response.json({ choices: [{ message: { content: "Continued" } }] }) : new Response("", { status: 429, headers: { "retry-after": "60" } });
+  } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls.map(c => c.body.model), ["gpt-5.4-mini", "primary", "openai/gpt-oss-20b"]);
+  assert.deepEqual(calls.map(c => c.key), ["Bearer openai-secret", "Bearer groq-secret", "Bearer groq-secret"]);
+  assert.ok(calls.every(c => JSON.stringify(c.body.messages) === JSON.stringify(context)));
+  assert.ok(calls.slice(1).every(c => c.url.startsWith("https://api.groq.com/") && c.body.max_tokens === 2048 && c.body.max_completion_tokens === undefined));
+});
+
+test("selected provider recovery respects opt-out, endpoint validation and authentication failures", async () => {
+  for (const overrides of [{ ATLAS_CHAT_FALLBACK_MODEL: "none" }, { ATLAS_CHAT_BASE_URL: "http://remote.test/v1" }, { ATLAS_CHAT_BASE_URL: "https://user:password@remote.test/v1" }, { ATLAS_CHAT_BASE_URL: "https://api.openai.com/v1" }]) {
+    assert.equal(resolveChatProvider({ ...env, ...overrides }, "openai").providerFallback, undefined);
+  }
+  for (const status of [401, 403, 400]) {
+    let calls = 0;
+    const response = await callModel(resolveChatProvider(env, "openai"), turns, { stream: false, fetcher: async () => { calls++; return new Response("", { status }); } });
+    assert.equal(response.status, status);
+    assert.equal(calls, 1);
+  }
+});
+
+test("selected OpenAI 429 recovers to a streamed answer through the production conversation loop", async () => {
+  const emitted = [];
+  const calls = [];
+  const outcome = await converse({ endpoint: resolveChatProvider(env, "openai"), turns,
+    toolContext: { environment: {}, allowlist: new Set(), githubToken: async () => undefined },
+    userMessage: "Continue the saved work", stream: true, emit: (type, data) => emitted.push({ type, data }),
+    fetcher: async (url) => { calls.push(url); return url.startsWith("https://api.openai.com/")
+      ? new Response("", { status: 429, headers: { "retry-after": "3600" } })
+      : new Response('data: {"choices":[{"delta":{"content":"Continued the work"}}]}\n\ndata: [DONE]\n\n', { headers: { "content-type": "text/event-stream" } }); },
+    startTasks: async () => [],
+  });
+  assert.equal(outcome.reply, "Continued the work");
+  assert.equal(outcome.error, undefined);
+  assert.equal(calls.length, 2);
+  assert.ok(emitted.some(e => e.type === "delta"));
+});
+
+test("nested provider fallback diagnostics preserve the actual answering model", async t => {
+  const records = [];
+  t.mock.method(console, "warn", line => records.push(JSON.parse(line)));
+  let fallbackCalls = 0;
+  const outcome = await converse({ endpoint: resolveChatProvider(env, "openai"), turns,
+    toolContext: { environment: {}, allowlist: new Set(), githubToken: async () => undefined },
+    userMessage: "hello", stream: false, emit: () => {}, startTasks: async () => [],
+    fetcher: async (_url, init) => {
+      const model = JSON.parse(init.body).model;
+      if (model !== "openai/gpt-oss-20b") return new Response("", { status: 429, headers: { "retry-after": "3600" } });
+      return Response.json({ choices: [{ message: { content: ++fallbackCalls === 1 ? "" : "Recovered" } }] });
+    },
+  });
+  assert.equal(outcome.reply, "Recovered");
+  const empty = records.find(r => r.event === "inference.empty_response");
+  assert.equal(empty.model, "openai/gpt-oss-20b");
+  assert.equal(empty.fallbackUsed, true);
+});

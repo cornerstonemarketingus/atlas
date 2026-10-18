@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
 /**
@@ -45,7 +45,7 @@ export function confineRealPath(root, candidate, makeError) {
  * The real path of `target`, or — when it does not exist yet — the real path
  * of its deepest existing ancestor with the missing segments appended.
  */
-function realpathOf(target) {
+function realpathOf(target, linksRemaining = 40) {
   const missing = [];
   let current = target;
   for (;;) {
@@ -53,6 +53,15 @@ function realpathOf(target) {
       const resolved = realpathSync(current);
       return missing.length === 0 ? resolved : join(resolved, ...missing);
     } catch {
+      // realpath fails for dangling links. Resolve the link itself before
+      // appending missing segments so an outside target stays outside.
+      let link = false;
+      try { link = lstatSync(current).isSymbolicLink(); } catch { /* Missing component. */ }
+      if (link) {
+        if (linksRemaining === 0) throw new Error("Too many symbolic links in path.");
+        const linked = resolve(dirname(current), readlinkSync(current));
+        return join(realpathOf(linked, linksRemaining - 1), ...missing);
+      }
       const parent = dirname(current);
       // Reached the filesystem root without finding anything that exists.
       if (parent === current) return target;

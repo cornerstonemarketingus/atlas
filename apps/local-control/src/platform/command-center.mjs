@@ -27,8 +27,9 @@ const DONE_LIMIT = 20;
 /**
  * @param {{ missions?: object[], genesisProjects?: object[], tasks?: object[], selfImprove?: object | null, now?: number }} sources
  */
-export function buildCommandCenter({ missions = [], genesisProjects = [], tasks = [], selfImprove = null, automations = [], now = Date.now() } = {}) {
+export function buildCommandCenter({ missions = [], genesisProjects = [], tasks = [], selfImprove = null, automations = [], goals = [], now = Date.now() } = {}) {
   const items = [
+    ...goals.map(goalItem),
     ...automations.filter((automation) => !automation.enabled && automation.consecutiveFailures > 0).map(automationItem),
     ...suggestionItems(missions, automations),
     ...missions.map(missionItem),
@@ -66,6 +67,7 @@ function missionItem(mission) {
     }
   }
   const strategy = mission.children?.[0]?.metadata?.strategy ?? null;
+  const modelChoice = mission.children?.[0]?.metadata?.modelChoice ?? null;
   const held = lanes.some((lane) => lane.held);
   const failedLane = lanes.some((lane) => lane.state === "failed" || lane.state === "blocked");
   const bucket = mission.status === "failed" || mission.status === "interrupted" || held || (failedLane && !MISSION_DONE.has(mission.status))
@@ -87,6 +89,7 @@ function missionItem(mission) {
     detail: recommendation ?? mission.reason ?? null,
     // Why Atlas chose one lane or several versions, when the kernel decided.
     strategy: strategy ? { branch: Boolean(strategy.branch), versions: lanes.length, reasons: strategy.reasons ?? [] } : null,
+    modelChoice: modelChoice ? { model: modelChoice.model, reasons: modelChoice.reasons ?? [] } : null,
     progress: { done: lanes.filter((lane) => lane.state === "completed").length, total: lanes.length },
     lanes,
     actions,
@@ -165,6 +168,29 @@ function suggestionItems(missions, automations) {
     });
   }
   return items;
+}
+
+/**
+ * A goal that sleeps between events. Sleeping is "waiting" (nothing to do
+ * until an event); out of wakes is "attention"; its missions show on their own.
+ */
+function goalItem(goal) {
+  const base = `/v1/goals/${encodeURIComponent(goal.id)}`;
+  const active = goal.state === "working" || goal.state === "sleeping";
+  const watching = `${goal.watch.repository}${goal.watch.pullRequest ? ` #${goal.watch.pullRequest}` : ""}`;
+  return {
+    kind: "goal", id: goal.id, title: goal.objective.slice(0, 160), state: goal.state,
+    bucket: goal.state === "working" ? "running" : goal.state === "sleeping" ? "waiting" : goal.state === "exhausted" ? "attention" : "done",
+    updatedAt: goal.updatedAt ?? null, link: "#/command",
+    detail: goal.reason ?? (goal.state === "sleeping"
+      ? `Asleep, watching ${watching}${goal.until ? ` until ${goal.until.event}${goal.until.merged ? " merged" : ""}` : ""}. Woken ${goal.wakes} of ${goal.maxWakes} times.`
+      : goal.state === "working" ? `Working (wake ${goal.wakes} of ${goal.maxWakes}) on ${watching}.` : null),
+    progress: null, lanes: [],
+    actions: active ? [
+      { name: "wake", label: "Wake now", method: "POST", path: `${base}/wake`, body: {} },
+      { name: "cancel", label: "Cancel", method: "DELETE", path: base, body: {} },
+    ] : [],
+  };
 }
 
 /** Only automations that paused themselves need the owner here; their runs show as missions. */
@@ -248,7 +274,7 @@ function latest(values) {
 }
 
 /** GET /v1/command-center — any authenticated caller; every action goes through its own owner-only route. */
-export function createCommandCenterRoutes({ missionService = null, genesis = null, store = null, selfImprove = null, automations = null, send }) {
+export function createCommandCenterRoutes({ missionService = null, genesis = null, store = null, selfImprove = null, automations = null, goals = null, send }) {
   return function handle(request, response) {
     if (request.method !== "GET" || new URL(request.url ?? "/", "http://local.atlas").pathname !== "/v1/command-center") return false;
     const read = (fn, fallback) => { try { return fn() ?? fallback; } catch { return fallback; } };
@@ -258,6 +284,7 @@ export function createCommandCenterRoutes({ missionService = null, genesis = nul
       tasks: read(() => store?.list(50), []),
       selfImprove: read(() => selfImprove?.status(), null),
       automations: read(() => automations?.list(), []),
+      goals: read(() => goals?.list(), []),
     }));
   };
 }

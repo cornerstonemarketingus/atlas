@@ -8,6 +8,7 @@ import {
   type ReadOnlyToolRegistryOptions,
 } from "../domain/read-only-tool-registry.js";
 import { summarizeRedaction } from "../domain/secret-redaction.js";
+import { RepositoryToolInputError } from "./repository-read-only-tools.js";
 import { evaluateToolPolicy, type ToolPolicyEvaluation } from "../domain/tool-policy.js";
 
 interface StoredToolDefinition {
@@ -75,7 +76,16 @@ export class PolicyEnforcedReadOnlyToolRegistry implements ReadOnlyToolRegistry 
         ? request.context.signal.reason
         : new Error("Tool execution was cancelled.");
     }
-    const validatedInput = definition.validateInput(request.input);
+    let validatedInput: unknown;
+    try {
+      validatedInput = definition.validateInput(request.input);
+    } catch (error: unknown) {
+      // Only a declared input error is model-correctable. Policy, scope,
+      // cancellation and unexpected validator/redactor faults remain fatal.
+      if (!(error instanceof RepositoryToolInputError)) throw error;
+      const message = await this.#redactText(`Invalid input for '${definition.name}': ${error.message}`);
+      return { status: "failed", policy, message, errorCode: "INVALID_TOOL_INPUT" };
+    }
 
     let output: unknown;
     try {

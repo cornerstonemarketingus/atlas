@@ -4,6 +4,7 @@ import { ToolRegistry } from "../src/agent/tool-registry.mjs";
 import { CAPABILITIES, capabilitiesCovering, mountCapabilities } from "../src/agent/kernel/capabilities.mjs";
 import { createKernel } from "../src/agent/kernel/kernel.mjs";
 import { decideStrategy } from "../src/agent/kernel/branching.mjs";
+import { choosePath, estimateFromHistory, localModelCandidates } from "../src/agent/kernel/economics.mjs";
 import { observationFor, recordToolCall } from "../src/agent/kernel/observations.mjs";
 import { createWorldRoutes } from "../src/agent/kernel/routes.mjs";
 import { WorldState, cleanAttributes } from "../src/agent/kernel/world-state.mjs";
@@ -248,6 +249,38 @@ test("branching: open-ended or previously failed work branches, mechanical work 
   assert.equal(decideStrategy({ objective: "Fix the typo in the README", repository: "/work/app", world: state }).branch, false, "only this objective's failures count");
 });
 
+test("capability economics: history decides, budgets are hard limits, untried candidates start even, and reasons are given", (t) => {
+  const state = world(t);
+  const run = (key, model, status) => {
+    state.upsert({ type: "run", key, attrs: { harness: "atlas-cli", model, status } });
+  };
+  for (let i = 0; i < 4; i += 1) run(`a${i}`, "qwen-small", "verified");
+  run("a4", "qwen-small", "unverified");
+  for (let i = 0; i < 4; i += 1) run(`b${i}`, "llama-big", i === 0 ? "verified" : "unverified");
+  run("c0", "qwen-small", "running");
+  const small = estimateFromHistory(state, { harness: "atlas-cli", model: "qwen-small" });
+  assert.deepEqual([small.runs, small.verified], [5, 4], "running runs are not evidence yet");
+  assert.equal(small.successRate, 5 / 7);
+  assert.equal(estimateFromHistory(state, { model: "never-used" }).successRate, 0.5, "an untried model starts at even odds");
+
+  const decision = choosePath(localModelCandidates(state, ["llama-big", "qwen-small", "never-used"]), { budget: { localOnly: true } });
+  assert.equal(decision.chosen.id, "qwen-small");
+  assert.deepEqual(decision.ranked.map((c) => c.id), ["qwen-small", "never-used", "llama-big"], "an untried model outranks one with a poor record");
+  assert.match(decision.reasons[0], /4 of 5 past runs verified/u);
+  assert.match(decision.reasons[0], /stays on this machine/u);
+
+  const hosted = { id: "hosted", successRate: 0.95, minutes: 2, costUsd: 3, privacy: "remote", risk: 0 };
+  const local = { id: "local", successRate: 0.6, minutes: 8, costUsd: 0, privacy: "local", risk: 0 };
+  assert.equal(choosePath([hosted, local], { budget: { localOnly: true } }).chosen.id, "local");
+  assert.match(choosePath([hosted, local], { budget: { localOnly: true } }).rejected[0].reason, /stay on this machine/u);
+  const cheapHosted = { ...hosted, costUsd: 0.5 };
+  assert.equal(choosePath([cheapHosted, local]).chosen.id, "hosted", "worth its cost when money allows");
+  assert.equal(choosePath([cheapHosted, local], { budget: { maxUsd: 0.25 } }).chosen.id, "local", "over the money budget, never chosen");
+  assert.equal(choosePath([hosted, local], { budget: { maxMinutes: 5 } }).chosen.id, "hosted", "only the fast one fits the time");
+  assert.equal(choosePath([{ ...local, risk: 4 }], { budget: { maxRisk: 2 } }).chosen, null);
+  assert.equal(choosePath([{ ...local, id: "x" }, { ...local, id: "y" }], { prefer: "y" }).chosen.id, "y", "a tie goes to the configured choice");
+});
+
 test("tool calls made outside a run (chat) are recorded too, and never break the caller", (t) => {
   const state = world(t);
   recordToolCall(state, { runId: "chat:s1", runAttrs: { kind: "conversation" }, seq: "c1", call: { name: "filesystem.read" }, input: { path: "/tmp/a.txt" }, status: "succeeded" });
@@ -258,14 +291,14 @@ test("tool calls made outside a run (chat) are recorded too, and never break the
   assert.ok(observation.entities.some((e) => e.type === "person" && e.key === "ann@example.com"));
 });
 
-test("/v1/world is owner-only and shows entities, relations and traces", (t) => {
+test("/v1/world is owner-only and shows entities, relations and traces", async (t) => {
   const state = world(t);
   state.apply({ entities: [{ type: "task", key: "t1" }, { type: "run", key: "r1" }], relations: [{ from: "run:r1", relation: "part_of", to: "task:t1" }] });
   state.trace("r1", "goal", {});
   const sent = [];
   const handle = createWorldRoutes({ world: state, send: (_response, status, body) => { sent.push({ status, body }); return true; } });
   const call = (path, role = "admin", method = "GET") => { handle({ url: path, method }, {}, { role }); return sent.at(-1); };
-  assert.equal(handle({ url: "/v1/other", method: "GET" }, {}, { role: "admin" }), false);
+  assert.equal(await handle({ url: "/v1/other", method: "GET" }, {}, { role: "admin" }), false);
   assert.equal(call("/v1/world", "device").status, 403);
   assert.equal(call("/v1/world", "admin", "POST").status, 405);
   assert.equal(call("/v1/world?type=task").body.entities.length, 1);
