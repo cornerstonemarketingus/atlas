@@ -22,6 +22,9 @@
  */
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1", "[::1]"];
+/** Hosted providers answer within a minute; anything else is a model the owner runs, which may take longer. */
+const HOSTED_ORIGINS = new Set(["https://api.groq.com", "https://api.openai.com", "https://api.cloudflare.com", "https://workers-ai.binding"]);
+const SELF_HOSTED_TIMEOUT_MS = 300_000;
 
 /**
  * A second model on the same endpoint for when the first is rate-limited.
@@ -54,6 +57,16 @@ function modelPoolFor(environment, model, fallback) {
   return [...new Set([model, ...extra, ...(fallback ? [fallback] : [])])].slice(0, MAX_POOL_MODELS);
 }
 
+/**
+ * What kind of provider an endpoint is, for the owner to see which one served
+ * a reply: never the address (a self-hosted one names the owner's machine).
+ */
+export function providerKind(baseUrl) {
+  let origin;
+  try { origin = new URL(baseUrl).origin; } catch { return "unknown"; }
+  return origin === "https://api.groq.com" ? "groq" : origin === "https://api.openai.com" ? "openai" : origin === "https://api.cloudflare.com" || origin === "https://workers-ai.binding" ? "workers-ai" : "self-hosted";
+}
+
 /** @returns {{ configured: boolean, reason?: string, baseUrl?: string, model?: string, apiKey?: string|null, fallbackModel?: string|null, models?: string[] }} */
 export function resolveChatModel(environment = process.env) {
   const baseUrl = (environment.ATLAS_CHAT_BASE_URL || "").trim();
@@ -83,7 +96,7 @@ export function resolveChatModel(environment = process.env) {
   if (url.search || url.hash) return { configured: false, reason: "The model endpoint must not contain a query or fragment." };
   if (!apiKey && url.origin === "https://api.groq.com") apiKey = (environment.GROQ_API_KEY || "").trim();
   const fallbackModel = fallbackModelFor(environment, url, model);
-  return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel, models: modelPoolFor(environment, model, fallbackModel) };
+  return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel, models: modelPoolFor(environment, model, fallbackModel), ...(HOSTED_ORIGINS.has(url.origin) ? {} : { timeoutMs: SELF_HOSTED_TIMEOUT_MS }) };
 }
 
 /**
@@ -107,7 +120,7 @@ export function chatReadiness(environment = process.env) {
 
 /** The absolute chat-completions URL for a resolved endpoint. */
 export function completionsUrl(baseUrl) {
-  return new URL("chat/completions", baseUrl).toString();
+  return new URL("chat/completions", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }
 
 /**

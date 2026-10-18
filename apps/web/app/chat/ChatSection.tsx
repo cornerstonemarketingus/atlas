@@ -1,10 +1,14 @@
 "use client";
 import Link from "next/link";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { classifyIntent } from "./intent.mjs";
+import { createScrollFollow } from "./scroll-follow.mjs";
+import { ProjectActivity, type ProjectOperation } from "./ProjectActivity.js";
+import { userWantsPublic } from "../api/chat/project-tools.mjs";
+import "./scroll-follow.css";
 import { MessageBody } from "./MessageBody.js";
 import { TaskActivity } from "./TaskActivity.js";
-import { AgentTree, ToolSteps, WorkPanel, type AgentNode, type LogLine, type ToolStep, type WorkItem } from "./Workspace.js";
+import { AgentTree, ToolSteps, WorkPanel, itemFromPreview, type Preview, type AgentNode, type LogLine, type ToolStep, type WorkItem } from "./Workspace.js";
 import { createEventParser } from "../api/chat/stream.mjs";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
@@ -34,19 +38,12 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
   return items;
 }
 
-type Suggestion = { text: string; kind: "project_task" | "computer_task"; mode?: string; reason: string };
+type Suggestion = { text: string; kind: "project_task" | "computer_task" | "new_project_task"; mode?: string; reason: string };
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
-type Preview = { kind: "file" | "page"; title: string; content: string; url?: string; repository?: string; path?: string };
 const PANEL_KEY = "atlas.workPanel";
 
 function readPanelPreference() {
   try { return typeof window !== "undefined" && window.localStorage.getItem(PANEL_KEY) === "open"; } catch { return false; }
-}
-
-/** Files and pages Atlas read become panel items; the same file read twice is one item, refreshed. */
-function itemFromPreview(preview: Preview): WorkItem {
-  if (preview.kind === "page") return { id: `page:${preview.url}`, kind: "page", title: preview.title, url: preview.url ?? "", content: preview.content };
-  return { id: `file:${preview.repository}/${preview.path}`, kind: "file", title: preview.path ?? preview.title, path: preview.path ?? preview.title, repository: preview.repository, content: preview.content };
 }
 
 function upsert<T extends { id: string }>(list: T[], item: T) {
@@ -62,14 +59,19 @@ export function ChatSection() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
+  // Set when the daily free-message cap is reached: the options after it are a local model, then a plan.
+  const [capReached, setCapReached] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [repository, setRepository] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(PROJECT_STORAGE_KEY) ?? "");
   const [branch, setBranch] = useState("main");
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [ready, setReady] = useState<{ configured: boolean; reason: string | null } | null>(null);
+  const [ready, setReady] = useState<{ configured: boolean; reason: string | null; providers?: { id: string; label: string; available: boolean; paid?: boolean }[] } | null>(null);
+  const [provider, setProvider] = useState("auto");
+  const [stored, setStored] = useState(true);
   const [version, setVersion] = useState(0);
   const { threads, close } = useThreads(version);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  const [projectOperation, setProjectOperation] = useState<ProjectOperation | null>(null);
   const [streaming, setStreaming] = useState<string | null>(null);
   // What the model thought before answering: streamed live, then kept (not stored) beside the reply it led to.
   const [thinking, setThinking] = useState("");
@@ -87,7 +89,16 @@ export function ChatSection() {
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
   const logSerial = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
-  const endRef = useRef<HTMLDivElement>(null);
+  const generation = useRef(0);
+  const busy = useRef(false);
+  const loading = useRef(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [scrollFollow] = useState(() => createScrollFollow(() => scrollRef.current));
+  const [following, setFollowing] = useState(true);
+  const touchY = useRef<number | null>(null);
+  const resetFollowing = useCallback(() => { scrollFollow.reset(); setFollowing(true); }, [scrollFollow]);
+  function pauseFollowing() { scrollFollow.pause(); setFollowing(false); }
 
   function addLog(line: Omit<LogLine, "id" | "at">) {
     logSerial.current += 1;
@@ -127,35 +138,63 @@ export function ChatSection() {
     return () => window.removeEventListener(PROJECT_CHANGE_EVENT, update);
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [messages, sending, streaming, suggestion]);
+  useEffect(() => { scrollFollow.contentChanged(); }, [messages, sending, streaming, suggestion, thinking, liveSteps, liveAgents, tasks, scrollFollow]);
+
+  useEffect(() => {
+    const observer = new ResizeObserver(() => scrollFollow.contentChanged());
+    if (contentRef.current) observer.observe(contentRef.current);
+    if (scrollRef.current) observer.observe(scrollRef.current);
+    return () => observer.disconnect();
+  }, [scrollFollow]);
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("conversation");
     if (!requested || !/^[0-9a-f-]{36}$/u.test(requested)) return;
+    const current = ++generation.current;
+    loading.current = true;
     void fetch(`/api/conversations/${encodeURIComponent(requested)}`, { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
       .then(async (detail: Detail | null) => {
-        if (!detail) return;
+        if (!detail) throw new Error("Conversation unavailable");
+        const liveTasks = await withLiveTaskStatus(detail.tasks ?? []);
+        if (current !== generation.current) return;
+        resetFollowing();
         setConversationId(requested);
         setMessages(detail.messages ?? []);
-        setTasks(await withLiveTaskStatus(detail.tasks ?? []));
+        setTasks(liveTasks);
       })
-      .catch(() => setNotice("That conversation could not be loaded."));
-  }, []);
+      .catch(() => { if (current === generation.current) setNotice("That conversation could not be loaded."); })
+      .finally(() => { if (current === generation.current) loading.current = false; });
+    // The request counter intentionally uses its latest value during cleanup.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { generation.current++; loading.current = false; abortRef.current?.abort(); };
+  }, [resetFollowing]);
 
   async function openThread(id: string) {
+    const current = ++generation.current;
+    abortRef.current?.abort();
+    busy.current = false;
+    loading.current = true;
+    setSending(false);
+    setStreaming(null); setThinking(""); setLiveSteps([]); setLiveAgents([]);
+    setSuggestion(null); setMessages([]); setTasks([]); setDraft("");
+    setProjectOperation(null);
+    resetFollowing();
+    setStored(true);
     setConversationId(id);
     setNotice("");
     try {
       const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`, { cache: "no-store" });
-      if (!response.ok) { setMessages([]); return; }
+      if (!response.ok) throw new Error("Conversation unavailable");
       const detail = await response.json() as Detail;
-      // The previous workspace fetched this and then threw the messages away,
-      // so re-opening a thread showed an empty room. They are the thread.
+      const liveTasks = await withLiveTaskStatus(detail.tasks ?? []);
+      if (current !== generation.current) return;
       setMessages(detail.messages ?? []);
-      setTasks(await withLiveTaskStatus(detail.tasks ?? []));
+      setTasks(liveTasks);
     } catch {
-      setNotice("That thread's history could not be loaded.");
+      if (current === generation.current) setNotice("That thread's history could not be loaded.");
+    } finally {
+      if (current === generation.current) loading.current = false;
     }
   }
 
@@ -172,25 +211,28 @@ export function ChatSection() {
     }
   }
 
-  function startNew() { abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
+  function startNew() { generation.current++; busy.current = false; loading.current = false; setSending(false); setThinking(""); setLiveSteps([]); setLiveAgents([]); setProjectOperation(null); resetFollowing(); setStored(true); abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || !stored || sending) return;
     let active = true;
+    const current = generation.current;
     const refresh = async () => {
       try {
         const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, { cache: "no-store" });
         if (response.ok && active) {
           const detail = await response.json() as Detail;
+          const liveTasks = await withLiveTaskStatus(detail.tasks ?? []);
+          if (!active || current !== generation.current || loading.current || busy.current) return;
           setMessages(detail.messages ?? []);
-          setTasks(await withLiveTaskStatus(detail.tasks ?? []));
+          setTasks(liveTasks);
         }
       } catch { /* Keep the last known conversation when offline. */ }
     };
     void refresh();
     const timer = setInterval(() => { void refresh(); }, 5_000);
     return () => { active = false; clearInterval(timer); };
-  }, [conversationId]);
+  }, [conversationId, stored, sending]);
 
   function showLocal(text: string) {
     setMessages((items) => [...items, { id: `local-${Date.now()}`, role: "user", content: text, createdAt: new Date().toISOString() }]);
@@ -205,20 +247,26 @@ export function ChatSection() {
   async function send(event: FormEvent) {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || sending) return;
+    if (!text || busy.current || loading.current) return;
+    resetFollowing();
     setDraft("");
     setNotice("");
+    setCapReached(false);
     const intent = classifyIntent(text, { hasProject: Boolean(repository) });
-    if (ready?.configured === false && (intent.kind === "project_task" || intent.kind === "computer_task")) {
+    if (ready?.configured === false && intent.kind !== "chat") {
       showLocal(text);
       setSuggestion({ text, kind: intent.kind, mode: "mode" in intent ? intent.mode : undefined, reason: intent.reason });
       return;
     }
     showLocal(text);
-    await ask(text);
+    await ask(text, draft);
   }
 
-  async function ask(text: string) {
+  async function ask(text: string, submittedDraft = text) {
+    const current = ++generation.current;
+    busy.current = true;
+    let succeeded = false;
+    let diagnosed = false;
     setSuggestion(null);
     setSending(true);
     setStreaming("");
@@ -228,12 +276,15 @@ export function ChatSection() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text, stream: true }),
+        body: JSON.stringify({ conversationId, message: text, repository, branch, stream: true, provider }),
         signal: controller.signal,
       });
+      if (current !== generation.current) { await response.body?.cancel(); return; }
       if (!response.ok || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
-        const result = await response.json().catch(() => ({})) as { message?: string; needsModelEndpoint?: boolean; conversationId?: string };
-        setNotice(result.message ?? "Atlas could not answer.");
+        const result = await response.json().catch(() => ({})) as { message?: string; code?: string; needsModelEndpoint?: boolean; conversationId?: string };
+        if (current !== generation.current) return;
+        if (result.code === "CHAT_CAP_REACHED") setCapReached(true);
+        setNotice(result.message ?? "The chat request failed without diagnostic details. Retry, or check the model and GitHub connections in Settings.");
         if (result.needsModelEndpoint) setReady({ configured: false, reason: result.message ?? null });
         return;
       }
@@ -250,10 +301,12 @@ export function ChatSection() {
       addLog({ kind: "note", text: `› ${text.length > 120 ? `${text.slice(0, 120)}…` : text}` });
       for (;;) {
         const { value, done } = await reader.read();
+        if (current !== generation.current) { await reader.cancel(); return; }
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-          const data = item.data as { conversationId?: string; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
-          if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
+          const data = item.data as { conversationId?: string; stored?: boolean; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
+          if (item.type === "project") setProjectOperation(item.data as ProjectOperation);
+          else if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
           else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
           else if (item.type === "delta" && data?.text) { partial += data.text; setStreaming(partial); }
           else if (item.type === "tool" && data?.id && data.label && data.state) {
@@ -272,8 +325,13 @@ export function ChatSection() {
             setStreaming((current) => current ?? "");
             addLog({ kind: "agent", state: node.state, who: node.name, text: `${node.state === "running" || node.state === "planning" ? "▸" : node.state === "done" ? "✓" : node.state === "failed" ? "✕" : "·"} ${node.title}${node.summary && (node.state === "done" || node.state === "failed") && node.depth === 0 ? ` (${node.summary})` : ""} · ${node.state}` });
           }
-          else if (item.type === "error") { setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `✕ ${data?.message ?? "the reply failed"}` }); }
+          else if (item.type === "error") { diagnosed = true; setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `✕ ${data?.message ?? "the reply failed"}` }); }
           else if (item.type === "done" && data?.reply) {
+            succeeded = true;
+            if (data.stored === false) {
+              setStored(false);
+              setNotice("This reply could not be saved. Keep this chat open to retain it; later replies may not remember earlier turns.");
+            }
             const reply = data.reply;
             if (thought) setThoughts((items) => ({ ...items, [reply.id]: thought }));
             if (steps.length) setStepLogs((items) => ({ ...items, [reply.id]: steps }));
@@ -283,22 +341,31 @@ export function ChatSection() {
           }
         }
       }
+      if (!succeeded && !diagnosed) setNotice("The reply ended before completion. Your message is ready to retry.");
       setVersion((value) => value + 1);
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError")) setNotice("Chat is temporarily unavailable. Your message was kept above; try again in a moment.");
+      if (current === generation.current && !(error instanceof DOMException && error.name === "AbortError")) setNotice("Chat is temporarily unavailable. Your message is ready to retry.");
     } finally {
-      abortRef.current = null;
-      setStreaming(null);
-      setThinking("");
-      setLiveSteps([]);
-      setLiveAgents([]);
-      setSending(false);
+      if (current === generation.current) {
+        if (!succeeded) setDraft((value) => value || submittedDraft);
+        busy.current = false;
+        abortRef.current = null;
+        setStreaming(null);
+        setThinking("");
+        setLiveSteps([]);
+        setLiveAgents([]);
+        setSending(false);
+      }
     }
   }
 
   function stop() { abortRef.current?.abort(); }
 
   async function startProjectTask(item: Suggestion) {
+    if (busy.current || loading.current) return;
+    const current = ++generation.current;
+    busy.current = true;
+    let succeeded = false;
     setSuggestion(null);
     setSending(true);
     try {
@@ -308,22 +375,48 @@ export function ChatSection() {
         body: JSON.stringify({ repository, branch, mode: item.mode ?? "coder", objective: item.text, conversationId }),
       });
       const result = await response.json() as { conversationId?: string; message?: string };
+      if (current !== generation.current) return;
       if (!response.ok) { setNotice(result.message ?? "Atlas could not start that task."); return; }
-      if (result.conversationId) { setConversationId(result.conversationId); await openThread(result.conversationId); }
+      succeeded = true;
+      if (result.conversationId) await openThread(result.conversationId);
       setVersion((value) => value + 1);
     } catch {
-      setNotice("Atlas could not reach the task service. Nothing was started.");
+      if (current === generation.current) setNotice("Atlas could not confirm the task. Check task history before retrying.");
     } finally {
-      setSending(false);
+      if (current === generation.current) {
+        if (!succeeded) setDraft((value) => value || item.text);
+        busy.current = false; setSending(false);
+      }
     }
   }
 
+  async function startNewProject(item: Suggestion) {
+    if (busy.current || loading.current) return;
+    const current = ++generation.current;
+    busy.current = true;
+    let succeeded = false;
+    setSuggestion(null); setSending(true);
+    try {
+      const response = await fetch("/api/genesis/operations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: crypto.randomUUID(), name: `atlas-project-${crypto.randomUUID().slice(0, 8)}`, description: item.text, template: "web-app", visibility: userWantsPublic(item.text) ? "public" : "private", host: "github" }) });
+      const result = await response.json();
+      if (current !== generation.current) return;
+      if (!response.ok) setNotice(result.message ?? "New project creation is unavailable.");
+      else { succeeded = true; setProjectOperation(result); }
+    } catch { if (current === generation.current) setNotice("Project creation could not be confirmed. Check Genesis before retrying."); }
+    finally { if (current === generation.current) { if (!succeeded) setDraft((value) => value || item.text); busy.current = false; setSending(false); } }
+  }
+
   async function startComputerTask(item: Suggestion) {
+    if (busy.current || loading.current) return;
+    const current = ++generation.current;
+    busy.current = true;
+    let succeeded = false;
     setSuggestion(null);
     setSending(true);
     try {
       const listed = await fetch("/api/computer/devices", { cache: "no-store" });
       const devices = listed.ok ? ((await listed.json()) as { devices?: Device[] }).devices ?? [] : [];
+      if (current !== generation.current) return;
       const usable = devices.filter((device) => !device.revokedAt);
       const device = usable.find((candidate) => candidate.status === "online") ?? usable[0];
       if (!device) { setNotice("No computer is paired yet. Open Computer to pair your PC, then send this again."); return; }
@@ -333,13 +426,18 @@ export function ChatSection() {
         body: JSON.stringify({ deviceId: device.id, executionProvider: "windows", objective: item.text }),
       });
       const result = await response.json() as { message?: string };
+      if (current !== generation.current) return;
       if (!response.ok) { setNotice(result.message ?? "Atlas could not start that computer task."); return; }
+      succeeded = true;
       setMessages((items) => [...items, { id: `local-${Date.now()}-task`, role: "assistant", createdAt: new Date().toISOString(),
         content: `Started on **${device.name}**${device.status === "online" ? "" : " (it will begin when that computer comes online)"}. I will pause for your approval before anything consequential. Follow it in [Computer control](/automation).` }]);
     } catch {
-      setNotice("Atlas could not reach the computer service. Nothing was started.");
+      if (current === generation.current) setNotice("Atlas could not confirm the computer task. Check Computer before retrying.");
     } finally {
-      setSending(false);
+      if (current === generation.current) {
+        if (!succeeded) setDraft((value) => value || item.text);
+        busy.current = false; setSending(false);
+      }
     }
   }
 
@@ -363,7 +461,21 @@ export function ChatSection() {
         onClick={() => togglePanel()} title="Show what Atlas is doing: terminal log and files">{panelOpen ? "Hide panel" : `Terminal${items.length ? ` · ${items.length} files` : ""}`}</button>
     </>}
   >
-    <div className="section-scroll">
+    {/* Keyboard focus makes this scrolling region usable without a pointer. */}
+    {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex, jsx-a11y/no-noninteractive-element-interactions */}
+    <div className="section-scroll" ref={scrollRef} role="region" tabIndex={0} aria-label="Chat history"
+      onScroll={() => setFollowing(scrollFollow.onScroll())}
+      onWheel={(event) => { if (event.deltaY < 0) pauseFollowing(); }}
+      onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? null; }}
+      onTouchMove={(event) => {
+        const y = event.touches[0]?.clientY;
+        if (y !== undefined && touchY.current !== null && y > touchY.current) pauseFollowing();
+        touchY.current = y ?? null;
+      }}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) pauseFollowing();
+      }}>
+      <div ref={contentRef}>
       {messages.length === 0 ? <div className="section-empty">
         <div className="empty-mark"><AtlasMark /></div>
         <h1>What do you want to accomplish?</h1>
@@ -387,12 +499,13 @@ export function ChatSection() {
           {liveAgents.length > 0 && <AgentTree agents={liveAgents} steps={liveSteps} />}
           {streaming ? <MessageBody text={streaming} /> : !thinking && liveSteps.length === 0 && liveAgents.length === 0 && <p className="thinking">Thinking…</p>}</div></div>}
         {sending && streaming === null && <div className="atlas-message"><div className="assistant-avatar"><AtlasMark /></div><div><b>Atlas</b><p className="thinking">Starting…</p></div></div>}
+        {projectOperation && <ProjectActivity key={projectOperation.operationId} operation={projectOperation} />}
         {suggestion && <div className="atlas-message suggestion-card"><div className="assistant-avatar"><AtlasMark /></div><div>
           <b>Atlas</b>
-          <p>{suggestion.reason} {suggestion.kind === "project_task" ? <>It will run on <strong>{repository}</strong> ({branch}).</> : <>It will run on your computer and ask you before anything important.</>}</p>
+          <p>{suggestion.reason} {suggestion.kind === "project_task" ? <>It will run on <strong>{repository}</strong> ({branch}).</> : suggestion.kind === "new_project_task" ? <>It will use its own workspace.</> : <>It will run on your computer and ask you before anything important.</>}</p>
           <div className="suggestion-actions">
-            <button type="button" className="primary" onClick={() => void (suggestion.kind === "project_task" ? startProjectTask(suggestion) : startComputerTask(suggestion))}>
-              {suggestion.kind === "project_task" ? (suggestion.mode === "inspect" ? "Start review" : suggestion.mode === "debug" ? "Start debugging" : "Start task") : "Start on my computer"}
+            <button type="button" className="primary" onClick={() => void (suggestion.kind === "project_task" ? startProjectTask(suggestion) : suggestion.kind === "new_project_task" ? startNewProject(suggestion) : startComputerTask(suggestion))}>
+              {suggestion.kind === "project_task" ? (suggestion.mode === "inspect" ? "Start review" : suggestion.mode === "debug" ? "Start debugging" : "Start task") : suggestion.kind === "new_project_task" ? "Create separate project" : "Start on my computer"}
             </button>
             <button type="button" className="secondary" onClick={() => void ask(suggestion.text)}>Just answer in chat</button>
           </div>
@@ -400,22 +513,28 @@ export function ChatSection() {
         {tasks.map((task) => <TaskActivity key={task.taskId} task={task} onLog={addLog} onChanges={addItems}
           onOpenFile={(id) => { setSelectedItem(id); setPanelTab("files"); togglePanel(true); }} />)}
       </div>}
-      <div ref={endRef} />
+      </div>
     </div>
     <form className="chat-composer" onSubmit={send}>
+      {!following && <button type="button" className="secondary jump-to-latest"
+        onClick={() => { scrollFollow.jump(); setFollowing(true); }}>↓ Jump to latest</button>}
       {blocked && <p className="composer-blocked">
         Questions need an AI model connection. Project and computer tasks can still start. {ready?.reason} <Link href="/setup">Open Connections →</Link>
       </p>}
       <textarea aria-label="Message Atlas" value={draft} rows={3} onKeyDown={keyDown}
         onChange={(event) => setDraft(event.target.value)}
       placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything…"} />
-      <div className="composer-actions">
+        <div className="composer-actions">
+          <label>Model <select aria-label="Model provider" value={provider} onChange={(event) => setProvider(event.target.value)} disabled={streaming !== null}>
+            {(ready?.providers ?? [{ id: "auto", label: "Automatic", available: true }]).map((option) => <option key={option.id} value={option.id} disabled={!option.available}>{option.label}{option.paid ? " (paid API)" : ""}{!option.available ? " — not configured" : ""}</option>)}
+          </select></label>
         <div><span className="composer-hint">Enter sends · Shift+Enter for a new line</span></div>
         {streaming !== null
           ? <button type="button" className="send" onClick={stop} aria-label="Stop the reply">■</button>
           : <button className="send" aria-label="Send" disabled={sending || !draft.trim()}>{sending ? "…" : "↑"}</button>}
       </div>
       {notice && <p className="composer-notice" role="status">{notice}</p>}
+      {capReached && <p className="composer-notice cap-options">Keep going free on your own computer: <a href="/guide#local-model">run a local model</a>. Or <a href="/pricing">choose a plan</a> for a higher daily limit.</p>}
     </form>
   </AtlasShell>;
 }

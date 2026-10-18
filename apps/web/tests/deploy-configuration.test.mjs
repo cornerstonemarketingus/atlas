@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { chatReadiness } from "../app/api/chat/model-endpoint.mjs";
 
@@ -9,8 +10,8 @@ import { chatReadiness } from "../app/api/chat/model-endpoint.mjs";
 // so production stopped on every 429 a fallback would have absorbed. These
 // tests fail the moment chat code reads a variable the deploy does not supply.
 
-const root = new URL("../../../", import.meta.url).pathname;
-const workflow = readFileSync(join(root, ".github/workflows/deploy-cloudflare.yml"), "utf8");
+const root = fileURLToPath(new URL("../../../", import.meta.url));
+const workflow = readFileSync(join(root, ".github/workflows/deploy-cloudflare.yml"), "utf8").replaceAll("\r\n", "\n");
 const chatDirectory = join(root, "apps/web/app/api/chat");
 
 /** Variables the upload step maps from secrets into its environment. */
@@ -30,6 +31,16 @@ function uploadedNames() {
   return new Set(loop[1].split(/\\\n/u).map((line) => line.trim()).filter(Boolean));
 }
 
+test("Genesis bridge connection variables are mapped and uploaded to the Worker", () => {
+  const source = readFileSync(join(root, "apps/web/app/api/genesis/bridge.mjs"), "utf8");
+  const runtime = new Set([...source.matchAll(/environment\.(ATLAS_[A-Z0-9_]+)/gu)].map((match) => match[1]));
+  assert.deepEqual([...runtime].sort(), ["ATLAS_GENESIS_TOKEN", "ATLAS_GENESIS_URL"]);
+  for (const name of runtime) {
+    assert.ok(uploadStepEnvironment().has(name), `${name} must be sourced from its repository secret`);
+    assert.ok(uploadedNames().has(name), `${name} must reach the Worker`);
+  }
+});
+
 /** Runtime variables the chat code reads. */
 function chatRuntimeVariables() {
   const names = new Set();
@@ -43,8 +54,6 @@ function chatRuntimeVariables() {
 
 // Read by chat but supplied some other way, each for a stated reason.
 const SUPPLIED_ELSEWHERE = new Map([
-  // Mapped into ATLAS_MODEL_API_KEY by the upload step for the Groq origin only.
-  ["GROQ_API_KEY", "mapped to ATLAS_MODEL_API_KEY"],
   // A fallback alias for self-hosted deployments that already use this name.
   ["TAVILY_API_KEY", "alias of ATLAS_TAVILY_API_KEY"],
 ]);
@@ -58,7 +67,9 @@ test("every variable chat reads is uploaded to the Worker", () => {
 test("the model variables are mapped and uploaded, the fallback included", () => {
   const environment = uploadStepEnvironment();
   const uploaded = uploadedNames();
-  for (const name of ["ATLAS_CHAT_BASE_URL", "ATLAS_CHAT_MODEL", "ATLAS_MODEL_API_KEY", "ATLAS_CHAT_FALLBACK_MODEL", "ATLAS_TAVILY_API_KEY"]) {
+  // GROQ_API_KEY is uploaded as itself too: when the main model is the owner's
+  // own (ATLAS_MODEL_API_KEY is then the gateway token), Groq is a fallback.
+  for (const name of ["ATLAS_CHAT_BASE_URL", "ATLAS_CHAT_MODEL", "ATLAS_MODEL_API_KEY", "ATLAS_CHAT_FALLBACK_MODEL", "ATLAS_TAVILY_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY"]) {
     assert.ok(environment.has(name), `${name} is not mapped from secrets`);
     assert.ok(uploaded.has(name), `${name} is not uploaded`);
   }

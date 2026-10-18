@@ -33,10 +33,17 @@ describe("SafeValidationProfileRunner", () => {
     assert.match(snapshot.observations[0]?.diagnostics[1]?.message ?? "", /token=\[REDACTED\]/u);
   });
 
-  it("marks runner exceptions, cancellation, and truncation as infrastructure outcomes", async () => {
-    const mock = new MockRunner([new Error("spawn"), result({ cancelled: true, exitCode: null }), result({ truncated: true, exitCode: null })]);
+  it("marks runner exceptions, cancellation, and timeouts as infrastructure outcomes", async () => {
+    const mock = new MockRunner([new Error("spawn"), result({ cancelled: true, exitCode: null }), result({ timedOut: true, exitCode: null })]);
     const snapshot = await new SafeValidationProfileRunner(mock).run({ label: "post-change", profiles: [profile({ id: "a" }), profile({ id: "b" }), profile({ id: "c" })] });
     assert.deepEqual(snapshot.observations.map((item) => item.outcome), ["execution-failed", "cancelled", "execution-failed"]);
+  });
+
+  it("judges a run with long output by its exit code", async () => {
+    const mock = new MockRunner([result({ truncated: true, exitCode: 0 }), result({ truncated: true, exitCode: 1, stdout: "many lines\n[... 5 bytes of output omitted ...]\n1 failing" })]);
+    const snapshot = await new SafeValidationProfileRunner(mock).run({ label: "post-change", profiles: [profile({ id: "a" }), profile({ id: "b" })] });
+    assert.deepEqual(snapshot.observations.map((item) => item.outcome), ["passed", "failed"]);
+    assert.deepEqual(snapshot.observations[0]?.diagnostics, [], "a passing run gains no diagnostic the comparator would count as new");
   });
 
   it("runs explicit repeated attempts for flaky comparison", async () => {
@@ -49,7 +56,13 @@ describe("SafeValidationProfileRunner", () => {
   it("bounds sanitized output", async () => {
     const mock = new MockRunner([result({ exitCode: 1, stdout: "x".repeat(20) })]);
     const snapshot = await new SafeValidationProfileRunner(mock, { maxOutputCharacters: 10 }).run({ label: "baseline", profiles: [profile()] });
-    assert.equal(snapshot.observations[0]?.diagnostics[1]?.message, "xxxxxxxxxx…");
+    assert.equal(snapshot.observations[0]?.diagnostics[1]?.message, "…xxxxxxxxxx");
+  });
+
+  it("keeps the end of long failure output, where the summary is", async () => {
+    const mock = new MockRunner([result({ exitCode: 1, stdout: `${"noise ".repeat(50)}1 failing: expected 2` })]);
+    const snapshot = await new SafeValidationProfileRunner(mock, { maxOutputCharacters: 30 }).run({ label: "baseline", profiles: [profile()] });
+    assert.match(snapshot.observations[0]?.diagnostics[1]?.message ?? "", /1 failing: expected 2$/);
   });
 
   it("rejects invalid or implicit profiles before the runner is called", async () => {

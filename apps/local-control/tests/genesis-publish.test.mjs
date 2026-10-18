@@ -108,6 +108,19 @@ test("pushMain pushes main to a real repository without prompting", () => withRo
   store.close();
 }));
 
+test("publishing an approved commit never pushes a newer HEAD", () => withRoot(async (root) => {
+  const { store, project } = await readyProject(root);
+  try {
+    const approved = execFileSync("git", ["-C", project.workspace, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(project.workspace, "UNAPPROVED.md"), "A later change\n");
+    await commitWorkspace(project.workspace, "Later unapproved change");
+    const bare = join(root, "approved.git");
+    execFileSync("git", ["init", "-q", "--bare", bare]);
+    assert.equal((await pushMain(project.workspace, bare, { expectedCommit: approved })).ok, true);
+    assert.equal(execFileSync("git", ["-C", bare, "rev-parse", "refs/heads/main"], { encoding: "utf8" }).trim(), approved);
+  } finally { store.close(); }
+}));
+
 test("over HTTP: publish waits in Approvals, and approving it there publishes", (t) => withRoot(async (root) => {
   const { store: genesisStore, genesis, project } = await readyProject(root);
   const store = new LocalTaskStore(join(root, "atlas.sqlite"));
@@ -250,5 +263,24 @@ test("apps that need a server are not deployed to static hosting, and say where 
   const publisher = new GenesisPublisher({ genesis, approvals: fakeApprovals("allow"), credentials: async () => "token" });
   await assert.rejects(publisher.requestDeployment(project.id, {}), (error) => error.code === "NEEDS_SERVER" && /Reach Atlas/u.test(error.message));
   await assert.rejects(new GenesisPublisher({ genesis, approvals: fakeApprovals("deny"), credentials: async () => "token" }).requestRepository(project.id, { host: "github" }), (error) => error.code === "DENIED_BY_POLICY");
+  store.close();
+}));
+
+test("adaptive autonomy: with deploys allowed, a preview deploys at once but production waits for a level 4 approval", () => withRoot(async (root) => {
+  const { store, genesis, project } = await readySite(root);
+  const vercel = fakeVercel();
+  const approvals = fakeApprovals("allow");
+  const publisher = new GenesisPublisher({
+    genesis, approvals,
+    credentials: async (name) => (name === "ATLAS_VERCEL_TOKEN" ? "vc-token" : null),
+    adapters: { vercel: (options) => createVercelAdapter({ ...options, fetchImpl: vercel.fetchImpl }) },
+  });
+  const production = await publisher.requestDeployment(project.id, { target: "production" });
+  assert.equal(production.status, "awaiting-approval", "allowed deploys still ask for production");
+  assert.equal(approvals.created[0].riskLevel, 4, "and the approval is confirmed a second time");
+  assert.equal(vercel.deployments.length, 0);
+  const preview = await publisher.requestDeployment(project.id, { target: "preview" });
+  assert.equal(preview.status, "deployed", JSON.stringify(preview));
+  assert.equal(approvals.created.length, 1, "a preview needs no approval when deploys are allowed");
   store.close();
 }));

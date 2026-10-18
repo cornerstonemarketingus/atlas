@@ -1,6 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { RateLimitState, estimateRequestTokens, parseDurationMs, parseRateLimitHeaders, targetKey } from "../src/index.mjs";
+import { RateLimitState, estimateRequestTokens, parseDurationMs, parseRateLimitHeaders, targetKey, retryAfterHeaderMs } from "../src/index.mjs";
+
+test("HTTP-date Retry-After blocks capacity through the supplied clock's reset", () => {
+  const now = Date.parse("Wed, 21 Oct 2026 07:27:00 GMT");
+  const headers = { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" };
+  assert.equal(retryAfterHeaderMs(headers, now), 60_000);
+  assert.equal(parseRateLimitHeaders(headers, now).retryAfterAt, now + 60_000);
+  const time = clock(now);
+  const state = new RateLimitState({ now: time.now });
+  state.observe("provider/model", headers);
+  assert.equal(state.check("provider/model").waitMs, 60_000);
+  time.advance(60_000);
+  assert.deepEqual(state.check("provider/model"), { ok: true });
+  assert.equal(retryAfterHeaderMs(headers, now + 120_000), 0);
+  for (const value of ["-1", "1e3", "1junk", "soon", "9".repeat(400)]) {
+    assert.equal(retryAfterHeaderMs({ "retry-after": value }, now), null);
+  }
+});
 
 const groqHeaders = (overrides = {}) => new Headers({
   "x-ratelimit-limit-requests": "1000",

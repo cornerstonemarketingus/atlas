@@ -12,6 +12,7 @@ import type {
   RepositoryFileEditRequest,
   RepositoryFileEditor,
 } from "../domain/repository-file-edit.js";
+import { loadGeneratedFilePolicy } from "./generated-file-policy.js";
 import { RepositoryToolInputError, type RepositoryToolBinding } from "./repository-read-only-tools.js";
 import { TransactionalRepositoryChangeSetEditor } from "./transactional-repository-change-set-editor.js";
 
@@ -24,6 +25,8 @@ const CHANGE_SET_OPERATIONS = ["create", "update", "delete", "rename"] as const;
 export interface ProposeFileEditInput {
   readonly path: string;
   readonly content: string;
+  /** Confirms a hand edit of a lockfile, dependency, vendored or generated file. */
+  readonly allowGenerated?: boolean;
 }
 
 export interface ProposeFileEditOutput {
@@ -33,11 +36,12 @@ export interface ProposeFileEditOutput {
   readonly diffTruncated: boolean;
 }
 
-export type ProposeChangeSetEditInput =
+export type ProposeChangeSetEditInput = (
   | { readonly operation: "create"; readonly path: string; readonly content: string }
   | { readonly operation: "update"; readonly path: string; readonly content: string }
   | { readonly operation: "delete"; readonly path: string }
-  | { readonly operation: "rename"; readonly path: string; readonly toPath: string };
+  | { readonly operation: "rename"; readonly path: string; readonly toPath: string }
+) & { readonly allowGenerated?: boolean };
 
 export interface ProposeChangeSetInput {
   readonly edits: readonly ProposeChangeSetEditInput[];
@@ -117,6 +121,12 @@ export function createRepositoryWriteTools(
         const plan = await services.editor.preview(binding.repositoryRoot, expectedSha256 === null
           ? { operation: "create", path: input.path, content: input.content, mustNotExist: true }
           : { operation: "update", path: input.path, content: input.content, expectedSha256 });
+        try {
+          await assertNotProtected(binding.repositoryRoot, [{ paths: [plan.path], allowGenerated: input.allowGenerated === true }]);
+        } catch (error) {
+          services.editor.discard(plan.planDigest);
+          throw error;
+        }
         await services.editor.apply(plan, { approved: true, planDigest: plan.planDigest });
         return { path: plan.path, operation, diff: plan.diff, diffTruncated: plan.diffTruncated };
       },
@@ -134,6 +144,15 @@ export function createRepositoryWriteTools(
           requests.push(await toEditRequest(binding.repositoryRoot, edit));
         }
         const plan = await changeSetEditor.preview(binding.repositoryRoot, requests);
+        try {
+          await assertNotProtected(binding.repositoryRoot, input.edits.map((edit) => ({
+            paths: edit.operation === "rename" ? [edit.path, edit.toPath] : [edit.path],
+            allowGenerated: edit.allowGenerated === true,
+          })));
+        } catch (error) {
+          changeSetEditor.discard(plan.changeSetDigest);
+          throw error;
+        }
         const result = await changeSetEditor.apply(plan, { approved: true, changeSetDigest: plan.changeSetDigest });
         if (result.failure !== null) throw changeSetToolError(result.failure, result.rollbackStatus, result.rollbackFailedPaths);
         return {
@@ -173,6 +192,27 @@ function changeSetToolError(
     failure.code,
     rollbackStatus,
     rollbackFailedPaths,
+  );
+}
+
+/**
+ * Runs after preview, so containment and symlink checks have already passed
+ * before a file's first lines are read for a generator marker. Every refused
+ * path is reported at once, so one resend can confirm them all.
+ */
+async function assertNotProtected(root: string, edits: readonly { readonly paths: readonly string[]; readonly allowGenerated: boolean }[]): Promise<void> {
+  const policy = await loadGeneratedFilePolicy(root);
+  const reasons: string[] = [];
+  for (const edit of edits) {
+    if (edit.allowGenerated) continue;
+    for (const path of edit.paths) {
+      const found = await policy.classify(path);
+      if (found !== null) reasons.push(found.reason);
+    }
+  }
+  if (reasons.length === 0) return;
+  throw new RepositoryToolInputError(
+    `${reasons.join(" ")} Nothing was changed. If a hand edit is really intended, resend with allowGenerated: true on ${reasons.length === 1 ? "that edit" : "those edits"}.`,
   );
 }
 
@@ -239,10 +279,10 @@ function assertContained(root: string, relativePath: string): void {
 }
 
 function validateProposeFileEditInput(input: unknown): ProposeFileEditInput {
-  const object = validateObject(input, ["path", "content"]);
+  const object = validateObject(input, ["path", "content", "allowGenerated"]);
   const path = validatePathField(object, "path");
   const content = validateContentField(object, "content");
-  return { path, content };
+  return validateAllowGenerated(object) ? { path, content, allowGenerated: true } : { path, content };
 }
 
 function validateProposeChangeSetInput(input: unknown): ProposeChangeSetInput {
@@ -274,7 +314,18 @@ function validateProposeChangeSetInput(input: unknown): ProposeChangeSetInput {
 }
 
 function validateChangeSetEdit(input: unknown): ProposeChangeSetEditInput {
-  const object = validateObject(input, ["operation", "path", "content", "toPath"]);
+  const object = validateObject(input, ["operation", "path", "content", "toPath", "allowGenerated"]);
+  const edit = validateChangeSetOperation(object);
+  return validateAllowGenerated(object) ? { ...edit, allowGenerated: true } : edit;
+}
+
+function validateAllowGenerated(object: Record<string, unknown>): boolean {
+  const value = object["allowGenerated"];
+  if (value !== undefined && typeof value !== "boolean") throw new RepositoryToolInputError("allowGenerated must be a boolean.");
+  return value === true;
+}
+
+function validateChangeSetOperation(object: Record<string, unknown>): ProposeChangeSetEditInput {
   const operation = object["operation"];
   if (typeof operation !== "string" || !CHANGE_SET_OPERATIONS.includes(operation as (typeof CHANGE_SET_OPERATIONS)[number])) {
     throw new RepositoryToolInputError(`operation must be one of ${CHANGE_SET_OPERATIONS.join(", ")}.`);

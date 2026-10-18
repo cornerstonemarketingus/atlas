@@ -64,3 +64,15 @@ The escalation model continues from the same checkpoint: the working tree
 with every edit so far, and only the failures the change introduced. The
 task is never restarted, and it spends from the same token budget. The
 pull request says when escalation was used (`escalatedAtPass`).
+
+## Cloud providers beyond Groq
+
+The coder supports OpenAI and Cloudflare Workers AI as first-class providers in
+addition to Groq and Anthropic. The Actions runner can continue through configured
+cross-vendor fallbacks without restarting the task. See
+[CLOUD-CODER-RECOVERY.md](CLOUD-CODER-RECOVERY.md) for credentials, route selection,
+privacy controls, incident evidence and live acceptance limits.
+
+An output-token setting alone does not establish a provider's paid-tier capacity.
+A route may still reject the request; an independent configured cloud provider
+is the recovery path, rather than repeatedly waiting on the same oversized call.
