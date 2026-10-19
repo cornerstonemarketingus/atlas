@@ -145,6 +145,11 @@ export class LocalEnvironment {
     // from disk) can be reproduced by a checkout. A global core.autocrlf
     // (the default on Windows) would otherwise rewrite line endings.
     await git(this.folder, ["config", "core.autocrlf", "false"]);
+    // Files committed while autocrlf was on (for example template files
+    // copied from a CRLF checkout) were stored converted, and git trusts its
+    // index for files it thinks are unchanged. Re-read every tracked file so
+    // the commit holds exactly the bytes on disk.
+    await git(this.folder, ["add", "--renormalize", "."]);
     await commitWorkspace(this.folder, message);
     const commit = (await git(this.folder, ["rev-parse", "HEAD"])).stdout.trim();
     await this.#ensureStore();

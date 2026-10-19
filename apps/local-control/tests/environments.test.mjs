@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -87,11 +87,19 @@ test("restore reproduces the exact bytes even when git is set to rewrite line en
   try {
     const environment = await smallEnvironment(root);
     writeFileSync(join(environment.folder, "src", "lines.mjs"), "export const a = 1;\nexport const b = 2;\n");
+    // A file with CRLF endings committed while autocrlf was on is stored with LF:
+    // the snapshot must store the bytes on disk, not that earlier conversion.
+    writeFileSync(join(environment.folder, "src", "crlf.mjs"), "export const c = 3;\r\nexport const d = 4;\r\n");
+    // Backdate it so git trusts its index entry later instead of re-reading the file.
+    utimesSync(join(environment.folder, "src", "crlf.mjs"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    gitIn(environment.folder, "add", "-A");
+    gitIn(environment.folder, "commit", "-q", "-m", "crlf file under autocrlf");
     const snapshot = await environment.snapshot({ manifest: { state: "building" } });
     await environment.destroy();
     const { environment: restored, receipt } = await environment.restore(snapshot, { folder: join(root, "projects", "demo-crlf") });
     assert.equal(receipt.treeDigest, snapshot.treeDigest);
     assert.equal(readFileSync(join(restored.folder, "src", "lines.mjs"), "utf8"), "export const a = 1;\nexport const b = 2;\n");
+    assert.equal(readFileSync(join(restored.folder, "src", "crlf.mjs"), "utf8"), "export const c = 3;\r\nexport const d = 4;\r\n");
   } finally {
     if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = previous;
     cleanup();
