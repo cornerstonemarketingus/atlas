@@ -7,6 +7,8 @@
  * The page ships under a strict CSP (no inline script or style), so every
  * dynamic value is escaped with esc() and nothing is styled inline.
  */
+import { FFMPEG_REFUSED_FILTERS } from "./platform/render/render-policy.mjs";
+
 export const LOCAL_UI_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark light"><meta name="theme-color" content="#0d120f">
@@ -132,6 +134,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
    <div class="actions"><button id="build-start">Build it</button></div><p id="build-notice" class="hint" role="status" aria-live="polite"></p>
    <p class="hint">Atlas writes the requirements with sensible assumptions, plans the work, builds it on this computer, tests it, runs it, checks it in a browser and fixes problems. It asks only when an answer changes cost, data rules or who gets contacted, and it asks before publishing anything.</p></form>
   <div id="build-detail" hidden></div>
+  <section id="build-render" class="panel" hidden aria-labelledby="build-render-heading"></section>
   <section aria-labelledby="build-projects-heading"><h3 id="build-projects-heading">Projects</h3><div id="build-projects" class="list"><p class="empty">Unlock this tab to see projects.</p></div></section>
  </section>
  <section class="view" data-view="artifacts" hidden aria-labelledby="artifacts-heading">
