@@ -158,6 +158,7 @@ test("a request bigger than a model's whole allowance is never queued for it; an
   observeLedger(state, "small", groq("5000"), 0); // limit 6000 tokens
   const refused = reserveCapacity(state, ask("a", 18_000, { models: ["small"] }), 0);
   assert.deepEqual([refused.granted, refused.permanent, refused.kind, refused.reason, refused.waitMs], [false, true, "CAPACITY_EXCEEDED", "request_exceeds_allowance", 0]);
+  assert.equal(refused.limitTokens, 6000, "the allowance is returned so the caller can reshape the request to fit");
   assert.equal(Object.keys(state.waiting).length, 0);
   assert.equal(reserveCapacity(state, ask("b", 18_000, { models: ["small", "large"] }), 0).model, "large");
   assert.equal(reserveCapacity(state, ask("c", 5_000, { models: ["small"] }), 0).granted, true, "a request that fits is unaffected");

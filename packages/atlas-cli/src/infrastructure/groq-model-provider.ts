@@ -1,6 +1,7 @@
 import type { ModelCapabilities, ModelProvider, ModelProviderMetadata, ModelRequest, ModelResponse } from "../model/model-provider.js";
 import { ModelProviderError } from "../model/model-provider.js";
 import { validateModelRequest, validateModelResponse } from "../model/model-contract-validation.js";
+import { boundCoderContext } from "../model/bounded-coder-context.js";
 import { buildOpenAiChatPayload, parseOpenAiChatResponse } from "./openai-compatible-chat-format.js";
 import { parseDurationMs, retryAfterHeaderMs, suggestedWaitFromMessage } from "./rate-limit-timing.js";
 
@@ -13,6 +14,11 @@ const DEFAULT_MAX_PACING_WAIT_MS = 60_000;
 // Rough upper bound for tokens in a JSON chat request. Over-estimating costs a
 // short wait; under-estimating costs a 429 and a retry.
 const BYTES_PER_TOKEN_ESTIMATE = 3;
+// A refitted turn keeps at least this much room to answer: enough for a tool
+// call with real arguments. Below it the request is not worth sending.
+const MINIMUM_REFIT_OUTPUT_TOKENS = 1_024;
+// Headroom under the stated allowance, for tokenizer differences.
+const REFIT_MARGIN_TOKENS = 256;
 
 export interface GroqModelProviderOptions {
   readonly apiKey: string;
@@ -29,6 +35,16 @@ export interface GroqModelProviderOptions {
   readonly maximumPacingWaitMs?: number;
   readonly sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   readonly now?: () => number;
+}
+
+/**
+ * What a "Request too large ... tokens per minute" refusal taught: the
+ * account's per-request allowance, and how many bytes of request JSON one
+ * of its tokens is (measured, not guessed, from the same refusal).
+ */
+interface RequestAllowance {
+  readonly tokens: number;
+  readonly bytesPerToken: number;
 }
 
 interface TokenWindow {
@@ -54,6 +70,7 @@ export class GroqModelProvider implements ModelProvider {
   readonly #sleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   readonly #now: () => number;
   #tokenWindow: TokenWindow | undefined;
+  #allowance: RequestAllowance | undefined;
 
   public constructor(options: GroqModelProviderOptions) {
     if (options.apiKey.trim().length === 0) throw new TypeError("GroqModelProvider requires a non-empty apiKey.");
@@ -69,8 +86,47 @@ export class GroqModelProvider implements ModelProvider {
     this.metadata = { id: "groq", displayName: "Groq", models: [...options.models] };
   }
 
+  /**
+   * A free or small Groq tier refuses any single request whose prompt plus
+   * max_tokens exceeds its tokens-per-minute allowance, however long one
+   * waits. The refusal states the allowance, so the request is refitted to it
+   * once (a smaller reply budget first, then older re-readable tool output
+   * replaced with a pointer to read it again) and every later turn is fitted
+   * before it is sent. Nothing the objective, edits or errors said is removed.
+   */
   public async complete(request: ModelRequest, options: { readonly signal?: AbortSignal } = {}): Promise<ModelResponse> {
     const validated = validateModelRequest(request);
+    const fitted = this.#fitToAllowance(validated) ?? validated;
+    try {
+      return await this.#send(fitted, options);
+    } catch (error: unknown) {
+      if (!(error instanceof AllowanceRefusal)) throw error;
+      const refitted = this.#fitToAllowance(validated);
+      if (refitted === undefined || sameSize(refitted, fitted)) throw error.providerError;
+      try {
+        return await this.#send(refitted, options);
+      } catch (second: unknown) {
+        throw second instanceof AllowanceRefusal ? second.providerError : second;
+      }
+    }
+  }
+
+  #fitToAllowance(request: ModelRequest): ModelRequest | undefined {
+    const allowance = this.#allowance;
+    if (allowance === undefined) return request;
+    const budget = allowance.tokens - REFIT_MARGIN_TOKENS;
+    const promptTokens = Math.ceil(requestBytes(request) / allowance.bytesPerToken);
+    const wanted = request.maxOutputTokens ?? MINIMUM_REFIT_OUTPUT_TOKENS;
+    if (promptTokens + wanted <= budget) return request;
+    if (budget - promptTokens >= MINIMUM_REFIT_OUTPUT_TOKENS) return { ...request, maxOutputTokens: budget - promptTokens };
+    const output = Math.min(wanted, MINIMUM_REFIT_OUTPUT_TOKENS);
+    const bytes = Math.floor((budget - output) * allowance.bytesPerToken);
+    if (bytes < 1) return undefined;
+    const bounded = boundCoderContext(request, bytes);
+    return bounded === undefined ? undefined : { ...bounded, maxOutputTokens: output };
+  }
+
+  async #send(validated: ModelRequest, options: { readonly signal?: AbortSignal }): Promise<ModelResponse> {
     const payload = buildOpenAiChatPayload(validated);
     const body = JSON.stringify(payload);
     await this.#waitForTokenWindow(body, options.signal);
@@ -118,6 +174,8 @@ export class GroqModelProvider implements ModelProvider {
         : undefined;
       if (recovered !== undefined) return recovered;
 
+      const allowance = (response.status === 413 || response.status === 429) ? statedAllowance(text, validated) : undefined;
+
       const authFailure = response.status === 401 || response.status === 403;
       // Classify privately; provider bodies may echo prompts and credentials.
       // Preserve a fixed capacity description for the existing fallback policy.
@@ -125,13 +183,19 @@ export class GroqModelProvider implements ModelProvider {
       const retryAfterMs = response.status === 429 || response.status >= 500
         ? retryAfterHeaderMs(response.headers) ?? suggestedWaitFromMessage(text)
         : undefined;
-      throw new ModelProviderError({
-        message: `Groq endpoint returned HTTP ${response.status}${detail}`,
-        code: authFailure ? "authentication" : response.status === 429 ? "rate-limit" : "provider-failure",
+      const providerError = new ModelProviderError({
+        message: `Groq endpoint returned HTTP ${response.status}${allowance === undefined ? detail : ": capacity exceeded for this request (tokens per minute)"}`,
+        code: authFailure ? "authentication" : response.status === 429 && allowance === undefined ? "rate-limit" : "provider-failure",
         providerId: this.metadata.id,
-        retryable: !authFailure && (response.status === 429 || response.status >= 500),
-        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+        // Waiting never makes an over-allowance request fit; a fallback route may.
+        retryable: !authFailure && allowance === undefined && (response.status === 429 || response.status >= 500),
+        ...(retryAfterMs === undefined || allowance !== undefined ? {} : { retryAfterMs }),
       });
+      if (allowance !== undefined) {
+        this.#allowance = allowance;
+        throw new AllowanceRefusal(providerError);
+      }
+      throw providerError;
     }
 
     let parsed: unknown;
@@ -187,6 +251,35 @@ export class GroqModelProvider implements ModelProvider {
       ? { remainingTokens: remaining, resetsAt: this.#now() + resetMs }
       : undefined;
   }
+}
+
+class AllowanceRefusal extends Error {
+  public constructor(public readonly providerError: ModelProviderError) {
+    super(providerError.message);
+  }
+}
+
+function requestBytes(request: ModelRequest): number {
+  return Buffer.byteLength(JSON.stringify(request), "utf8");
+}
+
+function sameSize(left: ModelRequest, right: ModelRequest): boolean {
+  return requestBytes(left) === requestBytes(right) && left.maxOutputTokens === right.maxOutputTokens;
+}
+
+/**
+ * Reads "Request too large ... on tokens per minute (TPM): Limit 8000,
+ * Requested 9513" into numbers only; the rest of the body never leaves here.
+ */
+function statedAllowance(body: string, sent: ModelRequest): RequestAllowance | undefined {
+  if (!/request too large/iu.test(body) || !/tokens per minute|\bTPM\b/iu.test(body)) return undefined;
+  const match = /Limit\s+(\d+),\s*Requested\s+(\d+)/iu.exec(body);
+  if (match === null) return undefined;
+  const limit = Number(match[1]);
+  const requested = Number(match[2]);
+  const promptTokens = requested - (sent.maxOutputTokens ?? 0);
+  if (!Number.isSafeInteger(limit) || limit < 1 || !Number.isSafeInteger(requested) || promptTokens < 1) return undefined;
+  return { tokens: limit, bytesPerToken: requestBytes(sent) / promptTokens };
 }
 
 function defaultSleep(delayMs: number, signal?: AbortSignal): Promise<void> {
