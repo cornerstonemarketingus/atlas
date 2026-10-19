@@ -70,6 +70,8 @@ import { createVisionReviewer } from "./platform/genesis/vision.mjs";
 import { createGenesisCoder } from "./platform/genesis/coder.mjs";
 import { ArtifactStore, recordGenesisArtifact } from "./platform/artifacts/index.mjs";
 import { RenderRunner } from "./platform/render/index.mjs";
+import { ComputeManager } from "./platform/compute/index.mjs";
+import { LOCAL_OWNER_ID, NodeProvider, NodeService, defaultComputeProviders } from "./platform/nodes/index.mjs";
 import { runCheck } from "./platform/self-improve/runtime.mjs";
 import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
 import { createVercelAdapter } from "./agent/infrastructure/vercel.mjs";
@@ -230,6 +232,19 @@ const renderRunner = new RenderRunner({
   },
   artifactStore: artifacts,
 });
+// Atlas Nodes: machines the owner brings dial out to this daemon and render jobs in their own container sandbox.
+// With no paid compute provider configured they are the only (default) provider; they cost $0.
+const nodeService = new NodeService({
+  db: join(dataDirectory, "nodes.sqlite"), artifacts, root: join(dataDirectory, "nodes"),
+  isOwner: ({ userId }) => userId === LOCAL_OWNER_ID,
+});
+const nodeProvider = new NodeProvider({ service: nodeService });
+const compute = new ComputeManager({
+  store: platformStore, leaseDb: join(dataDirectory, "compute.sqlite"),
+  providers: defaultComputeProviders({ nodeProvider, paid: [] }),
+});
+compute.startReconciler({ onError: (error) => console.error(`Compute reconcile failed: ${error.message}`) })
+  .catch((error) => console.error(`Compute reconcile failed: ${error.message}`));
 // Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
 const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
 let genesisCreation = null;
@@ -315,6 +330,7 @@ const server = createLocalControlServer({
   goals,
   artifacts,
   render: renderRunner,
+  nodes: nodeService,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -382,6 +398,9 @@ function shutdown() {
     world.close();
     workforceRuntime.close();
     businessService.close();
+    compute.stopReconciler();
+    compute.leases.close();
+    nodeService.close();
     platformStore.close();
     store.close();
     process.exit(0);
