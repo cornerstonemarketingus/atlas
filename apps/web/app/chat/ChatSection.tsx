@@ -59,6 +59,8 @@ export function ChatSection() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
+  // Set when the daily free-message cap is reached: the options after it are a local model, then a plan.
+  const [capReached, setCapReached] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [repository, setRepository] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(PROJECT_STORAGE_KEY) ?? "");
   const [branch, setBranch] = useState("main");
@@ -249,6 +251,7 @@ export function ChatSection() {
     resetFollowing();
     setDraft("");
     setNotice("");
+    setCapReached(false);
     const intent = classifyIntent(text, { hasProject: Boolean(repository) });
     if (ready?.configured === false && intent.kind !== "chat") {
       showLocal(text);
@@ -278,8 +281,9 @@ export function ChatSection() {
       });
       if (current !== generation.current) { await response.body?.cancel(); return; }
       if (!response.ok || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
-        const result = await response.json().catch(() => ({})) as { message?: string; needsModelEndpoint?: boolean; conversationId?: string };
+        const result = await response.json().catch(() => ({})) as { message?: string; code?: string; needsModelEndpoint?: boolean; conversationId?: string };
         if (current !== generation.current) return;
+        if (result.code === "CHAT_CAP_REACHED") setCapReached(true);
         setNotice(result.message ?? "The chat request failed without diagnostic details. Retry, or check the model and GitHub connections in Settings.");
         if (result.needsModelEndpoint) setReady({ configured: false, reason: result.message ?? null });
         return;
@@ -530,6 +534,7 @@ export function ChatSection() {
           : <button className="send" aria-label="Send" disabled={sending || !draft.trim()}>{sending ? "…" : "↑"}</button>}
       </div>
       {notice && <p className="composer-notice" role="status">{notice}</p>}
+      {capReached && <p className="composer-notice cap-options">Keep going free on your own computer: <a href="/guide#local-model">run a local model</a>. Or <a href="/pricing">choose a plan</a> for a higher daily limit.</p>}
     </form>
   </AtlasShell>;
 }
