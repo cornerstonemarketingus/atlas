@@ -74,6 +74,23 @@ test("ownership changes during verification and audit failures leave no partial 
   assert.equal(n(f, "task_execution_outcomes"), 0);
 });
 
+test("reconciliation retains its deadline when navigation also supplies cancellation", async t => {
+  let deadline;
+  t.mock.method(AbortSignal, "timeout", ms => { assert.equal(ms, 30000); return deadline.signal; });
+  for (const source of ["deadline", "navigation"]) {
+    deadline = new AbortController();
+    const navigation = new AbortController();
+    let signal;
+    const pending = reconcileTaskRequest({ requestKey: taskId, signal: navigation.signal, fetcher: async (_url, options) => {
+      signal = options.signal;
+      return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), { once: true }));
+    } });
+    assert.notEqual(signal, navigation.signal, "navigation must not replace the deadline");
+    (source === "deadline" ? deadline : navigation).abort();
+    await assert.rejects(pending, { name: "AbortError" });
+  }
+});
+
 test("mobile reconciliation sends only opaque request identity and an empty same-origin JSON intent", async () => {
   const response = await reconcileTaskRequest({ requestKey: taskId, fetcher: async (url, options) => {
     assert.equal(url, `/api/tasks/requests/${taskId}/reconcile`); assert.equal(options.method, "POST"); assert.equal(options.body, "{}"); assert.equal(options.cache, "no-store"); assert.ok(options.signal); return Response.json({ reconciled: true });
