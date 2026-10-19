@@ -220,10 +220,11 @@ async function startRequestedTasks(request: Request, { requests, errors }: TaskR
         headers: forwarded,
         body: JSON.stringify({ repository: task.repository, branch: taskBranch, mode: task.mode, objective: task.objective, conversationId: context.conversationId }),
       }));
-      const body = await result.json().catch(() => ({})) as { message?: string; taskId?: string; mergePolicy?: string };
-      outcome = result.ok
+      const body = await result.json().catch(() => ({})) as { message?: string; taskId?: string; mergePolicy?: string; status?: string };
+      // A saved request whose cloud run was not confirmed has not started; saying so keeps the person from waiting on nothing.
+      outcome = result.ok && body.status !== "dispatch-unknown"
         ? { ok: true, message: "started", taskId: body.taskId, mergePolicy: body.mergePolicy }
-        : { ok: false, message: body.message ?? `the task service answered ${result.status}` };
+        : { ok: false, message: result.ok ? `the request is saved${body.taskId ? ` (task ${body.taskId})` : ""}, but its cloud run was not confirmed. Check its progress before asking again` : body.message ?? `the task service answered ${result.status}` };
     } catch {
       outcome = { ok: false, message: "the task service could not be reached" };
     }
