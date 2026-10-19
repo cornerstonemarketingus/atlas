@@ -20,6 +20,9 @@ const LIFECYCLE_LABELS = Object.freeze({
   repairing: "Repairing a failed check", reviewing: "Reviewing the result", ready: "Verified; preparing to publish", publishing: "Publishing the repository",
 });
 
+/** Only a same-origin hosted preview path is ever linked. */
+const previewPath = (value) => (typeof value === "string" && /^\/preview\/gen_[0-9a-f-]{36}$/u.test(value) ? value : null);
+
 const text = (value) => (typeof value === "string" && value.trim() ? value.trim().slice(0, 600) : null);
 
 /**
@@ -35,7 +38,7 @@ export function describeProject(result) {
   if (text(result?.visibility)) facts.push({ label: "Visibility", value: result.visibility });
   if (text(result?.operationId)) facts.push({ label: "Operation", value: result.operationId });
   if (text(result?.deploymentState)) facts.push({ label: "Deployment", value: result.deploymentState.replaceAll("-", " ") });
-  const base = { facts, detail: message, nextStep, polling: false };
+  const base = { facts, detail: message, nextStep, polling: false, previewUrl: null };
 
   if (status === "unavailable") return { ...base, stage: "unavailable", title: "Project creation is unavailable", detail: message ?? "Atlas could not start this project." };
   if (status === "denied") return { ...base, stage: "failed", title: "Project creation was not allowed" };
@@ -45,6 +48,8 @@ export function describeProject(result) {
   if (status === "blocked") return { ...base, stage: "blocked", title: "Project creation needs your input", detail: message ?? "Open the project on the Genesis node to answer its questions." };
   if (status === "awaiting-approval") return { ...base, stage: "awaiting-approval", title: "Waiting for your approval to publish", detail: message ?? "Approve the exact publish action in the Genesis node's Approvals page.", polling: true };
   if (status === "published") return { ...base, stage: "completed", title: "Repository created and pushed" };
+  // A hosted website: built and structurally checked, previewable, not published.
+  if (status === "ready") return { ...base, stage: "completed", title: "Website built and ready to preview", detail: message ?? "A preview is ready. Nothing is published.", previewUrl: previewPath(result?.previewUrl) };
   if (status === "building" || status === "publishing") {
     const label = LIFECYCLE_LABELS[state] ?? null;
     if (PLANNING.includes(state)) return { ...base, stage: "planning", title: "Planning the project", detail: label, polling: true };

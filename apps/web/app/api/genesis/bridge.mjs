@@ -52,6 +52,8 @@ export function genesisBridge(environment, { owner = false, fetchImpl = fetch, c
     finally { clearTimeout(timer); }
   }
   return {
+    /** False when no node can be asked at all (not the owner, or not configured); the hosted builder is used instead. */
+    available: reason === null,
     capabilities: async ({ visibility = "private" } = {}) => {
       if (reason) return unavailable;
       const result = await call(`/v1/genesis/capabilities?visibility=${visibility === "public" ? "public" : "private"}`, undefined, capabilityTimeoutMs);

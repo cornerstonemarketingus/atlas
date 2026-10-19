@@ -28,6 +28,17 @@ test("unavailable, planning, executing, blocked, interrupted, failed and complet
   assert.equal(stage({ status: "something-new" }), "unknown");
 });
 
+test("a hosted website is completed with a same-origin preview link and nothing is claimed as deployed", () => {
+  const preview = "/preview/gen_11111111-aaaa-4bbb-8ccc-dddddddddddd";
+  const view = describeProject({ status: "ready", hosted: true, previewUrl: preview, name: "Team Hahn Construction", operationId: "gen_11111111-aaaa-4bbb-8ccc-dddddddddddd", deploymentState: "not-deployed", message: "Built 5 pages. Nothing is published." });
+  assert.equal(view.stage, "completed");
+  assert.equal(view.previewUrl, preview);
+  assert.equal(view.polling, false);
+  assert.ok(view.facts.some((fact) => fact.label === "Deployment" && fact.value === "not deployed"));
+  // A preview link that is not a hosted path is never rendered as a link.
+  for (const bad of ["https://evil.test/", "//evil.test/", "/preview/../x", "javascript:alert(1)", null]) assert.equal(describeProject({ status: "ready", previewUrl: bad }).previewUrl, null, String(bad));
+});
+
 test("only live stages poll, and a failure surfaces its message", () => {
   for (const status of ["unavailable", "failed", "blocked", "interrupted", "published", "denied"]) assert.equal(describeProject({ status }).polling, false, status);
   for (const status of ["building", "publishing", "awaiting-approval"]) assert.equal(describeProject({ status, projectState: "building" }).polling, true, status);
