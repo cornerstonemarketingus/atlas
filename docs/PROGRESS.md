@@ -808,3 +808,13 @@ Fresh verify39234208312 definitively failed Coder finished without a reviewable 
 Real smoke-script subprocess regression fails unchanged main at identical objectives, passes with the fix, fails again with only uniqueness removed, then passes restored. Runner/local suite:89tests88pass1skip0fail. Previous existing Mode A verification:32 focused agent/registry tests pass. This repairs an acceptance prerequisite, not Mode B; no fresh live change/medium-task success is claimed before deployment/dispatch.
 
 Next: complete exact-head CI and ordinary review eligibility, merge acceptance repair, then dispatch one fresh trivial coder acceptance. Obtain an authorized saved medium task and argument-level trace evidence before implementing a B repair; do not infer loops from repeated tool names.
+
+## 2026-10-19 — explicit medium coder diagnostic dispatch (#394)
+
+Acceptance prerequisite392 merged ba05f83 after every exact-head check in39238010787 passed, with no reviews/blockers. Dispatched one fresh trivial hosted acceptance39241361227 at that merged source; result remains pending.
+
+Prepared an optional coder objective input on the existing verify-hosted workflow, forwarded through an environment variable into the existing authenticated saved-task POST. Default remains the fresh UUID document. Claims, repository/manual-review restrictions, verified evidence and delivered findings remain required. Raised only coder artifact retention from7to30days so evidence survives an unattended investigation. These workflow changes require configured owner review; do not merge or dispatch the new unreviewed workflow to avoid that gate. No B algorithm, budget increase or verdict change.
+
+Actual subprocess test fails current main because the supplied medium objective is ignored; forwarding repair passes, removing only forwarding fails again, restoration passes. Runner/local suite89tests88pass1skip0fail. All11workflows parse and every shell step validates before push. No secret prompt/log payload added.
+
+Next: inspect fresh trivial acceptance39241361227 and its actual coder verdict/artifacts. Obtain configured workflow owner review for this diagnostic-input/retention PR, complete exact-head CI, then dispatch a bounded medium task through the saved-task claim path and replay its argument-level evidence before selecting a B repair.

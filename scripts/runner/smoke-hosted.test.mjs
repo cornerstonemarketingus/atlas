@@ -21,15 +21,16 @@ test('real coder smoke requests a fresh change on every invocation', async () =>
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 3; i++) {
       const child = spawn(process.execPath, [fileURLToPath(new URL('./smoke-hosted.mjs', import.meta.url))], {
         cwd: process.env.TEMP || process.env.TMPDIR || '/tmp',
-        env: { ...process.env, ATLAS_SMOKE_MODE: 'coder', ATLAS_OPERATOR_TOKEN: 'test-only', ATLAS_SMOKE_BASE_URL: `http://127.0.0.1:${server.address().port}` }, stdio: 'pipe',
+        env: { ...process.env, ATLAS_SMOKE_MODE: 'coder', ATLAS_SMOKE_CODER_OBJECTIVE: i === 2 ? 'Read the runner input validator and add a focused regression for missing objectives; change only its tests.' : '', ATLAS_OPERATOR_TOKEN: 'test-only', ATLAS_SMOKE_BASE_URL: `http://127.0.0.1:${server.address().port}` }, stdio: 'pipe',
       });
       let output = ''; child.stderr.on('data', chunk => output += chunk); child.stdout.resume();
       assert.equal(await new Promise(resolve => child.on('close', resolve)), 0, output);
     }
     assert.notEqual(objectives[0], objectives[1], 'a completed previous smoke must not satisfy the next objective');
-    for (const objective of objectives) assert.match(objective, /docs\/ATLAS-SMOKE-CHECK-[a-f0-9-]+\.md/u);
+    assert.equal(objectives[2], 'Read the runner input validator and add a focused regression for missing objectives; change only its tests.');
+    for (const objective of objectives.slice(0, 2)) assert.match(objective, /docs\/ATLAS-SMOKE-CHECK-[a-f0-9-]+\.md/u);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
