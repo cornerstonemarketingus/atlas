@@ -2,6 +2,7 @@
 export function pollActivity({ url, onActivity, onUnavailable, fetcher = fetch, intervalMs = 4000, timeoutMs = 20000, repeat = true }) {
   let stopped = false, timer, controller;
   async function load() {
+    let received = false;
     controller = new AbortController();
     const signal = controller.signal;
     const deadline = setTimeout(() => controller.abort(), timeoutMs);
@@ -14,12 +15,12 @@ export function pollActivity({ url, onActivity, onUnavailable, fetcher = fetch, 
         })(),
         new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("Activity request aborted")), { once: true })),
       ]);
-      if (!stopped) { onActivity(value); onUnavailable(false); }
+      if (!stopped) { received = true; onActivity(value); onUnavailable(false); }
     } catch {
       if (!stopped) onUnavailable(true);
     } finally {
       clearTimeout(deadline);
-      if (!stopped && repeat) timer = setTimeout(load, intervalMs);
+      if (!stopped && (repeat || !received)) timer = setTimeout(load, intervalMs);
     }
   }
   void load();
