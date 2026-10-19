@@ -78,3 +78,24 @@ are mocked. Four weakened guards (terminal status, commit binding, conflicting
 conclusions and read-side attempt binding) caused assertion failures and were restored
 before the full suite. No live production verification is inferred. Lint and CI
 results are recorded on the PR/claim issue.
+
+## 2026-10-18 — trusted execution outcomes integration (#286 / #289)
+
+GitHub confirms #270/#274/#276/#278 are merged. #282 at 593fad5 passed all
+13 CI jobs before this session. Current main e604174 also contains inference
+foundations #129–133, quota wiring #158 and model-pool routing #160. Prior open
+status inventories are historical. Main is now integrated through #282 into
+#289; no second inference governor or execution backend was introduced.
+
+Reused the existing attempt-specific GitHub job verifier, migration 0020,
+immutable outcome receipt, transactional ownership guards and scoped mobile
+reads. Improved callback diagnostics when outcome evidence is unavailable:
+retry result delivery, never rerun the task. Retained the parent task-mutation
+race and now require zero outcome receipts on refusal. Added a real-component
+GET-only pending-to-verified-failure UI test with explicit validation/retry limits.
+Thirteen verifier and request-history cases pass. Build/full web suite, typecheck,
+lint and refreshed CI are pending at this checkpoint; no live OIDC or phone
+acceptance is inferred. Migration 0020 follows 0019 and remains undeployed.
+No production data, billing, credentials or paid infrastructure were changed.
+Next: finish current-head verification/security review; then integrate existing
+#312 read-only claim reconciliation before designing any retry/takeover policy.

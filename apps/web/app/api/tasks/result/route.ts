@@ -50,7 +50,13 @@ export async function POST(request: Request) {
     if (!response.ok) return Response.json({ message: "Run verification unavailable." }, { status: 503 });
     const run = await response.json();
     if (!resultBelongsToTask(identity, task, run)) return Response.json({ message: "Result does not match dispatch." }, { status: 403 });
-    const outcome = task.dispatchState === "legacy" ? null : await verifyExecutionOutcome(identity, task, run, token);
+    let outcome = null;
+    if (task.dispatchState !== "legacy") {
+      try { outcome = await verifyExecutionOutcome(identity, task, run, token); }
+      catch {
+        return Response.json({ message: "Execution outcome verification temporarily unavailable. Retry result delivery; do not rerun the task." }, { status: 503 });
+      }
+    }
     // Recheck task, tenant, conversation and exact claim inside every write.
     if (!await saveRunnerResult(d1, task, identity, body.summary, new Date().toISOString(), outcome)) return Response.json({ message: "Result execution ownership does not match dispatch." }, { status: 409 });
     const correlationId = task.correlationId ?? body.correlationId ?? null;

@@ -757,3 +757,24 @@ Actual handler tests verify zero customer probes, exact safe projection for cust
 Actual phone-width Connections component acceptance passed with real Chromium: customer account status shown, owner-only billing/configuration and backend model text hidden, fixed failure notice on503, owner diagnostics retained, no page exceptions. The cold local Vite/browser fixture took about225seconds under host contention; this is test-host timing, not a product latency result. Build/type/lint checks remain pending.
 
 Connections validation follow-through: production build/typecheck and primary focused ESLint passed; real phone acceptance passed separately. Broad suite found the existing owner schema fixture stripped imports without injecting the new owner helper. Added the real isDeploymentOwner/customerFailure dependencies only; preserved every original migration/private-error assertion. Eight focused owner/customer/schema checks pass; repaired fullweb516tests512pass4optional browser skips0fail. Fixture-only ESLint and fresh exact-head CI remain required. The original draft CI failure is retained as failed evidence, not ignored.
+
+## 2026-10-18 — trusted execution outcomes integration (#286 / #289)
+
+GitHub confirms #270/#274/#276/#278 are merged. #282 at 593fad5 passed all
+13 CI jobs before this session. Current main e604174 also contains inference
+foundations #129–133, quota wiring #158 and model-pool routing #160. Prior open
+status inventories are historical. Main is now integrated through #282 into
+#289; no second inference governor or execution backend was introduced.
+
+Reused the existing attempt-specific GitHub job verifier, migration 0020,
+immutable outcome receipt, transactional ownership guards and scoped mobile
+reads. Improved callback diagnostics when outcome evidence is unavailable:
+retry result delivery, never rerun the task. Retained the parent task-mutation
+race and now require zero outcome receipts on refusal. Added a real-component
+GET-only pending-to-verified-failure UI test with explicit validation/retry limits.
+Thirteen verifier and request-history cases pass. Build/full web suite, typecheck,
+lint and refreshed CI are pending at this checkpoint; no live OIDC or phone
+acceptance is inferred. Migration 0020 follows 0019 and remains undeployed.
+No production data, billing, credentials or paid infrastructure were changed.
+Next: finish current-head verification/security review; then integrate existing
+#312 read-only claim reconciliation before designing any retry/takeover policy.

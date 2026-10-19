@@ -62,13 +62,29 @@ function history() {
     click(label) { const target = button(label); assert.ok(target, label); assert.equal(target.props.disabled, false, label); target.props.onClick(); commit(); },
     poll() { for (const callback of [...timers.values()]) callback(); commit(); },
     update() { version++; commit(); },
-    page(n, objective, nextCursor = null) { requests[n].resolve(Response.json({ requests: [saved(objective)], nextCursor })); },
+    page(n, objective, nextCursor = null, execution = null) { const row = saved(objective); row.task.execution = execution; requests[n].resolve(Response.json({ requests: [row], nextCursor })); },
     detail(n, objective) { requests[n].resolve(Response.json({ request: saved(objective) })); },
     text() { return JSON.stringify(render()); },
     unmount() { mounted = false; for (const slot of slots) slot?.cleanup?.(); },
     writesAfterUnmount: () => writesAfterUnmount,
   };
 }
+
+test("saved requests show verified job evidence without implying code validation or retry authority", async () => {
+  const panel = history(); panel.toggle(true);
+  const execution = { runId: 123, runAttempt: 1, claimedAt: "2026-10-18T00:00:00Z", expiresAt: "2026-10-18T06:00:00Z", outcome: null };
+  panel.page(0, "Check website", null, execution); await settle();
+  assert.doesNotMatch(panel.text(), /GitHub execution job|Verified by Atlas/);
+  panel.poll();
+  panel.page(1, "Check website", null, { ...execution, outcome: { jobId: 456, conclusion: "failure", completedAt: "2026-10-18T00:01:00Z", verifiedAt: "2026-10-18T00:02:00Z" } });
+  await settle();
+  assert.match(panel.text(), /GitHub execution job/);
+  assert.match(panel.text(), /failure/);
+  assert.match(panel.text(), /Verified by Atlas/);
+  assert.match(panel.text(), /This job result does not prove code validation or authorize a retry/);
+  assert.ok(panel.requests.every(request => request.options.method === "GET" && request.options.body === undefined));
+  panel.unmount();
+});
 
 test("saved-request polling is single-flight and skips hidden tabs", async () => {
   const panel = history(); panel.toggle(true);

@@ -99,7 +99,10 @@ test("built Worker result callback enforces claim ownership after signed run ver
   assert.equal((await invoke(await sign())).status, 503);
   assert.deepEqual(counts(f), [0, 0]);
   jobStatus = "completed"; jobsStatus = 429;
-  assert.equal((await invoke(await sign())).status, 503);
+  const rateLimited = await invoke(await sign());
+  assert.equal(rateLimited.status, 503);
+  assert.match((await rateLimited.json()).message, /verification temporarily unavailable.*Retry result delivery; do not rerun the task/);
+  assert.deepEqual(counts(f), [0, 0]);
   jobsStatus = 200;
   // The initial task read is no longer authoritative after the remote run check.
   const linkedRunBefore = f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id;
@@ -107,6 +110,7 @@ test("built Worker result callback enforces claim ownership after signed run ver
   assert.equal((await invoke(await sign())).status, 409);
   assert.deepEqual(counts(f), [0, 0]);
   assert.equal(f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id, linkedRunBefore);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM task_execution_outcomes").get().n, 0);
   duringVerification = () => {};
   f.sqlite.prepare("UPDATE tasks SET objective = ?").run(f.task.objective);
   assert.equal((await invoke(await sign())).status, 200);
