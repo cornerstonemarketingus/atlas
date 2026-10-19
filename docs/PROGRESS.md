@@ -763,3 +763,31 @@ Connections recovery validation: actual phone acceptance passes all stalled-head
 2026-10-19 | (this PR) | hosted tasks | Coding agents never started from hosted chat: the durable-dispatch, execution-claim, cancellation and Genesis-bridge calls passed `redirect: "error"` to fetch, which Cloudflare Workers does not implement (TypeError before sending), so every dispatch ended "Cloud dispatch unconfirmed" ~50 ms after it began. Now `redirect: "manual"` (redirects still never followed; a 3xx is not ok). Chat no longer says "Started a coder run" for a dispatch that was not confirmed. | Live task 85a45a79 (2026-10-19 00:41) dispatch events; Cloudflare Request docs; guard test `worker-fetch-redirect`; full web suite 587 pass / 0 fail. | — | After deploy, re-run `verify-hosted` in coder mode.
 2026-10-19 | (this PR) | hosted chat → Genesis | Website/app requests ("Build a responsive website for Team Hahn Construction…") now start a new project instead of a chat answer; unavailable creation returns a reason and a next step; the status card shows distinct unavailable/planning/executing/awaiting-approval/blocked/interrupted/failed/completed stages with no fabricated defaults; Genesis now keeps the business name and "in City, State" from that prompt. | Real Genesis + Chromium acceptance on the exact prompt: ready, 5 pages, build and 2/2 tests pass, 10 browser checks at 375/1280 px, loopback preview. web 592 pass, lint and tsc clean; genesis 47 pass. Not verified: hosted end to end (needs an owner-run Genesis node: ATLAS_GENESIS_URL/TOKEN), model-written site, public preview URL. | docs/HOSTED-WEBSITE-CREATION.md | Next: owner connects a Genesis node and runs the prompt from hosted chat; then a Worker-independent isolated builder with a public preview.
 2026-10-19 | (this PR) | hosted chat → Genesis | Hosted website builder: with no Genesis node, hosted chat builds a business website inside the Worker from Genesis's own specification, site config and a pure renderer (split out of the template build script, byte-identical output), stores it on the genesis_projects row, checks structure and links (39 checks for the Team Hahn site), and serves a CSP-sandboxed, noindex preview at /preview/<id>. A node is still used first for owners; apps and APIs keep the node's reason and fix. | Built Worker + scripted model + real Chromium at 375/1280 px: row written, five pages 200, no console errors or overflow, form states the preview does not send. web 611 pass / 0 skipped, lint and tsc clean; genesis 47 pass; runner scripts 88 pass. Not verified: live deployment, model-written copy, enquiry delivery, publishing. | docs/HOSTED-WEBSITE-CREATION.md, docs/FREE-CODING-MODEL-STRATEGY.md | Next: owner deploys and runs the prompt live; confirm migration 0016 on production; then GPU-node free-model path per FREE-CODING-MODEL-STRATEGY.md.
+
+## 2026-10-19 — one-week parallel sprint, first pass (ENGINEERING-PLAN-2026 §5)
+
+Six agent lanes ran in parallel, each in its own worktree, branch and PR, coordinated by the lead session.
+
+| Lane | Issue | PR | Result |
+|---|---|---|---|
+| A. Eval suite | #128 | #381 | Merged. 35 tasks validate (fail untouched, pass with recorded solution) in 8 categories, including test repair, tool args and final synthesis. CI `eval fixtures` passes. |
+| B. Coder loop limits | #355 | #368 | Merged. The atlas-cli repair loop stops on iteration, time (`--max-repair-ms`), token spend or no-progress (`--max-same-failure`) before each repair, escalates once on no progress, and reports `stopReason` in the receipt. |
+| C. Persistent environments | #351 | #377 | Merged. Genesis snapshots each stage (git commit plus tree and manifest digests), restores into a fresh folder with fail-closed verification, resumes after a restart, and never repeats a completed external side effect. Windows fixes: snapshots disable autocrlf and renormalise so stored bytes equal the disk; a regression test forces autocrlf on Linux. |
+| D. Artifacts | #354 | #370 | Merged. A typed, content-addressed, tenant-scoped artifact store; authenticated routes with Range support; video and glTF viewers; Genesis registers website artifacts. |
+| E. Render execution | #352 | #376, #389 | Merged. ffmpeg and headless Blender run only in the container sandbox (no host fallback, network off, workspace never mounted); a real ffmpeg container render ran. #389 wires it into the daemon: `GET /v1/render`, and an owner-only `POST /v1/render/jobs` against a Genesis project, with video outputs stored as artifacts. |
+| F. GPU compute manager | #353 | #369 | Merged. Provider interface and fake provider with four stops (budget reservation, provider-side max lifetime, idle timeout, orphan reconciler); the crash test leaves zero orphans. No real provider, no spend. |
+
+Sprint gate: met.
+- All six lanes are merged.
+- The eval suite has 35 tasks, above the 30 target.
+- The GPU chaos test passes.
+- The cross-lane journey passes in `tests/sprint-journey.test.mjs` (#389) through the real HTTP handler: sentence → verified project → sandboxed render → video artifact (Range) → paired device refused → restore from snapshot → render again. CI uses a container stand-in; the real-container render is in #376.
+
+Also merged this cycle: the eval CI workflow (#349), the engineering plan (#365) and bounded Genesis repair loops (#356).
+
+Next:
+- A render action in the Genesis UI.
+- A project-owned ffmpeg/Blender image pinned by digest.
+- Eval baseline, once a provider key secret exists.
+- Real GPU provider adapter, after decision D4.
+- Cloudflare Sandbox environment, after decision D2.
