@@ -93,3 +93,26 @@ claim identity and cannot start or bill tasks. Its UI now shares cancellation,
 single-flight and response fencing with detail reads. Three new regressions cover
 late success/failure after reopen and late completion after unmount. An earlier
 build overlapped the UI merge conflict and failed; the resolved tree is rebuilding.
+## 2026-10-19 — verification follow-through (#289, includes merged #312)
+
+Resolved-tree production Worker build and typecheck pass. Complete local web
+suite: 604 total, 599 passed, five optional browser skips, zero failures. Separate
+real Edge acceptance passed at 1280x800 and 390x844, including explicit receipt
+reconciliation, one POST with no client-selected run, a verified failure display,
+44px controls and no page errors. This uses controlled GitHub/API fixtures; it
+is not a physical-phone or live-provider acceptance result.
+
+The new deadline test failed before the fix and passed after combining the
+navigation signal with the existing 30-second timeout. Navigation fencing does
+not cancel committed evidence or authorize execution. Eleven workflow checks
+pass. Parent #282 at fc2d324 has all thirteen CI jobs green; #289 source d820c47
+has twelve green jobs and Windows local-control still running at this checkpoint.
+Fresh CI is required for the final documentation/browser-test commit. Local lint
+is still pending; CI web lint passes. Historical failed overlapping-merge build
+and the initial deadline regression remain recorded as failed evidence.
+
+No migration, production deployment, credentials, paid compute or production data
+changed. Owner/security review remains required for the receipt and tenant
+boundary. Migration 0020 must follow reviewed 0019. Next: finish fresh #289 CI and
+review; then inspect existing #284 Genesis receipt recovery (still open on main)
+without overwriting its active worktree. No retry/takeover authority is implied.
