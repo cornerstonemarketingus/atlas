@@ -5,6 +5,8 @@ import ts from 'typescript';
 
 const moduleUrl = code => 'data:text/javascript,' + encodeURIComponent(code);
 const privateError = 'PRIVATE /srv/atlas/tenancy.ts token=private';
+// Reproduce a legitimate opaque UUID containing the migration-number substring.
+const customerFailureSource = (await readFile(new URL('../app/api/customer-failure.mjs', import.meta.url), 'utf8')).replace("import { randomUUID } from 'node:crypto';", "const randomUUID = () => 'e0015a56-06be-4803-827c-d9e72bcbb10a';");
 let source = await readFile(new URL('../app/api/settings/repositories/route.ts', import.meta.url), 'utf8');
 const modules = {
   '../../../../db': 'export const getD1=()=>({});',
@@ -18,7 +20,7 @@ const modules = {
   '../../tasks/dispatch.mjs': "export const allowedRepositories=()=>new Set(['owner/repo']);",
   '../../tasks/operator-auth.mjs': `export const authenticatedAccount=async()=>{const f=globalThis.__settingsFixture;if(f.failure==='auth')throw new Error(f.error);return f.account};`,
   './validation.mjs': new URL('../app/api/settings/repositories/validation.mjs', import.meta.url).href,
-  '../../customer-failure.mjs': new URL('../app/api/customer-failure.mjs', import.meta.url).href,
+  '../../customer-failure.mjs': customerFailureSource,
 };
 for (const [name, code] of Object.entries(modules)) source = source.replaceAll(`from "${name}"`, `from ${JSON.stringify(code.startsWith('file:') ? code : moduleUrl(code))}`);
 const handlers = await import(moduleUrl(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText));
@@ -38,7 +40,10 @@ for (const [method, failures] of Object.entries({ GET: ['auth', 'tenant', 'list'
         assert.equal(response.headers.get('cache-control'), 'no-store');
         const body = await response.json();
         assert.match(body.reference, /^[0-9a-f-]{36}$/);
-        assert.doesNotMatch(JSON.stringify(body), /PRIVATE|migration|0015|\/srv\//);
+        const { reference, ...publicCopy } = body;
+        assert.equal(reference, 'e0015a56-06be-4803-827c-d9e72bcbb10a');
+        assert.deepEqual(publicCopy, { code: 'ACCOUNT_REQUEST_UNAVAILABLE', message: 'We could not confirm your account request. Refresh the page before trying again.' });
+        assert.doesNotMatch(JSON.stringify(publicCopy), /PRIVATE|migration|0015|\/srv\//);
         assert.equal(f.writes.length, 0);
       }
     }

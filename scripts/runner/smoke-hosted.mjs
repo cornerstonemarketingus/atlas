@@ -104,7 +104,7 @@ if (mode === "chat") {
     if (repository && repository.mergePolicy !== "manual") throw new Error("Coding smoke check requires manual PR review policy");
   }
   const objective = mode === "coder"
-    ? `Create docs/ATLAS-SMOKE-CHECK-${randomUUID()}.md containing exactly one line: Atlas coding smoke check. Do not modify any other file. Use the repository write tools to create it, then finish.`
+    ? (process.env.ATLAS_SMOKE_CODER_OBJECTIVE || "").trim() || `Create docs/ATLAS-SMOKE-CHECK-${randomUUID()}.md containing exactly one line: Atlas coding smoke check. Do not modify any other file. Use the repository write tools to create it, then finish.`
     : "Inspect Atlas and report its detected languages, frameworks, and manifests.";
   const task = await api("/api/tasks", { repository: "cornerstonemarketingus/atlas", branch: "main", mode, objective });
   if (!task.recorded) throw new Error("Task dispatched but history was not stored");

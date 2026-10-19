@@ -812,3 +812,33 @@ Fresh verify39234208312 definitively failed Coder finished without a reviewable 
 Real smoke-script subprocess regression fails unchanged main at identical objectives, passes with the fix, fails again with only uniqueness removed, then passes restored. Runner/local suite:89tests88pass1skip0fail. Previous existing Mode A verification:32 focused agent/registry tests pass. This repairs an acceptance prerequisite, not Mode B; no fresh live change/medium-task success is claimed before deployment/dispatch.
 
 Next: complete exact-head CI and ordinary review eligibility, merge acceptance repair, then dispatch one fresh trivial coder acceptance. Obtain an authorized saved medium task and argument-level trace evidence before implementing a B repair; do not infer loops from repeated tool names.
+
+## 2026-10-19 — explicit medium coder diagnostic dispatch (#394)
+
+Acceptance prerequisite392 merged ba05f83 after every exact-head check in39238010787 passed, with no reviews/blockers. Dispatched one fresh trivial hosted acceptance39241361227 at that merged source; result remains pending.
+
+Prepared an optional coder objective input on the existing verify-hosted workflow, forwarded through an environment variable into the existing authenticated saved-task POST. Default remains the fresh UUID document. Claims, repository/manual-review restrictions, verified evidence and delivered findings remain required. Raised only coder artifact retention from7to30days so evidence survives an unattended investigation. These workflow changes require configured owner review; do not merge or dispatch the new unreviewed workflow to avoid that gate. No B algorithm, budget increase or verdict change.
+
+Actual subprocess test fails current main because the supplied medium objective is ignored; forwarding repair passes, removing only forwarding fails again, restoration passes. Runner/local suite89tests88pass1skip0fail. All11workflows parse and every shell step validates before push. No secret prompt/log payload added.
+
+Next: inspect fresh trivial acceptance39241361227 and its actual coder verdict/artifacts. Obtain configured workflow owner review for this diagnostic-input/retention PR, complete exact-head CI, then dispatch a bounded medium task through the saved-task claim path and replay its argument-level evidence before selecting a B repair.
+
+## 2026-10-19 — live trivial coder acceptance established
+
+Hosted verification39241361227 and its saved/claimed coder execution39241380949 both succeeded at source ba05f83. Downloaded actual artifacts and replayed audit.jsonl: four turns, three completed tool calls, one proposed creation, verification status verified. Independently inspected generated PR396: exactly one UUID-named documentation file with the requested single line. Hosted receipt confirms findings persisted in its conversation. PR396 remains open for review; diagnostic output is not auto-merged. This establishes a real trivial objective through the current coder, not a forced malformed-input run or the unresolved medium-task/budget gate.
+
+Protected PR395 at ced6c0e passed every exact-head CI check in39241611077; configured owner review is still absent. No merge or unreviewed diagnostic workflow dispatch attempted. Existing trace lacks argument-level fingerprints, so replayed repeated tool names still cannot establish a loop. Complete local CLI suite was started; sandbox HTTP-fixture stall was interrupted, rerun with loopback access remains pending. Do not report a full-suite pass from the32focused cases.
+
+Next: obtain configured workflow review for PR395, complete fresh exact-head CI, then dispatch the unmet bounded medium objective through the existing saved-task claim gate and replay sufficient argument-level evidence before selecting a B repair. Preserve the successful trivial receipt and reviewable PR396; no budget increase or verdict-path change.
+
+## 2026-10-19 — deterministic privacy fixture repair during coder diagnostic CI
+
+Fresh PR395 CI39249488852 failed an unchanged repository privacy fixture: a legitimate random support UUID contained0015, so scanning the entire JSON falsely treated it as leaked migration instructions. Reproduced deterministically with the real customerFailure source and only UUID generation replaced by the observed safe value. All three handler tests fail before the fixture repair. The fixture now validates the opaque reference separately and asserts the exact remaining public projection, retaining private/path/migration guards, zero-write checks and scoped-success tests. Removing only this separation fails again; restoration passes4focused cases. No runtime failure contract or privacy policy changed. Worker build/full web validation and fresh remote CI remain required.
+
+Completed local CLI suite at the branch baseline:569tests559pass6fail4skip. Two CLI repair fixtures returned unverified because their repository checks could not start; a temporary compiled-only diagnostic reproduced that status and was restored. Other failures concern CRLF diff output, a doubled Windows drive path in the own-repository fixture, and checkpoint modes. No source fix or all-green claim is made; compare the exact baseline, since main has concurrently gained governor work. The earlier web broad run used stale dist output and had three built-route failures; rebuilding before acceptance is required.
+
+Allowance checkpoint: an automatic review could not run the package-cwd test command because usage was exhausted. The command was not executed; no bypass or credit purchase occurred. Work resumed only after the stated reset, preserving the uncommitted fixture repair.
+
+Next: finish the fresh Worker build/web suite, validate all workflows before this protected branch push, publish the deterministic fixture repair and inspect complete exact-head CI plus configured owner review. Preserve trivial coder acceptance39241361227/39241380949 and PR396; medium-task/B evidence is still outstanding and must not be inferred from tool-name repetition.
+
+Validation follow-through: fresh production Worker build passed, rebuilt fullweb592tests587pass5optional skips0fail;4focused repository privacy cases pass; all11workflows/shell steps validate. The three prebuild route failures disappear after the fresh build. Next: inspect fresh exact-head remote checks and obtain configured workflow review for PR395 before merge or medium-task dispatch.

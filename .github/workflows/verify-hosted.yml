@@ -8,6 +8,11 @@ on:
         default: inspect
         type: choice
         options: [inspect, coder, chat]
+      objective:
+        description: Coder only. Optional bounded diagnostic objective; results still require a verified manual-review PR. Never include secrets.
+        required: false
+        default: ""
+        type: string
       message:
         description: Chat only. The conversation to verify (for the release gate, the one that failed in production). Runs streaming and non-streaming.
         required: false
@@ -31,6 +36,7 @@ jobs:
         env:
           ATLAS_OPERATOR_TOKEN: ${{ secrets.ATLAS_OPERATOR_TOKEN }}
           ATLAS_SMOKE_MODE: ${{ inputs.mode }}
+          ATLAS_SMOKE_CODER_OBJECTIVE: ${{ inputs.objective }}
           # Passed through the environment, never interpolated into the script.
           ATLAS_SMOKE_CHAT_MESSAGE: ${{ inputs.message }}
         run: node scripts/runner/smoke-hosted.mjs
