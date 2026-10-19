@@ -17,7 +17,7 @@ export function genesisBridge(environment, { owner = false, fetchImpl = fetch, c
       // that do not settle their promise when a signal is aborted.
       return await Promise.race([
         (async () => {
-          const response = await fetchImpl(new URL(path, base), { method: input ? "POST" : "GET", redirect: "error",
+          const response = await fetchImpl(new URL(path, base), { method: input ? "POST" : "GET", redirect: "manual",
             headers: { authorization: `Bearer ${environment.ATLAS_GENESIS_TOKEN}`, "content-type": "application/json" },
             ...(input ? { body: JSON.stringify(input) } : {}), signal: controller.signal });
           if (!response.ok) {

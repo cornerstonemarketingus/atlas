@@ -158,7 +158,7 @@ test("built Worker saves before dispatch, survives lost response, reconciles aft
     if (String(url).includes("/collaborators/")) return Response.json({ role_name: "write" });
     if (options.method === "POST") {
       dispatches++; const inputs = JSON.parse(options.body).inputs; dispatchedId = inputs.task_id;
-      assert.equal(options.redirect, "error"); assert.equal(options.headers.authorization, "Bearer github-test");
+      assert.equal(options.redirect, "manual"); assert.equal(options.headers.authorization, "Bearer github-test");
       assert.equal(f.sqlite.prepare("SELECT dispatch_state FROM tasks WHERE task_id = ?").get(dispatchedId).dispatch_state, "dispatching");
       assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM conversation_messages WHERE id = ?").get(`request:${dispatchedId}`).n, 1);
       dispatchObserved = true;

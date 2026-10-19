@@ -8,6 +8,7 @@ import { createAgentRoutes } from "./agent/routes.mjs";
 import { createMissionRoutes } from "./agent/mission-routes.mjs";
 import { createBusinessRoutes } from "./agent/business-routes.mjs";
 import { createWorkforceRoutes } from "./platform/workforce-runtime.mjs";
+import { WORKFORCE_UI_HTML, WORKFORCE_UI_JS } from "./platform/workforce-ui.mjs";
 import { BUSINESS_UI_HTML, BUSINESS_UI_JS } from "./agent/business-ui.mjs";
 import { createPlatformRoutes, LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
 import { createInnovationRoutes, describeInnovationError } from "./platform/innovation/routes.mjs";
@@ -26,10 +27,11 @@ import { choosePath, localModelCandidates } from "./agent/kernel/economics.mjs";
 import { AUTONOMY_LEVELS, assessAction, suggestRelaxations } from "./agent/kernel/autonomy.mjs";
 import { createAutomationRoutes, createWebhookRoute } from "./platform/automations/routes.mjs";
 import { createArtifactRoutes } from "./platform/artifacts/routes.mjs";
+import { createRenderRoutes } from "./platform/render/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -53,12 +55,13 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const selfImproveRoutes = selfImprove ? createSelfImproveRoutes({ service: selfImprove, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const modelHostingRoutes = modelHosting ? createModelHostingRoutes({ ...modelHosting, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const remoteRoutes = remoteAccess ? createRemoteRoutes({ remote: remoteAccess, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
-  const genesisRoutes = genesis ? createGenesisRoutes({ genesis, previews: genesisPreviews, publisher: genesisPublisher, creation: genesisCreation, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const genesisRoutes = genesis ? createGenesisRoutes({ genesis, executor: genesisCreation?.executor ?? null, previews: genesisPreviews, publisher: genesisPublisher, creation: genesisCreation, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const automationRoutes = automations ? createAutomationRoutes({ automations, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const webhookRoute = automations ? createWebhookRoute({ automations, limiter, send: (response, status, value) => { send(response, status, value); return true; },
     readRaw: async (request, response) => { try { return await readBody(request); } catch (error) { send(response, error?.code === "BODY_TOO_LARGE" ? 413 : 400, { message: error.message }); return null; } } }) : null;
   const worldRoutes = world ? createWorldRoutes({ world, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const artifactRoutes = artifacts ? createArtifactRoutes({ artifacts, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const renderRoutes = render ? createRenderRoutes({ render, genesis, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const goalRoutes = goals ? createGoalRoutes({ goals, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, automations, goals, send: (response, status, value) => { send(response, status, value); return true; } });
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
@@ -76,6 +79,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (request.method === "GET" && request.url === "/app.css") return sendText(response, 200, "text/css; charset=utf-8", LOCAL_UI_CSS);
     if (request.method === "GET" && (request.url === "/icon.svg" || request.url === "/favicon.ico")) return sendText(response, 200, "image/svg+xml", LOCAL_UI_ICON);
     if (request.method === "GET" && request.url === "/app.js") return sendText(response, 200, "text/javascript; charset=utf-8", LOCAL_UI_JS);
+    if (workforceRuntime && request.method === "GET" && request.url === "/workforce") return sendText(response, 200, "text/html; charset=utf-8", WORKFORCE_UI_HTML);
+    if (workforceRuntime && request.method === "GET" && request.url === "/workforce.js") return sendText(response, 200, "text/javascript; charset=utf-8", WORKFORCE_UI_JS);
     if (businessService && request.method === "GET" && request.url === "/businesses") return sendText(response, 200, "text/html; charset=utf-8", BUSINESS_UI_HTML);
     if (businessService && request.method === "GET" && request.url === "/businesses.js") return sendText(response, 200, "text/javascript; charset=utf-8", BUSINESS_UI_JS);
     if (platformRoutes?.handlePage(request, response)) return;
@@ -124,6 +129,10 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (/^\/v1\/artifacts(\/|\?|$)/u.test(request.url ?? "")) {
       if (!artifactRoutes) return send(response, 503, { message: "The artifact store is not running in this process." });
       if (await artifactRoutes(request, response, identity)) return;
+    }
+    if (/^\/v1\/render(\/|\?|$)/u.test(request.url ?? "")) {
+      if (!renderRoutes) return send(response, 503, { message: "Rendering is not configured in this process." });
+      if (await renderRoutes(request, response, identity)) return;
     }
     if (remoteRoutes && (request.url ?? "").startsWith("/v1/remote")) { if (await remoteRoutes(request, response, identity)) return; }
 
