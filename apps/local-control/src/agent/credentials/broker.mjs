@@ -62,6 +62,13 @@ export class CredentialError extends Error {
 }
 
 const LEASE_TTL_MS = 5 * 60_000;
+/** Fixed refusal messages for a lease that can no longer be used; never provider text. */
+const REFUSALS = Object.freeze({
+  LEASE_INVALID: () => "This lease expired before the credential could be used.",
+  CREDENTIAL_REVOKED: (record) => `The ${record.provider} connection for ${record.account} was revoked.`,
+  CREDENTIAL_EXPIRED: (record) => `The ${record.provider} credential for ${record.account} has expired.`,
+  CREDENTIAL_INVALID: (record) => `The ${record.provider} connection for ${record.account} is not usable.`,
+});
 const PROVIDER = /^[a-z][a-z0-9-]{1,31}$/u;
 const VAULT_NAME = /^[A-Z][A-Z0-9_]{2,63}$/u;
 
@@ -309,9 +316,21 @@ export class CredentialBroker {
       this.#store.audit({ at, agent: lease?.agentId ?? "unknown", capability, resource, decision: "refused", result: "LEASE_INVALID" });
       throw new CredentialError("LEASE_INVALID", "This lease is unknown, expired, already used, or for another action.");
     }
-    const record = this.#store.get(lease.connectionId);
+    let record = this.#store.get(lease.connectionId);
     const reference = { connectionId: record.id, credentialRef: record.vaultRef, provider: record.provider };
-    const secret = record.status === "revoked" ? null : await this.#vault.get(record.vaultRef).catch(() => null);
+    const refuse = (code) => {
+      this.#store.audit({ at: this.#clock().toISOString(), agent: lease.agentId, capability, resource, decision: "refused", ...reference, result: code });
+      throw new CredentialError(code, REFUSALS[code](record));
+    };
+    const before = this.#refusal(lease);
+    if (before) refuse(before);
+    const secret = await this.#vault.get(record.vaultRef).catch(() => null);
+    // The lookup is asynchronous: the connection can be revoked or expire, or
+    // the lease can run out, while it is in flight. Decide again from the
+    // store's current state, immediately before the adapter sees the value.
+    record = this.#store.get(lease.connectionId) ?? record;
+    const after = this.#refusal(lease);
+    if (after) refuse(after);
     if (!secret) {
       this.#store.audit({ at, agent: lease.agentId, capability, resource, decision: "used", ...reference, result: "CREDENTIAL_MISSING" });
       throw new CredentialError("CREDENTIAL_MISSING", `The ${record.provider} credential for ${record.account} is not in the vault.`);
@@ -337,6 +356,16 @@ export class CredentialBroker {
     if (mode === "SAFE") return level >= 2;            // ask before any external change
     if (mode === "BALANCED") return level >= 3 && !this.#store.granted(connectionId, capability);
     return false;                                      // AUTONOMOUS: granted capabilities up to level 3
+  }
+
+  /** Why a lease may not be used now, from the connection's current stored state; null when it may. */
+  #refusal(lease) {
+    if (lease.expiresAt < this.#clock().getTime()) return "LEASE_INVALID";
+    const record = this.#store.get(lease.connectionId);
+    if (!record || record.status === "revoked") return "CREDENTIAL_REVOKED";
+    if (this.#refresh(record).status === "expired") return "CREDENTIAL_EXPIRED";
+    if (record.status !== "connected" && record.status !== "attention") return "CREDENTIAL_INVALID";
+    return null;
   }
 
   #refresh(record) {

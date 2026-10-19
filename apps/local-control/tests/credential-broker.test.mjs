@@ -247,3 +247,72 @@ test("a vault that refuses is a clear 503, never a crash, and no record is left 
   assert.equal(broker.connections().length, 0, "nothing registered without its value");
   assert.doesNotMatch(JSON.stringify(sent), /SECRET/u);
 });
+
+/** A vault whose reads wait until the test lets them finish, so state can change while a lookup is in flight. */
+function gatedVault() {
+  const vault = memoryVault();
+  let release = null;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const read = vault.get;
+  vault.get = async (name) => { await gate; return read(name); };
+  vault.release = () => release();
+  return vault;
+}
+
+async function gatedSetup({ expiresAt } = {}) {
+  let now = new Date("2026-10-06T12:00:00Z");
+  const store = new CredentialStore();
+  const vault = gatedVault();
+  const broker = new CredentialBroker({ store, vault, approvals: ownerApprovals(), clock: () => now });
+  const account = await broker.connect({ provider: "cloudflare", account: ACCOUNT, type: "API_TOKEN", vaultRef: "CLOUDFLARE_AI_TOKEN", capabilities: ["cloudflare.ai.run"], ...(expiresAt ? { expiresAt } : {}), secret: SECRET });
+  const lease = (await broker.request({ agentId: "chat", capability: "cloudflare.ai.run", resource: "m" })).lease;
+  let calls = 0;
+  const use = () => broker.use(lease.id, { capability: "cloudflare.ai.run", resource: "m" }, async () => { calls += 1; return "ran"; });
+  return { broker, vault, account, use, calls: () => calls, advance: (ms) => { now = new Date(now.getTime() + ms); } };
+}
+
+function refusedWith(broker, code) {
+  const [latest] = broker.auditTrail();
+  assert.equal(latest.decision, "refused");
+  assert.equal(latest.result, code);
+  assert.doesNotMatch(JSON.stringify(broker.auditTrail()), /SECRET/u);
+}
+
+test("a connection revoked while its credential is being looked up never reaches the adapter", async () => {
+  const { broker, vault, account, use, calls } = await gatedSetup();
+  const pending = use();
+  await broker.revoke(account.id);
+  vault.release();
+  await assert.rejects(pending, (error) => error.code === "CREDENTIAL_REVOKED" && !/SECRET/u.test(error.message));
+  assert.equal(calls(), 0, "the adapter must not run");
+  refusedWith(broker, "CREDENTIAL_REVOKED");
+  assert.deepEqual(broker.knownSecrets(), [], "a refused use does not hold the value");
+});
+
+test("a lease that expires while its credential is being looked up never reaches the adapter", async () => {
+  const { broker, vault, use, calls, advance } = await gatedSetup();
+  const pending = use();
+  advance(6 * 60_000);
+  vault.release();
+  await assert.rejects(pending, (error) => error.code === "LEASE_INVALID");
+  assert.equal(calls(), 0);
+  refusedWith(broker, "LEASE_INVALID");
+});
+
+test("a connection that expires after its lease was issued is refused, before and during the lookup", async () => {
+  const before = await gatedSetup({ expiresAt: "2026-10-06T12:02:00Z" });
+  before.advance(3 * 60_000);
+  before.vault.release();
+  await assert.rejects(before.use(), (error) => error.code === "CREDENTIAL_EXPIRED");
+  assert.equal(before.calls(), 0, "expired before use: refused without a lookup reaching the adapter");
+  refusedWith(before.broker, "CREDENTIAL_EXPIRED");
+  assert.equal(before.broker.connections()[0].status, "expired");
+
+  const during = await gatedSetup({ expiresAt: "2026-10-06T12:02:00Z" });
+  const pending = during.use();
+  during.advance(3 * 60_000);
+  during.vault.release();
+  await assert.rejects(pending, (error) => error.code === "CREDENTIAL_EXPIRED");
+  assert.equal(during.calls(), 0, "expired during the lookup");
+  refusedWith(during.broker, "CREDENTIAL_EXPIRED");
+});
