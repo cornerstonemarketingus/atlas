@@ -800,3 +800,11 @@ Downloaded and replayed retained real trace39094222456 with atlas replay: ten tu
 Connections379 is merged6cb8cb2 with all exact-headCI39157931782 passing and deployment39159499224 successful. Prior owner inspect39156966813 failed after20minutes waiting for delivered findings, with WorkersAI429; it is not passing acceptance. Native signing owner-review blocker remains unchanged and no rejected edit was retried.
 
 Next: obtain a fresh saved medium coder task with an unmet, bounded objective through the authorized hosted dispatch; replay its trace and establish argument-level evidence before a cause-driven B change. Replace the already-satisfied smoke objective for meaningful new-change acceptance, preserving configured workflow review. Add budget/security mutation coverage only for demonstrated missing guards; never duplicate #159 or increase limits to hide repetition.
+
+## 2026-10-19 — repeatable coder acceptance (#393)
+
+Fresh verify39234208312 definitively failed Coder finished without a reviewable pull request; underlying coder39234248406 truthfully completed without edits because its fixed smoke document already existed. The acceptance script now gives each invocation a UUID-named document, so prior acceptance cannot satisfy the next requested change. Existing saved-task dispatch, claim gate, manual PR policy, verified-evidence and delivery requirements remain intact. No workflow, credential, tool schema, budget or exhaustion verdict change.
+
+Real smoke-script subprocess regression fails unchanged main at identical objectives, passes with the fix, fails again with only uniqueness removed, then passes restored. Runner/local suite:89tests88pass1skip0fail. Previous existing Mode A verification:32 focused agent/registry tests pass. This repairs an acceptance prerequisite, not Mode B; no fresh live change/medium-task success is claimed before deployment/dispatch.
+
+Next: complete exact-head CI and ordinary review eligibility, merge acceptance repair, then dispatch one fresh trivial coder acceptance. Obtain an authorized saved medium task and argument-level trace evidence before implementing a B repair; do not infer loops from repeated tool names.
