@@ -12,8 +12,8 @@
  *   they start), with a hard SIGKILL a little later, and their output is
  *   capped. The container starts with Internet access off unless the
  *   environment was created with `internet: true`.
- * - A snapshot is a DirectoryBackup of the workspace in R2 (gitignored files
- *   left out, `.git` kept) plus the tree entries the client turns into the
+ * - A snapshot is a DirectoryBackup of the workspace in R2, under the
+ *   tenant's own key prefix (gitignored files left out, `.git` kept), plus the tree entries the client turns into the
  *   same tree digest a local snapshot uses. A restore only goes into a fresh
  *   sandbox; if it fails, the sandbox is destroyed and nothing is left.
  * - Preview URLs are `https://<port>-<token>.<previewDomain>`; the token is
