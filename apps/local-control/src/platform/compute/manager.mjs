@@ -89,14 +89,15 @@ export class ComputeManager {
   listAudit(tenantId, options) { return this.#leases.listAudit(tenantId, options); }
 
   /** Picks the cheapest provider/GPU that meets the job's requirements; `null` plan when it should run locally. */
-  async plan(job) {
+  async plan(job, { tenantId = undefined } = {}) {
     const requirements = detectRequirements(job, { localHardware: this.#localHardware });
     if (requirements.runLocally) return { requirements, choice: null };
     let best = null;
     for (const provider of this.#providers.values()) {
-      const estimate = await provider.estimate({ ...job, minVramGb: requirements.minVramGb, estMinutes: requirements.estMinutes });
+      const estimate = await provider.estimate({ ...job, tenantId, minVramGb: requirements.minVramGb, estMinutes: requirements.estMinutes });
       if (!estimate) continue;
-      const rate = microUsdPerSecond(estimate.estHourlyUsd);
+      // A $0 provider (the owner's own Atlas Nodes) is free by construction; any other price is per second, rounded up.
+      const rate = estimate.estHourlyUsd === 0 ? 0 : microUsdPerSecond(estimate.estHourlyUsd);
       const estMicroUsd = rate * Math.ceil(estimate.estMinutes * 60);
       if (!best || estMicroUsd < best.estMicroUsd) best = { provider: provider.name, ...estimate, rateMicroUsdPerSec: rate, estMicroUsd };
     }
@@ -113,25 +114,34 @@ export class ComputeManager {
   async start({ tenantId, taskId, job }) {
     if (!ID_PATTERN.test(String(tenantId))) throw new ComputeError("INVALID_ARGUMENT", "tenantId must be a short identifier.");
     if (!ID_PATTERN.test(String(job?.id))) throw new ComputeError("INVALID_ARGUMENT", "job.id must be a short identifier.");
-    const { requirements, choice } = await this.plan(job);
+    const { requirements, choice } = await this.plan(job, { tenantId });
     if (!choice) return { runLocally: true, requirements };
 
-    // Stop 1: reserve the worst case before anything is provisioned.
-    const budget = new TaskBudget({ store: this.#store, tenantId, taskId });
-    const remaining = budget.snapshot().remaining.costMicroUsd;
-    if (remaining === undefined) throw new ComputeError("NO_APPROVED_BUDGET", "The task has no approved costMicroUsd budget; GPU time is never rented without one.");
-    if (choice.estMicroUsd > remaining) {
-      throw new ComputeError("ESTIMATE_EXCEEDS_BUDGET", `Estimated GPU cost ${choice.estMicroUsd} micro-USD exceeds the remaining ${remaining}.`, { estimate: choice.estMicroUsd, remaining });
-    }
     const wantedSec = requirements.maxMinutes ? Math.ceil(requirements.maxMinutes * 60) : Math.ceil(choice.estMinutes * 60 * this.#lifetimeSafety);
-    const maxLifetimeSec = Math.min(this.#maxLifetimeCapSec, wantedSec, Math.floor(remaining / choice.rateMicroUsdPerSec));
-    if (maxLifetimeSec <= 0) throw new ComputeError("ESTIMATE_EXCEEDS_BUDGET", "The remaining budget does not cover one second of GPU time.");
-    const reservedMicroUsd = choice.rateMicroUsdPerSec * maxLifetimeSec;
-    try {
-      budget.reserve({ costMicroUsd: reservedMicroUsd });
-    } catch (error) {
-      if (error instanceof TaskBudgetExceededError) throw new ComputeError("BUDGET_EXCEEDED", error.message, { remaining });
-      throw error;
+    let maxLifetimeSec; let reservedMicroUsd;
+    if (choice.rateMicroUsdPerSec === 0) {
+      // A free provider spends nothing, so nothing is reserved. The lease,
+      // max lifetime, idle timeout and reconciler still apply, and a bill it
+      // reports anyway is charged truthfully at settlement.
+      maxLifetimeSec = Math.min(this.#maxLifetimeCapSec, wantedSec);
+      reservedMicroUsd = 0;
+    } else {
+      // Stop 1: reserve the worst case before anything is provisioned.
+      const budget = new TaskBudget({ store: this.#store, tenantId, taskId });
+      const remaining = budget.snapshot().remaining.costMicroUsd;
+      if (remaining === undefined) throw new ComputeError("NO_APPROVED_BUDGET", "The task has no approved costMicroUsd budget; GPU time is never rented without one.");
+      if (choice.estMicroUsd > remaining) {
+        throw new ComputeError("ESTIMATE_EXCEEDS_BUDGET", `Estimated GPU cost ${choice.estMicroUsd} micro-USD exceeds the remaining ${remaining}.`, { estimate: choice.estMicroUsd, remaining });
+      }
+      maxLifetimeSec = Math.min(this.#maxLifetimeCapSec, wantedSec, Math.floor(remaining / choice.rateMicroUsdPerSec));
+      if (maxLifetimeSec <= 0) throw new ComputeError("ESTIMATE_EXCEEDS_BUDGET", "The remaining budget does not cover one second of GPU time.");
+      reservedMicroUsd = choice.rateMicroUsdPerSec * maxLifetimeSec;
+      try {
+        budget.reserve({ costMicroUsd: reservedMicroUsd });
+      } catch (error) {
+        if (error instanceof TaskBudgetExceededError) throw new ComputeError("BUDGET_EXCEEDED", error.message, { remaining });
+        throw error;
+      }
     }
 
     const now = this.#now();
@@ -149,8 +159,9 @@ export class ComputeManager {
     const provider = this.#providers.get(choice.provider);
     let instance;
     try {
+      // `tenantId` and `job` are for providers that run the job themselves (Atlas Nodes); a GPU cloud ignores them.
       instance = await provider.provision({ gpuType: choice.gpuType, maxLifetimeSec,
-        tags: [ATLAS_TAG, `atlas-tenant:${tenantId}`, leaseTag(lease.id), `atlas-job:${job.id}`] });
+        tags: [ATLAS_TAG, `atlas-tenant:${tenantId}`, leaseTag(lease.id), `atlas-job:${job.id}`], tenantId, job });
     } catch (error) {
       this.#leases.audit(tenantId, lease.id, "provision.failed", this.#now(), { jobId: job.id, provider: choice.provider, error: String(error?.code ?? "PROVISION_FAILED") });
       await this.#end(tenantId, lease.id, "provision_failed", { provisionFailed: true });
