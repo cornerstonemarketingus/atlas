@@ -1,0 +1,35 @@
+{
+  "id": "legacy-policy-bridge",
+  "category": "multi-file-edit",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "3b3e76738021fdda9f52e527a5dff577d708d1a2",
+  "objective": "Make the platform PolicyEngine (apps/local-control/src/platform/policy.mjs) decide live tool calls. Add apps/local-control/src/platform/legacy-policy-bridge.mjs exporting createLegacyPolicyBridge({ policyForCapability, audit, tenantId, userId, version }) (TypeError without policyForCapability). It returns a policy function (capability, risk, tool, input, context) that maps the operator's saved allow/ask/deny (unknown means deny) to engine rules, evaluates the call (consequential tools still require approval even when allowed), returns \"allow\", \"ask\" or \"deny\" for ToolRegistry, and audits decision metadata only, never raw arguments. ToolRegistry.invoke must call the policy with (capability, risk, tool, input, { sessionId, ...context }), team step-executor passes agentId and taskId in context, and main.mjs uses the bridge. apps/local-control/tests/legacy-policy-bridge.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "6cc0ae17ca575d95d3d4d3d36dbab1bfb4081328",
+    "paths": [
+      "apps/local-control/tests/legacy-policy-bridge.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/legacy-policy-bridge.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "6cc0ae17ca575d95d3d4d3d36dbab1bfb4081328",
+    "paths": [
+      "apps/local-control/src/platform/legacy-policy-bridge.mjs",
+      "apps/local-control/src/agent/tool-registry.mjs",
+      "apps/local-control/src/agent/team/step-executor.mjs",
+      "apps/local-control/src/main.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "policy"
+  ]
+}

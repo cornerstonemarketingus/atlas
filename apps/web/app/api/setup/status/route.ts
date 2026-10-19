@@ -13,6 +13,9 @@ import { explainGitHubAppFailure, probeGitHubDispatch } from "../../tasks/github
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { platformGitHubToken } from "../../tasks/github-token.mjs";
 
+import { isDeploymentOwner } from "../../tasks/self-protection.mjs";
+import { customerFailure } from "../../customer-failure.mjs";
+
 type StepState = "complete" | "action-required" | "failed";
 
 async function databaseReadiness() {
@@ -53,8 +56,18 @@ async function githubDispatchReadiness(githubApp: ReturnType<typeof githubAppCon
 
 /** Readiness metadata only: secret values and credential names never leave the Worker. */
 export async function GET(request: Request) {
-  const account = await authenticatedAccount(request);
+  let account;
+  try { account = await authenticatedAccount(request); }
+  catch { return customerFailure("setup-status"); }
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
+  if (!isDeploymentOwner(account)) {
+    return Response.json({
+      version: 1, audience: "customer", overall: "account-ready",
+      completedSteps: 1, totalSteps: 1,
+      steps: [step("account", "Account connected", true, "Manage your projects and permissions on this page.")],
+      optional: {},
+    }, { headers: { "cache-control": "no-store" } });
+  }
 
   const githubOAuth = githubOAuthConfiguration();
   const stripe = stripeConfiguration();
@@ -80,6 +93,7 @@ export async function GET(request: Request) {
 
   return Response.json({
     version: 1,
+    audience: "owner",
     overall: completedSteps === steps.length ? "ready" : steps.some((item) => item.state === "failed") ? "blocked" : "setup-required",
     completedSteps,
     totalSteps: steps.length,

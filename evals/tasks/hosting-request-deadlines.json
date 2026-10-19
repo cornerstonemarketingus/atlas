@@ -1,0 +1,32 @@
+{
+  "id": "hosting-request-deadlines",
+  "category": "bug-localization",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "dee7942d7fb4a3971229be1f2ca9d97e8cef3eaf",
+  "objective": "createApiClient in apps/local-control/src/agent/infrastructure/adapter.mjs only aborts the fetch on timeout or caller cancellation; a transport that ignores AbortSignal, or a stalled response body, hangs the caller forever. Race the whole request including body consumption against the deadline and the caller's signal: a timeout rejects with InfrastructureError REQUEST_TIMEOUT, cancellation with REQUEST_CANCELLED, an already-aborted signal makes no request at all, a mutation is never replayed, and the abort listener and timer are always released. Successful and rejected responses keep their existing behaviour. apps/local-control/tests/infrastructure-deadlines.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "8ad577e3f138c0adedd6910cdd22d13f053bed5d",
+    "paths": [
+      "apps/local-control/tests/infrastructure-deadlines.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/infrastructure-deadlines.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "8ad577e3f138c0adedd6910cdd22d13f053bed5d",
+    "paths": [
+      "apps/local-control/src/agent/infrastructure/adapter.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "reliability"
+  ]
+}

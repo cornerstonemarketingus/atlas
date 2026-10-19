@@ -1,0 +1,32 @@
+{
+  "id": "model-stream-completion",
+  "category": "bug-localization",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "766e876cfed04bfc55654ec4f1dc65b71a59427e",
+  "objective": "The streaming parser in apps/local-control/src/agent/model-client.mjs (createModelClient) treats end-of-stream as success, so a dropped connection can release a half-received tool call. Make the stream fail closed: completion requires a finish_reason or a [DONE] sentinel (else ModelRequestError MODEL_STREAM_INTERRUPTED, also when the body ends inside an event); a stream with no non-blank text and no tool call is MODEL_EMPTY_RESPONSE; malformed JSON, error payloads, non-object events, unnamed tool calls and events over 1 MiB are MODEL_INVALID_RESPONSE without echoing provider content. Parse SSE events separated by LF, CRLF or bare CR, join multi-line data: fields, keep split UTF-8 sequences intact, and stop reading at [DONE]. apps/local-control/tests/model-stream.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "af500709c3ec5ec76757e1510bf5a6046ccc5dcd",
+    "paths": [
+      "apps/local-control/tests/model-stream.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/model-stream.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "af500709c3ec5ec76757e1510bf5a6046ccc5dcd",
+    "paths": [
+      "apps/local-control/src/agent/model-client.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "inference"
+  ]
+}
