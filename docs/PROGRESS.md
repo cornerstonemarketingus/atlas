@@ -759,3 +759,32 @@ Connections refresh could remain indefinitely busy on stalled headers/body, and 
 
 Connections recovery validation: actual phone acceptance passes all stalled-header/body, explicit retry/count, malformed-response, stale-response and unmount/late401 cases. Baseline actual main component fails at malformed status rendering; source restored before build. Production build/typecheck/direct ESLint pass. Full web580tests575pass5optional browser skips0fail. Fresh remote CI and deployment acceptance remain pending; no automatic retry or backend-completion guarantee introduced.
 2026-10-19 | (this PR) | inference / chat + coder | Fit requests to a provider's per-request allowance instead of failing. The quota ledger refused every chat request whose bytes/3 estimate plus max_tokens exceeded Groq's learned 8,000-token TPM ("refused a request larger than its per-minute token allowance"), before Groq was called; it now returns the allowance (`limitTokens`) and the chat refits once (smaller reply budget, shorter tool results, then oldest earlier turns; never the system prompt, latest message or work since it). Raw provider 413/429 "Limit N, Requested M" refusals refit the same way, calibrated to the provider's own count; 413 is routable. The coder's Groq provider learns the stated allowance, refits (reply budget, then re-readable tool output) and pre-fits later turns. | Live `verify-hosted` chat run 39105457659 before the fix: Groq too-large, Workers AI daily allocation (4006), OpenAI no credits. New tests: apps/web chat-allowance-fit (6), atlas-cli groq refit (3), ledger limitTokens. | OpenAI has no API credits and Workers AI's free daily allocation was spent: owner action. | Re-run `verify-hosted` chat after deploy.
+
+## 2026-10-19 — one-week parallel sprint, first pass (ENGINEERING-PLAN-2026 §5)
+
+Six agent lanes ran in parallel, each in its own worktree, branch and PR, coordinated by the lead session.
+
+| Lane | Issue | PR | Result |
+|---|---|---|---|
+| A. Eval suite | #128 | #381 | Merged. 35 tasks validate (fail untouched, pass with recorded solution) in 8 categories, including test repair, tool args and final synthesis. CI `eval fixtures` passes. |
+| B. Coder loop limits | #355 | #368 | Merged. The atlas-cli repair loop stops on iteration, time (`--max-repair-ms`), token spend or no-progress (`--max-same-failure`) before each repair, escalates once on no progress, and reports `stopReason` in the receipt. |
+| C. Persistent environments | #351 | #377 | Merged. Genesis snapshots each stage (git commit plus tree and manifest digests), restores into a fresh folder with fail-closed verification, resumes after a restart, and never repeats a completed external side effect. Windows fixes: snapshots disable autocrlf and renormalise so stored bytes equal the disk; a regression test forces autocrlf on Linux. |
+| D. Artifacts | #354 | #370 | Merged. A typed, content-addressed, tenant-scoped artifact store; authenticated routes with Range support; video and glTF viewers; Genesis registers website artifacts. |
+| E. Render execution | #352 | #376 | Open, owner review. ffmpeg and headless Blender run only in the container sandbox (no host fallback, network off, workspace never mounted). A real ffmpeg container render ran. Not yet wired into the daemon. |
+| F. GPU compute manager | #353 | #369 | Merged. Provider interface and fake provider with four stops (budget reservation, provider-side max lifetime, idle timeout, orphan reconciler); the crash test leaves zero orphans. No real provider, no spend. |
+
+Sprint gate status:
+- All six PRs are open or merged.
+- The eval suite has 35 tasks, above the 30 target.
+- The GPU chaos test passes.
+- The cross-lane journey is not run yet. It needs #376 merged and the render runner wired into Genesis.
+
+Also merged this cycle: the eval CI workflow (#349), the engineering plan (#365) and bounded Genesis repair loops (#356).
+
+Next:
+- Owner review of #376.
+- Wire `RenderRunner` into Genesis and the routes.
+- Run the cross-lane journey: sentence → project → rendered video artifact → viewer → restart and resume.
+- Eval baseline, once a provider key secret exists.
+- Real GPU provider adapter, after decision D4.
+- Cloudflare Sandbox environment, after decision D2.
