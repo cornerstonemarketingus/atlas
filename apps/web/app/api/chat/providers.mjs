@@ -1,5 +1,16 @@
 import { providerKind, resolveChatModel } from "./model-endpoint.mjs";
 import { workersAIBindingModel } from "./workers-ai-binding.mjs";
+import { vendorEndpoint } from "../../../../../packages/atlas-inference/src/catalog.mjs";
+
+/**
+ * Free and no-card vendors after the built-in ones: Cerebras (vendor terms),
+ * then Gemini, OpenRouter and Mistral, which are training tiers and only
+ * appear when the owner sets ATLAS_ALLOW_TRAINING_PROVIDERS=1 (the router
+ * then gives them only requests with no tool results, memory or code).
+ */
+function freeVendors(environment) {
+  return ["cerebras", "gemini", "openrouter", "mistral"].map((id) => vendorEndpoint(id, environment));
+}
 
 // Dedicated credentials only ever travel to this fixed OpenAI API origin.
 export function openAIModel(environment = process.env) {
@@ -79,25 +90,27 @@ export function resolveChatProvider(environment = process.env, selection = "auto
   const configured = primary.configured ? primary : null;
   if (selection === "workers-ai") {
     if (!workers) return { configured: false, reason: "Workers AI is not configured: the Worker has no AI binding and no ATLAS_WORKERS_AI_TOKEN." };
-    return fallbackDisabled ? workers : chain([workers, configured, groqModel(environment), openai]);
+    return fallbackDisabled ? workers : chain([workers, configured, groqModel(environment), ...freeVendors(environment), openai]);
   }
   if (!["auto", "configured"].includes(selection)) return { configured: false, reason: "Unknown model provider." };
   if (selection === "configured") return primary;
   // Invalid explicit endpoints remain errors; with no main model configured,
   // Workers AI (then OpenAI) leads.
   if (!configured && (environment.ATLAS_CHAT_BASE_URL || environment.ATLAS_CHAT_MODEL)) return primary;
-  const lead = configured ?? workers ?? openai;
+  // With no main model, the first configured provider leads: Workers AI, Groq, a free vendor, then OpenAI.
+  const lead = configured ?? workers ?? groqModel(environment) ?? freeVendors(environment).find(Boolean) ?? openai;
   if (!lead) return primary;
   if (fallbackDisabled) return lead;
-  // Automatic: the main model, then Workers AI, Groq and OpenAI (a provider
-  // already in the route is not repeated), each with its own fallback model.
-  return chain([lead, workers, groqModel(environment), openai]);
+  // Automatic: the main model, then Workers AI, Groq, the free vendors and
+  // OpenAI (a provider already in the route is not repeated), each with its
+  // own fallback model. A refusal from one bounces to the next.
+  return chain([lead, workers, groqModel(environment), ...freeVendors(environment), openai]);
 }
 
-/** Automatic's route as provider kinds ("self-hosted", "workers-ai", "groq", "openai"), never addresses or keys. */
+/** Automatic's route as provider kinds ("self-hosted", "workers-ai", "groq", a free vendor's id, "openai"), never addresses or keys. */
 export function chatRoute(environment = process.env, bindings = {}) {
   const kinds = [];
-  for (let provider = resolveChatProvider(environment, "auto", bindings); provider?.configured && kinds.length < 5; provider = provider.providerFallback) kinds.push(providerKind(provider.baseUrl));
+  for (let provider = resolveChatProvider(environment, "auto", bindings); provider?.configured && kinds.length < 10; provider = provider.providerFallback) kinds.push(providerKind(provider.baseUrl));
   return kinds;
 }
 

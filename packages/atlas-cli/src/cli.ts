@@ -79,7 +79,7 @@ const USAGE = `Usage:
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
-  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|openai|workers-ai] [--api-key-env <ENV_VAR>]
+  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|openai|workers-ai|cerebras|gemini|openrouter|mistral] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N] [--max-repair-ms N] [--max-same-failure N]
@@ -501,6 +501,18 @@ export function coderToolCallLimit(maximumTurns: number): number {
  * limit; an explicit per-turn output ceiling means a paid tier, where a
  * request can carry far more of the repository.
  */
+/**
+ * provider:model:API_KEY_ENV, where the model may itself contain colons
+ * (OpenRouter's "openai/gpt-oss-20b:free"): the first and last segments are
+ * the provider and the key variable, everything between is the model.
+ */
+export function splitRouteSpecification(specification: string | undefined): [string, string, string] | undefined {
+  const parts = specification?.split(":") ?? [];
+  if (parts.length < 3) return undefined;
+  const route: [string, string, string] = [parts[0]!, parts.slice(1, -1).join(":"), parts.at(-1)!];
+  return route.some((part) => part.trim().length === 0) ? undefined : route;
+}
+
 export function groqRequestByteLimit(outputTokensPerTurn: number | undefined): number {
   return outputTokensPerTurn === undefined ? 18_000 : 160_000;
 }
@@ -693,13 +705,12 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const routes = [{ provider: makeRoute(model, selection.selection, apiKey, endpoint), model }];
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] !== "--fallback") continue;
-    const specification = args[index + 1];
-    const parts = specification?.split(":") ?? [];
-    if (parts.length !== 3 || parts.some((part) => part.trim().length === 0)) {
+    const parts = splitRouteSpecification(args[index + 1]);
+    if (parts === undefined) {
       console.error("--fallback must use provider:model:API_KEY_ENV.");
       return 2;
     }
-    const [fallbackProvider, fallbackModel, fallbackKeyEnvironment] = parts as [string, string, string];
+    const [fallbackProvider, fallbackModel, fallbackKeyEnvironment] = parts;
     const fallbackSelection = selectCoderProvider({ provider: fallbackProvider, model: fallbackModel, apiKeyEnvironmentVariable: fallbackKeyEnvironment, tokenBudget, outputTokensPerTurn });
     if (!fallbackSelection.ok) { console.error(fallbackSelection.message); return 2; }
     const fallbackKey = process.env[fallbackSelection.selection.apiKeyEnvironmentVariable];
@@ -722,12 +733,12 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   if (args.includes("--escalate")) {
     const specification = readRequiredOption(args, "--escalate");
     if (specification === null) return 2;
-    const parts = specification.split(":");
-    if (parts.length !== 3 || parts.some((part) => part.trim().length === 0)) {
+    const parts = splitRouteSpecification(specification);
+    if (parts === undefined) {
       console.error("--escalate must use provider:model:API_KEY_ENV.");
       return 2;
     }
-    const [escalationProvider, escalationModel, escalationKeyEnvironment] = parts as [string, string, string];
+    const [escalationProvider, escalationModel, escalationKeyEnvironment] = parts;
     const escalationSelection = selectCoderProvider({ provider: escalationProvider, model: escalationModel, apiKeyEnvironmentVariable: escalationKeyEnvironment, tokenBudget, outputTokensPerTurn });
     if (!escalationSelection.ok) { console.error(escalationSelection.message); return 2; }
     const escalationKey = process.env[escalationSelection.selection.apiKeyEnvironmentVariable];

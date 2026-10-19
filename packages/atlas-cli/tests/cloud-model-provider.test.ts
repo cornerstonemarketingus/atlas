@@ -92,3 +92,33 @@ test("cloud function names and historical calls round-trip to exact Atlas regist
   const result = await provider.complete({ ...request, tools: [{ name: "repository.propose_change_set", description: "Apply edits", inputSchema: { type: "object" } }], messages: [...request.messages, { role: "assistant", content: [{ type: "tool-call", id: "earlier", name: "repository.propose_change_set", arguments: {} }] }, { role: "tool", toolCallId: "earlier", isError: false, content: [{ type: "text", text: "done" }] }] });
   const call = result.message.content[0]; assert.ok(call?.type === "tool-call"); assert.equal(call.name, "repository.propose_change_set");
 });
+
+test("free vendors have fixed destinations, their own key names, and are inferred from model names", async () => {
+  const destinations = { cerebras: "api.cerebras.ai", gemini: "generativelanguage.googleapis.com", openrouter: "openrouter.ai", mistral: "api.mistral.ai" } as const;
+  for (const [id, host] of Object.entries(destinations) as [keyof typeof destinations, string][]) {
+    const provider = new CloudModelProvider({ providerId: id, apiKey: "vendor-secret", models: capabilities("fixture"),
+      fetchImplementation: (async (url, init) => {
+        assert.equal(new URL(String(url)).hostname, host);
+        assert.equal((init?.headers as Record<string, string>)["authorization"], "Bearer vendor-secret");
+        assert.equal(JSON.parse(String(init?.body)).max_tokens, 8192);
+        return Response.json(completion());
+      }) as typeof fetch });
+    assert.equal((await provider.complete(request)).providerId, id);
+  }
+  for (const [model, provider, key] of [["gemini-2.5-flash", "gemini", "GEMINI_API_KEY"], ["openai/gpt-oss-20b:free", "openrouter", "OPENROUTER_API_KEY"], ["devstral-small-latest", "mistral", "MISTRAL_API_KEY"]] as const) {
+    assert.equal(inferCoderProviderId(model), provider);
+    const selected = selectCoderProvider({ model, tokenBudget: 20000 });
+    assert.ok(selected.ok);
+    assert.equal(selected.selection.apiKeyEnvironmentVariable, key);
+  }
+  const cerebras = selectCoderProvider({ provider: "cerebras", model: "gpt-oss-120b", tokenBudget: 20000 });
+  assert.ok(cerebras.ok && cerebras.selection.apiKeyEnvironmentVariable === "CEREBRAS_API_KEY");
+});
+
+test("route specifications keep colons inside the model name", async () => {
+  const { splitRouteSpecification } = await import("../src/cli.js");
+  assert.deepEqual(splitRouteSpecification("openrouter:openai/gpt-oss-20b:free:OPENROUTER_API_KEY"), ["openrouter", "openai/gpt-oss-20b:free", "OPENROUTER_API_KEY"]);
+  assert.deepEqual(splitRouteSpecification("groq:openai/gpt-oss-120b:GROQ_API_KEY"), ["groq", "openai/gpt-oss-120b", "GROQ_API_KEY"]);
+  assert.equal(splitRouteSpecification("groq:GROQ_API_KEY"), undefined);
+  assert.equal(splitRouteSpecification("groq::GROQ_API_KEY"), undefined);
+});

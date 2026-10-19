@@ -2,7 +2,7 @@ import { TASK_TOOL, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } from "./instant-tools.mjs";
 import { completionsUrl, providerKind, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
-import { classifyHttpFailure, classifyThrown, estimateRequestTokens } from "../../../../../packages/atlas-inference/src/index.mjs";
+import { TRUST, classifyHttpFailure, classifyThrown, estimateRequestTokens, qualifiesForTraining } from "../../../../../packages/atlas-inference/src/index.mjs";
 
 /**
  * The agent loop behind one chat reply.
@@ -431,14 +431,17 @@ async function callConfiguredModel(endpoint, turns, options) {
 }
 
 /**
- * Not now (429, 5xx), this account has no credit (402), the model is gone (404) or the request is over its allowance (413): another provider may serve.
- * A rejected credential (401/403) is deliberately not routed around: it is a setup error the owner must see.
+ * Not now (429, 5xx), this account has no credit (402), the model is gone (404), the request is over its allowance (413),
+ * or this provider rejected Atlas's credential (401/403): another provider may serve. A credential refusal still
+ * reaches the refusal trail and the logs, so a bad key is reported even when another provider answers.
  */
-const ROUTABLE_STATUSES = new Set([...TRANSIENT_STATUSES, 402, 404, 413]);
+const ROUTABLE_STATUSES = new Set([...TRANSIENT_STATUSES, 401, 402, 403, 404, 413]);
 
 /** Why a target cannot take this request (a fixed word), or null. Unknown limits are not limits. */
 export function incompatibility(target, turns, options) {
   const capabilities = target.capabilities ?? {};
+  // A free tier that may train on prompts never sees tool output, workspace memory or code.
+  if (target.tier === TRUST.TRAINS && !qualifiesForTraining(turns)) return "trust";
   if (options.tools && capabilities.tools === false) return "tools";
   if (options.stream && capabilities.streaming === false) return "streaming";
   if (capabilities.contextTokens && estimateRequestTokens({ messages: turns, tools: options.tools ?? undefined }) + (options.maxTokens ?? MAX_REPLY_TOKENS) > capabilities.contextTokens) return "context";
@@ -460,6 +463,11 @@ function nextCompatible(endpoint, turns, options) {
 /** Preserve existing same-provider recovery before crossing to a configured, compatible provider. */
 export async function callModel(endpoint, turns, options) {
   const next = nextCompatible(endpoint, turns, options);
+  // The lead obeys the same trust rule as every fallback.
+  if (incompatibility(endpoint, turns, options) === "trust") {
+    if (next) return callModel(next, turns, options);
+    return Response.json({ error: { code: "ATLAS_NO_ALLOWED_PROVIDER", message: "No configured model may receive this request." } }, { status: 503 });
+  }
   let response;
   try { response = await callConfiguredModel(endpoint, turns, options); }
   catch (error) {

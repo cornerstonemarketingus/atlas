@@ -93,3 +93,19 @@ test("setup status reports chat readiness as flags, never values", () => {
   assert.equal(chatReadiness({}).configured, false);
   assert.equal(chatReadiness({}).modelPoolSize, 0);
 });
+
+test("every variable the shared vendor catalog reads is mapped and uploaded", async () => {
+  const { VENDORS, TRUST } = await import("../../../packages/atlas-inference/src/catalog.mjs");
+  const environment = uploadStepEnvironment();
+  const uploaded = uploadedNames();
+  const names = ["ATLAS_ALLOW_TRAINING_PROVIDERS"];
+  for (const vendor of Object.values(VENDORS)) {
+    if (vendor.id === "groq") continue; // groqModel() and its upload predate the catalog
+    names.push(vendor.keyVariable, `ATLAS_${vendor.id.toUpperCase()}_MODEL`);
+    if (vendor.tier === TRUST.TRAINS) names.push(`ATLAS_${vendor.id.toUpperCase()}_TIER`);
+  }
+  for (const name of names) {
+    assert.ok(environment.has(name), `${name} is not mapped from secrets`);
+    assert.ok(uploaded.has(name), `${name} is not uploaded`);
+  }
+});

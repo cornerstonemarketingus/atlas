@@ -788,3 +788,5 @@ Next:
 - Eval baseline, once a provider key secret exists.
 - Real GPU provider adapter, after decision D4.
 - Cloudflare Sandbox environment, after decision D2.
+
+2026-10-19 | (this PR) | inference fabric A1 | Design `docs/atlas-os/INFERENCE-FABRIC.md`. Shared vendor catalog (`packages/atlas-inference/src/catalog.mjs`) with trust tiers. Chat and coder now bounce across Groq, Workers AI, Cerebras, Gemini, OpenRouter, Mistral and OpenAI; any refusal routes on, rejected keys included (logged); only a malformed request stops. Training tiers (Gemini/OpenRouter/Mistral free) need the owner's opt-in (`ATLAS_ALLOW_TRAINING_PROVIDERS=1` chat, `all` coder) and in chat receive only requests with no tool output, memory or code. Route specs accept model names with colons. | New tests: chat-free-vendors (5), catalog upload check, coder-routes (3), CLI vendors and route parsing; full suites: web 593/0, atlas-cli 571/0, inference 64/0, runner 85/0. | Owner: add free keys as secrets and redeploy. | A2: waiting-for-capacity and scheduled resume.
