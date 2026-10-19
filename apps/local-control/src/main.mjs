@@ -205,7 +205,7 @@ const automationStore = new AutomationStore(join(dataDirectory, "automations.sql
 // Goals sleep between events and wake on signed GitHub deliveries (Track B7).
 const goalStore = new GoalStore(join(dataDirectory, "goals.sqlite"));
 const goals = new GoalService({ store: goalStore, missionService, world });
-const automations = new AutomationService({ store: automationStore, missionService, team, onEvent: (event) => goals.onEvent(event) });
+const automations = new AutomationService({ store: automationStore, missionService, team, businessService, onEvent: (event) => goals.onEvent(event) });
 automations.startWatchers();
 const automationTimer = setInterval(() => {
   automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`));
