@@ -4,7 +4,7 @@
  * @param {any} d1
  * @param {any} task
  * @param {any} identity
- * @param {string} summary
+ * @param {string | null} summary
  * @param {string} [now]
  * @param {{runId: number, runAttempt: number, jobId: number, headSha: string, conclusion: string, completedAt: string} | null} [outcome]
  */
@@ -37,18 +37,22 @@ export async function saveRunnerResult(d1, task, identity, summary, now = new Da
     bindings.push(outcome.runId, outcome.runAttempt, outcome.runId, outcome.runAttempt,
       outcome.jobId, outcome.headSha, outcome.conclusion, outcome.completedAt);
   }
-  const statements = [
+  const statements = [];
+  if (summary !== null) statements.push(
     d1.prepare(`INSERT INTO run_events (id, conversation_id, task_id, requested_by, kind, label, detail, created_at)
       SELECT ?, ?, ?, ?, 'result', 'Runner results received', ?, ? WHERE EXISTS (${guard})
       ON CONFLICT(id) DO NOTHING`).bind(id, task.conversationId, task.taskId, task.requestedBy, summary, now, ...bindings),
     d1.prepare(`INSERT INTO conversation_messages (id, conversation_id, requested_by, role, content, created_at)
       SELECT ?, ?, ?, 'assistant', ?, ? WHERE EXISTS (${guard}) ON CONFLICT(id) DO NOTHING`)
       .bind(id, task.conversationId, task.requestedBy, summary, now, ...bindings),
+  );
+  const updateIndex = statements.length;
+  statements.push(
     d1.prepare(`UPDATE tasks SET github_run_id = ? WHERE task_id = ? AND EXISTS (${guard})`)
       .bind(Number(identity.run_id), task.taskId, ...bindings),
     d1.prepare(`UPDATE conversations SET updated_at = ? WHERE id = ? AND EXISTS (${guard})`)
       .bind(now, task.conversationId, ...bindings),
-  ];
+  );
   if (outcome) {
     statements.push(d1.prepare(`INSERT INTO task_execution_outcomes
       (task_id, tenant_id, requested_by, run_id, run_attempt, job_id, head_sha, conclusion, completed_at, verified_at)
@@ -62,5 +66,11 @@ export async function saveRunnerResult(d1, task, identity, summary, now = new Da
   }
   const results = await d1.batch(statements);
   if (results.some(result => result.success === false)) throw new Error("Result persistence unavailable");
-  return results[2]?.meta?.changes === 1;
+  return results[updateIndex]?.meta?.changes === 1;
+}
+
+/** Reconciliation records evidence only; it never fabricates an agent message. */
+export function saveExecutionOutcome(d1, task, identity, outcome, now = new Date().toISOString()) {
+  if (!outcome) return false;
+  return saveRunnerResult(d1, task, identity, null, now, outcome);
 }
