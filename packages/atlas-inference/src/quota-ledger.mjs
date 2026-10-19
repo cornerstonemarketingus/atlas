@@ -120,10 +120,11 @@ export function reserve(state, request, now) {
   let soonest = Number.POSITIVE_INFINITY;
   let reason = "capacity";
   let tooLarge = 0;
+  let largestLimit = 0;
   for (const model of request.models) {
     // Bigger than this model's whole allowance: no wait makes it fit, so it is not a candidate.
     const limit = state.models[model]?.limitTokens ?? null;
-    if (limit !== null && request.estimatedTokens > limit) { tooLarge += 1; continue; }
+    if (limit !== null && request.estimatedTokens > limit) { tooLarge += 1; largestLimit = Math.max(largestLimit, limit); continue; }
     // A target whose circuit is open is not sent to; a recovering one gets one probe at a time.
     const gate = admit(state.models[model]?.health, request.requestId, now);
     if (!gate.allowed) {
@@ -153,7 +154,8 @@ export function reserve(state, request, now) {
     soonest = Math.min(soonest, room.resetMs ?? POLL_MS);
   }
 
-  if (tooLarge === request.models.length) return { granted: false, permanent: true, kind: K.CAPACITY_EXCEEDED, waitMs: 0, reason: "request_exceeds_allowance", position: 0 };
+  // The largest allowance is returned so the caller can reshape the request to fit it.
+  if (tooLarge === request.models.length) return { granted: false, permanent: true, kind: K.CAPACITY_EXCEEDED, waitMs: 0, reason: "request_exceeds_allowance", limitTokens: largestLimit, position: 0 };
   state.waiting[request.requestId] = {
     models: [...request.models], tokens: request.estimatedTokens, latencyClass: me.latencyClass, priority: me.priority,
     registeredAt: me.enqueuedAt, enqueuedAt: me.enqueuedAt, expiresAt: now + WAITING_TTL_MS,
