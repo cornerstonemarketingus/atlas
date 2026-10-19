@@ -4,3 +4,4 @@ export {
 } from "./render-policy.mjs";
 export { MAX_BLENDER_FRAMES, buildBlenderJob } from "./blender-args.mjs";
 export { RENDER_CAPABILITIES, RenderError, RenderRunner, assertContainerInvocation, renderRequirements } from "./render-runner.mjs";
+export { createRenderRoutes } from "./routes.mjs";
