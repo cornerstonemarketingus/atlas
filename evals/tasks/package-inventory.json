@@ -1,0 +1,29 @@
+{
+  "id": "package-inventory",
+  "category": "final-synthesis",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "e00a49050841f932b970bc1f710d38054b1e870a",
+  "objective": "Without changing any source file: build an inventory of the repository's packages. For every directory directly under apps/ or packages/ that has a package.json, plus mobile/, report its directory, its package name, its scripts.test command (null when there is none) and whether it is dependency-free (declares no dependencies and no devDependencies). Write ANSWER.json as {\"packages\": [{\"dir\": \"apps/web\", \"name\": \"...\", \"test\": \"...\" | null, \"dependencyFree\": true | false}, ...]} sorted by dir.",
+  "setup": {
+    "files": {}
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/answer-check.mjs",
+      "{workspace}",
+      "package-inventory"
+    ]
+  },
+  "solution": {
+    "files": {
+      "ANSWER.json": "{\n  \"packages\": [\n    {\n      \"dir\": \"apps/browser-worker\",\n      \"name\": \"@atlas/browser-worker\",\n      \"test\": \"node --test tests/*.test.mjs\",\n      \"dependencyFree\": false\n    },\n    {\n      \"dir\": \"apps/local-control\",\n      \"name\": \"@atlas/local-control\",\n      \"test\": \"node --test tests/*.test.mjs\",\n      \"dependencyFree\": true\n    },\n    {\n      \"dir\": \"apps/web\",\n      \"name\": \"@atlas/web\",\n      \"test\": \"npm run build && node --test tests/*.test.mjs\",\n      \"dependencyFree\": false\n    },\n    {\n      \"dir\": \"apps/windows-companion\",\n      \"name\": \"@atlas/windows-companion\",\n      \"test\": \"node --test tests/*.test.mjs\",\n      \"dependencyFree\": false\n    },\n    {\n      \"dir\": \"mobile\",\n      \"name\": \"@atlas/mobile\",\n      \"test\": \"node --test tests/*.test.mjs\",\n      \"dependencyFree\": false\n    },\n    {\n      \"dir\": \"packages/atlas-cli\",\n      \"name\": \"@atlas/cli\",\n      \"test\": \"npm run build && node --test dist/**/*.test.js\",\n      \"dependencyFree\": false\n    },\n    {\n      \"dir\": \"packages/atlas-contracts\",\n      \"name\": \"@atlas/contracts\",\n      \"test\": \"node --test tests/*.test.mjs\",\n      \"dependencyFree\": true\n    },\n    {\n      \"dir\": \"packages/atlas-eval\",\n      \"name\": \"@atlas/eval\",\n      \"test\": \"node --test tests/*.test.mjs\",\n      \"dependencyFree\": true\n    },\n    {\n      \"dir\": \"packages/atlas-inference\",\n      \"name\": \"@atlas/inference\",\n      \"test\": \"node --test tests/*.test.mjs\",\n      \"dependencyFree\": true\n    }\n  ]\n}\n"
+    }
+  },
+  "timeoutMs": 180000,
+  "tags": [
+    "read-only",
+    "answer-file",
+    "synthesis"
+  ]
+}
