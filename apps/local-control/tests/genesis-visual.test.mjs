@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +11,29 @@ import { createInspector, inspectOverHttp, loadPlaywright } from "../src/platfor
 import { runCheck } from "../src/platform/self-improve/runtime.mjs";
 import { LocalTaskStore } from "../src/store.mjs";
 import { createLocalControlServer } from "../src/server.mjs";
+import { startDesignPreview } from "../src/platform/genesis/visual.mjs";
+
+test("design assets cannot follow links into private workspace files", async () => {
+  const root = mkdtempSync(join(tmpdir(), "atlas-visual-confinement-"));
+  let preview;
+  try {
+    mkdirSync(join(root, "dist")); mkdirSync(join(root, "private"));
+    writeFileSync(join(root, "site.json"), JSON.stringify({ pages: [{ id: "home", headline: "Home", intro: "Intro" }] }));
+    writeFileSync(join(root, "dist", "index.html"), '<h1 data-atlas-source="home:headline">Home</h1>');
+    writeFileSync(join(root, "dist", "logo.png"), "public asset");
+    writeFileSync(join(root, "private", "leak.png"), "private fixture data");
+    symlinkSync(join(root, "private"), join(root, "dist", "linked"), process.platform === "win32" ? "junction" : "dir");
+    preview = await startDesignPreview({ workspace: root, plan: { template: "static-site" }, version: 1 }, "http://127.0.0.1:4317");
+    assert.equal((await fetch(preview.url)).status, 200);
+    assert.equal(await (await fetch(`${preview.url}/logo.png`)).text(), "public asset");
+    const response = await fetch(`${preview.url}/linked/leak.png`);
+    assert.equal(response.status, 404);
+    assert.doesNotMatch(await response.text(), /private fixture data/);
+  } finally {
+    await preview?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
+});
 
 const TOKEN = "visual-editor-owner-test-token-0123456789";
 async function fixture(run) {

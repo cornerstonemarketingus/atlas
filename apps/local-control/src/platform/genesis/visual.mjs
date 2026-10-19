@@ -16,6 +16,14 @@ function containedFile(root, name) {
   return file;
 }
 
+function buildFile(project, name) {
+  // Check both boundaries: a dist asset must not link into private workspace
+  // files, and dist itself must not link outside the project.
+  const file = containedFile(project.workspace, `dist/${name}`);
+  if (file !== containedFile(resolve(project.workspace, "dist"), name)) throw new VisualError("The build asset changed.");
+  return file;
+}
+
 /** Source identity comes from the template renderer, never from DOM text or a caller-supplied path. */
 export function visualSelection(project, key) {
   if (project.plan?.template !== "static-site" || !project.workspace) throw new VisualError("Visual text editing currently supports generated static sites.");
@@ -55,7 +63,7 @@ export function pendingVisualContent(project) {
 /** Read-only design view on its own loopback origin. No daemon token, cookies, APIs or arbitrary proxy target. */
 export async function startDesignPreview(project, parentOrigin) {
   visualSelection(project, "home:headline");
-  if (!readFileSync(containedFile(project.workspace, "dist/index.html"), "utf8").includes('data-atlas-source="home:headline"')) throw new VisualError("This site predates visual source metadata. Create a new site with the current template to use this editor.");
+  if (!readFileSync(buildFile(project, "index.html"), "utf8").includes('data-atlas-source="home:headline"')) throw new VisualError("This site predates visual source metadata. Create a new site with the current template to use this editor.");
   const parent = new URL(parentOrigin);
   if (!["127.0.0.1", "localhost", "[::1]"].includes(parent.hostname) || parent.protocol !== "http:" || parent.origin !== parentOrigin) throw new VisualError("Open the visual editor from the local Atlas dashboard.");
   const nonce = randomBytes(24).toString("base64");
@@ -73,7 +81,7 @@ export async function startDesignPreview(project, parentOrigin) {
       const type = { ".html": "text/html", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".svg": "image/svg+xml", ".webp": "image/webp" }[extname(name)];
       if (!type) return fail(404);
       if (name.includes("\\") || name.split("/").some((part) => part === ".." || part === ".")) return fail(404);
-      let body = readFileSync(containedFile(project.workspace, `dist/${name}`));
+      let body = readFileSync(buildFile(project, name));
       if (type === "text/html") {
         const script = `document.querySelectorAll('[data-atlas-source]').forEach(el=>el.tabIndex=0);
           function select(e){e.preventDefault();e.stopImmediatePropagation();const el=e.target.closest('[data-atlas-source]');if(!el)return;
