@@ -140,7 +140,7 @@ export async function dispatchGitHub(options, fetcher = fetch, { timeoutMs = 10_
       reject(error);
     }, timeoutMs);
   });
-  const pending = Promise.resolve().then(() => fetcher(request.url, { ...request.init, redirect: "error", signal: controller.signal }));
+  const pending = Promise.resolve().then(() => fetcher(request.url, { ...request.init, redirect: "manual", signal: controller.signal }));
   // A transport may ignore cancellation. Its late acceptance must not change
   // the saved uncertain outcome or retain a response body indefinitely.
   pending.then(response => {

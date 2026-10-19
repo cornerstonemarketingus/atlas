@@ -341,3 +341,20 @@ there without a model. On your own machine:
      "Add Google login" continues the most recent project.
 9. Publishing handoff through the existing adapters and approvals.
 10. **Benchmarks.** Done: `node scripts/local/genesis-bench.mjs` runs the five scenarios (marketing site, CRUD, dashboard, REST API, authenticated app) for real. It records completion, build, test counts, browser verification, repairs, time, models used and human intervention in `~/.atlas/genesis/benchmarks/`. The first baseline, with no model available: 4/5 ready, 3 browser-verified and the API verified over HTTP, 0 repairs. The authenticated app correctly blocks until a coding model is set up.
+
+## Rendering from a project (`platform/render/routes.mjs`)
+
+The daemon builds a `RenderRunner` at startup. It only runs inside the container sandbox:
+- `ATLAS_TERMINAL_CONTAINER_RUNTIME`: the same runtime the terminal sandbox uses;
+- `ATLAS_RENDER_FFMPEG_IMAGE`, `ATLAS_RENDER_BLENDER_IMAGE`: one image per tool.
+
+Without a runtime and an image it reports itself unavailable and never runs on the host.
+
+- `GET /v1/render`: `{ available, reason, capabilities }`. Paired devices may read it.
+- `POST /v1/render/jobs` `{ projectId, job }`: owner only (a paired device gets 403). It renders against that project's workspace. Video outputs go into the artifact store with the project id as provenance. The response codes:
+  - 200: the render succeeded.
+  - 422: the render ran but failed.
+  - 503: no sandbox, or no image configured.
+  - 400: the job was refused by the render policy.
+
+`tests/sprint-journey.test.mjs` runs the cross-lane journey through the real HTTP handler: sentence → verified project → sandboxed render → video artifact (Range-served) → workspace lost → restore from snapshot → render again. In CI the container runtime is a stand-in; the real-container render is in `platform-render.test.mjs`.
