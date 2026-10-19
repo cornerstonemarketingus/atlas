@@ -248,7 +248,15 @@ const genesisExecutor = new GenesisExecutor({
   // Repair loops stop at a time/token limit or when a failure stops moving (loop-policy.mjs).
   loopPolicy: loopPolicyFromEnvironment(process.env, (line) => console.log(`Genesis: ${line}`)),
 });
-for (const project of genesis.recover()) console.log(`Genesis: ${project.name} was interrupted and is paused.`);
+// Interrupted projects are paused, then restored from the snapshot taken when their stage started
+// (verified against its digests) and resumed; each restore is a transition carrying a resume receipt.
+try {
+  for (const receipt of await genesisExecutor.recover()) {
+    console.log(receipt.restored ? `Genesis: ${receipt.projectId} restored from snapshot ${receipt.snapshot.seq} and resumed.` : `Genesis: ${receipt.projectId} was interrupted and is paused (${receipt.code ?? receipt.reason}).`);
+  }
+} catch (error) {
+  console.error(`Genesis recovery failed: ${error.message}`);
+}
 // Publishing a finished project is external: it goes through the publish.remote policy and the normal approvals.
 const genesisPublisher = new GenesisPublisher({
   genesis,

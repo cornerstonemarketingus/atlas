@@ -54,7 +54,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const selfImproveRoutes = selfImprove ? createSelfImproveRoutes({ service: selfImprove, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const modelHostingRoutes = modelHosting ? createModelHostingRoutes({ ...modelHosting, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const remoteRoutes = remoteAccess ? createRemoteRoutes({ remote: remoteAccess, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
-  const genesisRoutes = genesis ? createGenesisRoutes({ genesis, previews: genesisPreviews, publisher: genesisPublisher, creation: genesisCreation, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  const genesisRoutes = genesis ? createGenesisRoutes({ genesis, executor: genesisCreation?.executor ?? null, previews: genesisPreviews, publisher: genesisPublisher, creation: genesisCreation, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const automationRoutes = automations ? createAutomationRoutes({ automations, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const webhookRoute = automations ? createWebhookRoute({ automations, limiter, send: (response, status, value) => { send(response, status, value); return true; },
     readRaw: async (request, response) => { try { return await readBody(request); } catch (error) { send(response, error?.code === "BODY_TOO_LARGE" ? 413 : 400, { message: error.message }); return null; } } }) : null;
