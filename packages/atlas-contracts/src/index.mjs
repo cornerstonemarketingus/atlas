@@ -389,6 +389,91 @@ export const artifactSchema = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Artifact records: what Atlas made, content-addressed (issue #354)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a user can be shown. `artifactSchema` above is a task's verified
+ * output inside the platform store; an artifact record is the viewable thing
+ * itself (a website, a rendered video, a 3D model), addressed by the SHA-256
+ * of its bytes, so the same bytes are always the same artifact and a viewer
+ * can only ever ask for bytes by digest, never by path.
+ */
+export const ARTIFACT_KINDS = Object.freeze(["website", "app", "game", "video", "model3d", "document", "file"]);
+
+/**
+ * The media types each kind may carry. Anything not listed is refused at the
+ * boundary, so a store never holds (and a viewer never serves) a type nobody
+ * reviewed. SVG and HTML documents are deliberately absent because both can
+ * carry script: websites, apps and games are recorded as a manifest or an
+ * archive and are seen through their live preview.
+ */
+export const ARTIFACT_MEDIA_TYPES = Object.freeze({
+  website: Object.freeze(["application/vnd.atlas.site-manifest+json", "application/zip"]),
+  app: Object.freeze(["application/vnd.atlas.site-manifest+json", "application/zip"]),
+  game: Object.freeze(["application/vnd.atlas.site-manifest+json", "application/zip"]),
+  video: Object.freeze(["video/mp4", "video/webm"]),
+  model3d: Object.freeze(["model/gltf-binary", "model/gltf+json"]),
+  document: Object.freeze(["application/pdf", "text/markdown", "text/plain", "application/json"]),
+  file: Object.freeze(["application/json", "text/plain", "text/csv", "application/zip", "image/png", "image/jpeg", "image/webp"]),
+});
+
+/** Every media type at least one kind allows. */
+export const ARTIFACT_ALLOWED_MEDIA_TYPES = Object.freeze([...new Set(Object.values(ARTIFACT_MEDIA_TYPES).flat())]);
+
+export const ARTIFACT_SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+
+export const artifactRecordSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schemaVersion", "id", "tenantId", "kind", "sha256", "size", "mediaType", "provenance", "createdAt"],
+  properties: {
+    schemaVersion: { const: SCHEMA_VERSION },
+    id: { type: "string", pattern: "^art_[0-9a-f]{32}$" },
+    tenantId: idString,
+    kind: { enum: ARTIFACT_KINDS },
+    sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    size: { type: "integer", minimum: 0 },
+    mediaType: { enum: ARTIFACT_ALLOWED_MEDIA_TYPES },
+    // A download file name: no path separators or control characters.
+    name: { type: ["string", "null"], minLength: 1, maxLength: 200, pattern: "^[^/\\\\\\u0000-\\u001f]+$" },
+    provenance: {
+      type: "object",
+      additionalProperties: false,
+      required: ["runId", "step"],
+      properties: {
+        runId: idString,
+        step: { type: "string", minLength: 1, maxLength: 200 },
+        source: { type: "string", pattern: "^[a-z][a-z0-9_.-]{0,63}$" },
+      },
+    },
+    // Where to see it live: a same-origin path or an http(s) URL, never javascript: or data:.
+    previewUrl: { type: ["string", "null"], maxLength: 2048, pattern: "^(/(?!/)|https?://)\\S*$" },
+    createdAt: timestamp,
+  },
+};
+
+/**
+ * Validates an artifact record: the closed schema plus the kind/media-type
+ * pairing. Returns `{ path, message }` errors; an empty list means valid.
+ */
+export function validateArtifactRecord(value) {
+  const errors = validateSchema(artifactRecordSchema, value);
+  if (errors.length === 0 && !ARTIFACT_MEDIA_TYPES[value.kind].includes(value.mediaType)) {
+    errors.push({ path: "$.mediaType", message: `'${value.mediaType}' is not allowed for kind '${value.kind}'` });
+  }
+  return errors;
+}
+
+export function assertArtifactRecord(value) {
+  const errors = validateArtifactRecord(value);
+  if (errors.length) {
+    throw new ContractError("SCHEMA_VIOLATION", `artifact record is invalid: ${errors.map((e) => `${e.path} ${e.message}`).join("; ")}.`, errors);
+  }
+  return value;
+}
+
 export const agentMessageSchema = {
   type: "object",
   additionalProperties: false,
