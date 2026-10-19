@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { constructionLaunchPlan, selfImprovementPlan } from "./business-plans.mjs";
 import { normalizeBudget } from "./budget.mjs";
+import { BusinessBudget } from "./business-budget.mjs";
 
 const text = (value, label, max = 2000) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error(`${label} is required (maximum ${max} characters).`);
@@ -12,6 +13,7 @@ const text = (value, label, max = 2000) => {
 export class BusinessService {
   #db;
   #missions;
+  #budgets;
   constructor({ filename, missionService }) {
     this.#missions = missionService;
     this.#db = new DatabaseSync(filename);
@@ -23,6 +25,7 @@ export class BusinessService {
         id TEXT PRIMARY KEY, business_id TEXT NOT NULL REFERENCES businesses(id), record TEXT NOT NULL
       );
     `);
+    this.#budgets = new BusinessBudget(this.#db, missionService);
   }
   close() { this.#db.close(); }
   list() { return this.#db.prepare("SELECT record FROM businesses ORDER BY id").all().map(row => JSON.parse(row.record)); }
@@ -30,10 +33,12 @@ export class BusinessService {
     const row = this.#db.prepare("SELECT record FROM businesses WHERE id=?").get(id);
     if (!row) return null;
     const business = JSON.parse(row.record);
-    return { ...business, responsibilities: this.#db.prepare("SELECT record FROM business_responsibilities WHERE business_id=? ORDER BY id").all(id).map(row => JSON.parse(row.record)) };
+    return { ...business, executionBudget: this.#budgets.snapshot(business), responsibilities: this.#db.prepare("SELECT record FROM business_responsibilities WHERE business_id=? ORDER BY id").all(id).map(row => JSON.parse(row.record)) };
   }
   create({ name, objective, budget = {} }) {
-    const record = { id: randomUUID(), name: text(name, "Business name", 200), objective: text(objective, "Objective"), budget: normalizeBudget(budget), createdAt: new Date().toISOString() };
+    const limits = normalizeBudget(budget);
+    if (!Object.values(limits).every(Number.isSafeInteger)) throw new Error("Business budget must use safe integers.");
+    const record = { id: randomUUID(), name: text(name, "Business name", 200), objective: text(objective, "Objective"), budget: limits, executionBudgetVersion: 1, createdAt: new Date().toISOString() };
     this.#db.prepare("INSERT INTO businesses (id,record) VALUES (?,?)").run(record.id, JSON.stringify(record));
     return this.get(record.id);
   }
@@ -68,7 +73,20 @@ export class BusinessService {
     if (typeof build !== "function" || !["construction-launch", "self-improvement"].includes(template)) throw new Error("Unknown business plan template.");
     return build({ businessId: id, ...business });
   }
-  launch(id, { repository, model, template = "construction-launch" }) {
-    return this.#missions.create({ ...this.plan(id, template), repository, model });
+  launch(id, { repository, model, template = "construction-launch", budget }) {
+    const plan = this.plan(id, template);
+    if (typeof repository !== "string" || !repository.trim() || repository.length > 4096) throw new Error("A repository folder is required for a mission.");
+    if (typeof model !== "string" || !model.trim() || model.length > 200) throw new Error("A model is required for a mission.");
+    const business = this.get(id);
+    const limits = normalizeBudget({ ...business.budget, ...budget });
+    // Bound each existing scheduler child. Reservation precedes any executor.
+    plan.children = plan.children.map(child => ({ ...child, budget: Object.fromEntries(Object.entries(limits).map(([key, value]) => [key, Math.floor(value / plan.children.length)])) }));
+    const missionId = randomUUID();
+    this.#budgets.reserve(business, missionId, limits);
+    // A thrown create can follow durable creation or executor start. Keep the
+    // reservation even when its acknowledgement is lost; never infer rollback.
+    const mission = this.#missions.create({ ...plan, id: missionId, repository, model });
+    this.#budgets.created(missionId);
+    return mission;
   }
 }

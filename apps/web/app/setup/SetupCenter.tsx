@@ -1,10 +1,24 @@
 "use client";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AtlasShell } from "../AtlasShell.js";
 
 type SetupStep = { id: string; label: string; state: "complete" | "action-required" | "failed"; detail: string; action?: string };
-type SetupStatus = { overall: string; completedSteps: number; totalSteps: number; steps: SetupStep[]; optional: { stripeConfigured: boolean } };
+type SetupStatus = { audience?: "customer" | "owner"; overall: string; completedSteps: number; totalSteps: number; steps: SetupStep[]; optional: { stripeConfigured?: boolean } };
+
+function validStatus(value: unknown): value is SetupStatus {
+  if (!value || typeof value !== "object") return false;
+  const status = value as Partial<SetupStatus>;
+  return (status.audience === "customer" || status.audience === "owner")
+    && typeof status.overall === "string"
+    && Number.isInteger(status.completedSteps) && Number.isInteger(status.totalSteps)
+    && status.completedSteps! >= 0 && status.completedSteps! <= status.totalSteps!
+    && Array.isArray(status.steps) && status.steps.length === status.totalSteps
+    && status.steps.every(item => item && typeof item.id === "string" && typeof item.label === "string"
+      && typeof item.detail === "string" && ["complete", "action-required", "failed"].includes(item.state)
+      && (item.action === undefined || typeof item.action === "string"))
+    && Boolean(status.optional && typeof status.optional === "object" && !Array.isArray(status.optional));
+}
 type GitHub = { connected: boolean; method: string; installUrl: string | null };
 
 const MERGE_POLICIES = [
@@ -30,24 +44,50 @@ export function SetupCenter() {
   const [policyNotice, setPolicyNotice] = useState("");
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const statusRequest = useRef<{ generation: number; controller: AbortController | null }>({ generation: 0, controller: null });
 
   const refresh = useCallback(async () => {
+    const generation = ++statusRequest.current.generation;
+    statusRequest.current.controller?.abort();
+    const controller = new AbortController();
+    statusRequest.current.controller = controller;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     setRefreshing(true);
     try {
-      const response = await fetch("/api/setup/status", { cache: "no-store" });
-      if (response.status === 401) { window.location.href = "/"; return; }
-      if (!response.ok) throw new Error("Setup readiness is temporarily unavailable.");
-      setStatus(await response.json() as SetupStatus);
+      const result = await Promise.race([
+        (async () => {
+          const response = await fetch("/api/setup/status", { cache: "no-store", signal: controller.signal });
+          if (response.status === 401) return { signedOut: true } as const;
+          if (!response.ok) throw new Error("Status unavailable");
+          const value: unknown = await response.json();
+          if (!validStatus(value)) throw new Error("Invalid status");
+          return { status: value };
+        })(),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => { controller.abort(); reject(new Error("Status deadline")); }, 12000);
+        }),
+      ]);
+      if (generation !== statusRequest.current.generation) return;
+      if ("signedOut" in result) { window.location.href = "/"; return; }
+      setStatus(result.status);
       setError("");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Setup readiness is temporarily unavailable.");
+    } catch {
+      if (generation === statusRequest.current.generation) setError("Connection status is temporarily unavailable. Refresh or contact support.");
     } finally {
-      setRefreshing(false);
+      clearTimeout(deadline);
+      if (generation === statusRequest.current.generation) {
+        statusRequest.current.controller = null;
+        setRefreshing(false);
+      }
     }
   }, []);
 
   // Deferred a tick so the first render is not a cascading re-render.
-  useEffect(() => { const timer = window.setTimeout(() => void refresh(), 0); return () => window.clearTimeout(timer); }, [refresh]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refresh(), 0);
+    const request = statusRequest.current;
+    return () => { window.clearTimeout(timer); request.generation++; request.controller?.abort(); };
+  }, [refresh]);
 
   useEffect(() => {
     let active = true;
@@ -98,7 +138,7 @@ export function SetupCenter() {
   }
 
   return <AtlasShell section="connections" headerContext={
-    <span className="context-chip">{status ? `${status.completedSteps}/${status.totalSteps} ready` : "Checking…"}</span>
+    <span className="context-chip">{status?.audience === "customer" ? "Account connected" : status ? `${status.completedSteps}/${status.totalSteps} ready` : "Checking…"}</span>
   }>
     <div className="section-scroll">
       <div className="section-page">
@@ -122,7 +162,7 @@ export function SetupCenter() {
               <strong>{model === null ? "Checking…" : model.configured ? "Model endpoint connected" : "No model endpoint"}</strong>
               <p>{model?.configured
                 ? "Chat is connected. Atlas works with any OpenAI-compatible model server, hosted or your own."
-                : model?.reason ?? "Chat cannot answer until a model endpoint is configured."}</p>
+                : status?.audience === "owner" ? model?.reason ?? "Chat cannot answer until a model endpoint is configured." : "Chat is temporarily unavailable. Refresh or contact support."}</p>
             </article>
             <article className="status-card">
               <small>COMPUTER</small>
@@ -153,7 +193,7 @@ export function SetupCenter() {
         </section>
 
         <section className="page-block">
-          <h2><span>03</span>Setup checklist</h2>
+          <h2><span>03</span>{status?.audience === "customer" ? "Account status" : "Setup checklist"}</h2>
           {error && <p className="page-notice" role="alert">{error}</p>}
           {!status && !error && <p className="block-hint">Checking the live environment…</p>}
           <div className="check-list">
@@ -162,7 +202,7 @@ export function SetupCenter() {
               <div><div className="check-state">{item.state.replace("-", " ")}</div><h3>{item.label}</h3><p>{item.detail}</p></div>
               {item.state !== "complete" && <span className="check-action">{item.action ?? "Action required"}</span>}
             </article>)}
-            {status && <article className="check-row optional">
+            {status?.audience === "owner" && <article className="check-row optional">
               <div className="check-number">+</div>
               <div><div className="check-state">Optional</div><h3>Stripe billing</h3>
                 <p>{status.optional.stripeConfigured ? "Billing credentials are configured." : "Add billing when you are ready to charge customers."}</p></div>

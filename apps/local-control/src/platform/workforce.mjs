@@ -31,6 +31,19 @@ export class WorkforceCoordinator {
     return row ? JSON.parse(row.snapshot) : null;
   }
 
+  /** Bounded summaries for supervision; plans and model prompts stay in detail reads. */
+  list(tenantId, { limit = 50 } = {}) {
+    const count = Number.isSafeInteger(limit) ? Math.min(100, Math.max(1, limit)) : 50;
+    return this.#registry.db.prepare("SELECT snapshot FROM workforce_runs WHERE tenant_id=? ORDER BY rowid DESC LIMIT ?")
+      .all(tenantId, count).map(row => {
+        const run = JSON.parse(row.snapshot);
+        const steps = Array.isArray(run.steps) ? run.steps : [];
+        return { taskId: run.taskId, objective: String(run.objective ?? "").slice(0, 500), status: run.status,
+          stepCount: steps.length, completedSteps: steps.filter(step => step.memoryIds?.length > 0).length,
+          artifactCount: steps.reduce((sum, step) => sum + (step.artifacts?.length ?? 0), 0) };
+      });
+  }
+
   #save(run) {
     this.#registry.db.prepare("INSERT INTO workforce_runs VALUES (?,?,?) ON CONFLICT(tenant_id,task_id) DO UPDATE SET snapshot=excluded.snapshot")
       .run(run.tenantId, run.taskId, JSON.stringify(run));

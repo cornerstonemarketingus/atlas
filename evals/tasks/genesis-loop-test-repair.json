@@ -1,0 +1,49 @@
+{
+  "id": "genesis-loop-test-repair",
+  "category": "test-repair",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "c7466638e50abdc6c05c9a60cced9e4d7a8901be",
+  "objective": "Genesis repair loops are now bounded by apps/local-control/src/platform/loop-policy.mjs (already in place, with GenesisExecutor and coder.mjs updated to use it; do not change any source). The executor stops as soon as the same failure has survived maxSameFailure (2) repairs, moves the project to failed with a reason like 'Stopped: the same failure survived 2 repair attempt(s)…', and records the decision as evidence.loop ({ reason: \"no-progress\", iterations, tokens, … }) on that last transition; the second repair's objective tells the coder that the previous repair was rolled back and which rules it broke. apps/local-control/tests/genesis-executor.test.mjs still expects the old behaviour (three rejected repairs and 'Still failing after 3 repair attempt(s)') and fails. Repair that test so it asserts the new stop: the reason, evidence.loop.reason and iterations, and that only two repairs ran. Keep every other test in the file passing.",
+  "setup": {
+    "fromCommit": "e00a49050841f932b970bc1f710d38054b1e870a",
+    "paths": [
+      "apps/local-control/src/platform/loop-policy.mjs",
+      "apps/local-control/src/platform/genesis/coder.mjs",
+      "apps/local-control/src/platform/genesis/executor.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/test-repair-check.mjs",
+      "{workspace}",
+      "{repo}",
+      "--base",
+      "c7466638e50abdc6c05c9a60cced9e4d7a8901be",
+      "--fixed",
+      "e00a49050841f932b970bc1f710d38054b1e870a",
+      "--test",
+      "apps/local-control/tests/genesis-executor.test.mjs",
+      "--source",
+      "apps/local-control/src/platform/loop-policy.mjs",
+      "--source",
+      "apps/local-control/src/platform/genesis/coder.mjs",
+      "--source",
+      "apps/local-control/src/platform/genesis/executor.mjs",
+      "--mutate"
+    ]
+  },
+  "solution": {
+    "fromCommit": "e00a49050841f932b970bc1f710d38054b1e870a",
+    "paths": [
+      "apps/local-control/tests/genesis-executor.test.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "test-repair",
+    "genesis"
+  ]
+}

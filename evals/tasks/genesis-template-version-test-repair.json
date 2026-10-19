@@ -1,0 +1,45 @@
+{
+  "id": "genesis-template-version-test-repair",
+  "category": "test-repair",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "f7c108178d1aef6e40739142eb5a1ef31db5d46c",
+  "objective": "The Genesis web-app template was fixed so a slow response never replaces the current screen, and its version in apps/local-control/src/platform/genesis/templates/index.mjs was bumped from 1.0.0 to 1.0.1. Those source changes are correct and must not be modified. apps/local-control/tests/genesis-templates.test.mjs now fails because it hard-codes the template version in the expected initial commit message. Repair the test so it passes and keeps checking the commit message (preferably against the template's declared version via getTemplate, so the next version bump does not break it again). Keep every test in the file.",
+  "setup": {
+    "fromCommit": "bdced062a9fdd5e6d7ca91461429bdd9d4a7a677",
+    "paths": [
+      "apps/local-control/src/platform/genesis/templates/index.mjs",
+      "apps/local-control/src/platform/genesis/templates/web-app/files/public/app.js"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/test-repair-check.mjs",
+      "{workspace}",
+      "{repo}",
+      "--base",
+      "f7c108178d1aef6e40739142eb5a1ef31db5d46c",
+      "--fixed",
+      "bdced062a9fdd5e6d7ca91461429bdd9d4a7a677",
+      "--test",
+      "apps/local-control/tests/genesis-templates.test.mjs",
+      "--source",
+      "apps/local-control/src/platform/genesis/templates/index.mjs",
+      "--source",
+      "apps/local-control/src/platform/genesis/templates/web-app/files/public/app.js"
+    ]
+  },
+  "solution": {
+    "fromCommit": "bdced062a9fdd5e6d7ca91461429bdd9d4a7a677",
+    "paths": [
+      "apps/local-control/tests/genesis-templates.test.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "test-repair",
+    "genesis"
+  ]
+}

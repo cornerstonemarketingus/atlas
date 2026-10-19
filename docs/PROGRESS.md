@@ -649,6 +649,20 @@ Next: #282 result callback ownership against this parent, then outcome recovery.
 
 Existing trusted cloud coder subprocess cleanup now retains SIGKILL after the group leader exits, closes inherited pipes at a bounded cleanup deadline, and isolates progress observer exceptions/rejected promises. Two new real-process regressions failed before the repair and pass after it. Complete Windows runner/local suite: 80 passed, one Linux-only skip; final process suite seven passed, one Linux-only skip. CI must verify the resistant-descendant process-group case before merge. Focused handoff: docs/CLOUD-PROCESS-RECOVERY.md. No production database, provider, credentials or workflow changed. Migration 0017 and its deployment remain paused for exact production approval. Next: complete #333 CI, then continue the existing task/claim/outcome/mission rollout in dependency order; persistent isolated workspace checkpoints remain unfinished.
 
+## 2026-10-17 — cumulative local business execution allowances (#338)
+
+BusinessService now reserves cumulative per-business execution upper bounds in an immediate SQLite transaction before MissionService creation. Smaller launch budgets and a percentage control permit repeated missions. Reserved allowances remain committed across restart, lost acknowledgement and terminal lane retry; observed durable scheduler usage is reported separately from spending receipts. Legacy history is explicitly uncertain and requires a newly authorized business record for new work. Ledger admission is bounded at 1,000 reservations. No new executor, external purchase, billing credential or spending authority was added.
+
+Evidence: 23 business/mission focused tests pass, including four worker/SQLite connection admission races, real mission-store restart, uncertain launch retention and ledger exhaustion. Removing the cumulative comparison made the race regression fail (four admitted versus one); restored code passes. Full local-control run was intentionally stopped under shared Windows host contention and is not claimed passing; isolated CI remains the full-suite gate. See BUSINESS-BUDGETS.md for limitations. Next: current-head CI, then actual receipt reconciliation and controlled allowance top-up/release design.
+
+
+## 2026-10-17 — owner workforce console (#336)
+
+The existing local workforce API is now reachable through /workforce and the daemon navigation. Owner-token access remains required for all data and actions; paired-device data access is denied. The page itself contains no private data or inline code under the existing CSP. Token stays in tab memory and is cleared on lock/navigation. Explicit plans use existing execution, evidence review, cancel and resume boundaries. Saved run summaries are tenant-scoped, persisted, newest-created first and bounded to 100 rows without model/tool payloads. Existing name-to-ID agent mapping remains compatible through a separate display projection.
+
+Two HTTP regressions failed before implementation. Affected workforce unit/HTTP suite passed 12/12; final expanded console suite passed all four cases including a real phone-width Edge browser: actual repository plan execution and interrupted-run resume, no DOM injection from an objective, no token storage, no layout overflow, malformed intake receipt recovery and explicit-refresh gating before retry. No timeout or authorization assertion was weakened. Full Linux/Windows CI remains the merge gate. No model-backed semantic review, external operation or hosted workforce execution is claimed.
+
+Parallel continuation: approved terminal PR #311 merged as 912a7eb after green CI. #340 patch-bound truthful receipts and #341 explicit-opt-in business conversation previews merged after all CI passed. #342 cumulative business allowance admission has passing race/restart tests and is undergoing integration of appended documentation. Next: finish current-head CI/ordinary merges, independently evaluated test/live receipts, principal-safe conversational mutations and leased/deduplicated recurring business execution using existing services.
 
 ## 2026-10-18 — account overview customer privacy (#343)
 
@@ -672,6 +686,7 @@ suite was interrupted during Genesis fixtures amid shared Windows host load;
 it did not produce a complete passing result. Next: CI on this branch, then a
 trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
+
 
 
 ## 2026-10-17 coder context recovery (issue #287)
@@ -723,4 +738,24 @@ Repository settings GET/PUT/DELETE still returned raw storage errors or migratio
 
 Repository settings validation: production build/typecheck and direct installed ESLint pass; fullweb507tests504pass3optional skips0fail. Npm-wrapper lint was slow; direct installed binary completed successfully. No deployed adversarial settings acceptance claimed. Fresh PR CI remains required.
 
+## 2026-10-18 — customer Connections status (#371)
+
+Repository privacy #358 merged as 02a1421 after all exact-head checks passed. Cloudflare39093070087 succeeded; live anonymous settings GET returned exactly401/fixed sign-in message. Configured authenticated inspect39093166143 passed. These are ordinary route/product checks, not adversarial live tenant writes or universal privacy acceptance.
+
+The setup endpoint previously returned database/migration, dispatch, runtime and inference diagnostics to every authenticated account. It now uses the existing isDeploymentOwner identity to return only account-connected status to customers before any infrastructure probe. Operator diagnostics remain available with an explicit audience marker; no authentication, tenant, credential or approval policy is modified. Connections renders customer account status separately, removes the operator billing-configuration card for customers and uses fixed model/status failure copy outside the owner view. The separately owned chat GET response contract remains outside this slice; this does not claim it universally hides configuration fields.
+
+Actual handler tests verify zero customer probes, exact safe projection for customer/trusted-header identities, preserved owner diagnostics, sign-out and safe auth failures. Customer/auth guards fail against unchanged main. Phone-component acceptance, build/types/lint and broad checks are still pending at this checkpoint. Native signing review blocker is unchanged; no rejected workflow edit was retried or applied.
+
+Actual phone-width Connections component acceptance passed with real Chromium: customer account status shown, owner-only billing/configuration and backend model text hidden, fixed failure notice on503, owner diagnostics retained, no page exceptions. The cold local Vite/browser fixture took about225seconds under host contention; this is test-host timing, not a product latency result. Build/type/lint checks remain pending.
+
+Connections validation follow-through: production build/typecheck and primary focused ESLint passed; real phone acceptance passed separately. Broad suite found the existing owner schema fixture stripped imports without injecting the new owner helper. Added the real isDeploymentOwner/customerFailure dependencies only; preserved every original migration/private-error assertion. Eight focused owner/customer/schema checks pass; repaired fullweb516tests512pass4optional browser skips0fail. Fixture-only ESLint and fresh exact-head CI remain required. The original draft CI failure is retained as failed evidence, not ignored.
+
+
+## 2026-10-18 — bounded Connections status recovery (#378)
+
+Connections privacy375 merged e604174 after allCI39094888177 passed, including one bounded rerun of unchanged Windows boot timeout (root cause unproven). Deployment39156827088 succeeded; live anonymous setupGET returned exactly401/fixed sign-in copy. Authenticated owner inspection39156966813 remains in progress after delayed runner start, not yet a passing receipt.
+
+Connections refresh could remain indefinitely busy on stalled headers/body, and malformed200 status could crash the actual component. Added a12second whole-read deadline (including JSON body), AbortController cancellation, generation fencing for superseded/unmounted reads, explicit manual retry and response-shape validation. No automatic retry or mutation behavior changed. Actual Chromium component acceptance covers stalled headers/body, request counts/manual recovery, malformed status, late abort-ignoring response and unmount/late401 without navigation, retaining customer/owner privacy checks. It passes with the fix and fails unchanged main at malformed status rendering. Build/types/lint/broad checks and remote CI belong to this workstream checkpoint; no deployed recovery or overall cloud-readiness claim. Protected native signing blocker remains unchanged, no rejected change retried.
+
+Connections recovery validation: actual phone acceptance passes all stalled-header/body, explicit retry/count, malformed-response, stale-response and unmount/late401 cases. Baseline actual main component fails at malformed status rendering; source restored before build. Production build/typecheck/direct ESLint pass. Full web580tests575pass5optional browser skips0fail. Fresh remote CI and deployment acceptance remain pending; no automatic retry or backend-completion guarantee introduced.
 2026-10-19 | (this PR) | inference / chat + coder | Fit requests to a provider's per-request allowance instead of failing. The quota ledger refused every chat request whose bytes/3 estimate plus max_tokens exceeded Groq's learned 8,000-token TPM ("refused a request larger than its per-minute token allowance"), before Groq was called; it now returns the allowance (`limitTokens`) and the chat refits once (smaller reply budget, shorter tool results, then oldest earlier turns; never the system prompt, latest message or work since it). Raw provider 413/429 "Limit N, Requested M" refusals refit the same way, calibrated to the provider's own count; 413 is routable. The coder's Groq provider learns the stated allowance, refits (reply budget, then re-readable tool output) and pre-fits later turns. | Live `verify-hosted` chat run 39105457659 before the fix: Groq too-large, Workers AI daily allocation (4006), OpenAI no credits. New tests: apps/web chat-allowance-fit (6), atlas-cli groq refit (3), ledger limitTokens. | OpenAI has no API credits and Workers AI's free daily allocation was spent: owner action. | Re-run `verify-hosted` chat after deploy.

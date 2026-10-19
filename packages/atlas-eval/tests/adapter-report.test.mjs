@@ -52,6 +52,6 @@ test("reports count verified passes per target and category", () => {
 
 test("the checked-in tasks all load and have unique ids matching their files", async () => {
   const tasks = await loadTasks(fileURLToPath(new URL("../../../evals/tasks/", import.meta.url)));
-  assert.ok(tasks.length >= 10);
-  assert.ok(new Set(tasks.map((task) => task.category)).size >= 4);
+  assert.ok(tasks.length >= 30);
+  assert.ok(new Set(tasks.map((task) => task.category)).size >= 8);
 });
