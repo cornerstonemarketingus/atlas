@@ -1,0 +1,30 @@
+{
+  "id": "runner-test-coverage",
+  "category": "final-synthesis",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "e00a49050841f932b970bc1f710d38054b1e870a",
+  "objective": "Without changing any source file: report which runner modules have tests. For every non-test .mjs file directly in scripts/runner (sorted by name), give its path, the path of its sibling <name>.test.mjs if that file exists (else null), and the number of lines in that test file that begin with `test(` at column 0 (0 when there is no test file). Write ANSWER.json as {\"modules\": [{\"module\": \"scripts/runner/<name>.mjs\", \"test\": \"scripts/runner/<name>.test.mjs\" | null, \"tests\": <number>}, ...], \"untested\": [\"<module path>\", ...]} where untested lists, in the same order, the modules without a test file.",
+  "setup": {
+    "files": {}
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/answer-check.mjs",
+      "{workspace}",
+      "runner-test-coverage"
+    ]
+  },
+  "solution": {
+    "files": {
+      "ANSWER.json": "{\n  \"modules\": [\n    {\n      \"module\": \"scripts/runner/actions-budget.mjs\",\n      \"test\": \"scripts/runner/actions-budget.test.mjs\",\n      \"tests\": 13\n    },\n    {\n      \"module\": \"scripts/runner/coder-routes.mjs\",\n      \"test\": \"scripts/runner/coder-routes.test.mjs\",\n      \"tests\": 5\n    },\n    {\n      \"module\": \"scripts/runner/correlation.mjs\",\n      \"test\": \"scripts/runner/correlation.test.mjs\",\n      \"tests\": 2\n    },\n    {\n      \"module\": \"scripts/runner/create-coder-pull-request.mjs\",\n      \"test\": null,\n      \"tests\": 0\n    },\n    {\n      \"module\": \"scripts/runner/merge-decision.mjs\",\n      \"test\": \"scripts/runner/merge-decision.test.mjs\",\n      \"tests\": 9\n    },\n    {\n      \"module\": \"scripts/runner/pull-request-policy.mjs\",\n      \"test\": \"scripts/runner/pull-request-policy.test.mjs\",\n      \"tests\": 2\n    },\n    {\n      \"module\": \"scripts/runner/push-repair.mjs\",\n      \"test\": null,\n      \"tests\": 0\n    },\n    {\n      \"module\": \"scripts/runner/report-result.mjs\",\n      \"test\": \"scripts/runner/report-result.test.mjs\",\n      \"tests\": 10\n    },\n    {\n      \"module\": \"scripts/runner/run-coder-process.mjs\",\n      \"test\": \"scripts/runner/run-coder-process.test.mjs\",\n      \"tests\": 8\n    },\n    {\n      \"module\": \"scripts/runner/run-summary.mjs\",\n      \"test\": \"scripts/runner/run-summary.test.mjs\",\n      \"tests\": 11\n    },\n    {\n      \"module\": \"scripts/runner/run-task.mjs\",\n      \"test\": null,\n      \"tests\": 0\n    },\n    {\n      \"module\": \"scripts/runner/select-migrations.mjs\",\n      \"test\": \"scripts/runner/select-migrations.test.mjs\",\n      \"tests\": 3\n    },\n    {\n      \"module\": \"scripts/runner/smoke-hosted.mjs\",\n      \"test\": null,\n      \"tests\": 0\n    },\n    {\n      \"module\": \"scripts/runner/steward-plan.mjs\",\n      \"test\": \"scripts/runner/steward-plan.test.mjs\",\n      \"tests\": 1\n    },\n    {\n      \"module\": \"scripts/runner/steward.mjs\",\n      \"test\": \"scripts/runner/steward.test.mjs\",\n      \"tests\": 9\n    },\n    {\n      \"module\": \"scripts/runner/validate-inputs.mjs\",\n      \"test\": null,\n      \"tests\": 0\n    }\n  ],\n  \"untested\": [\n    \"scripts/runner/create-coder-pull-request.mjs\",\n    \"scripts/runner/push-repair.mjs\",\n    \"scripts/runner/run-task.mjs\",\n    \"scripts/runner/smoke-hosted.mjs\",\n    \"scripts/runner/validate-inputs.mjs\"\n  ]\n}\n"
+    }
+  },
+  "timeoutMs": 180000,
+  "tags": [
+    "read-only",
+    "answer-file",
+    "synthesis",
+    "tests"
+  ]
+}

@@ -62,9 +62,43 @@ files. Add a check there, then a task that names it.
 
 ## The first tasks
 
-Ten tasks, all validated by dry run: six from Atlas's own commits
-(multi-file edit ×2, bug localisation ×2, feature ×2) and four repository
-questions (navigation ×2, structured output ×2).
+35 tasks, all validated by dry run (`35/35 fixtures valid`):
+
+| Category | Tasks | Source |
+|---|---|---|
+| bug-localization | 10 | Atlas commits (runner, local-control agent, infrastructure, inference stream) |
+| feature | 6 | Atlas commits (new modules from their tests) |
+| multi-file-edit | 6 | Atlas commits touching 2–4 source files |
+| test-repair | 3 | Atlas commits where behaviour changed and a test was updated |
+| tool-args | 3 | Answer files whose truth comes from running git, a script with cwd/env, a test suite |
+| final-synthesis | 3 | Answer files assembled from many files (packages, workflow secrets, runner test coverage) |
+| navigation | 2 | Answer files |
+| structured-output | 2 | Answer files |
+
+25 of 35 come from real history. Review and browser reasoning still have no
+tasks.
+
+### Test-repair tasks
+
+`setup` applies the commit's *new source* on top of its parent, so the stale
+test fails; `solution` is the commit's repaired test. Passing the agent's own
+test is not enough (deleting assertions would do that), so
+`evals/verifiers/test-repair-check.mjs` checks that: the sources are
+byte-identical to the commit (repair the test, not the code); the agent's test
+passes; every test the stale file shared with the commit's repaired file is
+still there; a hidden copy of the commit's repaired test passes; and, with
+`--mutate`, the agent's test *fails* once the old source is put back, so it
+really checks the new behaviour. Its own tests (in
+`packages/atlas-eval/tests/verifiers.test.mjs`) prove deleted, weakened and
+source-reverting "repairs" are rejected.
+
+### Answer-file tasks
+
+`evals/verifiers/answer-check.mjs` now also refuses an answer when the agent
+changed any file other than `ANSWER.json`. Tool-args checks recompute the
+truth by running the same tool the agent must run (`git log -- <path>`,
+`select-migrations.mjs` from `apps/web` with `FROM_MIGRATION`/
+`THROUGH_MIGRATION`, the `atlas-inference` test suite).
 
 ## Dogfood log
 
@@ -92,8 +126,9 @@ the base commit, objective, verify command and solution and then runs
 |---|---|
 | Package, runner, reports, dry-run validation | Done (this PR) |
 | First 10 tasks | Done; history-derived tasks cover 6 of 10 |
-| Categories still without tasks | test repair, tool arguments, review, final synthesis, browser reasoning |
-| Grow to 30–50 tasks | Pending |
+| Grow to 30–50 tasks | Done: 35 tasks, 25 from history, all pass `validate` (issue #128) |
+| Test repair, tool arguments, final synthesis | Done: 3 tasks each, with `test-repair-check.mjs` and new answer checks |
+| Categories still without tasks | review, browser reasoning |
 | CI workflow (`atlas-eval.yml`): dry-run validation on PRs touching the harness, `workflow_dispatch` for full runs | Done in the workflow PR (#349, protected, owner review) |
 | Dogfood log `evals/dogfood/` (2.2): validated append-only log, recurring-failure drafts | Done in the dogfood PR; the log starts empty (no fabricated history) |
 | Groq Batch for background runs | Pending |
