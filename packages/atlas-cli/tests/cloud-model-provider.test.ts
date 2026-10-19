@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getEventListeners } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -90,4 +91,68 @@ test("cloud function names and historical calls round-trip to exact Atlas regist
   }) as typeof fetch });
   const result = await provider.complete({ ...request, tools: [{ name: "repository.propose_change_set", description: "Apply edits", inputSchema: { type: "object" } }], messages: [...request.messages, { role: "assistant", content: [{ type: "tool-call", id: "earlier", name: "repository.propose_change_set", arguments: {} }] }, { role: "tool", toolCallId: "earlier", isError: false, content: [{ type: "text", text: "done" }] }] });
   const call = result.message.content[0]; assert.ok(call?.type === "tool-call"); assert.equal(call.name, "repository.propose_change_set");
+});
+
+test("hard cloud deadline releases stalled headers even if fetch ignores abort", async () => {
+  let lateCancelled = false;
+  const provider = new CloudModelProvider({ providerId: "openai", apiKey: "secret", models: capabilities("fixture"), timeoutMs: 30,
+    fetchImplementation: (async () => new Promise<Response>(resolve => setTimeout(() => resolve(new Response(new ReadableStream({ pull(controller) { controller.enqueue(new TextEncoder().encode(JSON.stringify(completion()))); controller.close(); }, cancel() { lateCancelled = true; } }, { highWaterMark: 0 }))), 200))) as typeof fetch });
+  await assert.rejects(provider.complete(request), (error: unknown) => error instanceof ModelProviderError && error.code === "provider-failure" && error.retryable);
+  await new Promise(resolve => setTimeout(resolve, 230));
+  assert.equal(lateCancelled, true);
+});
+
+test("hard cloud body deadline does not wait for a noncooperative cancellation", async () => {
+  let cancelled = false;
+  let release: (() => void) | undefined;
+  const provider = new CloudModelProvider({ providerId: "workers-ai", apiKey: "secret", accountId: "a".repeat(32), models: capabilities("fixture"), timeoutMs: 30,
+    fetchImplementation: (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { release = () => { try { controller.enqueue(new TextEncoder().encode(JSON.stringify(completion()))); controller.close(); } catch { /* cancelled */ } }; },
+      cancel() { cancelled = true; return new Promise<void>(() => {}); },
+    }))) as typeof fetch });
+  const fixture = setTimeout(() => release?.(), 250);
+  try {
+    await assert.rejects(provider.complete(request), (error: unknown) => error instanceof ModelProviderError && error.code === "provider-failure" && error.retryable);
+    assert.equal(cancelled, true);
+  } finally { clearTimeout(fixture); release?.(); }
+});
+
+test("pre-cancelled cloud requests make no network call", async () => {
+  let calls = 0;
+  const provider = new CloudModelProvider({ providerId: "openai", apiKey: "secret", models: capabilities("fixture"), fetchImplementation: (async () => { calls++; return Response.json(completion()); }) as typeof fetch });
+  await assert.rejects(provider.complete(request, { signal: AbortSignal.abort(new Error("private cancellation reason")) }), (error: unknown) => error instanceof ModelProviderError && error.code === "cancelled" && !error.retryable && !error.message.includes("private"));
+  assert.equal(calls, 0);
+});
+
+test("caller cancellation interrupts a stalled cloud body without fallback", async () => {
+  const controller = new AbortController(); let fallbackCalls = 0, cancelled = false;
+  const primary = new CloudModelProvider({ providerId: "openai", apiKey: "secret", models: capabilities("fixture"), timeoutMs: 1000,
+    fetchImplementation: (async () => new Response(new ReadableStream<Uint8Array>({
+      pull(stream) { setTimeout(() => { try { stream.close(); } catch { /* cancelled */ } }, 200); controller.abort(new Error("private caller reason")); return new Promise<void>(() => {}); },
+      cancel() { cancelled = true; return new Promise<void>(() => {}); },
+    }))) as typeof fetch });
+  const other = new CloudModelProvider({ providerId: "openai", apiKey: "other", models: capabilities("fixture"), fetchImplementation: (async () => { fallbackCalls++; return Response.json(completion()); }) as typeof fetch });
+  await assert.rejects(new FallbackModelProvider([{ provider: primary, model: "fixture" }, { provider: other, model: "fixture" }]).complete(request, { signal: controller.signal }), (error: unknown) => error instanceof ModelProviderError && error.code === "cancelled" && !error.retryable && !error.message.includes("private"));
+  assert.equal(cancelled, true); assert.equal(fallbackCalls, 0);
+});
+
+test("a cloud response deadline can recover through the existing fallback chain", async () => {
+  const first = new CloudModelProvider({ providerId: "openai", apiKey: "secret", models: capabilities("fixture"), timeoutMs: 20, fetchImplementation: (async () => new Promise<Response>(resolve => setTimeout(() => resolve(Response.json(completion())), 200))) as typeof fetch });
+  let calls = 0;
+  const other = new CloudModelProvider({ providerId: "workers-ai", accountId: "a".repeat(32), apiKey: "other", models: capabilities("fixture"), fetchImplementation: (async () => { calls++; return Response.json(completion()); }) as typeof fetch });
+  const result = await new FallbackModelProvider([{ provider: first, model: "fixture" }, { provider: other, model: "fixture" }]).complete(request);
+  assert.equal(result.providerId, "workers-ai"); assert.equal(calls, 1);
+});
+
+test("completed cloud requests release caller listeners and reject invalid deadlines before fetch", async () => {
+  const controller = new AbortController(); let calls = 0;
+  const fetcher = (async () => { calls++; return Response.json(completion()); }) as typeof fetch;
+  const provider = new CloudModelProvider({ providerId: "openai", apiKey: "secret", models: capabilities("fixture"), fetchImplementation: fetcher });
+  for (let index = 0; index < 12; index++) await provider.complete(request, { signal: controller.signal });
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+  for (const timeoutMs of [0, -1, NaN, Infinity, 2_147_483_648]) {
+    const invalid = new CloudModelProvider({ providerId: "openai", apiKey: "secret", models: capabilities("fixture"), timeoutMs, fetchImplementation: fetcher });
+    await assert.rejects(invalid.complete(request), RangeError);
+  }
+  assert.equal(calls, 12);
 });

@@ -30,28 +30,7 @@ export class CloudModelProvider implements ModelProvider {
       delete payload["max_tokens"];
       payload["max_completion_tokens"] = request.maxOutputTokens;
     }
-    const timeout = AbortSignal.timeout(this.options.timeoutMs ?? 60_000);
-    const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-    let response: Response;
-    try {
-      response = await this.fetcher(this.endpoint, { method: "POST", redirect: "error", signal,
-        headers: { authorization: "Bearer " + this.options.apiKey, "content-type": "application/json" }, body: JSON.stringify(payload) });
-    } catch (cause) {
-      throw new ModelProviderError({ message: options.signal?.aborted ? "Cloud model request cancelled" : "Cloud model transport failed", code: options.signal?.aborted ? "cancelled" : "provider-failure", providerId: this.metadata.id, retryable: !options.signal?.aborted, cause });
-    }
-    const bytes: Uint8Array[] = []; let size = 0;
-    const reader = response.body?.getReader();
-    try {
-      if (reader) for (;;) {
-        const next = await reader.read(); if (next.done) break;
-        size += next.value.byteLength;
-        if (size > 4 * 1024 * 1024) throw new Error("Cloud model response exceeds 4 MiB.");
-        bytes.push(next.value);
-      }
-    } catch (cause) {
-      await reader?.cancel().catch(() => undefined);
-      throw new ModelProviderError({ message: "Cloud model response could not be read within its bound", code: options.signal?.aborted ? "cancelled" : "provider-failure", providerId: this.metadata.id, retryable: false, cause });
-    } finally { reader?.releaseLock(); }
+    const { response, bytes } = await readCloudResponse(this.fetcher, this.endpoint, payload, this.options.apiKey, this.metadata.id, this.options.timeoutMs ?? 60_000, options.signal);
     if (!response.ok) {
       const auth = response.status === 401 || response.status === 403;
       const capacity = response.status === 413;
@@ -69,5 +48,52 @@ export class CloudModelProvider implements ModelProvider {
     } catch (cause) {
       throw new ModelProviderError({ message: "Cloud model returned an empty or invalid completion", code: "model-unavailable", providerId: this.metadata.id, retryable: false, cause });
     }
+  }
+}
+
+/** One deadline covers headers and the entire bounded body, independent of fetch cooperation. */
+async function readCloudResponse(fetcher: typeof fetch, endpoint: URL, payload: Record<string, unknown>, apiKey: string, providerId: string, timeoutMs: number, callerSignal?: AbortSignal): Promise<{ response: Response; bytes: Uint8Array[] }> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) throw new RangeError("Invalid cloud response timeout");
+  const interruption = () => new ModelProviderError({ message: callerSignal?.aborted ? "Cloud model request cancelled" : "Cloud model response deadline exceeded", code: callerSignal?.aborted ? "cancelled" : "provider-failure", providerId, retryable: !callerSignal?.aborted });
+  if (callerSignal?.aborted) throw interruption();
+  const controller = new AbortController();
+  let interrupt!: () => void;
+  const stopped = new Promise<never>((_, reject) => { interrupt = () => { controller.abort(); reject(interruption()); }; });
+  const timer = setTimeout(interrupt, timeoutMs);
+  callerSignal?.addEventListener("abort", interrupt, { once: true });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let bodyComplete = false;
+  try {
+    const pending = Promise.resolve().then(() => {
+      if (controller.signal.aborted) throw interruption();
+      return fetcher(endpoint, { method: "POST", redirect: "error", signal: controller.signal,
+        headers: { authorization: "Bearer " + apiKey, "content-type": "application/json" }, body: JSON.stringify(payload) });
+    });
+    // A late transport result must not retain a body after the caller has left.
+    void pending.then(response => {
+      if (controller.signal.aborted) { try { void response.body?.cancel().catch(() => undefined); } catch { /* discard late response */ } }
+    }, () => undefined);
+    const response = await Promise.race([pending, stopped]);
+    const bytes: Uint8Array[] = []; let size = 0;
+    reader = response.body?.getReader();
+    if (reader) for (;;) {
+      const next = await Promise.race([reader.read(), stopped]);
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > 4 * 1024 * 1024) throw new ModelProviderError({ message: "Cloud model response could not be read within its bound", code: "provider-failure", providerId, retryable: false });
+      bytes.push(next.value);
+    }
+    if (controller.signal.aborted) throw interruption();
+    bodyComplete = true;
+    return { response, bytes };
+  } catch (cause) {
+    if (cause instanceof ModelProviderError) throw cause;
+    throw new ModelProviderError({ message: "Cloud model transport or response failed", code: callerSignal?.aborted ? "cancelled" : "provider-failure", providerId, retryable: !callerSignal?.aborted, cause });
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", interrupt);
+    // Never await cancellation: an underlying source may ignore it indefinitely.
+    if (!bodyComplete) { controller.abort(); try { void reader?.cancel().catch(() => undefined); } catch { /* best effort */ } }
+    try { reader?.releaseLock(); } catch { /* interrupted read owns no future work */ }
   }
 }
