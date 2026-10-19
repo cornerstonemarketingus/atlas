@@ -87,9 +87,16 @@ reads. Improved callback diagnostics when outcome evidence is unavailable:
 retry result delivery, never rerun the task. Retained the parent task-mutation
 race and now require zero outcome receipts on refusal. Added a real-component
 GET-only pending-to-verified-failure UI test with explicit validation/retry limits.
-Thirteen verifier and request-history cases pass. Build/full web suite, typecheck,
+Sixteen verifier and request-history cases pass. Build/full web suite, typecheck,
 lint and refreshed CI are pending at this checkpoint; no live OIDC or phone
 acceptance is inferred. Migration 0020 follows 0019 and remains undeployed.
 No production data, billing, credentials or paid infrastructure were changed.
 Next: finish current-head verification/security review; then integrate existing
-#312 read-only claim reconciliation before designing any retry/takeover policy.
+#284 Genesis receipt recovery; never infer permission for retry/takeover.
+
+Concurrent integration: remote #289 advanced to 3ed8310 when #312 merged into
+it. Merged that work without force-pushing. Reconciliation retains server-selected
+claim identity and cannot start or bill tasks. Its UI now shares cancellation,
+single-flight and response fencing with detail reads. Three new regressions cover
+late success/failure after reopen and late completion after unmount. An earlier
+build overlapped the UI merge conflict and failed; the resolved tree is rebuilding.

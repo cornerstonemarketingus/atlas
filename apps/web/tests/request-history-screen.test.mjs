@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
-import { readTaskRequests, requestExplanation } from "../app/build/request-inspection-client.mjs";
+import { readTaskRequests, requestExplanation, reconcileTaskRequest } from "../app/build/request-inspection-client.mjs";
 
 const key = "11111111-1111-4111-8111-111111111111";
 const saved = (objective) => ({ requestKey: key, createdAt: "2026-10-17 00:00:00", state: "task-saved", receiptState: "reserved", outcomeStatus: null,
@@ -42,7 +42,7 @@ function history() {
     require(name) {
       if (name === "react") return react;
       if (name === "react/jsx-runtime") return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) };
-      if (name.endsWith("request-inspection-client.mjs")) return { requestExplanation, readTaskRequests: options => readTaskRequests({ ...options, fetcher }) };
+      if (name.endsWith("request-inspection-client.mjs")) return { requestExplanation, readTaskRequests: options => readTaskRequests({ ...options, fetcher }), reconcileTaskRequest: options => reconcileTaskRequest({ ...options, fetcher }) };
       if (name.endsWith(".css")) return {};
       throw new Error(`Unexpected component import: ${name}`);
     },
@@ -84,6 +84,34 @@ test("saved requests show verified job evidence without implying code validation
   assert.match(panel.text(), /This job result does not prove code validation or authorize a retry/);
   assert.ok(panel.requests.every(request => request.options.method === "GET" && request.options.body === undefined));
   panel.unmount();
+});
+
+for (const outcome of ["success", "failure"]) {
+  test(`abandoned reconciliation ${outcome} cannot overwrite reopened history`, async () => {
+    const panel = history(); panel.toggle(true);
+    panel.page(0, "Original", null, { runId: 123, runAttempt: 1, outcome: null }); await settle();
+    panel.click("Reconcile execution"); panel.poll(); panel.poll();
+    assert.equal(panel.requests.length, 2, "polling must not overlap pending evidence verification");
+    assert.equal(panel.requests[1].options.method, "POST");
+    assert.equal(panel.requests[1].options.body, "{}", "run identity remains server-selected");
+    panel.toggle(false); assert.equal(panel.requests[1].options.signal.aborted, true);
+    panel.toggle(true); panel.page(2, "Reopened"); await settle();
+    if (outcome === "success") panel.detail(1, "STALE_RECEIPT"); else panel.requests[1].reject(new Error("old evidence unavailable"));
+    await settle();
+    assert.match(panel.text(), /Reopened/);
+    assert.doesNotMatch(panel.text(), /STALE_RECEIPT|Execution evidence checked|Execution evidence is unavailable/);
+    assert.equal(panel.requests.filter(request => request.options.method === "POST").length, 1);
+    panel.unmount();
+  });
+}
+
+test("unmount fences a cancellation-ignoring reconciliation response", async () => {
+  const panel = history(); panel.toggle(true);
+  panel.page(0, "Original", null, { runId: 123, runAttempt: 1, outcome: null }); await settle();
+  panel.click("Reconcile execution"); panel.unmount();
+  assert.equal(panel.requests[1].options.signal.aborted, true);
+  panel.detail(1, "Late receipt"); await settle();
+  assert.equal(panel.writesAfterUnmount(), 0);
 });
 
 test("saved-request polling is single-flight and skips hidden tabs", async () => {
