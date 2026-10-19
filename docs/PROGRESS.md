@@ -788,3 +788,23 @@ Next:
 - Eval baseline, once a provider key secret exists.
 - Real GPU provider adapter, after decision D4.
 - Cloudflare Sandbox environment, after decision D2.
+
+## 2026-10-19 — coder reliability evidence refresh (handoff follow-through)
+
+Audited current main dd87fc8 and the two-mode handoff. Mode A already landed in #159 (3452343): declared input errors become redacted failed tool results; the agent tool message includes the tool name and schema-derived validFields. Policy/scope and unexpected validator/redactor faults remain fatal. Pinned CLI installation/build and 32 focused registry/agent tests pass. This is existing-implementation verification, not a newly implemented fix or full live acceptance.
+
+Fresh configured coder smoke39234208312 created saved task execution39234248406 through the real claim gate. The actual coder completed in four turns/three calls, but proposed no edits because docs/ATLAS-SMOKE-CHECK.md already contains the requested exact content. Thus this fixed smoke objective cannot prove a new coding change or PR; a green step is insufficient. Final hosted delivery/verification remains pending.
+
+Downloaded and replayed retained real trace39094222456 with atlas replay: ten turns, nine completed tool calls, then provider routes exhausted with HTTP429. Its objective was the vague Improve the Atlas source code, not the comparable medium objective requested by the handoff. tool.requested stores toolId and argumentCount, not argument values/digests. Repeated tool names alone cannot establish identical-call loops. No B repair, larger budget, exhaustion verdict change or loop-free claim is made from this evidence. Preserve original traces locally; do not add raw artifacts to Git.
+
+Connections379 is merged6cb8cb2 with all exact-headCI39157931782 passing and deployment39159499224 successful. Prior owner inspect39156966813 failed after20minutes waiting for delivered findings, with WorkersAI429; it is not passing acceptance. Native signing owner-review blocker remains unchanged and no rejected edit was retried.
+
+Next: obtain a fresh saved medium coder task with an unmet, bounded objective through the authorized hosted dispatch; replay its trace and establish argument-level evidence before a cause-driven B change. Replace the already-satisfied smoke objective for meaningful new-change acceptance, preserving configured workflow review. Add budget/security mutation coverage only for demonstrated missing guards; never duplicate #159 or increase limits to hide repetition.
+
+## 2026-10-19 — repeatable coder acceptance (#393)
+
+Fresh verify39234208312 definitively failed Coder finished without a reviewable pull request; underlying coder39234248406 truthfully completed without edits because its fixed smoke document already existed. The acceptance script now gives each invocation a UUID-named document, so prior acceptance cannot satisfy the next requested change. Existing saved-task dispatch, claim gate, manual PR policy, verified-evidence and delivery requirements remain intact. No workflow, credential, tool schema, budget or exhaustion verdict change.
+
+Real smoke-script subprocess regression fails unchanged main at identical objectives, passes with the fix, fails again with only uniqueness removed, then passes restored. Runner/local suite:89tests88pass1skip0fail. Previous existing Mode A verification:32 focused agent/registry tests pass. This repairs an acceptance prerequisite, not Mode B; no fresh live change/medium-task success is claimed before deployment/dispatch.
+
+Next: complete exact-head CI and ordinary review eligibility, merge acceptance repair, then dispatch one fresh trivial coder acceptance. Obtain an authorized saved medium task and argument-level trace evidence before implementing a B repair; do not infer loops from repeated tool names.
