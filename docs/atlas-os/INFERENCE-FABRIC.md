@@ -80,9 +80,14 @@ the hosted chat, the coder runner and the local daemon.
 
 - The quota ledger already learns per-minute allowances and fits requests to
   them (#382). It also records daily refusals (`scope: "daily"`).
-- A coder run whose every route is out of capacity ends with status
-  `waiting-for-capacity` and the soonest reset. Hosted Atlas keeps the task
-  open, says when it will resume, and re-dispatches it then (Worker cron).
+- A coder run whose every route is out of capacity waits, inside the run,
+  for the soonest stated reset and carries on with its work intact
+  (`FallbackModelProvider`, `--capacity-wait-ms`, repository variable
+  `ATLAS_CODER_CAPACITY_WAIT_MS`, default 5 minutes for the whole run; the
+  runner bounds the coder at 15). A reset beyond that, such as a daily quota,
+  ends the run at once with when the soonest reset is. Re-dispatching such a
+  task later from hosted Atlas is deferred: a task has exactly one claimed
+  cloud run (execution claims), so a resume needs a new claim generation.
 - The home PC's gateway is probed on `/v1/models`; when it answers, coder
   work prefers it, and waiting tasks resume immediately.
 
@@ -114,7 +119,8 @@ a malformed request stops, because every provider would refuse it.
 
 - **A — more sources, enforced trust, waiting instead of failing.** Catalog;
   Gemini, OpenRouter, Mistral, Cerebras in chat and coder; trust enforcement;
-  every refusal routes on (built); `waiting-for-capacity` and scheduled resume.
+  every refusal routes on; the coder waits out short resets in-run (built).
+  Hosted re-dispatch after long resets is deferred (see Capacity).
 Phases B–D are optional for this owner (no disk, no card) and wait until wanted.
 
 - **B — the home PC as primary.** One command connects the PC (gateway +

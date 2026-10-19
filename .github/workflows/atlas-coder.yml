@@ -283,6 +283,8 @@ jobs:
           ATLAS_CODER_FALLBACKS: ${{ vars.ATLAS_CODER_FALLBACKS }}
           ATLAS_CODER_RETRY_ATTEMPTS: ${{ vars.ATLAS_CODER_RETRY_ATTEMPTS }}
           ATLAS_CODER_RETRY_MAX_DELAY_MS: ${{ vars.ATLAS_CODER_RETRY_MAX_DELAY_MS }}
+          # How long a run may wait in total for capacity when every provider is out (default 5 min).
+          ATLAS_CODER_CAPACITY_WAIT_MS: ${{ vars.ATLAS_CODER_CAPACITY_WAIT_MS }}
           # Optional stronger model for repairs the configured one could not finish (docs/CODER-PROVIDER-LIMITS.md).
           ATLAS_CODER_ESCALATION: ${{ vars.ATLAS_CODER_ESCALATION }}
           ATLAS_CODER_ESCALATION_ATTEMPTS: ${{ vars.ATLAS_CODER_ESCALATION_ATTEMPTS }}

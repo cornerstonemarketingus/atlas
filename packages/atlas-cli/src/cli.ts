@@ -81,7 +81,7 @@ const USAGE = `Usage:
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|openai|workers-ai|cerebras|gemini|openrouter|mistral] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
-       [--retry-attempts N] [--retry-max-delay-ms N]
+       [--retry-attempts N] [--retry-max-delay-ms N] [--capacity-wait-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N] [--max-repair-ms N] [--max-same-failure N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
@@ -555,8 +555,9 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const verifyTimeoutOption = readOptionalInteger(args, "--verify-timeout-ms", 1_000, 1_800_000);
   const retryAttemptsOption = readOptionalInteger(args, "--retry-attempts", 1, 5);
   const retryMaxDelayOption = readOptionalInteger(args, "--retry-max-delay-ms", 0, 120_000);
+  const capacityWaitOption = readOptionalInteger(args, "--capacity-wait-ms", 0, 3_600_000);
   const outputTokensPerTurn = readOptionalInteger(args, "--output-tokens-per-turn", OUTPUT_TOKENS_PER_TURN_RANGE.minimum, OUTPUT_TOKENS_PER_TURN_RANGE.maximum);
-  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null || retryAttemptsOption === null || retryMaxDelayOption === null || outputTokensPerTurn === null) return 2;
+  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null || retryAttemptsOption === null || retryMaxDelayOption === null || capacityWaitOption === null || outputTokensPerTurn === null) return 2;
   const tokenBudget = tokenBudgetOption ?? 16_384;
   const selection = selectCoderProvider({
     provider: providerOption,
@@ -720,7 +721,11 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     }
     routes.push({ provider: makeRoute(fallbackModel, fallbackSelection.selection, fallbackKey), model: fallbackModel });
   }
-  const routedProvider = routes.length === 1 ? routes[0]!.provider : new FallbackModelProvider(routes);
+  // When every route is out of capacity, wait for the soonest stated reset
+  // rather than lose the run's work (docs/atlas-os/INFERENCE-FABRIC.md).
+  // Five minutes by default: the runner bounds the whole coder process at fifteen.
+  const capacityWaitMs = capacityWaitOption ?? 300_000;
+  const routedProvider = new FallbackModelProvider(routes, { capacityWaitMs });
   // Retries, fallbacks and escalation share one outer budget ledger, so
   // changing routes or models cannot reset the task's hard output-token ceiling.
   const budgetLedger = new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget });

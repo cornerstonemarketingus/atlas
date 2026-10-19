@@ -64,12 +64,13 @@ test("quota 413 falls through from Groq to Workers AI without replaying work; to
   for (const file of files) assert.ok((await readFile(join(root, "apps/web/services/wood-framing-mn", file), "utf8")).length);
 });
 
-test("authentication never falls back; provider errors cannot echo prompts or credentials", async () => {
+test("a rejected key moves to the next route; provider errors cannot echo prompts or credentials", async () => {
   let fallbackCalls = 0;
   const bad = new CloudModelProvider({ providerId: "openai", apiKey: "secret", models: capabilities("fixture"), fetchImplementation: (async () => Response.json({ error: "secret and private prompt" }, { status: 401 })) as typeof fetch });
   const other = new CloudModelProvider({ providerId: "openai", apiKey: "other", models: capabilities("fixture"), fetchImplementation: (async () => { fallbackCalls++; return Response.json(completion()); }) as typeof fetch });
-  await assert.rejects(new FallbackModelProvider([{ provider: bad, model: "fixture" }, { provider: other, model: "fixture" }]).complete(request), (error: unknown) => error instanceof ModelProviderError && error.code === "authentication" && !error.message.includes("private prompt") && !error.message.includes("secret"));
-  assert.equal(fallbackCalls, 0);
+  assert.equal((await new FallbackModelProvider([{ provider: bad, model: "fixture" }, { provider: other, model: "fixture" }]).complete(request)).providerId, "openai");
+  assert.equal(fallbackCalls, 1);
+  await assert.rejects(new FallbackModelProvider([{ provider: bad, model: "fixture" }]).complete(request), (error: unknown) => error instanceof ModelProviderError && error.code === "authentication" && !error.message.includes("private prompt") && !error.message.includes("secret"));
 });
 
 test("cloud request cancellation, oversized responses and empty replies fail explicitly", async () => {

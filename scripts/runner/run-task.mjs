@@ -259,6 +259,7 @@ if (metadata.mode === "inspect") {
     ["ATLAS_CODER_RETRY_ATTEMPTS", "--retry-attempts", 1, 5],
     ["ATLAS_CODER_ESCALATION_ATTEMPTS", "--escalation-attempts", 1, 5],
     ["ATLAS_CODER_RETRY_MAX_DELAY_MS", "--retry-max-delay-ms", 0, 120_000],
+    ["ATLAS_CODER_CAPACITY_WAIT_MS", "--capacity-wait-ms", 0, 3_600_000],
     ["ATLAS_TOKEN_BUDGET", "--token-budget", 1, 1_000_000],
     ["ATLAS_MAX_TURNS", "--max-turns", 1, 32],
     ["ATLAS_OUTPUT_TOKENS_PER_TURN", "--output-tokens-per-turn", 256, 32_768],
