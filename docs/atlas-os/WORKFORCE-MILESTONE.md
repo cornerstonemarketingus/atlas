@@ -27,6 +27,24 @@ All workforce routes require the local owner's bearer token. Paired devices
 cannot create or inspect workforce plans. Get `/v1/workforce` for stable agent
 IDs, registered tools, and the confined repository root.
 
+Open `/workforce` from the local console to inspect the persistent agents,
+review an explicit JSON plan, start it, and inspect saved runs. The tab keeps
+the owner token only in memory and clears it on lock/navigation. The supplied
+example reads `README.md`; it does not automatically run a model or start work.
+Use Refresh runs after an uncertain intake response before considering another
+submission. The console never automatically resumes interrupted work.
+
+`GET /v1/workforce/runs?limit=50` lists persisted summaries in creation order,
+newest first, scoped to the local tenant and bounded to 100 rows. Summaries omit
+tool input and model prompts. The existing detail endpoint remains available
+to the authenticated owner. The overview retains its stable name-to-ID `agents`
+map and adds an `agentDetails` array for display.
+
+Select an interrupted run to resume explicitly, or cancel unfinished work.
+Follow the task ID to the existing Task evidence console for artifacts and
+policy records. A completed run means the existing deterministic schema and
+tool-record checks passed; no semantic business outcome is inferred.
+
 Post this body to `/v1/workforce/runs`, substituting IDs from the overview:
 
 ```json
