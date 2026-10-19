@@ -30,8 +30,8 @@ export interface GovernedModelProviderOptions {
  *   unavailable so the fallback route takes it, rather than waiting forever.
  * - A rate-limit failure is reported with its retry-after, so every other
  *   caller in the same scope stops sending until it passes.
- * - Governor unavailable: proceed as before (the governor must never be the
- *   reason work fails).
+ * - Governor unavailable or malformed: refuse dispatch; bounded retry/fallback
+ *   may recover, but configured shared admission must never be bypassed.
  * - Cancellation withdraws the reservation and never calls the provider.
  *
  * Place it directly around the raw provider and inside RetryingModelProvider,
@@ -62,44 +62,67 @@ export class GovernedModelProvider implements ModelProvider {
     const requestId = this.#newRequestId();
     const estimatedTokens = estimateTokens(request);
     let waited = 0;
-    let governed = false;
     for (;;) {
-      const grant = await this.#governor.reserve({ requestId, models: [request.model], estimatedTokens, latencyClass: this.#latencyClass, priority: 0 }, options.signal);
-      if (options.signal?.aborted) { await this.#governor.withdraw(requestId); this.#throwIfCancelled(options.signal); }
-      if (!grant) break;
-      governed = true;
+      let grant;
+      try {
+        grant = await this.#governor.reserve({ requestId, models: [request.model], estimatedTokens, latencyClass: this.#latencyClass, priority: 0 }, options.signal);
+      } catch (error: unknown) {
+        await this.#withdraw(requestId);
+        this.#throwIfCancelled(options.signal);
+        if (error instanceof ModelProviderError && error.code === "authentication") throw error;
+        throw unavailable(providerId);
+      }
+      if (options.signal?.aborted) { await this.#withdraw(requestId); this.#throwIfCancelled(options.signal); }
+      if (!grant || typeof grant.granted !== "boolean" || (grant.model !== undefined && grant.model !== request.model)) {
+        await this.#withdraw(requestId);
+        throw unavailable(providerId);
+      }
       if (grant.granted) break;
       if (grant.permanent) {
-        await this.#governor.withdraw(requestId);
+        await this.#withdraw(requestId);
         throw new ModelProviderError({ message: `The shared capacity ledger refuses this request for ${request.model} (${grant.reason ?? "unavailable"}).`, code: "model-unavailable", providerId, retryable: false });
       }
       const waitMs = Number.isFinite(grant.waitMs) && (grant.waitMs ?? 0) > 0 ? Math.ceil(grant.waitMs as number) : 1_000;
       if (waited + waitMs > this.#maximumWaitMs) {
-        await this.#governor.withdraw(requestId);
+        await this.#withdraw(requestId);
         throw new ModelProviderError({ message: `Provider capacity for ${request.model} is reserved by other work; retry in about ${Math.ceil(waitMs / 1000)}s.`, code: "rate-limit", providerId, retryable: true, retryAfterMs: waitMs });
       }
       try {
         await this.#sleep(waitMs, options.signal);
       } catch {
-        await this.#governor.withdraw(requestId);
+        await this.#withdraw(requestId);
         throw cancelled(providerId);
       }
       waited += waitMs;
     }
 
+    let response: ModelResponse;
     try {
-      const response = await this.#provider.complete(request, options);
-      if (governed) await this.#governor.release({ requestId, model: request.model, status: 200, kind: null });
-      return response;
+      response = await this.#provider.complete(request, options);
     } catch (error: unknown) {
-      if (governed) await this.#governor.release(outcomeFor(requestId, request.model, error));
+      await this.#release(outcomeFor(requestId, request.model, error));
       throw error;
     }
+    await this.#release({ requestId, model: request.model, status: 200, kind: null });
+    return response;
+  }
+
+  async #withdraw(requestId: string): Promise<void> {
+    try { await this.#governor.withdraw(requestId); } catch { /* uncertain reservations expire; cleanup never authorizes dispatch */ }
+  }
+
+  async #release(outcome: Parameters<InferenceGovernor["release"]>[0]): Promise<void> {
+    try { await this.#governor.release(outcome); } catch { /* retain the original provider outcome; never replay completed work */ }
   }
 
   #throwIfCancelled(signal: AbortSignal | undefined): void {
     if (signal?.aborted) throw cancelled(this.metadata.id);
   }
+}
+
+function unavailable(providerId: string): ModelProviderError {
+  return new ModelProviderError({ message: "Shared inference capacity could not be confirmed. No model request was sent.",
+    code: "provider-failure", providerId, retryable: true, retryAfterMs: 1_000 });
 }
 
 function outcomeFor(requestId: string, model: string, error: unknown) {

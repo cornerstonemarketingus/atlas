@@ -20,9 +20,15 @@ allowance. This adds an authenticated path so they reserve on the same ledger.
   stops sending until it passes. Cancellation withdraws the reservation.
 - The scope is computed as the Worker computes it (origin + first 8 bytes of SHA-256 of the
   key), so the same key shares one ledger; the key itself is never sent.
-- Off by default: nothing changes unless `ATLAS_GOVERNOR_URL` **and** `ATLAS_GOVERNOR_TOKEN`
-  are both set. If the governor is unreachable the call proceeds (it must never be the reason
-  work fails) and one metadata-only warning is printed.
+- Off only when both `ATLAS_GOVERNOR_URL` and `ATLAS_GOVERNOR_TOKEN` are absent.
+  Partial configuration is rejected. Once configured, an unreachable governor or malformed
+  grant refuses provider dispatch with a safe transient error; existing bounded retry/fallback
+  handles recovery. Gateway 401/403 is a terminal authentication failure, never an ordinary
+  rate limit or outage retry. One metadata-only warning is printed per client.
+- A failed admission is withdrawn best-effort in case its acknowledgement was lost.
+  Failed settlement never replaces a completed model response or the original provider error;
+  it cannot cause a completed physical request to be retried. Unsettled reservations remain
+  subject to the ledger's existing expiry; durable settlement replay is not implemented here.
 
 ## To turn it on (owner)
 
@@ -41,3 +47,16 @@ allowance. This adds an authenticated path so they reserve on the same ledger.
   via `api.cloudflare.com` here may not match the scope chat uses for the Worker's binding.
 - Not deployed or run against production; verified in-process and over a real HTTP socket
   against the real ledger (`governed-shared-ledger.test.ts`).
+- Hosted chat's separate governor client still has its existing fail-open behavior. This
+  runner-side repair does not establish end-to-end fail-closed admission, shared account IDs
+  across multiple keys, worker-specific authorization or durable waiting/checkpoint recovery.
+
+## Runner admission hardening — 2026-10-18
+
+The previous runner implementation sent requests when reservation returned unavailable and
+treated gateway authentication failures as permission to proceed. Five regression groups failed
+against that implementation. With this repair, the TypeScript build and 36 focused governor,
+real-HTTP shared-ledger, retry and fallback checks pass. They cover unavailable/malformed grants,
+transport failures, gateway 401/403/429/503, bounded retries, partial configuration, cancellation,
+and preserving a completed response or original provider error when settlement fails.
+These are deterministic local checks; production acceptance and the limits above remain open.

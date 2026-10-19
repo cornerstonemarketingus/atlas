@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ModelProviderError } from "../model/model-provider.js";
 
 /** One governor decision for a reservation request (the wire shape of packages/atlas-inference's ledger). */
 export interface GovernorGrant {
@@ -26,7 +27,7 @@ export interface GovernorOutcome {
   readonly scope?: "daily";
 }
 
-/** Everything the governed provider needs from a governor; null from reserve means "unavailable, proceed ungoverned". */
+/** Null from reserve means unavailable; it never authorizes a provider call. */
 export interface InferenceGovernor {
   reserve(reservation: GovernorReservation, signal?: AbortSignal): Promise<GovernorGrant | null>;
   release(outcome: GovernorOutcome): Promise<void>;
@@ -56,9 +57,9 @@ export interface HttpGovernorOptions {
 }
 
 /**
- * Calls the Worker's governor gateway. It never throws into a model call: any
+ * Calls the Worker's governor gateway. Any
  * transport or server failure answers "unavailable" (null / no-op) and warns
- * once, because the governor protects capacity and must not itself stop work.
+ * once. Reservation authentication failures are terminal; callers must not bypass admission.
  * The URL must be https (loopback excepted) because it carries a bearer token.
  */
 export function createHttpGovernor(options: HttpGovernorOptions): InferenceGovernor {
@@ -73,7 +74,7 @@ export function createHttpGovernor(options: HttpGovernorOptions): InferenceGover
   const warn = (message: string): void => {
     if (warned) return;
     warned = true;
-    (options.warn ?? ((text: string) => { process.stderr.write(`${text}\n`); }))(message);
+    try { (options.warn ?? ((text: string) => { process.stderr.write(`${text}\n`); }))(message); } catch { /* logging cannot alter admission or error classification */ }
   };
 
   async function call(method: string, argument: unknown, signal?: AbortSignal): Promise<unknown> {
@@ -86,11 +87,18 @@ export function createHttpGovernor(options: HttpGovernorOptions): InferenceGover
         body: JSON.stringify({ method, scope: options.scope, argument }),
         signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       });
-      if (!response.ok) { warn(`Inference governor answered ${response.status}; continuing without shared capacity control.`); return null; }
+      if (!response.ok) {
+        warn(`Inference governor answered ${response.status}; shared capacity was not confirmed.`);
+        if (method === "reserve" && (response.status === 401 || response.status === 403)) {
+          throw new ModelProviderError({ message: "Shared inference governor authorization was rejected.", code: "authentication", providerId: "inference-governor", retryable: false });
+        }
+        return null;
+      }
       return await response.json();
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof ModelProviderError) throw error;
       if (signal?.aborted) return null;
-      warn("Inference governor is unreachable; continuing without shared capacity control.");
+      warn("Inference governor is unreachable; shared capacity was not confirmed.");
       return null;
     }
   }
@@ -125,8 +133,9 @@ export function governorFromEnvironment(
 ): InferenceGovernor | undefined {
   const url = environment["ATLAS_GOVERNOR_URL"]?.trim();
   const token = environment["ATLAS_GOVERNOR_TOKEN"]?.trim();
-  if (!url || !token) return undefined;
+  if (!url && !token) return undefined;
+  if (!url || !token) throw new Error("Shared inference governor URL and token must both be configured.");
   const origin = quotaOriginFor(route.providerId, route.endpoint);
-  if (origin === undefined) return undefined;
+  if (origin === undefined) throw new Error("The configured shared governor has no quota scope for this provider.");
   return createHttpGovernor({ url, token, scope: quotaScopeFor(origin, route.apiKey) });
 }

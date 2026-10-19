@@ -80,12 +80,66 @@ test("a request larger than the model's whole allowance is refused as unavailabl
   assert.equal(mock.requests.length, 0);
 });
 
-test("an unavailable governor never stops work: the request is sent and nothing is released", async () => {
+test("an unavailable governor blocks dispatch and withdraws uncertain admission", async () => {
   const mock = new Spy([ok]);
   const { governor, log } = fakeGovernor([null]);
-  await new GovernedModelProvider(mock, governor).complete(request);
-  assert.deepEqual(log, ["reserve"]);
+  await assert.rejects(new GovernedModelProvider(mock, governor).complete(request),
+    (e: unknown) => e instanceof ModelProviderError && e.code === "provider-failure" && e.retryable);
+  assert.deepEqual(log, ["reserve", "withdraw"]);
+  assert.equal(mock.requests.length, 0);
+});
+
+test("malformed grants and reservation exceptions never authorize provider dispatch", async () => {
+  for (const grant of [{}, { granted: "true" }, { granted: true, model: "another-model" }]) {
+    const mock = new Spy([ok]);
+    const { governor } = fakeGovernor([grant as unknown as GovernorGrant]);
+    await assert.rejects(new GovernedModelProvider(mock, governor, { maximumWaitMs: 0 }).complete(request), ModelProviderError);
+    assert.equal(mock.requests.length, 0);
+  }
+  const mock = new Spy([ok]);
+  const { governor } = fakeGovernor([]);
+  governor.reserve = async () => { throw new Error("PRIVATE governor failure"); };
+  governor.withdraw = async () => { throw new Error("PRIVATE cleanup failure"); };
+  await assert.rejects(new GovernedModelProvider(mock, governor).complete(request), (e: unknown) => {
+    assert.ok(e instanceof ModelProviderError);
+    assert.doesNotMatch(e.message, /PRIVATE/);
+    assert.equal(e.cause, undefined);
+    return true;
+  });
+  assert.equal(mock.requests.length, 0);
+});
+
+test("settlement failure preserves completed results and never retries completed provider work", async () => {
+  const mock = new Spy([ok]);
+  const { governor } = fakeGovernor([{ granted: true }]);
+  governor.release = async () => { throw new Error("PRIVATE settlement failure"); };
+  const retry = new RetryingModelProvider(new GovernedModelProvider(mock, governor), { maximumAttempts: 3, sleep: async () => {} });
+  assert.deepEqual(await retry.complete(request), ok);
   assert.equal(mock.requests.length, 1);
+  const failure = new ModelProviderError({ message: "original provider failure", code: "invalid-request", providerId: "groq", retryable: false });
+  await assert.rejects(new GovernedModelProvider(new Spy([failure]), governor).complete(request), (e: unknown) => e === failure);
+});
+
+test("HTTP refusals and malformed replies cannot bypass admission, and governor auth is never retried", async () => {
+  for (const status of [0, 401, 403, 429, 503, 200]) {
+    const mock = new Spy([ok]);
+    let reserves = 0;
+    const governor = createHttpGovernor({ url: "https://atlas.example/g", token: "secret", scope: "https://api.groq.com",
+      fetch: (async (_url, init) => {
+        if (JSON.parse(String(init?.body)).method === "reserve") reserves++;
+        if (status === 0) throw new Error("PRIVATE network failure");
+        return new Response(status === 200 ? "invalid json" : "PRIVATE provider body", { status });
+      }) as typeof fetch, warn: () => {} });
+    const provider = new RetryingModelProvider(new GovernedModelProvider(mock, governor), { maximumAttempts: 2, sleep: async () => {} });
+    await assert.rejects(provider.complete(request), (e: unknown) => {
+      assert.ok(e instanceof ModelProviderError);
+      assert.equal(e.code, status === 401 || status === 403 ? "authentication" : "provider-failure");
+      assert.doesNotMatch(e.message, /PRIVATE|secret/);
+      return true;
+    });
+    assert.equal(mock.requests.length, 0);
+    assert.equal(reserves, status === 401 || status === 403 ? 1 : 2);
+  }
 });
 
 test("a provider rate limit is reported with its retry-after so everyone sharing the quota stops, and a long one is marked daily", async () => {
@@ -176,7 +230,7 @@ test("the governor URL must be https except loopback, and configuration needs bo
   assert.doesNotThrow(() => createHttpGovernor({ url: "http://127.0.0.1:8787/g", token: "t", scope: "https://a.test" }));
   const route = { providerId: "groq", apiKey: "k" };
   assert.equal(governorFromEnvironment({}, route), undefined);
-  assert.equal(governorFromEnvironment({ ATLAS_GOVERNOR_URL: "https://a.test/g" }, route), undefined);
-  assert.equal(governorFromEnvironment({ ATLAS_GOVERNOR_TOKEN: "t" }, route), undefined);
+  assert.throws(() => governorFromEnvironment({ ATLAS_GOVERNOR_URL: "https://a.test/g" }, route), /both/u);
+  assert.throws(() => governorFromEnvironment({ ATLAS_GOVERNOR_TOKEN: "t" }, route), /both/u);
   assert.ok(governorFromEnvironment({ ATLAS_GOVERNOR_URL: "https://a.test/g", ATLAS_GOVERNOR_TOKEN: "t" }, route));
 });

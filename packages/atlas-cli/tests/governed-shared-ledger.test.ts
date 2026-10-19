@@ -82,14 +82,15 @@ test("a rate limit seen by one runner makes every caller on that quota wait, wit
   } finally { await gateway.close(); }
 });
 
-test("a wrong token is refused by the gateway, and the caller carries on ungoverned", { skip }, async () => {
+test("a wrong token is refused by the gateway with zero provider dispatches", { skip }, async () => {
   const gateway = await liveGateway();
   try {
     const warnings: string[] = [];
     const governor = createHttpGovernor({ url: gateway.url, token: "not-the-token", scope: quotaScopeFor("https://api.groq.com", "k"), warn: (message) => warnings.push(message) });
     const provider = new Scripted(ok);
-    await new GovernedModelProvider(provider, governor).complete(request);
-    assert.equal(provider.calls, 1);
+    await assert.rejects(new GovernedModelProvider(provider, governor).complete(request),
+      (e: unknown) => e instanceof ModelProviderError && e.code === "authentication" && !e.retryable);
+    assert.equal(provider.calls, 0);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0] ?? "", /401/u);
   } finally { await gateway.close(); }
