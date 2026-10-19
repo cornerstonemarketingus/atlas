@@ -113,7 +113,7 @@ test("built Worker verifies real signed claim identity, exact run metadata and d
   let liveRun = run;
   globalThis.fetch = async (url, options) => {
     if (String(url).includes("/.well-known/jwks")) return Response.json({ keys: [jwk] });
-    assert.equal(options.redirect, "error"); assert.equal(options.headers.authorization, "Bearer github-test");
+    assert.equal(options.redirect, "manual"); assert.equal(options.headers.authorization, "Bearer github-test");
     return Response.json(liveRun);
   };
   t.after(() => { globalThis.fetch = originalFetch; delete globalThis.__claimsEnv; if (previousToken === undefined) delete process.env.ATLAS_GITHUB_TOKEN; else process.env.ATLAS_GITHUB_TOKEN = previousToken; });

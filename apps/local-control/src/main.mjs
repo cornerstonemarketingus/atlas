@@ -73,6 +73,7 @@ import { createInspector } from "./platform/genesis/inspector.mjs";
 import { createVisionReviewer } from "./platform/genesis/vision.mjs";
 import { createGenesisCoder } from "./platform/genesis/coder.mjs";
 import { ArtifactStore, recordGenesisArtifact } from "./platform/artifacts/index.mjs";
+import { RenderRunner } from "./platform/render/index.mjs";
 import { runCheck } from "./platform/self-improve/runtime.mjs";
 import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
 import { createVercelAdapter } from "./agent/infrastructure/vercel.mjs";
@@ -250,6 +251,16 @@ automations.tick().catch((error) => console.error(`Automation catch-up failed: $
 
 // What Atlas made (websites, apps, videos, 3D models), content-addressed under the data directory.
 const artifacts = new ArtifactStore({ root: join(dataDirectory, "artifacts") });
+// Rendering (ffmpeg, headless Blender) runs only inside the container sandbox, never on the host.
+// It uses the terminal's container runtime and an image per tool; without both it reports itself unavailable.
+const renderRunner = new RenderRunner({
+  container: process.env.ATLAS_TERMINAL_CONTAINER_RUNTIME?.trim() ? { runtime: process.env.ATLAS_TERMINAL_CONTAINER_RUNTIME.trim() } : undefined,
+  images: {
+    ...(process.env.ATLAS_RENDER_FFMPEG_IMAGE?.trim() ? { ffmpeg: process.env.ATLAS_RENDER_FFMPEG_IMAGE.trim() } : {}),
+    ...(process.env.ATLAS_RENDER_BLENDER_IMAGE?.trim() ? { blender: process.env.ATLAS_RENDER_BLENDER_IMAGE.trim() } : {}),
+  },
+  artifactStore: artifacts,
+});
 // Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
 const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
 let genesisCreation = null;
@@ -279,7 +290,15 @@ const genesisExecutor = new GenesisExecutor({
   // Repair loops stop at a time/token limit or when a failure stops moving (loop-policy.mjs).
   loopPolicy: loopPolicyFromEnvironment(process.env, (line) => console.log(`Genesis: ${line}`)),
 });
-for (const project of genesis.recover()) console.log(`Genesis: ${project.name} was interrupted and is paused.`);
+// Interrupted projects are paused, then restored from the snapshot taken when their stage started
+// (verified against its digests) and resumed; each restore is a transition carrying a resume receipt.
+try {
+  for (const receipt of await genesisExecutor.recover()) {
+    console.log(receipt.restored ? `Genesis: ${receipt.projectId} restored from snapshot ${receipt.snapshot.seq} and resumed.` : `Genesis: ${receipt.projectId} was interrupted and is paused (${receipt.code ?? receipt.reason}).`);
+  }
+} catch (error) {
+  console.error(`Genesis recovery failed: ${error.message}`);
+}
 // Publishing a finished project is external: it goes through the publish.remote policy and the normal approvals.
 const genesisPublisher = new GenesisPublisher({
   genesis,
@@ -327,6 +346,7 @@ const server = createLocalControlServer({
   world,
   goals,
   artifacts,
+  render: renderRunner,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },

@@ -40,18 +40,21 @@ test("stopping polling aborts a request and suppresses late updates", async () =
   assert.deepEqual(updates, []);
 });
 
-test("an HTTP failure stays visible and terminal tasks fetch only once", async () => {
+test("a terminal task retries HTTP failures until its final activity is received", async () => {
   let calls = 0;
   const values = [];
+  let received;
+  const finalActivity = new Promise(resolve => { received = resolve; });
   const stop = pollActivity({ url: "/activity", repeat: false, intervalMs: 1,
-    fetcher: async () => { calls++; return { ok: false }; },
-    onActivity: () => assert.fail("an error must not replace the last activity"),
-    onUnavailable: value => values.push(value),
+    fetcher: async () => { calls++; return calls === 1 ? { ok: false } : { ok: true, json: async () => ({ status: "completed" }) }; },
+    onActivity: value => assert.equal(value.status, "completed"),
+    onUnavailable: value => { values.push(value); if (!value) received(); },
   });
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await finalActivity;
+  await new Promise(resolve => setTimeout(resolve, 10));
   stop();
-  assert.equal(calls, 1);
-  assert.deepEqual(values, [true]);
+  assert.equal(calls, 2);
+  assert.deepEqual(values, [true, false]);
 });
 
 test("completed activity overrides a stale running task status", () => {
