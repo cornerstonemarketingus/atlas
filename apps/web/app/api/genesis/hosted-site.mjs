@@ -146,8 +146,9 @@ export async function createHostedSite({ store, scope, requestId, userMessage, i
   const plan = planHostedSite({ userMessage, description: input.description, template: input.template });
   if (!plan.ok) return failure(plan.code, plan.message);
   const id = `gen_${/^[0-9a-f-]{36}$/u.test(String(requestId)) ? requestId : crypto.randomUUID()}`;
+  try { await reserve(id); }
+  catch { return unavailable("history_required", "Project creation requires saved conversation history. Reopen a saved chat and try again. No creation request was sent."); }
   try {
-    await reserve(id);
     const existing = await store.get(scope, id);
     if (existing) return resultFromRow(existing);
     const since = new Date(now().getTime() - 24 * 60 * 60 * 1000).toISOString();

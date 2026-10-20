@@ -69,3 +69,23 @@ CI remains a gate. Earlier all-green source heads do not replace this evidence.
 No production migration, credential transfer, data change or paid provisioning.
 Next: complete current-head CI and protected persistence review before rollout;
 configure a trusted Genesis node only with the required owner authorization.
+
+## 2026-10-19 — Genesis receipt verification follow-through
+
+Integrated build and typecheck pass. Full web acceptance: 624 total, 619 passed,
+five optional browser skips, zero failures. Separate Edge desktop/mobile chat
+acceptance passes: reopen/reload restores the receipt, offline status retry is
+read-only, no project creation POST occurs, and scroll position is preserved.
+Twenty-six focused chat/project cases pass. Full ESLint passes after removing
+an unused default callback argument. CI b02ca55 failed at that lint error; it did
+not reach the incomplete chat test host. The host now imports the real receipt
+helper. Final history-refusal diagnostics and no-write assertions pass 16 focused
+cases; final head CI remains required. No assertion or authorization was removed.
+
+#289's current-main integration exposed an unsupported Worker redirect mode in
+three verification calls; the separate outcome branch now uses manual redirects
+and rejects non-success responses. Its source scanner is corrected to inspect
+real files on Windows. Both fixes retain original ownership and approval gates.
+No live node, physical phone, production write, migration or deployment claimed.
+Next: finish exact-head CI/protected review for #284 and #289, then a configured,
+explicitly authorized Genesis-node acceptance run without publishing by default.

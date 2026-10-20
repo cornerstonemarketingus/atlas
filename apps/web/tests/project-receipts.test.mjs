@@ -33,7 +33,10 @@ test("hosted fallback saves its actual operation id before persistence and recov
   assert.equal(recovered.deploymentState, "not-deployed");
   const blocked = projectBackend({ bridge, hosted: { store, scope }, reserve: async () => { throw new Error("History offline"); } });
   const refusedId = "22222222-2222-4222-8222-222222222222";
-  assert.equal((await blocked.create({ requestId: refusedId, description })).status, "unavailable");
+  const refused = await blocked.create({ requestId: refusedId, description });
+  assert.equal(refused.status, "unavailable");
+  assert.equal(refused.reason, "history_required");
+  assert.match(refused.nextStep, /saved conversation history/);
   assert.equal(await store.get(scope, `gen_${refusedId}`), null);
 });
 
