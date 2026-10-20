@@ -405,29 +405,6 @@ hosted seeding implementation; this work reuses the requested local Genesis
 runtime and should be reconciled during review. Other open task-dispatch/UI
 work may require integration conflict resolution. No TODO file was created.
 
-## 2026-10-15 | PR #284 | Genesis receipt recovery (issue #281)
-
-Hosted project creation now reserves an operation-ID-only event in an owned,
-unarchived conversation before contacting Genesis. Direct callers without a
-thread receive newly saved owned history. Reopening chat restores the latest
-receipt and checks actual node status; lost creation responses do not require
-another creation request. Status polling is bounded and explicit retry reads
-only. Existing operations are not backfilled; node connectivity/credentials
-remain required for live confirmation.
-
-Evidence: production build, typecheck and lint passed; full web suite 485 passed,
-one optional browser gate skipped, zero failed. Separate desktop/mobile browser
-gate passed including recovery, offline retry, reload, no creation POSTs, and
-scroll preservation. Real SQLite/route tests cover scope isolation and history
-failures. Removing receipt reservation fails the mutation check. A concurrent
-build/test output race was resolved by rerunning the suite after the build; a
-cold browser-bundle timeout passed on warmed rerun with its original timeout.
-
-PR is for owner review under PROGRAM section 3 because tenant-scoped persistence
-at the publishing boundary is protected. No credential provisioning or live
-repository creation occurred. Other agents' root edits and task dispatch were
-preserved. Next: review/integrate #284, then configure the trusted Genesis node
-connection before a live new-project acceptance run.
 ## 2026-10-15 — chat responsiveness rescue (issue #283)
 
 A streamed Markdown fence such as ```typescript title="app.ts" could prevent
@@ -846,6 +823,73 @@ Independent of the still-open medium-task/tool-budget investigation, default Win
 Build passes. Actual runner + main()-driven repair-loop checks:13tests11pass2platform skips0fail; the previously failing no-progress and elapsed-time CLI verification cases now pass on Windows. Full CLI suite:588tests580pass4fail4skip; four previously observed Windows CRLF/path/mode failures remain, so this is not an all-green local suite. Removing only the source adapter with the new test retained fails again; restoring/rebuilding passes. No Mode B fix, larger budget, verdict-path change or medium live evidence claimed.
 
 Next: publish this isolated verification repair, inspect exact-head CI/reviews and merge only ordinary-eligible all-green/no-blocker changes. Continue to preserve PR395 configured workflow review for medium-task dispatch and native320 signing review; do not infer identical-call loops from old argument-free traces.
+
+## 2026-10-20 — complete Windows CLI fixture portability (#411)
+
+Windows verification408 merged afdee0498e18b0f471b9649f7757e784d5a89439 after all exact-headCI39355503000 passed; mainCI39357421554 also passed. The default npm launch defect is repaired without touching active inference cli.ts work.
+
+Reproduced the four remaining Windows suite failures before edits. Corrected fixtures only: convert file URLs with fileURLToPath, set autocrlf=false only in the deliberately LF git-apply fixture repository, and compare undo mode restoration to the filesystem's actual initial mode. POSIX executable-bit setup remains asserted on POSIX. The checkpoint0600 assertion remains unchanged in a separate POSIX-only test, explicitly skipped on Windows where those mode bits do not express ACL privacy. Content, conflict/all-or-nothing, traversal, symlink and saved-checkpoint assertions remain; no runtime permissions or security policies changed.
+
+Build passed; fullCLI589tests584pass5platform skips0fail on this Windows host. Focused26tests25pass1POSIX skip0fail. Restoring original fixture assumptions reproduces the failures; restoring corrections passes again. Runner/local checks and fresh exact-head CI are recorded with the PR. This is portable verification coverage, not a Mode B algorithm repair.
+
+A normal browser sign-in attempt through Atlas's existing GitHub flow failed at token exchange before a usable session was established. No auth bypass, credential extraction or unreviewed workflow dispatch was attempted; temporary browser tab closed. The live medium-task diagnosis still needs an authorized runtime or configured owner review on PR395. Existing trivial coder acceptance39241361227/39241380949 and reviewablePR396 remain valid.
+
+Next: complete exact-head CI/no-blocker checks for this ordinary fixture repair; obtain configured workflow owner review on PR395, dispatch a fresh bounded medium saved task and replay argument-level evidence before selecting a B repair. Do not raise budgets or claim the original exhausted run was a loop without its missing evidence.
+
+Portability validation follow-through: added actual Windows read-only restoration coverage, which passes and fails if chmod restoration is removed from the compiled runtime; restored implementation passes. POSIX0600 and executable-bit assertions remain on POSIX. Final fullCLI590tests585pass5platform skips0fail; runner/local91tests90pass1skip0fail. Next: require all fresh exact-head CI for the updated fixture PR; medium-task diagnosis still requires configured PR395 review or a working authorized normal sign-in, and is not complete.
+
+## 2026-10-20 — private argument-level coder diagnosis (#413)
+
+Portable Windows fixture PR412 merged07ba84f3c35a06eff79a74c77924de0d079bea80 after all exact-headCI39361062225 passed. Its first Windows daemon boot attempt timed out at the unchanged15-second fixture; one inspected failed-job retry passed. Cause remains unproven; no timeout or assertion weakened.
+
+The current coder audit lacked argument identity, so repeated tool names could not diagnose Mode B. Populate its existing optional argumentsDigest with canonicalized, per-run keyed HMAC-SHA256; replay exposes only validated fingerprints in text and JSON. The unpublished key changes on every run, including reused agent instances. Raw arguments and keys are not added to audit metadata. Calls still execute and count normally; no deduplication, retries, larger budget, policy recovery or exhaustion verdict change. Coordinated the narrow stale agent-file overlap on PR200; its provider/billing work remains untouched.
+
+New guards failed before implementation; fixed agent/replay and existing registry/audit focused suite passed63 tests. Removing digest emission, replacing the random run key with a fixed key, or removing replay display each fails its retained guard; restored implementation passes. Existing Mode A budget characterization also fails when its budget guard is removed: recovered invalid input consumes calls and never executes. Real main() replay wiring is covered. After integrating portable fixtures, build and full CLI593tests588pass5platform skips0fail; runner/local91tests90pass1skip0fail. Initial sandbox-local HTTP fixtures could not start; rerun with loopback permitted completed successfully. No medium-run evidence or B repair is claimed.
+
+Next: publish the argument-diagnostic PR and inspect exact-head CI. Review provider PR397 under the latest human request without bypassing configured workflow review, then deploy/verify chat only after eligible checks/review and available credentials. Obtain a fresh authorized saved medium coder task after the diagnostic code ships and PR395 receives configured review (or normal authenticated runtime works); replay toolId plus run-local digest before selecting a cause-driven B repair.
+## 2026-10-20 — recurring business review admission and installation startup
+
+Business review PR404 merged b513774 after all exact-head CI39250479455 checks passed, including Linux and Windows daemon suites. Owner-configured business-review automations use the existing cumulative allowance and MissionService, claim an exact responsibility/due cycle atomically, recheck that cycle under the SQLite write lock, retain uncertain reservations and never advance review dates merely on mission completion. Eight new boundary tests and 42 affected checks passed; no live business outcome is asserted. Setup and limitations: BUSINESS-REVIEWS.md.
+
+Issue402 exposed a real deployment blocker: both Windows payload paths omitted atlas-contracts; MSI staging also omitted the engineering adapter's merge-decision import. Installer-only stale ownership takeover was documented on PR230, leaving its runner/model changes untouched. The fix stages these existing dependencies and adds real installed-daemon startup regressions for source installation and MSI staging. Both regressions fail against original scripts with ERR_MODULE_NOT_FOUND; repaired startup plus release checks passed14/14 locally. Actual WiX compile/sign and coder toolchain packaging remain unqualified; see LOCAL-INSTALLATION-ACCEPTANCE.md. Fresh integrated-head CI is required before merge.
+
+Live chat gate39249794671 failed streaming with a fixed error and no stored reply; non-streaming answered/stored via Groq. Preceding39249667886 failed non-streaming with rate-limit/billing exhaustion while streaming passed. Deployment39249464778 itself succeeded. Evidence is retained on issue238; generic streaming copy does not establish root cause. No repeat-until-green, provider spending or gate weakening. Next: complete installer CI/ordinary merge; separately package and verify the local coder toolchain, and resolve existing transport/capacity work before claiming two-mode live chat acceptance.
+
+
+## 2026-10-19 — bounded cloud inference responses (#383)
+
+OpenAI/Workers AI CLI inference now enforces one deadline across headers and all bounded body reads, even if a transport ignores abort. Caller cancellation is terminal; timeout flows through existing retry/fallback. Cleanup never waits indefinitely for stream cancellation, late response bodies are discarded, and completed calls remove timers/listeners. Five new regressions fail against unchanged provider source and pass after repair. TypeScript passed; focused cloud/retry/fallback/budgets 42/42. Full Windows CLI: 572 total, 562 pass, six fail, four skip. All six failures reproduce in a selected unchanged-provider baseline (repair-loop fixture validation, CRLF, file URL and POSIX modes); no tests weakened. Exact-head required CI remains the merge gate. Focused handoff: docs/CLOUD-RESPONSE-DEADLINES.md. No schema, credentials, destination, workflow or infrastructure changed. Next: complete CI, then continue shared runner admission and persistent environment rollout with existing owners; do not duplicate #364/#377.
+
+
+Cloud response #403 integration: preserved concurrent progress entries and current-main shared runner admission (#364), persistent environments (#377), render and hosted dispatch repairs. No runtime source conflict; cloud tests merged automatically. Fresh compilation, governed-provider checks and required CI are needed at this integrated head.
+
+PR415 integration: retained both independent progress entries; current main includes #403 cloud deadlines and #404 business review. All prior exact-head CI39379249241 passed before this docs-only conflict resolution. Next: inspect fresh integrated-head CI; medium coder diagnosis and provider release remain subject to their documented review/evidence gates.
+
+PR415 integration with #416: retained all concurrent progress entries; no diagnostic source conflict. Next: require all fresh exact-head CI before ordinary merge, then obtain authorized medium-task evidence under the existing review gates.
+
+## 2026-10-15 | PR #284 | Genesis receipt recovery (issue #281)
+
+Hosted project creation now reserves an operation-ID-only event in an owned,
+unarchived conversation before contacting Genesis. Direct callers without a
+thread receive newly saved owned history. Reopening chat restores the latest
+receipt and checks actual node status; lost creation responses do not require
+another creation request. Status polling is bounded and explicit retry reads
+only. Existing operations are not backfilled; node connectivity/credentials
+remain required for live confirmation.
+
+Evidence: production build, typecheck and lint passed; full web suite 485 passed,
+one optional browser gate skipped, zero failed. Separate desktop/mobile browser
+gate passed including recovery, offline retry, reload, no creation POSTs, and
+scroll preservation. Real SQLite/route tests cover scope isolation and history
+failures. Removing receipt reservation fails the mutation check. A concurrent
+build/test output race was resolved by rerunning the suite after the build; a
+cold browser-bundle timeout passed on warmed rerun with its original timeout.
+
+PR is for owner review under PROGRAM section 3 because tenant-scoped persistence
+at the publishing boundary is protected. No credential provisioning or live
+repository creation occurred. Other agents' root edits and task dispatch were
+preserved. Next: review/integrate #284, then configure the trusted Genesis node
+connection before a live new-project acceptance run.
 
 ## 2026-10-19 — Genesis receipt integration checkpoint (#281 / #284)
 
