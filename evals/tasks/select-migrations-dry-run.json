@@ -1,0 +1,29 @@
+{
+  "id": "select-migrations-dry-run",
+  "category": "tool-args",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "e00a49050841f932b970bc1f710d38054b1e870a",
+  "objective": "Without changing any source file: run scripts/runner/select-migrations.mjs as a script the way the D1 migration workflow does, with apps/web as the working directory and the environment variables FROM_MIGRATION=0004 and THROUGH_MIGRATION=0009. Write ANSWER.json as {\"output\": \"<what it printed to stdout, with surrounding whitespace trimmed>\"}.",
+  "setup": {
+    "files": {}
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/answer-check.mjs",
+      "{workspace}",
+      "select-migrations-run"
+    ]
+  },
+  "solution": {
+    "files": {
+      "ANSWER.json": "{\n  \"output\": \"drizzle/0004_chilly_the_liberteens.sql drizzle/0005_parallel_peter_parker.sql drizzle/0006_atlas_conversations.sql drizzle/0007_military_black_knight.sql drizzle/0008_workable_moon_knight.sql drizzle/0009_account_deletion_audit.sql\"\n}\n"
+    }
+  },
+  "timeoutMs": 180000,
+  "tags": [
+    "read-only",
+    "answer-file",
+    "shell"
+  ]
+}

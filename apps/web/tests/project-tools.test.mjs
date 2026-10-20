@@ -33,7 +33,7 @@ test("structured registry defaults private, emits receipt and never exposes cred
 test("bridge is owner-only, HTTPS-only, server configured and reports real unavailability", async () => {
   let calls = 0;
   const environment = { ATLAS_GENESIS_URL: "https://genesis.test", ATLAS_GENESIS_TOKEN: "server-secret" };
-  const fetchImpl = async (url, init) => { calls++; assert.equal(init.headers.authorization, "Bearer server-secret"); assert.equal(init.redirect, "error"); return Response.json({ github: { connected: true, canCreateRepositories: true }, publish: { policy: "ask" } }); };
+  const fetchImpl = async (url, init) => { calls++; assert.equal(init.headers.authorization, "Bearer server-secret"); assert.equal(init.redirect, "manual"); return Response.json({ github: { connected: true, canCreateRepositories: true }, publish: { policy: "ask" } }); };
   assert.equal((await genesisBridge(environment, { fetchImpl }).capabilities()).github.reason, "owner_required");
   assert.equal(calls, 0);
   assert.equal((await genesisBridge({ ...environment, ATLAS_GENESIS_URL: "http://localhost" }, { owner: true, fetchImpl }).capabilities()).github.reason, "invalid_execution_node");

@@ -649,6 +649,20 @@ Next: #282 result callback ownership against this parent, then outcome recovery.
 
 Existing trusted cloud coder subprocess cleanup now retains SIGKILL after the group leader exits, closes inherited pipes at a bounded cleanup deadline, and isolates progress observer exceptions/rejected promises. Two new real-process regressions failed before the repair and pass after it. Complete Windows runner/local suite: 80 passed, one Linux-only skip; final process suite seven passed, one Linux-only skip. CI must verify the resistant-descendant process-group case before merge. Focused handoff: docs/CLOUD-PROCESS-RECOVERY.md. No production database, provider, credentials or workflow changed. Migration 0017 and its deployment remain paused for exact production approval. Next: complete #333 CI, then continue the existing task/claim/outcome/mission rollout in dependency order; persistent isolated workspace checkpoints remain unfinished.
 
+## 2026-10-17 — cumulative local business execution allowances (#338)
+
+BusinessService now reserves cumulative per-business execution upper bounds in an immediate SQLite transaction before MissionService creation. Smaller launch budgets and a percentage control permit repeated missions. Reserved allowances remain committed across restart, lost acknowledgement and terminal lane retry; observed durable scheduler usage is reported separately from spending receipts. Legacy history is explicitly uncertain and requires a newly authorized business record for new work. Ledger admission is bounded at 1,000 reservations. No new executor, external purchase, billing credential or spending authority was added.
+
+Evidence: 23 business/mission focused tests pass, including four worker/SQLite connection admission races, real mission-store restart, uncertain launch retention and ledger exhaustion. Removing the cumulative comparison made the race regression fail (four admitted versus one); restored code passes. Full local-control run was intentionally stopped under shared Windows host contention and is not claimed passing; isolated CI remains the full-suite gate. See BUSINESS-BUDGETS.md for limitations. Next: current-head CI, then actual receipt reconciliation and controlled allowance top-up/release design.
+
+
+## 2026-10-17 — owner workforce console (#336)
+
+The existing local workforce API is now reachable through /workforce and the daemon navigation. Owner-token access remains required for all data and actions; paired-device data access is denied. The page itself contains no private data or inline code under the existing CSP. Token stays in tab memory and is cleared on lock/navigation. Explicit plans use existing execution, evidence review, cancel and resume boundaries. Saved run summaries are tenant-scoped, persisted, newest-created first and bounded to 100 rows without model/tool payloads. Existing name-to-ID agent mapping remains compatible through a separate display projection.
+
+Two HTTP regressions failed before implementation. Affected workforce unit/HTTP suite passed 12/12; final expanded console suite passed all four cases including a real phone-width Edge browser: actual repository plan execution and interrupted-run resume, no DOM injection from an objective, no token storage, no layout overflow, malformed intake receipt recovery and explicit-refresh gating before retry. No timeout or authorization assertion was weakened. Full Linux/Windows CI remains the merge gate. No model-backed semantic review, external operation or hosted workforce execution is claimed.
+
+Parallel continuation: approved terminal PR #311 merged as 912a7eb after green CI. #340 patch-bound truthful receipts and #341 explicit-opt-in business conversation previews merged after all CI passed. #342 cumulative business allowance admission has passing race/restart tests and is undergoing integration of appended documentation. Next: finish current-head CI/ordinary merges, independently evaluated test/live receipts, principal-safe conversational mutations and leased/deduplicated recurring business execution using existing services.
 
 ## 2026-10-18 — account overview customer privacy (#343)
 
@@ -672,6 +686,7 @@ suite was interrupted during Genesis fixtures amid shared Windows host load;
 it did not produce a complete passing result. Next: CI on this branch, then a
 trusted post-change test receipt adapter bound to reviewed patch digests and
 separate live-health/business outcome adapters. No live business action claimed.
+
 
 
 ## 2026-10-17 coder context recovery (issue #287)
@@ -722,6 +737,10 @@ Account344 merged c746663 after ALL CI39087720052 passed, deployment39087988081 
 Repository settings GET/PUT/DELETE still returned raw storage errors or migration0015 instructions, and auth exceptions escaped their context boundary. Reused existing fixed customerFailure contract (503/reference/no-store); unchanged auth/tenant resolution, owner/admin management, deployment allowlist, default-tenant zero-gate policy, validation and scoped writes. Three actual TypeScript-handler privacy regressions fail prior main; all10focused actual account/settings/validation cases pass after repair, covering auth/tenant/list/default/write faults with private/path/token/table sentinels and successful denial/scoping/mutation behavior. No new tenant policy or credential permissions. Broad checks/CI/deployment pending at this checkpoint. Native329/320 remain held for the already reported protected-signing automatic-review rejection; no bypass or signing edit.
 
 Repository settings validation: production build/typecheck and direct installed ESLint pass; fullweb507tests504pass3optional skips0fail. Npm-wrapper lint was slow; direct installed binary completed successfully. No deployed adversarial settings acceptance claimed. Fresh PR CI remains required.
+## 2026-10-18 — shared governor for runner model calls (branch claude/shared-governor-runner)
+
+Closes the documented gap that coder inference did not share capacity with hosted chat. Worker gateway `/api/inference/governor` (own `ATLAS_GOVERNOR_TOKEN`, not the operator token) and CLI `GovernedModelProvider` wired around each coder route inside the retry layer; off unless `ATLAS_GOVERNOR_URL` and `ATLAS_GOVERNOR_TOKEN` are set. Evidence: gateway 4 tests over the real ledger core; CLI 555/555 (15 new, including a real HTTP socket proving a 429 on one runner makes a second runner on the same key wait without sending a provider request); web 506 pass/3 skipped; runner 81/81; workflows valid. Protected paths changed (deploy/coder/steward workflows, a new auth-gated route): owner review required. Not deployed. Next: owner adds the secret/variable and deploys, then verify with a real coder run; pass rate-limit headers through the provider contract.
+Runner hardening follow-up: configured admission no longer fails open on missing/malformed grants, transport errors or gateway authentication rejection. Partial URL/token configuration is rejected; completed provider outcomes survive settlement failure. Five regression groups fail the previous implementation; TypeScript build and 36 focused governor/socket/retry/fallback tests pass. Hosted chat fail-open behavior, multi-key account scope, durable waiting and production configuration remain open. No deployment or real-provider spend was initiated.
 
 ## 2026-10-18 — customer Connections status (#371)
 
@@ -734,3 +753,62 @@ Actual handler tests verify zero customer probes, exact safe projection for cust
 Actual phone-width Connections component acceptance passed with real Chromium: customer account status shown, owner-only billing/configuration and backend model text hidden, fixed failure notice on503, owner diagnostics retained, no page exceptions. The cold local Vite/browser fixture took about225seconds under host contention; this is test-host timing, not a product latency result. Build/type/lint checks remain pending.
 
 Connections validation follow-through: production build/typecheck and primary focused ESLint passed; real phone acceptance passed separately. Broad suite found the existing owner schema fixture stripped imports without injecting the new owner helper. Added the real isDeploymentOwner/customerFailure dependencies only; preserved every original migration/private-error assertion. Eight focused owner/customer/schema checks pass; repaired fullweb516tests512pass4optional browser skips0fail. Fixture-only ESLint and fresh exact-head CI remain required. The original draft CI failure is retained as failed evidence, not ignored.
+
+
+## 2026-10-18 — bounded Connections status recovery (#378)
+
+Connections privacy375 merged e604174 after allCI39094888177 passed, including one bounded rerun of unchanged Windows boot timeout (root cause unproven). Deployment39156827088 succeeded; live anonymous setupGET returned exactly401/fixed sign-in copy. Authenticated owner inspection39156966813 remains in progress after delayed runner start, not yet a passing receipt.
+
+Connections refresh could remain indefinitely busy on stalled headers/body, and malformed200 status could crash the actual component. Added a12second whole-read deadline (including JSON body), AbortController cancellation, generation fencing for superseded/unmounted reads, explicit manual retry and response-shape validation. No automatic retry or mutation behavior changed. Actual Chromium component acceptance covers stalled headers/body, request counts/manual recovery, malformed status, late abort-ignoring response and unmount/late401 without navigation, retaining customer/owner privacy checks. It passes with the fix and fails unchanged main at malformed status rendering. Build/types/lint/broad checks and remote CI belong to this workstream checkpoint; no deployed recovery or overall cloud-readiness claim. Protected native signing blocker remains unchanged, no rejected change retried.
+
+Connections recovery validation: actual phone acceptance passes all stalled-header/body, explicit retry/count, malformed-response, stale-response and unmount/late401 cases. Baseline actual main component fails at malformed status rendering; source restored before build. Production build/typecheck/direct ESLint pass. Full web580tests575pass5optional browser skips0fail. Fresh remote CI and deployment acceptance remain pending; no automatic retry or backend-completion guarantee introduced.
+2026-10-19 | (this PR) | inference / chat + coder | Fit requests to a provider's per-request allowance instead of failing. The quota ledger refused every chat request whose bytes/3 estimate plus max_tokens exceeded Groq's learned 8,000-token TPM ("refused a request larger than its per-minute token allowance"), before Groq was called; it now returns the allowance (`limitTokens`) and the chat refits once (smaller reply budget, shorter tool results, then oldest earlier turns; never the system prompt, latest message or work since it). Raw provider 413/429 "Limit N, Requested M" refusals refit the same way, calibrated to the provider's own count; 413 is routable. The coder's Groq provider learns the stated allowance, refits (reply budget, then re-readable tool output) and pre-fits later turns. | Live `verify-hosted` chat run 39105457659 before the fix: Groq too-large, Workers AI daily allocation (4006), OpenAI no credits. New tests: apps/web chat-allowance-fit (6), atlas-cli groq refit (3), ledger limitTokens. | OpenAI has no API credits and Workers AI's free daily allocation was spent: owner action. | Re-run `verify-hosted` chat after deploy.
+
+2026-10-19 | (this PR) | hosted tasks | Coding agents never started from hosted chat: the durable-dispatch, execution-claim, cancellation and Genesis-bridge calls passed `redirect: "error"` to fetch, which Cloudflare Workers does not implement (TypeError before sending), so every dispatch ended "Cloud dispatch unconfirmed" ~50 ms after it began. Now `redirect: "manual"` (redirects still never followed; a 3xx is not ok). Chat no longer says "Started a coder run" for a dispatch that was not confirmed. | Live task 85a45a79 (2026-10-19 00:41) dispatch events; Cloudflare Request docs; guard test `worker-fetch-redirect`; full web suite 587 pass / 0 fail. | — | After deploy, re-run `verify-hosted` in coder mode.
+## 2026-10-19 — one-week parallel sprint, first pass (ENGINEERING-PLAN-2026 §5)
+
+Six agent lanes ran in parallel, each in its own worktree, branch and PR, coordinated by the lead session.
+
+| Lane | Issue | PR | Result |
+|---|---|---|---|
+| A. Eval suite | #128 | #381 | Merged. 35 tasks validate (fail untouched, pass with recorded solution) in 8 categories, including test repair, tool args and final synthesis. CI `eval fixtures` passes. |
+| B. Coder loop limits | #355 | #368 | Merged. The atlas-cli repair loop stops on iteration, time (`--max-repair-ms`), token spend or no-progress (`--max-same-failure`) before each repair, escalates once on no progress, and reports `stopReason` in the receipt. |
+| C. Persistent environments | #351 | #377 | Merged. Genesis snapshots each stage (git commit plus tree and manifest digests), restores into a fresh folder with fail-closed verification, resumes after a restart, and never repeats a completed external side effect. Windows fixes: snapshots disable autocrlf and renormalise so stored bytes equal the disk; a regression test forces autocrlf on Linux. |
+| D. Artifacts | #354 | #370 | Merged. A typed, content-addressed, tenant-scoped artifact store; authenticated routes with Range support; video and glTF viewers; Genesis registers website artifacts. |
+| E. Render execution | #352 | #376, #389 | Merged. ffmpeg and headless Blender run only in the container sandbox (no host fallback, network off, workspace never mounted); a real ffmpeg container render ran. #389 wires it into the daemon: `GET /v1/render`, and an owner-only `POST /v1/render/jobs` against a Genesis project, with video outputs stored as artifacts. |
+| F. GPU compute manager | #353 | #369 | Merged. Provider interface and fake provider with four stops (budget reservation, provider-side max lifetime, idle timeout, orphan reconciler); the crash test leaves zero orphans. No real provider, no spend. |
+
+Sprint gate: met.
+- All six lanes are merged.
+- The eval suite has 35 tasks, above the 30 target.
+- The GPU chaos test passes.
+- The cross-lane journey passes in `tests/sprint-journey.test.mjs` (#389) through the real HTTP handler: sentence → verified project → sandboxed render → video artifact (Range) → paired device refused → restore from snapshot → render again. CI uses a container stand-in; the real-container render is in #376.
+
+Also merged this cycle: the eval CI workflow (#349), the engineering plan (#365) and bounded Genesis repair loops (#356).
+
+Next:
+- A render action in the Genesis UI.
+- A project-owned ffmpeg/Blender image pinned by digest.
+- Eval baseline, once a provider key secret exists.
+- Real GPU provider adapter, after decision D4.
+- Cloudflare Sandbox environment, after decision D2.
+
+## 2026-10-19 — coder reliability evidence refresh (handoff follow-through)
+
+Audited current main dd87fc8 and the two-mode handoff. Mode A already landed in #159 (3452343): declared input errors become redacted failed tool results; the agent tool message includes the tool name and schema-derived validFields. Policy/scope and unexpected validator/redactor faults remain fatal. Pinned CLI installation/build and 32 focused registry/agent tests pass. This is existing-implementation verification, not a newly implemented fix or full live acceptance.
+
+Fresh configured coder smoke39234208312 created saved task execution39234248406 through the real claim gate. The actual coder completed in four turns/three calls, but proposed no edits because docs/ATLAS-SMOKE-CHECK.md already contains the requested exact content. Thus this fixed smoke objective cannot prove a new coding change or PR; a green step is insufficient. Final hosted delivery/verification remains pending.
+
+Downloaded and replayed retained real trace39094222456 with atlas replay: ten turns, nine completed tool calls, then provider routes exhausted with HTTP429. Its objective was the vague Improve the Atlas source code, not the comparable medium objective requested by the handoff. tool.requested stores toolId and argumentCount, not argument values/digests. Repeated tool names alone cannot establish identical-call loops. No B repair, larger budget, exhaustion verdict change or loop-free claim is made from this evidence. Preserve original traces locally; do not add raw artifacts to Git.
+
+Connections379 is merged6cb8cb2 with all exact-headCI39157931782 passing and deployment39159499224 successful. Prior owner inspect39156966813 failed after20minutes waiting for delivered findings, with WorkersAI429; it is not passing acceptance. Native signing owner-review blocker remains unchanged and no rejected edit was retried.
+
+Next: obtain a fresh saved medium coder task with an unmet, bounded objective through the authorized hosted dispatch; replay its trace and establish argument-level evidence before a cause-driven B change. Replace the already-satisfied smoke objective for meaningful new-change acceptance, preserving configured workflow review. Add budget/security mutation coverage only for demonstrated missing guards; never duplicate #159 or increase limits to hide repetition.
+
+## 2026-10-19 — repeatable coder acceptance (#393)
+
+Fresh verify39234208312 definitively failed Coder finished without a reviewable pull request; underlying coder39234248406 truthfully completed without edits because its fixed smoke document already existed. The acceptance script now gives each invocation a UUID-named document, so prior acceptance cannot satisfy the next requested change. Existing saved-task dispatch, claim gate, manual PR policy, verified-evidence and delivery requirements remain intact. No workflow, credential, tool schema, budget or exhaustion verdict change.
+
+Real smoke-script subprocess regression fails unchanged main at identical objectives, passes with the fix, fails again with only uniqueness removed, then passes restored. Runner/local suite:89tests88pass1skip0fail. Previous existing Mode A verification:32 focused agent/registry tests pass. This repairs an acceptance prerequisite, not Mode B; no fresh live change/medium-task success is claimed before deployment/dispatch.
+
+Next: complete exact-head CI and ordinary review eligibility, merge acceptance repair, then dispatch one fresh trivial coder acceptance. Obtain an authorized saved medium task and argument-level trace evidence before implementing a B repair; do not infer loops from repeated tool names.

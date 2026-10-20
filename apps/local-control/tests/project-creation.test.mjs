@@ -52,26 +52,46 @@ async function harness(run, { policy = "allow", host = github(), pushOk = true }
   finally { while (creation.running.size) await new Promise((resolve) => setTimeout(resolve, 20)); store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
 }
 
-async function wait(creation) {
-  const deadline = Date.now() + 30000;
+// Windows CI executes independent suites concurrently; this bounds the whole
+// asynchronous scaffold/check/Git phase, not an individual model request.
+async function wait(creation, { timeoutMs = 90000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
   while (creation.running.size && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(creation.running.size, 0, "operation finishes within a bounded time");
+  assert.equal(creation.running.size, 0, `Genesis completion timed out: ${JSON.stringify(creation.status(input.requestId))}`);
   return creation.status(input.requestId);
 }
 
-test("hosted model tool creates an isolated verified Genesis project, creates GitHub repo, verifies and pushes, returns URL", () => harness(async ({ creation, genesis, host, pushes }) => {
+test("hosted model tools start a project then read its verified publication in a later turn", () => harness(async ({ creation, genesis, host, pushes }) => {
   const tools = createProjectTools({ create: creation.create.bind(creation), status: creation.status.bind(creation), requestId: input.requestId, userMessage: "Create a new repo for a simple autonomous online service business." });
   let round = 0; const modelRequests = []; const events = [];
-  const outcome = await converse({ endpoint: { baseUrl: "https://model.test/v1", model: "fixture" }, turns: [{ role: "user", content: "Create a new repo for a simple autonomous online service business." }],
+  const conversation = { endpoint: { baseUrl: "https://model.test/v1", model: "fixture" }, turns: [{ role: "user", content: "Create a new repo for a simple autonomous online service business." }],
     defaultRepository: "cornerstonemarketingus/atlas", userMessage: "Create a new repo", toolContext: { environment: {}, allowlist: new Set() },
-    tools: tools.definitions, handlers: tools.handlers, stream: false, emit: (...args) => events.push(args), startTasks: async () => assert.fail("existing repository must never be dispatched"),
+    tools: tools.definitions, handlers: tools.handlers, stream: false, emit: (...args) => events.push(args), startTasks: async () => assert.fail("existing repository must never be dispatched") };
+  const started = await converse({ ...conversation,
     fetcher: async (_url, init) => {
       modelRequests.push(JSON.parse(init.body)); round++;
       if (round === 1) return Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: "create", type: "function", function: { name: "workspace_create_project", arguments: JSON.stringify(input) } }] } }] });
-      await wait(creation);
-      if (round === 2) return Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: "status", type: "function", function: { name: "workspace_project_status", arguments: JSON.stringify({ operationId: input.requestId }) } }] } }] });
+      return Response.json({ choices: [{ message: { content: "Project creation started; check its operation receipt for completion." } }] });
+    } });
+  assert.equal(started.error, undefined);
+  assert.equal(started.finalization, undefined);
+  assert.doesNotMatch(started.reply, /Repository created:/);
+  assert.ok(events.some(([type, result]) => type === "project" && result.operationId === input.requestId));
+  // A real asynchronous build belongs outside the model transport fixture:
+  // otherwise a slow Windows build's assertion becomes a caught network error.
+  // The full build/check/Git phase has its own bounded acceptance deadline.
+  await wait(creation, { timeoutMs: 90000 });
+  round = 0;
+  const outcome = await converse({ ...conversation,
+    fetcher: async (_url, init) => {
+      const request = JSON.parse(init.body); modelRequests.push(request); round++;
+      if (round === 1) return Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: "status", type: "function", function: { name: "workspace_project_status", arguments: JSON.stringify({ operationId: input.requestId }) } }] } }] });
+      const receipt = JSON.parse(request.messages.findLast(message => message.role === "tool").content);
+      assert.equal(receipt.status, "published");
       return Response.json({ choices: [{ message: { content: "Repository created: https://github.com/owner/service-tracker" } }] });
     } });
+  assert.equal(outcome.error, undefined);
+  assert.equal(outcome.finalization, undefined);
   assert.match(outcome.reply, /https:\/\/github.com\/owner\/service-tracker/);
   const result = creation.status(input.requestId); assert.equal(result.status, "published", JSON.stringify(result)); assert.equal(result.visibility, "private"); assert.equal(result.deploymentState, "not-deployed");
   const project = genesis.view(result.projectId); assert.equal(project.name, input.name);
@@ -83,6 +103,11 @@ test("hosted model tool creates an isolated verified Genesis project, creates Gi
   assert.equal((await creation.create(input)).projectId, project.id); assert.equal(genesis.list().length, 1);
   await assert.rejects(creation.create({ ...input, name: "different" }), /different project/);
 }));
+
+test("an unfinished build reports its durable state at the test completion boundary", async () => {
+  const creation = { running: new Set([input.requestId]), status: () => ({ operationId: input.requestId, status: "building" }) };
+  await assert.rejects(wait(creation, { timeoutMs: 0 }), /Genesis completion timed out:.*building/);
+});
 
 test("ask waits for the exact approval; deny never builds or creates", () => harness(async ({ creation, publisher, approvals, pushes }) => {
   await creation.create(input); let result = await wait(creation); assert.equal(result.status, "awaiting-approval"); assert.deepEqual(pushes, []);

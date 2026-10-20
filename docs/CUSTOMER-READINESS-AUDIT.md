@@ -71,3 +71,8 @@ Unexpected repository-settings authentication, tenant resolution and storage fai
 ## Customer Connections projection — issue #371
 
 Setup status uses the established deployment-owner check before any infrastructure probes. Customer responses contain only account-connected state and no database/migration/provider/governor/credential configuration; operator responses retain the existing diagnostics. The actual Connections component distinguishes account status from infrastructure readiness, hides operator billing setup from customers and renders fixed status/model failure copy for customers. Authentication and owner identity logic are consumed unchanged. The separately owned chat GET metadata contract remains outside this repair; no universal confidentiality, production acceptance or backend health claim follows from account-connected status.
+
+
+## Connections read recovery — issue #378
+
+The Connections component bounds the complete status fetch/body read to12seconds and offers explicit retry with fixed safe failure copy. It aborts replaced/unmounted reads and fences late responses, including unauthorized responses after unmount. Malformed status is rejected before rendering. Actual phone-component acceptance exercises these failure/recovery boundaries and the preserved owner/customer projection. This client deadline does not prove backend health or forcibly stop an abort-ignoring server.

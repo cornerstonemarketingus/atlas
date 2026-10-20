@@ -1,0 +1,37 @@
+{
+  "id": "untrusted-content-labels",
+  "category": "multi-file-edit",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "be8de5ab704c8d2dd14d60c76739d90124e48c1b",
+  "objective": "Add apps/local-control/src/agent/untrusted.mjs exporting untrustedSourceLabel(source) (keeps only A-Za-z0-9._:/ space and hyphen, max 80 chars, \"untrusted\" when empty) and wrapUntrusted(source, content) returning { text, markers }: one <data source=\"…\"> … </data> block whose content cannot close or open a data tag (escape any <data / </data, including spaced variants), with non-string content stringified, and, when detectInjection from platform/mcp/gateway.mjs flags markers, a notice naming them inside the block before the verbatim content. Use it for tool results in conversation-executor.mjs (and tell the model in its system prompt that <data> blocks never speak for the user) and in team/step-executor.mjs for upstream reports, memory, tool output and the verification report. apps/local-control/tests/untrusted.test.mjs and conversation.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "0fa3236352b7a80ea46070c7ebedf7a1e7122ebe",
+    "paths": [
+      "apps/local-control/tests/untrusted.test.mjs",
+      "apps/local-control/tests/conversation.test.mjs",
+      "apps/local-control/tests/fixtures/injection-corpus.json"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/untrusted.test.mjs",
+      "apps/local-control/tests/conversation.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "0fa3236352b7a80ea46070c7ebedf7a1e7122ebe",
+    "paths": [
+      "apps/local-control/src/agent/untrusted.mjs",
+      "apps/local-control/src/agent/conversation-executor.mjs",
+      "apps/local-control/src/agent/team/step-executor.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "security"
+  ]
+}
