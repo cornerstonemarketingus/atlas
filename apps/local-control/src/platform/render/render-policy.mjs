@@ -93,7 +93,7 @@ const FFMPEG_REFUSED_FORMATS = new Set([
   "dv1394", "bktr", "libdc1394", "ladspa", "pipe", "concat", "hls", "dash", "smoothstreaming", "segment", "stream_segment", "ssegment",
 ]);
 /** Filters that open files, sockets or plugins on their own. */
-const FFMPEG_REFUSED_FILTERS = ["movie", "amovie", "sendcmd", "asendcmd", "zmq", "azmq", "frei0r", "frei0r_src", "ladspa", "lv2", "lut3d", "lut1d", "haldclutsrc", "subtitles", "ass", "ocr", "dnn_processing", "dnn_classify", "dnn_detect", "sr", "derain","vidstabdetect", "vidstabtransform", "libvmaf", "whisper"];
+export const FFMPEG_REFUSED_FILTERS = Object.freeze(["movie", "amovie", "sendcmd", "asendcmd", "zmq", "azmq", "frei0r", "frei0r_src", "ladspa", "lv2", "lut3d", "lut1d", "haldclutsrc", "subtitles", "ass", "ocr", "dnn_processing", "dnn_classify", "dnn_detect", "sr", "derain","vidstabdetect", "vidstabtransform", "libvmaf", "whisper"]);
 const FILTER_PATTERN = new RegExp(`(?:^|[^a-z0-9_])(?:${FFMPEG_REFUSED_FILTERS.join("|")})(?:@[a-z0-9_]+)?(?:=|$|[,;\\[\\]\\s'"])`, "iu");
 /** Filter options that name a file (drawtext fontfile/textfile, etc.). */
 const FILE_FILTER_OPTION = /(?:^|[^a-z0-9_])(?:fontfile|textfile|filename|file|stats_file|log_fn|model|psnr_stats|ssim_stats)\s*=/iu;
