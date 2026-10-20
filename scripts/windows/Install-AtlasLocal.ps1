@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 if ($env:OS -ne "Windows_NT") { throw "This installer supports Windows only." }
 $sourceRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$required = @("apps\local-control", "scripts\local", "scripts\windows\Start-AtlasLocal.ps1")
+$required = @("apps\local-control", "scripts\local", "scripts\windows\Start-AtlasLocal.ps1", "scripts\runner\merge-decision.mjs", "packages\atlas-contracts\src\index.mjs")
 foreach ($relativePath in $required) {
   if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $relativePath))) { throw "Package is incomplete: $relativePath is missing." }
 }
@@ -21,6 +21,10 @@ New-Item -ItemType Directory -Path $InstallDirectory -Force | Out-Null
 foreach ($relativePath in @("apps", "scripts")) {
   Copy-Item -LiteralPath (Join-Path $sourceRoot $relativePath) -Destination $InstallDirectory -Recurse -Force
 }
+# The daemon imports these dependency-free shared contracts by relative path.
+$packagesDirectory = Join-Path $InstallDirectory "packages"
+New-Item -ItemType Directory -Path $packagesDirectory -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $sourceRoot "packages\atlas-contracts") -Destination $packagesDirectory -Recurse -Force
 
 $launcher = Join-Path $InstallDirectory "scripts\windows\Start-AtlasLocal.ps1"
 if (-not $NoShortcut) {

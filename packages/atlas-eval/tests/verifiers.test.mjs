@@ -3,13 +3,13 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { runTask, validateFixture } from "../src/index.mjs";
 
 const verifiers = fileURLToPath(new URL("../../../evals/verifiers/", import.meta.url));
-const { parseArgs, testNames } = await import(join(verifiers, "test-repair-check.mjs"));
-const { CHECKS, secretsIn } = await import(join(verifiers, "answer-check.mjs"));
+const { parseArgs, testNames } = await import(pathToFileURL(join(verifiers, "test-repair-check.mjs")));
+const { CHECKS, secretsIn } = await import(pathToFileURL(join(verifiers, "answer-check.mjs")));
 const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@invalid", ...args], { cwd, encoding: "utf8" }).trim();
 
 const staleTest = 'import test from "node:test"; import assert from "node:assert/strict"; import { greet } from "./greet.mjs";\ntest("greets", () => assert.equal(greet(), "hi"));\ntest("is a string", () => assert.equal(typeof greet(), "string"));\n';
@@ -83,7 +83,7 @@ test("workflow secrets are read only from expressions, never from comments", () 
 });
 
 test("a read-only answer may only add ANSWER.json", async () => {
-  const { changedSources } = await import(join(verifiers, "answer-check.mjs"));
+  const { changedSources } = await import(pathToFileURL(join(verifiers, "answer-check.mjs")));
   const { root } = await repairRepo();
   git(root, "commit", "-q", "--allow-empty", "-m", "eval setup");
   await writeFile(join(root, "ANSWER.json"), "{}\n");
