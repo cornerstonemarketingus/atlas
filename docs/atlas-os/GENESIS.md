@@ -357,4 +357,15 @@ Without a runtime and an image it reports itself unavailable and never runs on t
   - 503: no sandbox, or no image configured.
   - 400: the job was refused by the render policy.
 
+The local console has a **Render a clip** panel on each Build project page (`ui.mjs`):
+- It shows what `GET /v1/render` reports, including the reason when rendering is unavailable.
+- For the owner only, it shows a form with ffmpeg presets:
+  - a title card with the sanitized project name as its caption;
+  - a test pattern.
+- The form submits `POST /v1/render/jobs`.
+- When the render finishes, the panel plays the resulting video artifact and lists the project's artifacts.
+- A paired device sees the panel's status but gets no form.
+
+`docker/render/` holds a project-owned, digest-pinned ffmpeg + headless Blender image for `ATLAS_RENDER_FFMPEG_IMAGE` / `ATLAS_RENDER_BLENDER_IMAGE`; see its README. `tests/render-ui.test.mjs` covers the panel against the real HTTP handler, plus a real-browser pass that runs when `ATLAS_TEST_PLAYWRIGHT` is set.
+
 `tests/sprint-journey.test.mjs` runs the cross-lane journey through the real HTTP handler: sentence → verified project → sandboxed render → video artifact (Range-served) → workspace lost → restore from snapshot → render again. In CI the container runtime is a stand-in; the real-container render is in `platform-render.test.mjs`.
