@@ -7,6 +7,8 @@
  * The page ships under a strict CSP (no inline script or style), so every
  * dynamic value is escaped with esc() and nothing is styled inline.
  */
+import { FFMPEG_REFUSED_FILTERS } from "./platform/render/render-policy.mjs";
+
 export const LOCAL_UI_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark light"><meta name="theme-color" content="#0d120f">
@@ -26,6 +28,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
   <a href="#/improve" data-nav="improve"><span class="ico" aria-hidden="true">↻</span>Improve Atlas<span class="badge" id="improve-badge" hidden></span></a>
   <a href="#/models" data-nav="models"><span class="ico" aria-hidden="true">◈</span>Models</a>
   <a href="#/families" data-nav="families"><span class="ico" aria-hidden="true">⋔</span>Agent families</a>
+  <a href="/workforce"><span class="ico" aria-hidden="true">⇢</span>Workforce</a>
   <a href="#/computer" data-nav="computer"><span class="ico" aria-hidden="true">▣</span>Computer</a>
   <a href="#/projects" data-nav="projects"><span class="ico" aria-hidden="true">▤</span>Projects</a>
   <a href="#/knowledge" data-nav="knowledge"><span class="ico" aria-hidden="true">✦</span>Knowledge</a>
@@ -131,6 +134,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
    <div class="actions"><button id="build-start">Build it</button></div><p id="build-notice" class="hint" role="status" aria-live="polite"></p>
    <p class="hint">Atlas writes the requirements with sensible assumptions, plans the work, builds it on this computer, tests it, runs it, checks it in a browser and fixes problems. It asks only when an answer changes cost, data rules or who gets contacted, and it asks before publishing anything.</p></form>
   <div id="build-detail" hidden></div>
+  <section id="build-render" class="panel" hidden aria-labelledby="build-render-heading"></section>
   <section aria-labelledby="build-projects-heading"><h3 id="build-projects-heading">Projects</h3><div id="build-projects" class="list"><p class="empty">Unlock this tab to see projects.</p></div></section>
  </section>
  <section class="view" data-view="artifacts" hidden aria-labelledby="artifacts-heading">
@@ -572,6 +576,7 @@ const viewFromHash=()=>location.hash.replace(/^#\\/?/,'').split('/')[0]||'home';
 function show(view){
  if(!VIEWS[view])view='home';currentView=view;
  if(view!=='artifacts')clearArtifactView();
+ if(view!=='build')clearRenderPanel();
  $$('.view').forEach(v=>{v.hidden=v.dataset.view!==view});
  $$('[data-nav]').forEach(a=>a.setAttribute('aria-current',a.dataset.nav===view?'page':'false'));
  $('#view-title').textContent=VIEWS[view];document.title=VIEWS[view]+' · Atlas';
@@ -678,7 +683,7 @@ async function loadBuild(){
  try{
   const {projects}=await getJson('/v1/genesis');
   list.innerHTML=projects.length?projects.map(p=>'<a class="card" href="#/build/'+esc(p.id)+'"><div class="task-top"><h4>'+esc(p.name)+'</h4>'+pill(p.label)+'</div><time>'+when(p.updatedAt)+'</time></a>').join(''):'<p class="empty">Nothing built yet. Describe an app above.</p>';
-  if(!id){detail.hidden=true;return}
+  if(!id){detail.hidden=true;clearRenderPanel();return}
   const {project:v}=await getJson('/v1/genesis/'+encodeURIComponent(id));
   const ready=v.transitions.findLast(t=>t.to==='ready')?.evidence?.summary;
   const last=v.transitions.at(-1);
@@ -708,6 +713,7 @@ async function loadBuild(){
    +'<details><summary>Assumptions</summary><ul>'+(v.spec?.assumptions||[]).map(a=>'<li>'+esc(a)+'</li>').join('')+'</ul></details>'
    +'<details><summary>Technical details</summary><p class="hint">Template '+esc(v.plan?.template||'—')+' · folder <code>'+esc(v.workspace||'not created yet')+'</code> · repairs '+v.repairsUsed+'/'+v.repairBudget+'</p><table class="table"><thead><tr><th>When</th><th>Stage</th><th>Why</th></tr></thead><tbody>'+v.transitions.slice().reverse().map(t=>'<tr><td>'+when(t.at)+'</td><td>'+esc(t.to)+'</td><td>'+esc(t.reason)+'<details><summary>Evidence</summary><pre class="log">'+esc(JSON.stringify(t.evidence,null,1).slice(0,6000))+'</pre></details></td></tr>').join('')+'</tbody></table></details></div>';
   detail.querySelectorAll('[data-gen]').forEach(b=>b.onclick=()=>genAction(v.id,b.dataset.gen,{}));
+  loadRenderPanel(v).catch(()=>{});
   const answers=detail.querySelector('#gen-answers');
   if(answers)answers.onsubmit=e=>{e.preventDefault();genAction(v.id,'answers',{answers:Object.fromEntries(new FormData(answers).entries())})};
   const external=async(action,body)=>{const notice=$('#build-notice');notice.textContent='Asking…';
@@ -735,6 +741,107 @@ $('#build-form').onsubmit=async e=>{e.preventDefault();const prompt=$('#build-pr
  catch(error){notice.textContent=error.message}finally{$('#build-start').disabled=false}};
 $$('#build-examples [data-example]').forEach(b=>b.onclick=()=>{$('#build-prompt').value=b.dataset.example;$('#build-prompt').focus()});
 $('#build-refresh').onclick=()=>loadBuild();
+
+/* Render panel (pure): what a Build project shows about rendering and the preset jobs it submits.
+   No DOM in this block, so tests can run it against the daemon's real responses. */
+const RENDER_REFUSED_WORDS=${JSON.stringify(FFMPEG_REFUSED_FILTERS)};
+const RENDER_PRESETS={title:'Title card: the caption on a dark background, fading in and out',bars:'Test pattern: moving colour bars, no text'};
+const RENDER_SIZES={'720p':'1280x720','1080p':'1920x1080',square:'1080x1080'};
+/* Captions go inside an ffmpeg filter: keep letters, digits, spaces and a little punctuation, nothing the filter syntax or the render policy reads. */
+function renderCaption(text){const clean=String(text??'').normalize('NFKC').replace(/[^\\p{L}\\p{N} .!?&+-]/gu,' ').replace(/\\.{2,}/g,'.').replace(/\\s+/g,' ').trim().slice(0,60).trim();return clean||'Atlas'}
+/* The render policy refuses filter names that open files or sockets wherever they appear, so a caption holding one would be refused too. */
+function refusedCaptionWord(caption){return String(caption).toLowerCase().split(/[^a-z0-9_]+/).find(w=>RENDER_REFUSED_WORDS.includes(w))||null}
+function renderJob(preset,{caption='Atlas',seconds=5,size='720p',stamp=Date.now().toString(36)}={}){
+ const s=Math.min(30,Math.max(1,Math.round(Number(seconds)||5))),dim=RENDER_SIZES[size]||RENDER_SIZES['720p'],tag=String(stamp).replace(/[^a-z0-9]/gi,'').slice(0,24)||'clip';
+ const encode=['-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p','-movflags','+faststart'];
+ if(preset==='bars'){const out='renders/test-pattern-'+tag+'.mp4';return {tool:'ffmpeg',args:['-y','-nostdin','-hide_banner','-f','lavfi','-i','testsrc2=size='+dim+':rate=30:duration='+s,...encode,out],inputs:[],outputs:[out],timeoutMs:300000}}
+ if(preset==='title'){const text=renderCaption(caption),fade=Math.min(0.8,s/4),out='renders/title-card-'+tag+'.mp4';
+  return {tool:'ffmpeg',args:['-y','-nostdin','-hide_banner','-f','lavfi','-i','color=c=0x14200f:size='+dim+':rate=30:duration='+s,'-vf',"drawtext=text='"+text+"':fontcolor=0xd8ff8f:fontsize=h/10:x=(w-text_w)/2:y=(h-text_h)/2,fade=t=in:st=0:d="+fade.toFixed(2)+",fade=t=out:st="+(s-fade).toFixed(2)+":d="+fade.toFixed(2),...encode,out],inputs:[],outputs:[out],timeoutMs:300000}}
+ throw new Error('Unknown render preset.');
+}
+const isSha=v=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v);
+function renderArtifactsHtml(artifacts){
+ const list=(artifacts||[]).filter(a=>a&&isSha(a.sha256));
+ return list.length?list.map(a=>'<a class="card" href="#/artifacts/'+a.sha256+'"><div class="task-top"><h4>'+esc(artifactName(a))+'</h4>'+pill(ARTIFACT_LABELS[a.kind]||a.kind)+'</div><p class="hint">'+esc(a.mediaType)+' · '+esc(bytesText(a.size))+' · '+esc(a.provenance?.step||'')+'</p></a>').join(''):'<p class="empty">Nothing from this project in Artifacts yet.</p>';
+}
+function renderPanelHtml({project,render,role,artifacts=[]}){
+ const r=render&&typeof render==='object'?render:{available:false,reason:'Rendering status is unknown.',capabilities:[]};
+ const caps=Array.isArray(r.capabilities)?r.capabilities:[];
+ let html='<div class="task-top"><h3 id="build-render-heading">Render a clip</h3>'+pill(r.available?'available':'unavailable')+'</div>';
+ if(!r.available){
+  html+='<p id="render-reason">Rendering is not available on this computer: '+esc(r.reason||'no reason given')+'</p>'
+   +'<p class="hint">Renders run only inside the container sandbox, never on this computer directly. To turn them on, set ATLAS_TERMINAL_CONTAINER_RUNTIME and ATLAS_RENDER_FFMPEG_IMAGE (see docker/render/README.md) and restart Atlas.</p>'
+   +'<div class="actions"><button type="button" class="secondary" id="render-recheck">Check again</button></div>';
+ }else{
+  html+='<p class="hint" id="render-reason">Renders run inside the container sandbox with the network off ('+esc(caps.join(', '))+'). Outputs are saved in the project folder under renders/ and in Artifacts.</p>';
+  if(role!=='owner')html+='<p id="render-owner-only">Only the owner, on this computer, can start a render. A paired device can watch the results in Artifacts.</p>';
+  else if(!project?.workspace)html+='<p>This project has no folder yet. Render once it has been built.</p>';
+  else if(!caps.includes('render.ffmpeg'))html+='<p>The presets here use ffmpeg. Set ATLAS_RENDER_FFMPEG_IMAGE to use them.</p>';
+  else html+='<form id="render-form" class="card"><label for="render-preset">Preset</label><select id="render-preset">'+Object.entries(RENDER_PRESETS).map(([k,label])=>'<option value="'+k+'">'+esc(label)+'</option>').join('')+'</select>'
+   +'<label for="render-caption">Caption (title card)</label><input id="render-caption" maxlength="60" autocomplete="off" value="'+esc(renderCaption(project.name))+'">'
+   +'<div class="row"><label>Length<select id="render-seconds"><option value="3">3 seconds</option><option value="5" selected>5 seconds</option><option value="10">10 seconds</option></select></label>'
+   +'<label>Size<select id="render-size"><option value="720p" selected>1280 × 720</option><option value="1080p">1920 × 1080</option><option value="square">1080 × 1080 (square)</option></select></label></div>'
+   +'<div class="actions"><button id="render-start">Render</button><span class="hint" id="render-elapsed" aria-hidden="true"></span></div></form>';
+ }
+ html+='<div id="render-result" role="status" aria-live="polite"></div><div id="render-view" class="artifact-view" hidden></div>'
+  +'<h4>This project in Artifacts</h4><div id="render-artifacts" class="list">'+renderArtifactsHtml(artifacts)+'</div>';
+ return html;
+}
+function renderResultHtml(status,body){
+ const result=body&&body.result;
+ if(status===200&&result&&result.ok){
+  const files=(result.files||[]).map(f=>'<li><code>'+esc(f.path)+'</code> '+esc(bytesText(Number(f.bytes)||0))+(f.artifact&&isSha(f.artifact.sha256)?' · <a href="#/artifacts/'+f.artifact.sha256+'">Open in Artifacts</a>':f.artifactError?' · not stored in Artifacts: '+esc(f.artifactError.message):'')+'</li>').join('');
+  return '<div class="card success"><h4>Rendered</h4><ul>'+files+'</ul><p class="hint">'+esc(((Number(result.durationMs)||0)/1000).toFixed(1))+' s in '+esc(result.image||'')+', network '+esc(result.isolation?.network||'none')+'.</p></div>';
+ }
+ if(result){const tail=String(result.logs?.stderr||'').slice(-4000);
+  return '<div class="error"><strong>The render did not finish: '+esc(result.error||result.status||'unknown error')+'</strong>'+(tail?'<details><summary>Tool output (last lines)</summary><pre class="log">'+esc(tail)+'</pre></details>':'')+'</div>';}
+ return '<div class="error"><strong>'+esc((body&&body.message)||('The render request failed ('+status+').'))+'</strong></div>';
+}
+/* Render panel (DOM) */
+let renderVideoUrl=null;
+function clearRenderPanel(){if(renderVideoUrl){URL.revokeObjectURL(renderVideoUrl);renderVideoUrl=null}const p=$('#build-render');if(p){p.innerHTML='';p.hidden=true;delete p.dataset.key}}
+function playVideo(view,blob,label){const url=URL.createObjectURL(blob),video=document.createElement('video');video.controls=true;video.playsInline=true;video.preload='metadata';video.src=url;if(label)video.setAttribute('aria-label',label);view.replaceChildren(video);return url}
+const renderArtifacts=id=>getJson('/v1/artifacts?runId='+encodeURIComponent(id)).then(b=>b.artifacts||[]);
+/* Redrawn only when the project or its folder changes, so the 5-second Build refresh never interrupts a render or a playing clip. */
+async function loadRenderPanel(v,{force=false}={}){
+ const panel=$('#build-render'),key=v.id+'|'+(v.workspace?'1':'0');
+ if(!force&&panel.dataset.key===key)return;
+ clearRenderPanel();panel.dataset.key=key;panel.hidden=false;panel.innerHTML='<p class="hint">Checking what this computer can render…</p>';
+ const [render,identity,artifacts]=await Promise.all([
+  getJson('/v1/render').then(b=>b.render).catch(error=>({available:false,reason:error.message,capabilities:[]})),
+  getJson('/v1/identity').catch(()=>({role:'device'})),
+  renderArtifacts(v.id).catch(()=>[])]);
+ if(panel.dataset.key!==key)return;
+ panel.innerHTML=renderPanelHtml({project:v,render,role:identity.role,artifacts});
+ const recheck=panel.querySelector('#render-recheck');
+ if(recheck)recheck.onclick=()=>loadRenderPanel(v,{force:true}).then(()=>{const b=$('#render-recheck');if(b)b.focus()});
+ const form=panel.querySelector('#render-form');
+ if(form)form.onsubmit=e=>{e.preventDefault();startRender(v,key)};
+}
+async function startRender(v,key){
+ const panel=$('#build-render'),out=$('#render-result'),button=$('#render-start'),elapsed=$('#render-elapsed');
+ const preset=$('#render-preset').value,caption=renderCaption($('#render-caption').value);
+ if(preset==='title'){const bad=refusedCaptionWord(caption);if(bad){out.innerHTML='<div class="error"><strong>Change the caption: the render policy refuses the word “'+esc(bad)+'” inside video filters.</strong></div>';$('#render-caption').focus();return}}
+ const job=renderJob(preset,{caption,seconds:$('#render-seconds').value,size:$('#render-size').value});
+ button.disabled=true;$('#render-form').setAttribute('aria-busy','true');out.textContent='Rendering inside the container sandbox…';
+ const started=Date.now(),tick=()=>{elapsed.textContent=Math.round((Date.now()-started)/1000)+' s'};tick();const timer=setInterval(tick,1000);
+ let status=0,body={};
+ try{const response=await api('/v1/render/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({projectId:v.id,job})});status=response.status;body=await response.json().catch(()=>({}))}
+ catch(error){body={message:error.message}}
+ finally{clearInterval(timer)}
+ if(panel.dataset.key!==key)return;
+ button.disabled=false;$('#render-form').removeAttribute('aria-busy');elapsed.textContent='';
+ out.innerHTML=renderResultHtml(status,body);
+ renderArtifacts(v.id).then(list=>{if(panel.dataset.key===key)$('#render-artifacts').innerHTML=renderArtifactsHtml(list)}).catch(()=>{});
+ const video=(body.result?.files||[]).find(f=>f.artifact&&isSha(f.artifact.sha256));
+ if(video)showRenderedVideo(key,video.artifact.sha256);
+}
+async function showRenderedVideo(key,sha){
+ const view=$('#render-view');
+ try{const {artifact:a}=await getJson('/v1/artifacts/'+sha);const blob=await artifactBlob(a);if($('#build-render').dataset.key!==key)return;
+  if(renderVideoUrl)URL.revokeObjectURL(renderVideoUrl);renderVideoUrl=playVideo(view,blob,'Rendered clip: '+artifactName(a));view.hidden=false}
+ catch(error){view.hidden=false;view.innerHTML=problem(error)}
+}
 
 function refreshView(){
  if(!isUnlocked())return;
@@ -1027,7 +1134,7 @@ async function loadArtifacts(){
   if(a.kind==='video'||a.mediaType.startsWith('image/')||a.kind==='model3d'||a.mediaType.startsWith('text/')||a.mediaType.endsWith('json')){
    const blob=await artifactBlob(a);
    if(detail.dataset.sha!==sha)return;
-   if(a.kind==='video'){artifactUrl=URL.createObjectURL(blob);const video=document.createElement('video');video.controls=true;video.playsInline=true;video.preload='metadata';video.src=artifactUrl;view.replaceChildren(video)}
+   if(a.kind==='video')artifactUrl=playVideo(view,blob,artifactName(a));
    else if(a.mediaType.startsWith('image/')){artifactUrl=URL.createObjectURL(blob);const img=document.createElement('img');img.alt=artifactName(a);img.src=artifactUrl;view.replaceChildren(img)}
    else if(a.kind==='model3d'){try{artifactStop=showModel(view,parseGltf(await blob.arrayBuffer(),a.mediaType))}catch(error){view.innerHTML='<div class="error"><strong>'+esc(error.message)+'</strong><p>Download the model to open it in another viewer.</p></div>'}}
    else if(a.mediaType==='application/vnd.atlas.site-manifest+json'){let m={};try{m=JSON.parse(await blob.text())}catch{}const files=Array.isArray(m.files)?m.files:[];view.innerHTML='<p>'+esc(m.name||'')+' · template '+esc(m.template||'unknown')+' · '+files.length+(m.truncated?'+':'')+' files</p><details><summary>Files</summary><ul class="hint">'+files.slice(0,200).map(f=>'<li><code>'+esc(f.path)+'</code> '+esc(bytesText(Number(f.size)||0))+'</li>').join('')+'</ul></details>'}

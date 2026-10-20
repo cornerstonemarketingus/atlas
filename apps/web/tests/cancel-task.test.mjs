@@ -22,7 +22,7 @@ function fixture(t) {
     environment: {},
     fetcher: async (url, options) => {
       calls.push({ url, options });
-      if (options.redirect !== undefined) assert.equal(options.redirect, "error");
+      if (options.redirect !== undefined) assert.equal(options.redirect, "manual");
       assert.equal(options.headers.authorization, "Bearer github-test-secret");
       assert.ok(options.signal);
       if (options.method === "POST") {
@@ -45,7 +45,7 @@ test("authenticated cancellation persists intent and acceptance; restart/retry d
     assert.deepEqual(await response.json(), { taskId, runId: 123, status: "cancellation-requested" });
   }
   assert.equal(f.calls.filter(call => call.options.method === "POST").length, 1);
-  for (const call of f.calls) assert.equal(call.options.redirect, "error", "cancellation refuses redirects");
+  for (const call of f.calls) assert.equal(call.options.redirect, "manual", "cancellation never follows redirects");
   assert.equal(f.calls.at(-2).url, "https://api.github.com/repos/owner/repo/actions/runs/123/cancel");
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM run_events").get().n, 2);
   f.run.run_attempt = 2;

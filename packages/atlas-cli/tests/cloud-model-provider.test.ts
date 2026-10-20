@@ -54,7 +54,8 @@ test("quota 413 falls through from Groq to Workers AI without replaying work; to
   }) as typeof fetch });
   const fallback = new FallbackModelProvider([{ provider: groq, model: "groq-model" }, { provider: cloud, model: "cloud-model" }]);
   const result = await fallback.complete(request);
-  assert.equal(result.providerId, "workers-ai"); assert.equal(groqCalls, 1); assert.equal(cloudCalls, 1);
+  // Groq gets the request once, then once refitted to its stated allowance; it still refuses, so Workers AI answers.
+  assert.equal(result.providerId, "workers-ai"); assert.equal(groqCalls, 2); assert.equal(cloudCalls, 1);
   const call = result.message.content[0]; assert.ok(call?.type === "tool-call");
   const registry = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
   registerRepositoryWriteTools(registry, createRepositoryWriteTools({ repositoryId: "fixture", repositoryRoot: root }, { editor: new SafeRepositoryFileEditor() }));

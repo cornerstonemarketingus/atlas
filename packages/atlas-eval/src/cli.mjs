@@ -68,6 +68,11 @@ async function main(args) {
     for (const target of targets) for (const task of tasks) {
       const result = await runTask({ task, target, agent, repoRoot });
       console.log(`${result.passed ? "pass" : "fail"} ${task.id} ${target} ${result.failureClass ?? ""}`);
+      // Why a run failed, so a CI log alone can tell a weak model from a broken setup.
+      if (!result.passed) {
+        const why = result.evidence.agentError ?? result.evidence.agentMessage ?? result.evidence.infraError ?? "";
+        console.log(`  agent: ${result.evidence.agentStatus ?? "none"}; tool calls ${result.toolCalls}; tokens ${result.tokens.input}/${result.tokens.output}${why ? `; ${String(why).replace(/\s+/gu, " ").slice(0, 240)}` : ""}`);
+      }
       results.push(result);
     }
     const report = { results, tasks, generatedAt: new Date().toISOString() };

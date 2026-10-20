@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type {
   SafeCommandRequest,
   SafeCommandResult,
@@ -72,10 +72,11 @@ export class BoundedCommandRunner implements SafeCommandRunner {
     const root = await this.rootPromise;
     const cwd = await resolveWorkingDirectory(root, request.cwd);
     const environment = this.createEnvironment(request.environment);
+    const invocation = await resolveInvocation(request);
     const startedAt = Date.now();
 
     return await new Promise<SafeCommandResult>((resolveResult, reject) => {
-      const child = spawn(request.executable, [...(request.args ?? [])], {
+      const child = spawn(invocation.executable, invocation.args, {
         cwd,
         env: environment,
         shell: false,
@@ -315,6 +316,26 @@ async function resolveWorkingDirectory(root: string, requested?: string): Promis
     throw new SafeCommandError("cwd-outside-repository", "Working directory is outside the repository.");
   }
   return canonical;
+}
+
+/** Windows npm is a command shim. Only use the CLI beside this trusted Node
+ * runtime after logical executable allowlisting, never a PATH/workspace script. */
+async function resolveInvocation(request: SafeCommandRequest): Promise<{ executable: string; args: string[] }> {
+  if (process.platform !== "win32" || request.executable.toLowerCase() !== "npm") {
+    return { executable: request.executable, args: [...(request.args ?? [])] };
+  }
+  try {
+    const node = await realpath(process.execPath);
+    const distribution = dirname(node);
+    const script = await realpath(resolve(distribution, "node_modules", "npm", "bin", "npm-cli.js"));
+    const fromDistribution = relative(distribution, script);
+    if (isAbsolute(fromDistribution) || fromDistribution === ".." || fromDistribution.startsWith(".." + sep) || !(await lstat(script)).isFile()) {
+      throw new Error("npm CLI is outside the Node distribution.");
+    }
+    return { executable: node, args: [script, ...(request.args ?? [])] };
+  } catch (cause) {
+    throw new SafeCommandError("spawn-failed", "The Node distribution's npm CLI is unavailable.", { cause });
+  }
 }
 
 function normalizeExecutable(executable: string): string {

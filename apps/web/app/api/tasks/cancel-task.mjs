@@ -37,7 +37,7 @@ export async function cancelHostedTask(request, taskId, { authenticate, tenantCo
     if (!token) return reply({ message: "Run verification is unavailable." }, 503);
     const workflow = workflowForMode(task.mode, { coderWorkflow: environment.ATLAS_CODER_WORKFLOW, defaultWorkflow: environment.ATLAS_GITHUB_WORKFLOW });
     const read = async options => {
-      const response = await fetcher(options.url, { ...options.init, redirect: "error", signal: AbortSignal.timeout(8000) });
+      const response = await fetcher(options.url, { ...options.init, redirect: "manual", signal: AbortSignal.timeout(8000) });
       if (!response.ok) throw new Error("Run verification unavailable");
       return response.json();
     };
@@ -72,7 +72,7 @@ export async function cancelHostedTask(request, taskId, { authenticate, tenantCo
       // Cancellation is safe to repeat after an uncertain acknowledgement. No
       // rerun, force-cancel or retry of repository operations is performed.
       response = await fetcher(`${workflowRunRequest({ token, repository: task.repository, runId: run.id }).url}/cancel`, {
-        method: "POST", headers: githubReadHeaders(token), redirect: "error", signal: AbortSignal.timeout(8000),
+        method: "POST", headers: githubReadHeaders(token), redirect: "manual", signal: AbortSignal.timeout(8000),
       });
       try { await response.body?.cancel(); } catch { /* no provider text is exposed */ }
     } catch {

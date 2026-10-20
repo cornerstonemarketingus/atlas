@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     const token = app.configured ? await createInstallationToken(app) : platformGitHubToken();
     if (!token) return reply({ message: "Run verification unavailable." }, 503);
     const response = await fetch(`https://api.github.com/repos/${task.repository}/actions/runs/${identity.run_id}`, {
-      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "atlas-control-plane" }, redirect: "error", signal: AbortSignal.timeout(10000),
+      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "atlas-control-plane" }, redirect: "manual", signal: AbortSignal.timeout(10000),
     });
     if (!response.ok) { await response.body?.cancel(); return reply({ message: "Run verification unavailable." }, 503); }
     if (!claimRunMatches(identity, task, await response.json())) return reply({ message: "Run does not match saved dispatch." }, 403);

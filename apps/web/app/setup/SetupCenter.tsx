@@ -1,10 +1,24 @@
 "use client";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AtlasShell } from "../AtlasShell.js";
 
 type SetupStep = { id: string; label: string; state: "complete" | "action-required" | "failed"; detail: string; action?: string };
 type SetupStatus = { audience?: "customer" | "owner"; overall: string; completedSteps: number; totalSteps: number; steps: SetupStep[]; optional: { stripeConfigured?: boolean } };
+
+function validStatus(value: unknown): value is SetupStatus {
+  if (!value || typeof value !== "object") return false;
+  const status = value as Partial<SetupStatus>;
+  return (status.audience === "customer" || status.audience === "owner")
+    && typeof status.overall === "string"
+    && Number.isInteger(status.completedSteps) && Number.isInteger(status.totalSteps)
+    && status.completedSteps! >= 0 && status.completedSteps! <= status.totalSteps!
+    && Array.isArray(status.steps) && status.steps.length === status.totalSteps
+    && status.steps.every(item => item && typeof item.id === "string" && typeof item.label === "string"
+      && typeof item.detail === "string" && ["complete", "action-required", "failed"].includes(item.state)
+      && (item.action === undefined || typeof item.action === "string"))
+    && Boolean(status.optional && typeof status.optional === "object" && !Array.isArray(status.optional));
+}
 type GitHub = { connected: boolean; method: string; installUrl: string | null };
 
 const MERGE_POLICIES = [
@@ -30,24 +44,50 @@ export function SetupCenter() {
   const [policyNotice, setPolicyNotice] = useState("");
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const statusRequest = useRef<{ generation: number; controller: AbortController | null }>({ generation: 0, controller: null });
 
   const refresh = useCallback(async () => {
+    const generation = ++statusRequest.current.generation;
+    statusRequest.current.controller?.abort();
+    const controller = new AbortController();
+    statusRequest.current.controller = controller;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     setRefreshing(true);
     try {
-      const response = await fetch("/api/setup/status", { cache: "no-store" });
-      if (response.status === 401) { window.location.href = "/"; return; }
-      if (!response.ok) throw new Error("Setup readiness is temporarily unavailable.");
-      setStatus(await response.json() as SetupStatus);
+      const result = await Promise.race([
+        (async () => {
+          const response = await fetch("/api/setup/status", { cache: "no-store", signal: controller.signal });
+          if (response.status === 401) return { signedOut: true } as const;
+          if (!response.ok) throw new Error("Status unavailable");
+          const value: unknown = await response.json();
+          if (!validStatus(value)) throw new Error("Invalid status");
+          return { status: value };
+        })(),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => { controller.abort(); reject(new Error("Status deadline")); }, 12000);
+        }),
+      ]);
+      if (generation !== statusRequest.current.generation) return;
+      if ("signedOut" in result) { window.location.href = "/"; return; }
+      setStatus(result.status);
       setError("");
     } catch {
-      setError("Connection status is temporarily unavailable. Refresh or contact support.");
+      if (generation === statusRequest.current.generation) setError("Connection status is temporarily unavailable. Refresh or contact support.");
     } finally {
-      setRefreshing(false);
+      clearTimeout(deadline);
+      if (generation === statusRequest.current.generation) {
+        statusRequest.current.controller = null;
+        setRefreshing(false);
+      }
     }
   }, []);
 
   // Deferred a tick so the first render is not a cascading re-render.
-  useEffect(() => { const timer = window.setTimeout(() => void refresh(), 0); return () => window.clearTimeout(timer); }, [refresh]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refresh(), 0);
+    const request = statusRequest.current;
+    return () => { window.clearTimeout(timer); request.generation++; request.controller?.abort(); };
+  }, [refresh]);
 
   useEffect(() => {
     let active = true;
