@@ -44,8 +44,9 @@ export default function AboutPage() {
         <h2>From idea to operation</h2>
         <p>The opportunity is an execution layer between an idea and an operating business. The roadmap joins product development, deployment, customer workflows, ongoing SEO and generative engine optimization (GEO), analytics and recurring operations.</p>
         <p>Supported website/app/API creation and SEO foundations are implemented. Dedicated game creation, complete autonomous business operation, continuous SEO/GEO growth, richer visual editing and persistent cloud execution remain development goals. Local and hosted surfaces have different capability coverage.</p>
-        <h2>Advanced research</h2>
-        <p>Quantum physics is a founder-identified research direction. Its implementation and experimental results are not documented on public main; a validated quantum capability remains unverified.</p>
+        <h2>Compute resilience and research</h2>
+        <p>Atlas combines local-model support with optional hosted inference. Existing quota and recovery controls are a foundation, while consistent governance across hosted and CLI execution, durable continuation and verified fallback remain active engineering work. The objective is to reduce unnecessary API dependence and recover gracefully from provider limits—not bypass them.</p>
+        <p>Quantum computing is an exploratory direction for reproducible simulation and optimization research. Real-hardware integration and any performance advantage would require independent experimental verification; neither is presented as a shipped capability.</p>
         <h2>Who builds Atlas</h2>
         <p>Atlas is built by Anthony Hahn, an independent founder based in Minnesota. The product is built around customer ownership, verified execution and autonomy governed by policy, budgets and approvals.</p>
         <p>Questions and ideas go to the <a href="https://github.com/cornerstonemarketingus/atlas/issues">Atlas issue tracker</a>. The <a href="https://github.com/cornerstonemarketingus/atlas/blob/main/TODO.md">public roadmap</a> records implemented slices and remaining work.</p>
