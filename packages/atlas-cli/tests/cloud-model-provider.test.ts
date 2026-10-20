@@ -157,3 +157,19 @@ test("completed cloud requests release caller listeners and reject invalid deadl
   }
   assert.equal(calls, 12);
 });
+
+test("stalled error bodies preserve terminal authentication and safe retry headers", async () => {
+  for (const status of [401, 403, 429]) {
+    let cancelled = false, fallbacks = 0;
+    const provider = new CloudModelProvider({ providerId: "openai", apiKey: "secret", models: capabilities("fixture"), timeoutMs: 30,
+      fetchImplementation: (async () => new Response(new ReadableStream({ cancel() { cancelled = true; return new Promise<void>(() => {}); } }), { status, headers: { "retry-after": "2" } })) as typeof fetch });
+    if (status === 429) {
+      await assert.rejects(provider.complete(request), (error: unknown) => error instanceof ModelProviderError && error.code === "rate-limit" && error.retryAfterMs === 2000);
+    } else {
+      const other = new CloudModelProvider({ providerId: "workers-ai", accountId: "a".repeat(32), apiKey: "other", models: capabilities("fixture"), fetchImplementation: (async () => { fallbacks++; return Response.json(completion()); }) as typeof fetch });
+      await assert.rejects(new FallbackModelProvider([{ provider, model: "fixture" }, { provider: other, model: "fixture" }]).complete(request), (error: unknown) => error instanceof ModelProviderError && error.code === "authentication" && !error.retryable);
+      assert.equal(fallbacks, 0);
+    }
+    assert.equal(cancelled, true);
+  }
+});

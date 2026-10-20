@@ -74,6 +74,13 @@ async function readCloudResponse(fetcher: typeof fetch, endpoint: URL, payload: 
       if (controller.signal.aborted) { try { void response.body?.cancel().catch(() => undefined); } catch { /* discard late response */ } }
     }, () => undefined);
     const response = await Promise.race([pending, stopped]);
+    if (!response.ok) {
+      // Status and retry headers are sufficient; never let an error body hide
+      // terminal authentication failure behind a retryable body timeout.
+      try { void response.body?.cancel().catch(() => undefined); } catch { /* discard provider body */ }
+      bodyComplete = true;
+      return { response, bytes: [] };
+    }
     const bytes: Uint8Array[] = []; let size = 0;
     reader = response.body?.getReader();
     if (reader) for (;;) {
