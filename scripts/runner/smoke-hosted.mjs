@@ -67,6 +67,8 @@ if (forged.status !== 401) throw new Error("Untrusted identity header was accept
 if (mode === "website") {
   // Verify the keyless hosted builder directly, without consuming model quota
   // or depending on an external Genesis node. This creates one saved preview.
+  const capabilities = await api("/api/genesis/operations");
+  if (capabilities.github?.reason !== "execution_node_not_configured") throw new Error("Website verification requires the hosted builder without a configured Genesis node; no project was requested");
   const project = await api("/api/genesis/operations", {
     requestId: randomUUID(), template: "static-site", visibility: "private",
     description: "Build a responsive website for Atlas Verification, a software business based in Eagan, Minnesota, offering software testing and development.",

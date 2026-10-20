@@ -86,6 +86,7 @@ test('website verification creates a preview, reads public pages and confirms pe
   const server = http.createServer(async (req, res) => {
     if (req.headers['oai-authenticated-user-id']) { res.writeHead(401); res.end('{}'); return; }
     if (req.url === '/api/setup/status') { res.end(JSON.stringify({ overall: 'ready', completedSteps: 8, totalSteps: 8, optional: { chat: { route: ['workers-ai'] } } })); return; }
+    if (req.url === '/api/genesis/operations' && req.method === 'GET') { res.end(JSON.stringify({ github: { reason: 'execution_node_not_configured' } })); return; }
     if (req.url === '/api/genesis/operations' && req.method === 'POST') {
       let data = ''; for await (const chunk of req) data += chunk;
       assert.equal(JSON.parse(data).template, 'static-site');
