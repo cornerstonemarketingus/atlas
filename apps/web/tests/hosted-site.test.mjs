@@ -145,7 +145,8 @@ test("preview pages escape every stored string", async () => {
 
 test("the embedded stylesheet is the template's stylesheet", () => {
   const template = readFileSync(new URL("../../local-control/src/platform/genesis/templates/static-site/files/src/styles.css", import.meta.url), "utf8");
-  assert.equal(SITE_STYLES, template);
+  // Git may check text files out as CRLF on Windows; compare the CSS content.
+  assert.equal(SITE_STYLES, template.replaceAll("\r\n", "\n"));
 });
 
 test("a node is used first when it answers; otherwise a website is built here; apps keep the node's reason", async () => {
