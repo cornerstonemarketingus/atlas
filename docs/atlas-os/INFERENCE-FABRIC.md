@@ -28,7 +28,7 @@ allocation (code 4006), and OpenAI had no credits (verify-hosted run
 |---|---|---|
 | `private` | Owner's hardware or owner's cloud account (home PC, Modal, Oracle, rented GPU through the compute plane) | Everything, including repository code |
 | `vendor` | Paid or no-training API terms (Groq, Workers AI, Cerebras, paid OpenAI, Anthropic) | Everything |
-| `trains` | Free tiers whose terms allow using prompts to improve products (Gemini free, OpenRouter `:free` routes, Mistral free) | Only requests with no tool results and no workspace memory: the system prompt, the conversation and the new message. Never the coder. Off unless the owner sets `ATLAS_ALLOW_TRAINING_PROVIDERS=1`. |
+| `trains` | Free tiers whose terms allow using prompts to improve products (Gemini free, OpenRouter `:free` routes, Mistral free) | In chat, only requests made of Atlas's own system prompt (registered where it is built) and messages the person typed: no tool output, no workspace memory, no other system context and no earlier Atlas replies (they can quote files). Decided by recorded provenance, not by inspecting text, so anything the person types, pasted code included, does reach the provider; that is what `ATLAS_ALLOW_TRAINING_PROVIDERS=1` consents to. The coder uses them only with `=all`, which consents to sending repository code. |
 
 An owner on a paid plan of a `trains` vendor sets `ATLAS_<VENDOR>_TIER=paid`
 to move it to `vendor`.
@@ -68,7 +68,7 @@ context or tool support does not fit (the existing `incompatibility` check):
 - **interactive** (chat reply): fastest available — Groq → Workers AI →
   Cerebras → owned → `trains` (if allowed and the request qualifies) → OpenAI.
 - **coder** (repository tools, many turns): owned PC → Modal → Cerebras →
-  Groq → Workers AI → OpenAI/Anthropic. Never `trains`.
+  Groq → Workers AI → OpenAI/Anthropic. `trains` only with the owner's `all` consent.
 - **background** (self-improvement, evals): owned compute when idle, else the
   unspent daily allowance; deferred rather than refused.
 
@@ -104,12 +104,16 @@ free, no-card vendor is one more place a refused request bounces to.
 2. Add each as a repository secret: `GEMINI_API_KEY`, `OPENROUTER_API_KEY`,
    `MISTRAL_API_KEY` (and `CEREBRAS_API_KEY` if ever wanted). Run "Deploy
    Atlas web to Cloudflare Workers" so chat sees them.
-3. Allow the training tiers: secret `ATLAS_ALLOW_TRAINING_PROVIDERS=1` for
-   chat (they then see only the person's own words, never tool output,
-   memory or code). For the coder, the repository variable
-   `ATLAS_ALLOW_TRAINING_PROVIDERS=all` also lets them see repository code;
-   reasonable for a public repository such as Atlas itself, whose code is
-   already public.
+3. Allow the training tiers, knowing what each setting sends:
+   - secret `ATLAS_ALLOW_TRAINING_PROVIDERS=1` (chat): a training tier is
+     used only for a request made of Atlas's own system prompt and what
+     you typed, typically the first message of a conversation. Whatever you
+     type, pasted code included, may then be used by that vendor. Tool
+     output, workspace memory, other system context and earlier replies
+     never go to it.
+   - repository variable `ATLAS_ALLOW_TRAINING_PROVIDERS=all` (coder):
+     sends repository code and objectives. Reasonable for a public
+     repository such as Atlas, whose code is already public.
 
 Any refusal now moves on: rate limits, daily quotas, no credit, a model
 that is gone, a request too large, or a rejected key (still logged). Only

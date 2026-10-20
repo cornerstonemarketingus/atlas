@@ -8,8 +8,10 @@
  *             endpoints, not listed here); may receive anything.
  *   vendor  — paid or no-training terms; may receive anything.
  *   trains  — free tiers whose terms allow using prompts to improve the
- *             vendor's products. Off unless the owner opts in, never given
- *             tool results, workspace memory or code, never used by the coder.
+ *             vendor's products. Off unless the owner opts in. In chat they
+ *             receive only Atlas's own system prompt and what the person
+ *             typed (see qualifiesForTraining); the coder uses them only with
+ *             ATLAS_ALLOW_TRAINING_PROVIDERS=all, which sends repository code.
  *
  * Free terms change without notice; the dates say when these were checked.
  * Model names can be overridden per vendor (ATLAS_<VENDOR>_MODEL), and a
@@ -84,16 +86,33 @@ export function vendorEndpoint(id, environment = {}) {
 }
 
 /**
- * Whether a request may go to a `trains` tier: nothing in it came from a tool
- * (repository files, web pages, run output), from workspace memory, or looks
- * like code. What remains is the system prompt and the person's own words.
+ * System messages Atlas itself wrote (its own system prompt), registered by
+ * identity where they are built. Provenance is recorded, never inferred from
+ * what a message looks like.
+ */
+const ATLAS_AUTHORED = new WeakSet();
+
+/** Marks a message object as written by Atlas itself; returns it. */
+export function atlasAuthored(message) {
+  if (message && typeof message === "object") ATLAS_AUTHORED.add(message);
+  return message;
+}
+
+/**
+ * Whether a request may go to a `trains` tier. Fail-closed by provenance:
+ * every message must be a system message Atlas registered as its own
+ * (`atlasAuthored`) or a message the person typed. Anything else stops it:
+ * an unregistered system message (repository context, workspace memory,
+ * another agent's prompt), tool output, or any assistant turn, since an
+ * earlier reply can quote files or pages Atlas read.
+ *
+ * This is not a code detector. What the person types (pasted code included)
+ * does reach the provider; that is what the owner consents to with
+ * ATLAS_ALLOW_TRAINING_PROVIDERS=1.
  */
 export function qualifiesForTraining(messages = []) {
-  return messages.every((message) => {
-    if (message.role === "tool" || (message.role === "assistant" && Array.isArray(message.tool_calls) && message.tool_calls.length)) return false;
-    const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "");
-    if (/<data\b/iu.test(content)) return false;
-    // Atlas's own system prompt may show examples; the conversation may not carry code.
-    return message.role === "system" || !content.includes("```");
+  return messages.length > 0 && messages.every((message) => {
+    if (message?.role === "system") return ATLAS_AUTHORED.has(message);
+    return message?.role === "user" && typeof message.content === "string";
   });
 }

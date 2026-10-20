@@ -440,7 +440,7 @@ const ROUTABLE_STATUSES = new Set([...TRANSIENT_STATUSES, 401, 402, 403, 404, 41
 /** Why a target cannot take this request (a fixed word), or null. Unknown limits are not limits. */
 export function incompatibility(target, turns, options) {
   const capabilities = target.capabilities ?? {};
-  // A free tier that may train on prompts never sees tool output, workspace memory or code.
+  // A free tier that may train on prompts gets only Atlas's own system prompt and what the person typed.
   if (target.tier === TRUST.TRAINS && !qualifiesForTraining(turns)) return "trust";
   if (options.tools && capabilities.tools === false) return "tools";
   if (options.stream && capabilities.streaming === false) return "streaming";

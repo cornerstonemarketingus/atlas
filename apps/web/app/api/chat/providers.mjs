@@ -6,7 +6,8 @@ import { vendorEndpoint } from "../../../../../packages/atlas-inference/src/cata
  * Free and no-card vendors after the built-in ones: Cerebras (vendor terms),
  * then Gemini, OpenRouter and Mistral, which are training tiers and only
  * appear when the owner sets ATLAS_ALLOW_TRAINING_PROVIDERS=1 (the router
- * then gives them only requests with no tool results, memory or code).
+ * then gives them only requests made of Atlas's own system prompt and what
+ * the person typed; see qualifiesForTraining).
  */
 function freeVendors(environment) {
   return ["cerebras", "gemini", "openrouter", "mistral"].map((id) => vendorEndpoint(id, environment));
