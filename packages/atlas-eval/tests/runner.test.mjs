@@ -97,6 +97,26 @@ test("agent errors and deadlines are classified, still verified, and measured fi
   assert.deepEqual([metered.toolCalls, metered.toolErrors, metered.repairs, metered.ttftMs, metered.tokens.input], [4, 1, 2, 120, 900]);
 });
 
+test("a structured agent failure is not mislabeled as an incorrect solution", async () => {
+  const { root, task } = await fixtureRepo();
+  const result = await runTask({ task, target: "unavailable-provider", repoRoot: root,
+    agent: async () => ({ status: "failed", message: "Provider returned invalid JSON", toolCalls: 0, tokens: { input: 0, output: 0 } }) });
+  assert.equal(result.passed, false);
+  assert.equal(result.verified, true);
+  assert.equal(result.failureClass, "agent_error");
+  assert.equal(result.evidence.agentStatus, "failed");
+  assert.equal(result.evidence.agentMessage, "Provider returned invalid JSON");
+});
+
+test("independently verified changes can pass even if the agent reports failure afterwards", async () => {
+  const { root, task } = await fixtureRepo();
+  const result = await runTask({ task, target: "completed-before-provider-failure", repoRoot: root,
+    agent: async ctx => { await goldAgent(root)(ctx); return { status: "failed", message: "Final response unavailable" }; } });
+  assert.equal(result.passed, true);
+  assert.equal(result.verified, true);
+  assert.equal(result.failureClass, null);
+});
+
 test("workspaces are removed on success, failure and a throwing agent", async () => {
   const { root, task } = await fixtureRepo();
   assert.equal(worktrees(root), 1);

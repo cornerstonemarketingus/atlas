@@ -30,6 +30,8 @@ import { CloudModelProvider } from "./infrastructure/cloud-model-provider.js";
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
 import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provider.js";
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
+import { GovernedModelProvider } from "./infrastructure/governed-model-provider.js";
+import { governorFromEnvironment } from "./infrastructure/inference-governor-client.js";
 import { FallbackModelProvider } from "./infrastructure/fallback-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
 import { OUTPUT_TOKENS_PER_TURN_RANGE, selectCoderProvider } from "./model/coder-provider-selection.js";
@@ -688,7 +690,11 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       : routeSelection.profile.providerId === "groq"
         ? new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) })
         : new CloudModelProvider({ providerId: routeSelection.profile.providerId, apiKey: routeApiKey, models: routeCapabilities, ...(process.env["CLOUDFLARE_ACCOUNT_ID"] ? { accountId: process.env["CLOUDFLARE_ACCOUNT_ID"] } : {}) });
-    return new RetryingModelProvider(new RedactingModelProvider(upstream, new PatternSecretRedactor()), retryOptions);
+    // With a shared governor configured, every physical attempt (retries included) reserves capacity
+    // against the same provider ledger hosted chat uses; without one this is unchanged.
+    const governor = governorFromEnvironment(process.env, { providerId: routeSelection.profile.providerId, apiKey: routeApiKey, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
+    const redacted = new RedactingModelProvider(upstream, new PatternSecretRedactor());
+    return new RetryingModelProvider(governor === undefined ? redacted : new GovernedModelProvider(redacted, governor, { maximumWaitMs: Math.min(30_000, retryOptions.maximumDelayMs) }), retryOptions);
   };
   const routes = [{ provider: makeRoute(model, selection.selection, apiKey, endpoint), model }];
   for (let index = 0; index < args.length; index += 1) {
