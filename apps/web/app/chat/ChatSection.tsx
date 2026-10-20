@@ -65,8 +65,8 @@ export function ChatSection() {
   const [repository, setRepository] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(PROJECT_STORAGE_KEY) ?? "");
   const [branch, setBranch] = useState("main");
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [ready, setReady] = useState<{ configured: boolean; reason: string | null; providers?: { id: string; label: string; available: boolean; paid?: boolean }[] } | null>(null);
-  const [provider, setProvider] = useState("auto");
+  const [ready, setReady] = useState<{ configured: boolean; reason: string | null; providers?: { id: string; label: string; available: boolean; paid?: boolean; locked?: boolean }[] } | null>(null);
+  const [provider, setProvider] = useState("atlas");
   const [stored, setStored] = useState(true);
   const [version, setVersion] = useState(0);
   const { threads, close } = useThreads(version);
@@ -526,7 +526,7 @@ export function ChatSection() {
       placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything…"} />
         <div className="composer-actions">
           <label>Model <select aria-label="Model provider" value={provider} onChange={(event) => setProvider(event.target.value)} disabled={streaming !== null}>
-            {(ready?.providers ?? [{ id: "auto", label: "Automatic", available: true }]).map((option) => <option key={option.id} value={option.id} disabled={!option.available}>{option.label}{option.paid ? " (paid API)" : ""}{!option.available ? " — not configured" : ""}</option>)}
+            {(ready?.providers ?? [{ id: "atlas", label: "Atlas", available: true, locked: false }]).map((option) => <option key={option.id} value={option.id} disabled={!option.available}>{option.label}{option.locked ? " — paid subscription" : !option.available ? " — unavailable" : ""}</option>)}
           </select></label>
         <div><span className="composer-hint">Enter sends · Shift+Enter for a new line</span></div>
         {streaming !== null
@@ -534,6 +534,7 @@ export function ChatSection() {
           : <button className="send" aria-label="Send" disabled={sending || !draft.trim()}>{sending ? "…" : "↑"}</button>}
       </div>
       {notice && <p className="composer-notice" role="status">{notice}</p>}
+      {ready?.providers?.some((option) => option.locked) && <p className="composer-notice"><Link href="/pricing">Unlock Super Atlas with a paid subscription</Link></p>}
       {capReached && <p className="composer-notice cap-options">Keep going free on your own computer: <a href="/guide#local-model">run a local model</a>. Or <a href="/pricing">choose a plan</a> for a higher daily limit.</p>}
     </form>
   </AtlasShell>;

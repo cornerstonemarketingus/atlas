@@ -5,7 +5,7 @@ import { conversationWritable, recallForMemory, tenantAllowlist } from "../../..
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
-import { checkAndRecordChatUsage } from "../billing/plan.mjs";
+import { currentPlan, checkAndRecordChatUsage } from "../billing/plan.mjs";
 import { isDeploymentOwner } from "../tasks/self-protection.mjs";
 import { POST as startTask } from "../tasks/route";
 import { allowedRepositories } from "../tasks/dispatch.mjs";
@@ -16,7 +16,7 @@ import { POST as startComputerTask } from "../computer/tasks/route";
 import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, memoryDigest, taskRequestsFrom } from "./atlas-knowledge.mjs";
 import { chatTurns } from "./turns.mjs";
 import { threadTitle } from "./model-endpoint.mjs";
-import { resolveChatProvider, chatProviderChoices } from "./providers.mjs";
+import { normalizeChatTier, superAtlasAccess, resolveTierModel, atlasChoices } from "./chat-tiers.mjs";
 import { encodeEvent } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
 import { governChain } from "../inference/governor-client.mjs";
@@ -51,10 +51,13 @@ export async function POST(request: Request) {
 
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
-  const selection = body.provider ?? "auto";
+  const selection = normalizeChatTier(body.provider);
   const workersAI = { ai: (workerEnv as { AI?: unknown }).AI };
-  if (typeof selection !== "string" || !chatProviderChoices(process.env, workersAI).some((choice) => choice.id === selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
-  const resolved = resolveChatProvider(process.env, selection, workersAI);
+  if (!selection) return Response.json({ message: "Choose Atlas or Super Atlas." }, { status: 400 });
+  if (selection === "super-atlas" && !await superAtlasAccess(account, (id: number) => currentPlan(getDb(), id))) {
+    return Response.json({ message: "Super Atlas requires an active paid subscription.", code: "SUBSCRIPTION_REQUIRED", upgradeUrl: "/pricing" }, { status: 403 });
+  }
+  const resolved = resolveTierModel(selection, process.env, workersAI);
   if (!resolved.configured) {
     return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
   }
@@ -295,6 +298,8 @@ export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
   const bindings = { ai: (workerEnv as { AI?: unknown }).AI };
-  const endpoint = resolveChatProvider(process.env, "auto", bindings);
-  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null, providers: chatProviderChoices(process.env, bindings) }, { headers: { "cache-control": "no-store" } });
+  const paid = await superAtlasAccess(account, (id: number) => currentPlan(getDb(), id));
+  const endpoint = resolveTierModel("atlas", process.env, bindings);
+  const providers = atlasChoices(process.env, bindings, paid);
+  return Response.json({ configured: providers.some((choice) => choice.available), reason: endpoint.reason ?? null, providers }, { headers: { "cache-control": "no-store" } });
 }
