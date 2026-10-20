@@ -120,17 +120,18 @@ reconciler and audit trail of a rented GPU. A job is submitted with
    machine.
 
 3. **On the node machine:** install Node.js 22.13 or newer and a container
-   runtime, check out this repository, and point the node at render images
-   that contain the tools (any image whose entrypoint can run `ffmpeg` /
-   `blender`). Then start it with the token in an environment variable (never
-   on the command line):
+   runtime, check out this repository, and build the render image
+   (`docker build -t atlas/render:local docker/render`, see
+   `docker/render/README.md`; it has ffmpeg and headless Blender). Then start
+   the node with the token in an environment variable (never on the command
+   line):
 
    - **Linux** (Docker or Podman):
      ```sh
      export ATLAS_NODE_TOKEN='…'
      export ATLAS_TERMINAL_CONTAINER_RUNTIME=/usr/bin/docker   # or /usr/bin/podman
-     export ATLAS_RENDER_FFMPEG_IMAGE=your/ffmpeg-image:tag
-     export ATLAS_RENDER_BLENDER_IMAGE=your/blender-image:tag   # Cycles on CPU works without a GPU
+     export ATLAS_RENDER_FFMPEG_IMAGE=atlas/render:local
+     export ATLAS_RENDER_BLENDER_IMAGE=atlas/render:local   # Cycles on CPU works without a GPU
      cd apps/local-control && node src/node/main.mjs --daemon https://atlas.your-tailnet.ts.net --token-env ATLAS_NODE_TOKEN
      ```
    - **macOS** (Docker Desktop, or Podman machine): the same, with
@@ -141,7 +142,7 @@ reconciler and audit trail of a rented GPU. A job is submitted with
      ```powershell
      $env:ATLAS_NODE_TOKEN = '…'
      $env:ATLAS_TERMINAL_CONTAINER_RUNTIME = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
-     $env:ATLAS_RENDER_FFMPEG_IMAGE = 'your/ffmpeg-image:tag'
+     $env:ATLAS_RENDER_FFMPEG_IMAGE = 'atlas/render:local'
      cd apps\local-control; node src\node\main.mjs --daemon https://atlas.your-tailnet.ts.net --token-env ATLAS_NODE_TOKEN
      ```
 
