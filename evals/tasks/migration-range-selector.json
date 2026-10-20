@@ -1,0 +1,33 @@
+{
+  "id": "migration-range-selector",
+  "category": "multi-file-edit",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "1d61567d3469bd79a3530ee94c1d5c85d7f6f740",
+  "objective": "Let the D1 migration workflow repair one skipped migration without replaying later ones. Add scripts/runner/select-migrations.mjs exporting selectMigrations(names, { from, through }): both are four-digit prefixes, through is optional, only files named NNNN_name.sql qualify, results are sorted ascending, an inverted range, invalid prefix or empty selection throws. Running the file as a script reads FROM_MIGRATION and THROUGH_MIGRATION from the environment, lists apps/web/drizzle, and prints the selected paths space-separated as drizzle/<name>. Wire it into .github/workflows/migrate-d1.yml with a through_migration input. scripts/runner/select-migrations.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "931288a0b318a82eb0662e1edd788301d105399e",
+    "paths": [
+      "scripts/runner/select-migrations.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "scripts/runner/select-migrations.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "931288a0b318a82eb0662e1edd788301d105399e",
+    "paths": [
+      "scripts/runner/select-migrations.mjs",
+      ".github/workflows/migrate-d1.yml"
+    ]
+  },
+  "timeoutMs": 120000,
+  "tags": [
+    "history",
+    "runner",
+    "workflow"
+  ]
+}

@@ -26,9 +26,12 @@ import { JsonLinesSessionAuditStore } from "./infrastructure/json-lines-session-
 import { persistSessionAudit } from "./infrastructure/persist-session-audit.js";
 import { InMemoryUsageBudgetLedger } from "./infrastructure/in-memory-usage-budget-ledger.js";
 import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-openai-compatible-model-provider.js";
+import { CloudModelProvider } from "./infrastructure/cloud-model-provider.js";
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
 import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provider.js";
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
+import { GovernedModelProvider } from "./infrastructure/governed-model-provider.js";
+import { governorFromEnvironment } from "./infrastructure/inference-governor-client.js";
 import { FallbackModelProvider } from "./infrastructure/fallback-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
 import { OUTPUT_TOKENS_PER_TURN_RANGE, selectCoderProvider } from "./model/coder-provider-selection.js";
@@ -78,10 +81,10 @@ const USAGE = `Usage:
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
-  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq] [--api-key-env <ENV_VAR>]
+  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|openai|workers-ai] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N]
-      [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N]
+      [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N] [--max-repair-ms N] [--max-same-failure N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
 
@@ -533,6 +536,12 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const tokenBudgetOption = readOptionalInteger(args, "--token-budget", 1, 1_000_000);
   const maximumTurnsOption = readOptionalInteger(args, "--max-turns", 1, 32);
   const repairAttemptsOption = readOptionalInteger(args, "--max-repair-attempts", 0, 5);
+  // Repair-loop limits checked before every repair (docs/PROGRAM.md 2.4):
+  // wall time since the session started, and how many repairs the same
+  // failure may survive. Token spend reuses --token-budget's shared ledger.
+  const repairWallOption = readOptionalInteger(args, "--max-repair-ms", 1_000, 86_400_000);
+  const sameFailureOption = readOptionalInteger(args, "--max-same-failure", 1, 10);
+  if (repairWallOption === null || sameFailureOption === null) return 2;
   const verifyTimeoutOption = readOptionalInteger(args, "--verify-timeout-ms", 1_000, 1_800_000);
   const retryAttemptsOption = readOptionalInteger(args, "--retry-attempts", 1, 5);
   const retryMaxDelayOption = readOptionalInteger(args, "--retry-max-delay-ms", 0, 120_000);
@@ -570,8 +579,8 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   // Refused rather than ignored. A custom endpoint that silently did nothing
   // would send the repository to the vendor the operator was trying to avoid,
   // and they would have no way to tell from the output.
-  if (endpoint !== undefined && selection.selection.profile.providerId === "anthropic") {
-    console.error("--base-url applies to the OpenAI-compatible provider only; it cannot redirect the Anthropic client.");
+  if (endpoint !== undefined && selection.selection.profile.providerId !== "groq") {
+    console.error("--base-url applies only to the groq OpenAI-compatible server path; cloud vendor credentials cannot be redirected.");
     return 2;
   }
   const { profile, apiKeyEnvironmentVariable, maxOutputTokensPerTurn } = selection.selection;
@@ -678,8 +687,14 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     }];
     const upstream = routeSelection.profile.providerId === "anthropic"
       ? new AnthropicModelProvider({ apiKey: routeApiKey, models: routeCapabilities, defaultMaxOutputTokens: routeSelection.maxOutputTokensPerTurn })
-      : new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
-    return new RetryingModelProvider(new RedactingModelProvider(upstream, new PatternSecretRedactor()), retryOptions);
+      : routeSelection.profile.providerId === "groq"
+        ? new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) })
+        : new CloudModelProvider({ providerId: routeSelection.profile.providerId, apiKey: routeApiKey, models: routeCapabilities, ...(process.env["CLOUDFLARE_ACCOUNT_ID"] ? { accountId: process.env["CLOUDFLARE_ACCOUNT_ID"] } : {}) });
+    // With a shared governor configured, every physical attempt (retries included) reserves capacity
+    // against the same provider ledger hosted chat uses; without one this is unchanged.
+    const governor = governorFromEnvironment(process.env, { providerId: routeSelection.profile.providerId, apiKey: routeApiKey, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
+    const redacted = new RedactingModelProvider(upstream, new PatternSecretRedactor());
+    return new RetryingModelProvider(governor === undefined ? redacted : new GovernedModelProvider(redacted, governor, { maximumWaitMs: Math.min(30_000, retryOptions.maximumDelayMs) }), retryOptions);
   };
   const routes = [{ provider: makeRoute(model, selection.selection, apiKey, endpoint), model }];
   for (let index = 0; index < args.length; index += 1) {
@@ -826,11 +841,28 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     runAgent: runAgentWith(agent),
     ...(escalationRoute ? { escalation: { attempts: escalationAttemptsOption ?? 2, runAgent: runAgentWith(makeAgent(escalationRoute.provider, escalationRoute.model)) } } : {}),
     runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),
+    loopLimits: {
+      ...(repairWallOption === undefined ? {} : { maxWallMs: repairWallOption }),
+      maxTokens: tokenBudget,
+      ...(sameFailureOption === undefined ? {} : { maxSameFailure: sameFailureOption }),
+    },
+    tokensSpent: () => budgetLedger.snapshot().used.outputTokens,
   });
   let result: Awaited<ReturnType<typeof session.run>>;
+  // Only counters reach CI progress; never tool arguments, paths, prompts or provider bodies.
+  const progressTimer = setInterval(() => {
+    const events = audit.snapshot();
+    console.error("Atlas progress: " + JSON.stringify({
+      modelRequests: events.filter((event) => event.type === "model.requested").length,
+      toolCalls: events.filter((event) => event.type === "tool.requested").length,
+      failedTools: events.filter((event) => event.type === "tool.completed" && "outcome" in event.payload && event.payload.outcome === "failed").length,
+    }));
+  }, 15_000);
+  progressTimer.unref();
   try {
     result = await session.run();
   } finally {
+    clearInterval(progressTimer);
     // Saved however the session ended, so its edits can be taken back.
     // stderr, never stdout: stdout is the result the runner parses.
     const saved = await checkpoint.save(sessionId).catch((error: unknown) => {

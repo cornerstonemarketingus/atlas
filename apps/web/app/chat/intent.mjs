@@ -24,6 +24,9 @@ const PROJECT_REFERENCE = /\b(?:my|the|this|our)\s+(?:project|repo(?:sitory)?|co
 const COMPUTER_VERBS = /^(?:go\s+to|open|visit|browse|navigate(?:\s+to)?|search\s+(?:for|on|the web)|look\s+up|fill\s+(?:out|in)|apply\s+(?:to|for)|log\s*in(?:to)?|sign\s+(?:in|up)(?:\s+(?:to|for))?|download|book|order|find\s+(?:me\s+)?(?:a|an|the)?\s*\w+\s+(?:on|at)\b|click|take\s+a\s+screenshot|screenshot)\b/iu;
 const COMPUTER_REFERENCE = /\b(?:on|in|using|with|of)\s+(?:my\s+|the\s+)?(?:computer|pc|desktop|laptop|screen|browser|chrome|edge|firefox)\b|\bhttps?:\/\/\S+|\b[a-z0-9-]+\.(?:com|org|net|io|dev|ai|app|co)\b/iu;
 
+/** "build (me) a (responsive, modern) website / web app / landing page …": creating something new, not editing a repository. */
+const NEW_SITE_REQUEST = /^(?:create|build|make|design|develop|launch|set\s+up)\s+(?:(?:me|us)\s+)?(?:a|an)\s+(?:[\w-]+\s+){0,4}?(?:web\s?site|web\s?app(?:lication)?|landing\s+page|online\s+store|portfolio\s+site|marketing\s+site)\b/iu;
+
 function stripLeadIn(text) {
   return text.replace(LEAD_IN, "").trim();
 }
@@ -31,7 +34,7 @@ function stripLeadIn(text) {
 /**
  * @param {string} message
  * @param {{ hasProject?: boolean }} [context]
- * @returns {{ kind: "chat" } | { kind: "project_task", mode: "coder"|"debug"|"inspect", reason: string } | { kind: "computer_task", reason: string }}
+ * @returns {{ kind: "chat" } | { kind: "new_project_task", reason: string } | { kind: "project_task", mode: "coder"|"debug"|"inspect", reason: string } | { kind: "computer_task", reason: string }}
  */
 export function classifyIntent(message, { hasProject = false } = {}) {
   const text = typeof message === "string" ? message.trim() : "";
@@ -45,6 +48,16 @@ export function classifyIntent(message, { hasProject = false } = {}) {
   // A question that is not a polite request for work is answered, never dispatched.
   if (!polite && (QUESTION_START.test(body) || (text.endsWith("?") && !COMPUTER_VERBS.test(request) && !Object.values(PROJECT_VERBS).some((verb) => verb.test(request))))) {
     return { kind: "chat" };
+  }
+
+  if (/^(?:create|start|build|make|set\s+up)\b/iu.test(request) && /\b(?:(?:new|separate|own)\s+(?:github\s+)?(?:repo(?:sitory)?|project|app|business|saas)|(?:a|an)\s+(?:github\s+)?repo(?:sitory)?|as\s+(?:its|their)\s+own\s+app)\b/iu.test(request)) {
+    return { kind: "new_project_task", reason: "This creates a separate Genesis workspace and GitHub repository under your publishing policy." };
+  }
+
+  // "Build a responsive website for Team Hahn Construction…" names no repository, so it is a new
+  // project; "build the website in my project" points at an existing one and stays a project task.
+  if (NEW_SITE_REQUEST.test(request) && !PROJECT_REFERENCE.test(text)) {
+    return { kind: "new_project_task", reason: "This creates a separate Genesis workspace and GitHub repository under your publishing policy." };
   }
 
   if (COMPUTER_VERBS.test(request) && (COMPUTER_REFERENCE.test(text) || /^(?:go\s+to|visit|browse|navigate|log\s*in|sign\s+(?:in|up)|fill|apply|book|order|take\s+a\s+screenshot|screenshot)/iu.test(request))) {

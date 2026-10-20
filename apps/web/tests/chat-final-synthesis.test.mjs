@@ -303,6 +303,52 @@ test("the fallback model's empty reply is recovered like any other", async () =>
   assert.deepEqual(requests.map((request) => request.model), ["m", "small", "m"]);
 });
 
+// Production (Automatic provider): two steps of work, then every attempt to
+// write the answer came back empty from the configured provider, and the
+// answer ended "the model returned an empty reply." although OpenAI was
+// configured as the cross-provider fallback and was never asked.
+for (const stream of [false, true]) {
+  test(`an empty final answer moves to the cross-provider fallback instead of giving up (stream=${stream})`, async () => {
+    const read = { choices: [{ message: { tool_calls: [{ id: "read1", type: "function", function: { name: "read_web_page", arguments: JSON.stringify({ url: "https://example.com" }) } }] } }] };
+    const empty = json({ choices: [{ message: { content: "" }, finish_reason: "stop" }] });
+    const { fetcher, requests } = scripted([json(read), empty, empty, empty, json({ choices: [{ message: { content: "The page says: Example body." } }] })]);
+    const locations = [];
+    const observedFetcher = async (url, init) => {
+      if (String(url).startsWith("https://model.test")) locations.push(String(url));
+      return fetcher(url, init);
+    };
+    const providerFallback = { baseUrl: "https://model.test/openai/v1", apiKey: "openai-key", model: "gpt-mini" };
+    const outcome = await run(observedFetcher, { stream, endpoint: { ...endpoint, providerFallback } }).promise;
+    assert.equal(outcome.reply, "The page says: Example body.");
+    assert.equal(outcome.finalization, undefined, "answered, not incomplete");
+    // Tool round, the empty turn, the configured model's two synthesis tries, then the fallback provider writes it.
+    assert.deepEqual(requests.map((request) => request.model), ["m", "m", "m", "m", "gpt-mini"]);
+    assert.match(locations.at(-1), /\/openai\//u);
+    assert.match(JSON.stringify(requests.at(-1).messages), /Example body/u, "the fallback writes from the work already done");
+  });
+}
+
+test("an empty final answer: the configured model twice, then the same-provider fallback model, then the other provider", async () => {
+  const empty = json({ choices: [{ message: { content: "" }, finish_reason: "stop" }] });
+  const { fetcher, requests } = scripted([empty, empty, empty, empty, json({ choices: [{ message: { content: "Answered at last." } }] })]);
+  const providerFallback = { baseUrl: "https://model.test/openai/v1", apiKey: "openai-key", model: "gpt-mini" };
+  const outcome = await run(fetcher, { stream: false, endpoint: { ...endpoint, fallbackModel: "small", providerFallback } }).promise;
+  assert.equal(outcome.reply, "Answered at last.");
+  assert.deepEqual(requests.map((request) => request.model), ["m", "m", "m", "small", "gpt-mini"]);
+});
+
+test("a fallback model cut off by the token limit gets one more try with more room before moving on", async () => {
+  const empty = json({ choices: [{ message: { content: "" }, finish_reason: "stop" }] });
+  const cutOff = json({ choices: [{ message: { content: "" }, finish_reason: "length" }], usage: { completion_tokens: 4000 } });
+  const { fetcher, requests } = scripted([empty, empty, empty, cutOff, json({ choices: [{ message: { content: "Done with room to spare." } }] })]);
+  const providerFallback = { baseUrl: "https://model.test/openai/v1", apiKey: "openai-key", model: "gpt-mini" };
+  const outcome = await run(fetcher, { stream: false, endpoint: { ...endpoint, fallbackModel: "small", providerFallback } }).promise;
+  assert.equal(outcome.reply, "Done with room to spare.");
+  assert.deepEqual(requests.map((request) => request.model), ["m", "m", "m", "small", "small"], "the cut-off fallback, given more room");
+  const room = (request) => request.max_tokens ?? request.max_completion_tokens;
+  assert.ok(room(requests[4]) > room(requests[3]));
+});
+
 test("an agent team's results reach the answer even when the lead's next turn is empty", async () => {
   const team = Object.assign(async () => ({ ok: true, label: "Agent team finished: 3/3 steps verified", content: "<data>auth lives in session.ts</data>" }), { pending: "Handing this to an agent team…" });
   const tools = [{ type: "function", function: { name: "run_agent_team", description: "team", parameters: { type: "object", properties: {} } } }];
@@ -316,13 +362,14 @@ test("an agent team's results reach the answer even when the lead's next turn is
   assert.match(requests.at(-1).messages.at(-1).content, /auth lives in session\.ts/u);
 });
 
-test("a task-only reply gets words, then the started runs", async () => {
-  const { fetcher } = scripted([
+test("a task-only reply dispatches without model synthesis", async () => {
+  const { fetcher, requests } = scripted([
     [callTool("s1", "start_atlas_task", { mode: "coder", objective: "Fix the login bug", repository: "cornerstonemarketingus/atlas" })],
     [say("Starting that now.")],
   ]);
   const outcome = await run(fetcher).promise;
-  assert.match(outcome.reply, /^Starting that now\.\n\nStarted /u);
+  assert.equal(requests.length, 1);
+  assert.equal(outcome.reply, "Started coder.");
 });
 
 test("a child agent's report is never empty either", async () => {
@@ -366,3 +413,39 @@ test("the planner's client asks again on an empty reply instead of feeding \"\" 
   const alwaysEmpty = plannerClient(endpoint, async () => json({ choices: [] })());
   await assert.rejects(async () => { for await (const chunk of alwaysEmpty.stream({ messages: [] })) void chunk; }, (error) => error.code === "EMPTY_MODEL_RESPONSE");
 });
+
+// Production (Automatic, Groq configured, 2026-10-05): one answer used the
+// minute's allowance, and the next reply ended "the model provider's rate
+// limit was reached." after 34 s, because Groq's model, Groq's fallback model
+// and the OpenAI fallback all refused within that minute and a ~40 s reset
+// was more than the reply would wait.
+for (const stream of [false, true]) {
+  const read = { choices: [{ message: { tool_calls: [{ id: "read1", type: "function", function: { name: "read_web_page", arguments: JSON.stringify({ url: "https://example.com" }) } }] } }] };
+  const limited = () => new Response("", { status: 429, headers: { "retry-after": "40" } });
+  const noCredits = () => new Response(JSON.stringify({ error: { code: "insufficient_quota", message: "private provider text" } }), { status: 429 });
+  const providerFallback = { baseUrl: "https://model.test/openai/v1", apiKey: "openai-key", model: "gpt-mini" };
+
+  test(`every provider refusing for a minute is waited out, then the answer is written (stream=${stream})`, async () => {
+    const { fetcher, requests } = scripted([json(read), limited, limited, noCredits, limited, limited, json({ choices: [{ message: { content: "Answer from the work." } }] })]);
+    const slept = [];
+    const { promise, events } = run(fetcher, { stream, endpoint: { ...endpoint, fallbackModel: "small", providerFallback }, sleep: async (ms) => { slept.push(ms); } });
+    const outcome = await promise;
+    assert.equal(outcome.reply, "Answer from the work.");
+    assert.equal(outcome.finalization, undefined);
+    assert.deepEqual(slept, [40_000], "every route is tried before waiting, and the wait is the stated reset");
+    // The OpenAI account without credits is not asked again in the same reply.
+    assert.deepEqual(requests.map((request) => request.model), ["m", "m", "small", "gpt-mini", "m", "small", "m"]);
+    assert.ok(events.some((event) => event.type === "tool" && /Waiting about 40 s for model capacity/u.test(event.data.label)));
+  });
+
+  test(`when no provider recovers, the reply names who refused and why (stream=${stream})`, async () => {
+    const { fetcher } = scripted([json(read), limited, limited, noCredits, ...Array.from({ length: 6 }, () => limited)]);
+    const slept = [];
+    const outcome = await run(fetcher, { stream, endpoint: { ...endpoint, fallbackModel: "small", providerFallback }, sleep: async (ms) => { slept.push(ms); } }).promise;
+    assert.deepEqual(slept, [40_000, 40_000]);
+    assert.equal(outcome.finalization.status, "incomplete");
+    assert.match(outcome.finalization.reason, /rate limit was reached \(m \(model\.test\) is rate-limited for about 40 s; small \(model\.test\) is rate-limited for about 40 s; gpt-mini \(model\.test\) has no API credits or reached a billing limit\)/u);
+    assert.match(outcome.reply, /Why it stopped: the model provider's rate limit was reached \(/u);
+    assert.doesNotMatch(outcome.reply, /private provider text/u);
+  });
+}

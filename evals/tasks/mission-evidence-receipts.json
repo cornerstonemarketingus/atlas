@@ -1,0 +1,32 @@
+{
+  "id": "mission-evidence-receipts",
+  "category": "bug-localization",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "912a7eb989f40d7dfc0c5418440419c12c84a282",
+  "objective": "createMissionEvidenceVerifier({ patchDirectory }) in apps/local-control/src/agent/mission-evidence.mjs lets an executor's own claims pass as verified test and live-outcome receipts. Change the verifier so that: (1) when a child's metadata.requiredEvidence includes \"validation\" it rejects with an error matching /Independent validation is unavailable/; (2) non-patch evidence items are kept but marked verification: \"executor-reported\"; (3) the returned result carries an authoritative verification object replacing any executor-supplied one: { schemaVersion: 1, evaluator: \"mission-artifact-verifier\", artifacts: [{ kind: \"patch\", sha256, bytes }] for each verified patch, validation: { status: \"unavailable\", reason }, liveOutcomes: { status: \"not-evaluated\", reason } }. MissionService must hand that receipt to dependent children and persist it. apps/local-control/tests/mission-evidence.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "68d19791a67bb93aaa10afcf53db6ea03cc5f986",
+    "paths": [
+      "apps/local-control/tests/mission-evidence.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/mission-evidence.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "68d19791a67bb93aaa10afcf53db6ea03cc5f986",
+    "paths": [
+      "apps/local-control/src/agent/mission-evidence.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "safety"
+  ]
+}

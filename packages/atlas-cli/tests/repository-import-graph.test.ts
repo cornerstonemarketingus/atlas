@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { RepositoryImportGraph, isTestFile, stripJsonComments, testsFor } from "../src/infrastructure/repository-import-graph.js";
 
@@ -85,7 +86,7 @@ test("test file conventions for both languages", () => {
 });
 
 test("works on Atlas's own coder: the tests for the verified coder session are found", async () => {
-  const graph = await new RepositoryImportGraph().build(new URL("../../", import.meta.url).pathname.replace(/dist\/?$/u, ""));
+  const graph = await new RepositoryImportGraph().build(fileURLToPath(new URL("../../", import.meta.url)));
   const result = testsFor(graph, "src/agent/verified-coder-session.ts");
   assert.ok(result.tests.some((item) => item.test === "tests/verified-coder-session.test.ts"), JSON.stringify(result.tests.slice(0, 3)));
 });

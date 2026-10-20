@@ -1,0 +1,32 @@
+{
+  "id": "mission-cooldown-restore",
+  "category": "bug-localization",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "74958255c54d5dc92c286258eed3ff709ba48941",
+  "objective": "MissionScheduler in apps/local-control/src/agent/mission-scheduler.mjs loses its provider rate-limit state across restart and pause/resume, so a restored mission gets fresh retries and ignores the provider's reset time. Include maxRateLimitRetries and throttle.consecutiveLimits in snapshots alongside the existing throttle fields; on restore, rebuild the adaptive batch size from throttle.batchSize, restore consecutiveLimits and re-arm the wait when throttle.waitingUntil is in the future (not for terminal missions). Pausing must not clear the throttle, and an expired wait must not resume a paused mission by itself. Reject malformed recovery fields with MissionPlanError INVALID_SNAPSHOT; legacy snapshots without them still restore. apps/local-control/tests/mission-throttle-recovery.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "ac54793c20a85d591d0556c765fdd9ef15cd3e47",
+    "paths": [
+      "apps/local-control/tests/mission-throttle-recovery.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/mission-throttle-recovery.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "ac54793c20a85d591d0556c765fdd9ef15cd3e47",
+    "paths": [
+      "apps/local-control/src/agent/mission-scheduler.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "recovery"
+  ]
+}

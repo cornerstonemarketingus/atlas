@@ -18,7 +18,7 @@ const chatDirectory = join(root, "apps/web/app/api/chat");
 function uploadStepEnvironment() {
   const step = workflow.slice(workflow.indexOf("- name: Upload Worker runtime secrets"));
   const envBlock = step.slice(0, step.indexOf("run: |"));
-  return new Set([...envBlock.matchAll(/^\s+([A-Z][A-Z0-9_]+):\s*\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}/gmu)].map(([, name, secret]) => {
+  return new Set([...envBlock.matchAll(/^\s+([A-Z][A-Z0-9_]+):\s*\$\{\{\s*(?:secrets|vars)\.([A-Z0-9_]+)\s*\}\}/gmu)].map(([, name, secret]) => {
     assert.equal(name, secret, `${name} must come from the secret of the same name`);
     return name;
   }));
@@ -30,6 +30,16 @@ function uploadedNames() {
   assert.ok(loop, "the upload loop must be present");
   return new Set(loop[1].split(/\\\n/u).map((line) => line.trim()).filter(Boolean));
 }
+
+test("Genesis bridge connection variables are mapped and uploaded to the Worker", () => {
+  const source = readFileSync(join(root, "apps/web/app/api/genesis/bridge.mjs"), "utf8");
+  const runtime = new Set([...source.matchAll(/environment\.(ATLAS_[A-Z0-9_]+)/gu)].map((match) => match[1]));
+  assert.deepEqual([...runtime].sort(), ["ATLAS_GENESIS_TOKEN", "ATLAS_GENESIS_URL"]);
+  for (const name of runtime) {
+    assert.ok(uploadStepEnvironment().has(name), `${name} must be sourced from its repository secret`);
+    assert.ok(uploadedNames().has(name), `${name} must reach the Worker`);
+  }
+});
 
 /** Runtime variables the chat code reads. */
 function chatRuntimeVariables() {
@@ -44,8 +54,6 @@ function chatRuntimeVariables() {
 
 // Read by chat but supplied some other way, each for a stated reason.
 const SUPPLIED_ELSEWHERE = new Map([
-  // Mapped into ATLAS_MODEL_API_KEY by the upload step for the Groq origin only.
-  ["GROQ_API_KEY", "mapped to ATLAS_MODEL_API_KEY"],
   // A fallback alias for self-hosted deployments that already use this name.
   ["TAVILY_API_KEY", "alias of ATLAS_TAVILY_API_KEY"],
 ]);
@@ -59,16 +67,30 @@ test("every variable chat reads is uploaded to the Worker", () => {
 test("the model variables are mapped and uploaded, the fallback included", () => {
   const environment = uploadStepEnvironment();
   const uploaded = uploadedNames();
-  for (const name of ["ATLAS_CHAT_BASE_URL", "ATLAS_CHAT_MODEL", "ATLAS_MODEL_API_KEY", "ATLAS_CHAT_FALLBACK_MODEL", "ATLAS_TAVILY_API_KEY"]) {
+  // GROQ_API_KEY is uploaded as itself too: when the main model is the owner's
+  // own (ATLAS_MODEL_API_KEY is then the gateway token), Groq is a fallback.
+  for (const name of ["ATLAS_CHAT_BASE_URL", "ATLAS_CHAT_MODEL", "ATLAS_MODEL_API_KEY", "ATLAS_CHAT_FALLBACK_MODEL", "ATLAS_TAVILY_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY"]) {
     assert.ok(environment.has(name), `${name} is not mapped from secrets`);
     assert.ok(uploaded.has(name), `${name} is not uploaded`);
   }
 });
 
-test("everything uploaded is mapped from a secret, so no upload is silently empty", () => {
+test("everything uploaded is mapped from a repository setting, so no upload is silently empty", () => {
   const environment = uploadStepEnvironment();
   const unmapped = [...uploadedNames()].filter((name) => !environment.has(name));
   assert.deepEqual(unmapped, []);
+});
+
+test("billing display, canonical origin and independent dispatch settings reach the Worker", () => {
+  const uploaded = uploadedNames();
+  for (const name of ["ATLAS_PUBLIC_URL", "ATLAS_PRICE_DISPLAY_PRO", "ATLAS_PRICE_DISPLAY_TEAM"]) {
+    assert.ok(workflow.includes(name + ": ${{ vars." + name + " }}"));
+    assert.ok(uploaded.has(name), `${name} must reach the Worker`);
+  }
+  for (const name of ["ATLAS_AGENT_DISPATCH_URL", "ATLAS_AGENT_DISPATCH_TOKEN"]) {
+    assert.ok(uploadStepEnvironment().has(name));
+    assert.ok(uploaded.has(name), `${name} must reach the Worker`);
+  }
 });
 
 test("setup status reports chat readiness as flags, never values", () => {
@@ -77,8 +99,9 @@ test("setup status reports chat readiness as flags, never values", () => {
     ATLAS_CHAT_MODEL: "openai/gpt-oss-120b",
     GROQ_API_KEY: "gsk_secret_value",
   });
-  assert.deepEqual(readiness, { configured: true, fallbackModelConfigured: true, webSearchConfigured: false });
+  assert.deepEqual(readiness, { configured: true, fallbackModelConfigured: true, modelPoolSize: 2, webSearchConfigured: false });
   assert.doesNotMatch(JSON.stringify(readiness), /gsk_|groq\.com|gpt-oss/u);
   assert.equal(chatReadiness({ ATLAS_CHAT_BASE_URL: "https://api.groq.com/openai/v1", ATLAS_CHAT_MODEL: "m", ATLAS_CHAT_FALLBACK_MODEL: "none" }).fallbackModelConfigured, false);
   assert.equal(chatReadiness({}).configured, false);
+  assert.equal(chatReadiness({}).modelPoolSize, 0);
 });

@@ -1,7 +1,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { runCoderProcess } from "./run-coder-process.mjs";
+import { resolveCoderRoutes } from "./coder-routes.mjs";
 import path from "node:path";
 import { correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
+import { enforceHostedExecutionLease } from "./claim-execution.mjs";
+
+// Also fence cached pre-claim workflow definitions that check out current main policy.
+enforceHostedExecutionLease(process.env);
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const outputDirectory = process.env.ATLAS_OUTPUT_DIR;
@@ -179,19 +185,18 @@ if (metadata.mode === "inspect") {
   // clear status instead of a CLI usage error buried in a log, and so this
   // never becomes a way to name an arbitrary environment variable to read.
   const providerInput = (process.env.ATLAS_CODER_PROVIDER || "").trim().toLowerCase();
-  const PROVIDER_KEY_VARIABLES = { anthropic: "ANTHROPIC_API_KEY", groq: "GROQ_API_KEY" };
+  const PROVIDER_KEY_VARIABLES = { anthropic: "ANTHROPIC_API_KEY", groq: "GROQ_API_KEY", openai: "OPENAI_API_KEY", "workers-ai": "ATLAS_WORKERS_AI_TOKEN" };
   if (providerInput && !Object.hasOwn(PROVIDER_KEY_VARIABLES, providerInput)) {
     const known = Object.keys(PROVIDER_KEY_VARIABLES).join(", ");
     writeStatus("failed", `ATLAS_CODER_PROVIDER '${providerInput}' is not recognised; expected one of: ${known}.`);
     console.error(`Atlas coder mode: unknown provider '${providerInput}'.`);
     process.exit(2);
   }
-  const model = process.env.ATLAS_CODER_MODEL || "openai/gpt-oss-120b";
-  // Match the CLI's own inference so the runner asks for the key the CLI will
-  // actually look up; naming the provider explicitly below keeps the two from
-  // drifting apart later.
-  const provider = providerInput || (/^(anthropic\/)?claude[-.]/i.test(model) ? "anthropic" : "groq");
-  const apiKeyVariable = PROVIDER_KEY_VARIABLES[provider];
+  let routePlan;
+  try { routePlan = resolveCoderRoutes(process.env); }
+  catch (error) { writeStatus("failed", error.message); console.error(error.message); process.exit(2); }
+  const { provider, model, apiKeyVariable } = routePlan;
+  console.log("Coder route: " + provider + "/" + model + "; configured fallbacks: " + routePlan.fallbacks.map((route) => route.split(":").slice(0, 2).join("/")).join(", "));
   // A self-hosted OpenAI-compatible server (vLLM, Ollama, llama.cpp) usually
   // has no API key at all, so requiring one would make it impossible to run
   // your own model. The placeholder is applied ONLY when a custom endpoint is
@@ -229,9 +234,9 @@ if (metadata.mode === "inspect") {
   if (baseUrl) codeArgs.push("--base-url", baseUrl);
   if (verifyDir) codeArgs.push("--verify-dir", verifyDir);
   if (/^[0-5]$/.test(repairAttempts)) codeArgs.push("--max-repair-attempts", repairAttempts);
-  const fallbacks = (process.env.ATLAS_CODER_FALLBACKS || "").split(",").map((item) => item.trim()).filter(Boolean);
+  const fallbacks = routePlan.fallbacks;
   for (const fallback of fallbacks) {
-    if (!/^(?:anthropic|groq):[A-Za-z0-9._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY)$/.test(fallback)) {
+    if (!/^(?:anthropic|groq|openai|workers-ai):[A-Za-z0-9@._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY|OPENAI_API_KEY|ATLAS_WORKERS_AI_TOKEN)$/.test(fallback)) {
       writeStatus("failed", "ATLAS_CODER_FALLBACKS contains an invalid route. Expected provider:model:API_KEY_ENV.");
       console.error("Atlas coder mode: invalid fallback route.");
       process.exit(2);
@@ -242,7 +247,9 @@ if (metadata.mode === "inspect") {
   // (docs/PROGRAM.md 2.4). Same shape and allowlist as a fallback route.
   const escalation = (process.env.ATLAS_CODER_ESCALATION || "").trim();
   if (escalation) {
-    if (!/^(?:anthropic|groq):[A-Za-z0-9._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY)$/.test(escalation)) {
+    try { resolveCoderRoutes({ ...process.env, ATLAS_CODER_FALLBACKS: escalation }); }
+    catch (error) { writeStatus("failed", error.message); console.error(error.message); process.exit(2); }
+    if (!/^(?:anthropic|groq|openai|workers-ai):[A-Za-z0-9@._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY|OPENAI_API_KEY|ATLAS_WORKERS_AI_TOKEN)$/.test(escalation)) {
       writeStatus("failed", "ATLAS_CODER_ESCALATION is invalid. Expected provider:model:API_KEY_ENV.");
       console.error("Atlas coder mode: invalid escalation route.");
       process.exit(2);
@@ -268,7 +275,15 @@ if (metadata.mode === "inspect") {
     }
     codeArgs.push(flag, value);
   }
-  const result = runCommand("code", process.execPath, codeArgs, process.cwd(), coderTimeoutMs);
+  const result = await runCoderProcess(process.execPath, codeArgs, process.cwd(), coderTimeoutMs);
+
+  if (result.timedOut || result.outputExceeded) {
+    const message = result.timedOut ? "Coder run reached its execution deadline; no completion is confirmed." : "Coder output exceeded its capture bound; no completion is confirmed.";
+    writeJson("code.json", { status: "failed", edits: [], message });
+    writeStatus("failed", message);
+    console.error(message);
+    process.exit(1);
+  }
 
   // 'atlas code' exits 1 for every non-'completed' agent outcome (failed,
   // blocked, cancelled, approval-required), not just crashes — those still

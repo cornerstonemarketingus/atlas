@@ -1,0 +1,29 @@
+{
+  "id": "inference-test-summary",
+  "category": "tool-args",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "e00a49050841f932b970bc1f710d38054b1e870a",
+  "objective": "Without changing any source file: run the test suite of packages/atlas-inference exactly as its package.json test script does (from inside that directory) and read the summary node:test prints at the end. Write ANSWER.json as {\"tests\": <number>, \"pass\": <number>, \"fail\": <number>} using the '# tests', '# pass' and '# fail' counts.",
+  "setup": {
+    "files": {}
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/answer-check.mjs",
+      "{workspace}",
+      "inference-test-summary"
+    ]
+  },
+  "solution": {
+    "files": {
+      "ANSWER.json": "{\n  \"tests\": 63,\n  \"pass\": 63,\n  \"fail\": 0\n}\n"
+    }
+  },
+  "timeoutMs": 180000,
+  "tags": [
+    "read-only",
+    "answer-file",
+    "tests"
+  ]
+}

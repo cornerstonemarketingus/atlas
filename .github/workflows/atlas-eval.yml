@@ -1,0 +1,130 @@
+name: Atlas eval
+
+# Dry-run validation on every pull request that touches the harness or its
+# tasks: each task must fail untouched and pass with its recorded solution, so
+# a broken fixture cannot silently skew a pass rate. No model, no secrets.
+#
+# Full runs (a real model against the tasks) happen on manual dispatch and on
+# a weekly schedule, never on pull requests, so background measurement cannot
+# compete with interactive capacity or spend a provider quota on every push.
+#
+# No paid key is required: the default target is GitHub Models, called with
+# this run's own GITHUB_TOKEN (permission `models: read`), and the repository's
+# existing Workers AI secrets give a second, independent target.
+
+on:
+  pull_request:
+    paths:
+      - "packages/atlas-eval/**"
+      - "evals/**"
+      - ".github/workflows/atlas-eval.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/atlas-eval/**"
+      - "evals/**"
+  schedule:
+    # Weekly baseline, Monday 06:17 UTC.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Space-separated provider:model:API_KEY_ENV[:base-url] targets (blank = GitHub Models + Workers AI)"
+        required: false
+        type: string
+      only:
+        description: "Run a single task id (blank for all)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-eval-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    name: eval fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Full history: each task checks out an old base commit.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Harness tests
+        working-directory: packages/atlas-eval
+        run: npm test
+
+      - name: Validate every task (fails untouched, passes with its solution)
+        run: node packages/atlas-eval/src/cli.mjs validate
+
+  run:
+    name: eval run
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # models: read lets GITHUB_TOKEN call GitHub Models; nothing else is widened.
+    permissions:
+      contents: read
+      models: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/atlas-cli/package-lock.json
+
+      - name: Build the coder CLI
+        working-directory: packages/atlas-cli
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      # Provider keys are exposed to this step only; the harness hands the
+      # coder process just the one variable the target names. Inputs reach the
+      # shell through env, never interpolated into the script.
+      - name: Run the tasks
+        env:
+          TARGETS: ${{ inputs.target }}
+          ONLY: ${{ inputs.only }}
+          GITHUB_MODELS_TOKEN: ${{ github.token }}
+          ATLAS_WORKERS_AI_TOKEN: ${{ secrets.ATLAS_WORKERS_AI_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TARGETS// /}" ]; then
+            TARGETS="groq:openai/gpt-4.1-mini:GITHUB_MODELS_TOKEN:https://models.github.ai/inference"
+            if [ -n "$ATLAS_WORKERS_AI_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+              TARGETS="$TARGETS workers-ai:@cf/openai/gpt-oss-120b:ATLAS_WORKERS_AI_TOKEN"
+            fi
+          fi
+          args=(run --out "$RUNNER_TEMP/eval-report")
+          for target in $TARGETS; do args+=(--target "$target"); done
+          if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
+          node packages/atlas-eval/src/cli.mjs "${args[@]}"
+          cat "$RUNNER_TEMP/eval-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: |
+            ${{ runner.temp }}/eval-report.json
+            ${{ runner.temp }}/eval-report.md

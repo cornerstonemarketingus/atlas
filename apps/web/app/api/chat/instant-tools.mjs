@@ -17,6 +17,9 @@
  * can change anything anywhere.
  */
 
+import { readRepositoryContent } from "./repository-content.mjs";
+import { searchRepository } from "./repository-search.mjs";
+
 export const INSTANT_TOOL_NAMES = Object.freeze(["read_web_page", "web_search", "read_repository_file", "search_repository_code"]);
 
 const MAX_PAGE_BYTES = 600_000;
@@ -52,7 +55,7 @@ const READ_REPOSITORY_FILE = definition(
     ref: { type: "string", description: "Branch, tag or commit. Defaults to the default branch." },
     offset: { type: "integer", minimum: 0, description: "Character offset from nextOffset in the previous page. Defaults to 0." },
     maxChars: { type: "integer", minimum: 256, maximum: MAX_FILE_CHARS, description: "Page size; defaults to 3000 characters." },
-    fileSha: { type: "string", description: "File SHA from the previous page; required when offset is not 0, so changed files cannot be mixed." },
+    fileSha: { type: "string", description: "File SHA from the previous page; required when offset is not 0. Pins observed file content within this turn, also for rereading offset 0. Omit it at offset 0 to refresh a branch." },
   },
   ["repository", "path"],
 );
@@ -62,6 +65,13 @@ const SEARCH_REPOSITORY_CODE = definition(
   {
     repository: { type: "string", description: "owner/name" },
     query: { type: "string", description: "Words or an identifier to find." },
+    filename: { type: "string", description: "Optional filename filter, e.g. route.ts." },
+    path: { type: "string", description: "Optional directory filter, e.g. apps/web." },
+    page: { type: "integer", minimum: 1, description: "Result page; follow nextPage. Only the first 1000 results are accessible." },
+    perPage: { type: "integer", minimum: 1, maximum: 100, description: "Results per page, defaults to 15." },
+    itemOffset: { type: "integer", minimum: 0, description: "For unusually long paths, follow nextItemOffset within the same result page." },
+    filePath: { type: "string", description: "Known exact file path to read if search is invalid or unavailable in the index." },
+    ref: { type: "string", description: "Ref for direct file fallback only. Search indexes the default branch." },
   },
   ["repository", "query"],
 );
@@ -172,13 +182,13 @@ function parseArguments(call) {
  * message the model can read and recover from.
  *
  * @param {{ function?: { name?: string, arguments?: unknown } }} call
- * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined> }} context
+ * @param {{ fetcher?: typeof fetch, environment?: Record<string, string|undefined>, allowlist?: Set<string>, githubToken?: () => Promise<string|undefined>, observeGitHub?: (observation: object) => void }} context
  * @returns {Promise<{ ok: boolean, label: string, content: string, preview?: { kind: "file" | "page", title: string, content: string, url?: string, repository?: string, path?: string } }>}
  */
 export async function runInstantTool(call, context = {}) {
   const name = call?.function?.name ?? "";
   const args = parseArguments(call);
-  if (!args) return { ok: false, label: `Could not read the ${name} request`, content: "The tool arguments were not valid JSON." };
+  if (!args || typeof args !== "object" || Array.isArray(args)) return { ok: false, label: `Could not read the ${name} request`, error: { operation: name, category: "invalid_request" }, content: "The tool arguments must be a JSON object. Correct them before retrying." };
   const fetcher = context.fetcher ?? fetch;
   try {
     if (name === "read_web_page") return await readWebPage(args, fetcher);
@@ -188,7 +198,7 @@ export async function runInstantTool(call, context = {}) {
     return { ok: false, label: `Unknown tool ${name}`, content: `There is no tool named '${name}'.` };
   } catch (error) {
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    return { ok: false, label: `${name} failed`, content: timedOut ? "The request timed out." : "The request failed." };
+    return { ok: false, label: `${name} failed`, error: { operation: name, category: "unavailable", cause: timedOut ? "timeout" : "transport or invalid response" }, content: `${name}: ${timedOut ? "The request timed out." : "The service could not be reached or returned an invalid response."} Use another available source or try later; the operation has not succeeded.` };
   }
 }
 
@@ -236,18 +246,14 @@ async function webSearch(args, fetcher, environment) {
 async function repositoryAccess(args, context) {
   const repository = typeof args.repository === "string" ? args.repository.trim().toLowerCase().replace(/^https:\/\/github\.com\//u, "").replace(/\.git$/u, "") : "";
   if (!REPOSITORY_PATTERN.test(repository)) return { error: { ok: false, label: "Invalid repository", content: "Use the owner/name form." } };
-  if (!context.allowlist?.has(repository)) return { error: { ok: false, label: `${repository} is not connected`, content: `${repository} is not on this workspace's allowlist, so Atlas cannot read it.` } };
+  if (!context.allowlist?.has(repository)) return { error: { ok: false, label: `${repository} is not connected`, error: { category: "permission" }, content: `${repository} is not on this workspace's allowlist, so Atlas cannot read it. Connect the repository to this workspace.` } };
   const token = await context.githubToken?.();
-  if (!token) return { error: { ok: false, label: "GitHub is not connected", content: "No GitHub credential is configured for the hosted app." } };
+  if (!token) return { error: { ok: false, label: "GitHub is not connected", error: { category: "integration_unavailable" }, content: "No GitHub credential is configured for the hosted app. Connect GitHub before repository operations can succeed." } };
   return { repository, token };
 }
 
 function githubHeaders(token) {
   return { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "atlas-chat", "x-github-api-version": "2022-11-28" };
-}
-
-function encodePath(path) {
-  return path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
 }
 
 async function readRepositoryFile(args, fetcher, context) {
@@ -260,14 +266,12 @@ async function readRepositoryFile(args, fetcher, context) {
   if (access.error) return access.error;
   const path = typeof args.path === "string" ? args.path.trim().replace(/^\/+/u, "").slice(0, 400) : "";
   if (path.split("/").includes("..")) return { ok: false, label: "Invalid path", content: "Paths cannot contain '..'." };
-  const ref = typeof args.ref === "string" && /^[\w./-]{1,200}$/u.test(args.ref) ? `?ref=${encodeURIComponent(args.ref)}` : "";
-  const response = await fetcher(`https://api.github.com/repos/${access.repository}/contents/${encodePath(path)}${ref}`, {
-    signal: AbortSignal.timeout(TOOL_TIMEOUT_MS), headers: githubHeaders(access.token),
-  });
+  const ref = typeof args.ref === "string" && /^[\w./-]{1,200}$/u.test(args.ref) ? args.ref : "";
+  const response = await readRepositoryContent({ context, repository: access.repository, token: access.token, path, ref, fileSha: args.fileSha, fetcher, headers: githubHeaders(access.token), timeoutMs: TOOL_TIMEOUT_MS });
   const shown = `${access.repository}/${path}`.replace(/\/$/u, "");
   if (response.status === 404) return { ok: false, label: `No ${shown}`, content: "That path does not exist on that ref." };
-  if (!response.ok) return { ok: false, label: `Could not read ${shown}`, content: `GitHub answered ${response.status}.` };
-  const body = await response.json();
+  if (!response.ok) return response.toolError ?? { ok: false, label: `Could not read ${shown}`, error: { operation: "read_repository_file", status: response.status, category: response.retryAfterMs ? "quota" : "unavailable" }, content: `read_repository_file: GitHub answered ${response.status}.${response.retryAfterMs ? ` Retry after ${Math.ceil(response.retryAfterMs / 1000)} seconds.` : " Check GitHub access and the path before retrying."}` };
+  const body = response.body;
   if (Array.isArray(body)) {
     const entries = body.slice(0, 300).map((entry) => `${entry?.type === "dir" ? "dir " : "file"} ${entry?.path ?? ""}`);
     return { ok: true, label: `Listed ${shown || access.repository} (${body.length} entries)`, content: asData(`repository ${access.repository} directory ${path || "/"}`, entries.join("\n")) };
@@ -297,16 +301,7 @@ async function readRepositoryFile(args, fetcher, context) {
 async function searchRepositoryCode(args, fetcher, context) {
   const access = await repositoryAccess(args, context);
   if (access.error) return access.error;
-  const query = typeof args.query === "string" ? args.query.replace(/\b(repo|org|user):\S+/giu, "").trim().slice(0, 200) : "";
-  if (!query) return { ok: false, label: "Empty search", content: "The search query was empty." };
-  const response = await fetcher(`https://api.github.com/search/code?per_page=15&q=${encodeURIComponent(`${query} repo:${access.repository}`)}`, {
-    signal: AbortSignal.timeout(TOOL_TIMEOUT_MS), headers: githubHeaders(access.token),
-  });
-  if (!response.ok) return { ok: false, label: `Code search failed in ${access.repository}`, content: `GitHub answered ${response.status}.` };
-  const body = await response.json();
-  const items = Array.isArray(body?.items) ? body.items : [];
-  const paths = items.map((item) => item?.path).filter((path) => typeof path === "string");
-  return { ok: true, label: `Searched ${access.repository} for “${query.slice(0, 60)}” (${paths.length} files)`, content: asData(`code search in ${access.repository}: ${query}`, paths.join("\n") || "No matches.") };
+  return searchRepository({ args, repository: access.repository, headers: githubHeaders(access.token), fetcher, context, timeoutMs: TOOL_TIMEOUT_MS, asData, readFile: fileArgs => readRepositoryFile(fileArgs, fetcher, context) });
 }
 
 /** What the chat shows while a tool call is running. */

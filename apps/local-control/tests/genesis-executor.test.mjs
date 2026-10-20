@@ -4,20 +4,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { GenesisService, GenesisStore } from "../src/platform/genesis/index.mjs";
-import { GenesisExecutor, testSummary } from "../src/platform/genesis/executor.mjs";
+import { GenesisExecutor, outputTail, testSummary } from "../src/platform/genesis/executor.mjs";
 import { PreviewManager } from "../src/platform/genesis/preview.mjs";
 import { createInspector, inspectOverHttp } from "../src/platform/genesis/inspector.mjs";
 import { runCheck } from "../src/platform/self-improve/runtime.mjs";
+import { createKernel } from "../src/agent/kernel/kernel.mjs";
+import { WorldState } from "../src/agent/kernel/world-state.mjs";
+import { ToolRegistry } from "../src/agent/tool-registry.mjs";
 
 const LEAD_TRACKER = "Build a simple customer lead tracker with: add customer, name/email/phone, status, notes, dashboard, search";
 
-async function harness(run, { coder = null, inspector = undefined } = {}) {
+async function harness(run, { coder = null, inspector = undefined, kernel = null, loopPolicy = {}, now = undefined } = {}) {
   const root = mkdtempSync(join(tmpdir(), "atlas-genesis-run-"));
   const store = new GenesisStore(join(root, "genesis.sqlite"));
   const genesis = new GenesisService({ store, policy: () => ({ decision: "allow" }) });
   const preview = new PreviewManager({ registryPath: join(root, "previews.json"), runPrepare: runCheck });
   const executor = new GenesisExecutor({
-    genesis, projectsRoot: join(root, "projects"), runCheck, coder, preview,
+    genesis, projectsRoot: join(root, "projects"), runCheck, coder, preview, kernel, loopPolicy, ...(now ? { now } : {}),
     inspector: inspector === undefined ? createInspector({ artifactsRoot: join(root, "inspections") }) : inspector,
   });
   try {
@@ -112,18 +115,64 @@ test("a failed check is repaired with its evidence and verified again", async ()
   }, { coder, inspector: async (project, preview) => inspectOverHttp(project, preview) });
 });
 
-test("a repair that deletes tests is rolled back, and the budget ends the loop", async () => {
+test("a repair that deletes tests is rolled back, told why, and the loop stops when the failure does not move", async () => {
   const coder = scriptedCoder({ breakTests: true });
   await harness(async ({ genesis, executor }) => {
     const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
     const done = await executor.run(project.id);
     assert.equal(done.state, "failed");
-    assert.match(done.transitions.at(-1).reason, /Still failing after 3 repair attempt/u);
+    const last = done.transitions.at(-1);
+    assert.match(last.reason, /same failure survived 2 repair attempt/u);
+    assert.equal(last.evidence.loop.reason, "no-progress");
+    assert.equal(last.evidence.loop.iterations, 2);
     const rejected = done.transitions.filter((t) => t.evidence.kind === "repair-result");
-    assert.equal(rejected.length, 3);
+    assert.equal(rejected.length, 2, "the third repair attempt was not paid for");
     assert.ok(rejected.every((t) => t.evidence.violations.some((v) => v.rule === "deleted-test")));
+    const repairs = coder.calls.filter((c) => c.kind === "repair");
+    assert.doesNotMatch(repairs[0].objective, /rolled back/u);
+    assert.match(repairs[1].objective, /previous repair was rolled back because it broke these rules: deleted-test/u);
     assert.ok(existsSync(join(done.workspace, "tests", "app.test.mjs")), "the tests are still there");
   }, { coder, inspector: async () => ({ ok: true, findings: [], evidence: {} }) });
+});
+
+test("a repair loop that keeps changing the failure runs to its budget, then names the limit", async () => {
+  // Each attempt leaves a different kind of error, so every failure is new.
+  const broken = ["export function notify( {\n", "export const = 1;\n", "export function f() { return }}\n", "let let = 1;\n"];
+  let n = 0;
+  const coder = async ({ workspace, kind }) => {
+    writeFileSync(join(workspace, "src", "notify.mjs"), broken[n++] ?? broken.at(-1));
+    return { ok: true, summary: kind, model: "scripted", usage: { totalTokens: 100 } };
+  };
+  coder.available = async () => true;
+  await harness(async ({ genesis, executor }) => {
+    const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
+    const done = await executor.run(project.id);
+    assert.equal(done.state, "failed");
+    assert.equal(done.transitions.at(-1).evidence.loop.reason, "iteration-limit");
+    assert.equal(done.transitions.at(-1).evidence.loop.tokens, 300);
+    assert.equal(done.repairsUsed, 3);
+  }, { coder, inspector: async () => ({ ok: true, findings: [], evidence: {} }) });
+});
+
+test("spend and time limits stop repairs before the next model call", async () => {
+  const spendCoder = scriptedCoder({ breakTests: true });
+  const metered = async (input) => ({ ...(await spendCoder(input)), usage: { totalTokens: 5000 } });
+  metered.available = async () => true;
+  await harness(async ({ genesis, executor }) => {
+    const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
+    const done = await executor.run(project.id);
+    assert.equal(done.transitions.at(-1).evidence.loop.reason, "spend-limit");
+    assert.equal(spendCoder.calls.filter((c) => c.kind === "repair").length, 1);
+  }, { coder: metered, inspector: async () => ({ ok: true, findings: [], evidence: {} }), loopPolicy: { maxTokens: 4000 } });
+
+  const timeCoder = scriptedCoder();
+  await harness(async ({ genesis, executor }) => {
+    const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
+    const done = await executor.run(project.id);
+    assert.equal(done.state, "failed");
+    assert.equal(done.transitions.at(-1).evidence.loop.reason, "time-limit");
+    assert.equal(timeCoder.calls.filter((c) => c.kind === "repair").length, 0);
+  }, { coder: timeCoder, inspector: async () => ({ ok: true, findings: [], evidence: {} }), loopPolicy: { maxWallMs: 1000 }, now: () => Date.now() + 5000 });
 });
 
 test("a task that needs a model blocks with the reason, then continues when resumed", async () => {
@@ -182,9 +231,59 @@ test("the preview manager starts on a free port, reports failed starts with logs
   assert.equal(cleaned[0].action, "left");
 }));
 
+test("a Genesis build is a kernel run: each stage is an action and the outcome is recorded", async () => {
+  const world = new WorldState();
+  try {
+    await harness(async ({ genesis, executor }) => {
+      const project = await genesis.create("Build a REST API for managing inventory items");
+      const done = await executor.run(project.id);
+      assert.equal(done.state, "ready", JSON.stringify(done.transitions.at(-1), null, 1));
+      const [run] = world.find({ type: "run" });
+      assert.equal(run.attrs.status, "verified");
+      assert.equal(run.attrs.harness, "genesis");
+      assert.ok(world.relations(run.id).some((edge) => edge.relation === "part_of" && edge.to === `task:genesis:${project.id}`));
+      const trace = world.traceOf(run.key);
+      assert.deepEqual([trace[0].phase, trace.at(-1).phase], ["goal", "finish"]);
+      const stages = trace.filter((entry) => entry.phase === "act").map((entry) => entry.data.tool);
+      for (const stage of ["genesis.building", "genesis.verifying", "genesis.previewing", "genesis.ready"]) assert.ok(stages.includes(stage), `${stage} in ${stages.join(", ")}`);
+    }, { inspector: async (project, preview) => inspectOverHttp(project, preview), kernel: createKernel({ toolRegistry: new ToolRegistry(), world }) });
+  } finally {
+    world.close();
+  }
+});
+
+test("a Genesis build that waits on the owner is recorded as waiting, not as failed", async () => {
+  const world = new WorldState();
+  const coder = scriptedCoder();
+  coder.available = async () => false;
+  try {
+    await harness(async ({ genesis, executor }) => {
+      const project = await genesis.create("Build a small app where my team can log in and track tasks, and email me reminders");
+      const blocked = await executor.run(project.id);
+      assert.equal(blocked.state, "blocked");
+      const [run] = world.find({ type: "run" });
+      assert.equal(run.attrs.status, "waiting");
+      assert.match(run.attrs.reason, /blocked/u);
+      assert.equal(world.traceOf(run.key).filter((entry) => entry.phase === "act").at(-1).data.status, "awaiting_approval");
+    }, { coder, inspector: async () => ({ ok: true, findings: [], evidence: {} }), kernel: createKernel({ toolRegistry: new ToolRegistry(), world }) });
+  } finally {
+    world.close();
+  }
+});
+
 test("test output is summarised from node:test", () => {
   assert.deepEqual(testSummary("ok 1\n# tests 12\n# suites 0\n# pass 11\n# fail 1\n"), { tests: 12, pass: 11, fail: 1 });
   assert.equal(testSummary("no tests here"), null);
+});
+
+test("a failing test's name survives even when later tests push it out of the output tail", () => {
+  const early = "not ok 3 - Items: create, list, search, update and delete\n  error: expected 201\n";
+  const later = Array.from({ length: 400 }, (_, i) => `ok ${i + 10} - later test ${i}`).join("\n");
+  const tail = outputTail({ stdout: `${early}${later}\n# tests 410\n# pass 409\n# fail 1\n`, stderr: "" });
+  assert.ok(tail.length <= 4000);
+  assert.match(tail, /^not ok 3 - Items: create, list, search, update and delete/u, "kept at the top");
+  assert.match(tail, /# fail 1/u, "and the summary at the end");
+  assert.equal(outputTail({ stdout: "short output", stderr: "" }), "short output");
 });
 
 test("an observer that starts runs on every transition still gets exactly one run (the daemon's wiring)", async () => {

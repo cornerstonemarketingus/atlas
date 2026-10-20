@@ -43,7 +43,7 @@ export type ReadOnlyToolExecutionResult =
     }
   | {
       /**
-       * The tool was allowed to run and its own `execute` threw — an
+       * The tool was allowed to run and rejected its input or its `execute` threw — an
        * ordinary domain-level failure (a file that doesn't exist yet, a
        * path outside the repository) rather than a policy or lookup
        * problem. Callers should feed this back to the model as a failed

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 // Overridable only to exercise this script against a local stand-in; the workflow never sets it.
 const base = process.env.ATLAS_SMOKE_BASE_URL || "https://atlas-web.cornerstonemarketingus.workers.dev";
 const headers = { authorization: `Bearer ${process.env.ATLAS_OPERATOR_TOKEN}`, "content-type": "application/json" };
@@ -10,7 +11,8 @@ async function api(route, body) {
     // Task creation answers with a fixed, user-content-free diagnosis
     // (e.g. "GitHub rejected Atlas's credential"), which is what an operator
     // needs to fix a failed run; print it with the status.
-    const detail = route === "/api/settings/repositories" || route === "/api/tasks" ? await response.json().catch(() => ({})) : {};
+    // Chat's error names the providers that refused and why, in fixed words.
+    const detail = route === "/api/settings/repositories" || route === "/api/tasks" || route === "/api/chat" ? await response.json().catch(() => ({})) : {};
     throw new Error(`${route}: HTTP ${response.status}${typeof detail.message === "string" ? ` (${detail.message.slice(0, 500)})` : ""}${typeof detail.unblock === "string" ? ` — ${detail.unblock.slice(0, 300)}` : ""}`);
   }
   return response.json();
@@ -44,32 +46,81 @@ async function streamChat(message) {
 const mode = process.env.ATLAS_SMOKE_MODE || "inspect";
 const status = await api("/api/setup/status");
 console.log(`Setup: ${status.overall} (${status.completedSteps}/${status.totalSteps})`);
+// Provider kinds only (self-hosted, groq, openai): never addresses or keys.
+const route = Array.isArray(status.optional?.chat?.route) ? status.optional.chat.route.map(String) : [];
+if (route.length) console.log(`Chat route: ${route.join(" → ")}`);
+// Provider credential diagnosis (categories and statuses only; never a credential).
+if (mode !== "website" && route.includes("workers-ai")) {
+  const diagnosis = await api("/api/setup/providers").catch((error) => ({ error: String(error?.message ?? error).slice(0, 200) }));
+  const health = diagnosis.providers?.workersAI;
+  if (health) {
+    console.log(`Workers AI: credential ${health.credential}, account ${health.account}, validation ${health.validation ?? "-"}, token ${health.tokenKind ?? "-"}, Workers AI ${health.workersAI ?? "-"}, inference ${health.inference ?? "-"} → ${health.category}`);
+    console.log(`Workers AI HTTP: ${JSON.stringify(health.http ?? {})}${health.providerErrorCodes?.length ? ` codes ${health.providerErrorCodes.join(",")}` : ""}`);
+    if (health.recommendedAction) console.log(`Workers AI action: ${health.recommendedAction}`);
+  } else console.log(`Workers AI diagnosis unavailable: ${diagnosis.error ?? "no result"}`);
+  const binding = diagnosis.providers?.workersAIBinding;
+  if (binding) console.log(`Workers AI binding: ${binding.binding}${binding.model ? `, model ${binding.model}` : ""}, inference ${binding.inference ?? "-"}${binding.http ? ` (HTTP ${binding.http.inference})` : ""} → ${binding.category}`);
+}
 // An unauthenticated identity header must not grant access on workers.dev.
 const forged = await fetch(`${base}/api/tasks`, { headers: { "oai-authenticated-user-id": "operator" } });
 if (forged.status !== 401) throw new Error("Untrusted identity header was accepted");
-if (mode === "chat") {
+if (mode === "website") {
+  // Verify the keyless hosted builder directly, without consuming model quota
+  // or depending on an external Genesis node. This creates one saved preview.
+  const capabilities = await api("/api/genesis/operations");
+  if (capabilities.github?.reason !== "execution_node_not_configured") throw new Error("Website verification requires the hosted builder without a configured Genesis node; no project was requested");
+  const project = await api("/api/genesis/operations", {
+    requestId: randomUUID(), template: "static-site", visibility: "private",
+    description: "Build a responsive website for Atlas Verification, a software business based in Eagan, Minnesota, offering software testing and development.",
+  });
+  if (!project.hosted || project.status !== "ready" || project.verification?.structure !== "passed") throw new Error("Hosted website was not structurally verified");
+  if (project.deploymentState !== "not-deployed" || project.verification?.enquiryDelivery !== "preview-only") throw new Error("Website preview made an unexpected publication or delivery claim");
+  if (!/^gen_[0-9a-f-]{36}$/u.test(project.projectId ?? "") || project.previewUrl !== `/preview/${project.projectId}`) throw new Error("Invalid hosted preview identity");
+  const pages = project.pages;
+  if (!Array.isArray(pages) || pages.length === 0) throw new Error("No website pages were reported");
+  for (const page of pages) {
+    if (typeof page.path !== "string" || !(page.path === project.previewUrl || page.path.startsWith(project.previewUrl + "/"))) throw new Error("Unexpected preview page path");
+    const url = new URL(page.path, base);
+    if (url.origin !== new URL(base).origin) throw new Error("Preview escaped the hosted origin");
+    if (!(url.pathname === project.previewUrl || url.pathname.startsWith(project.previewUrl + "/"))) throw new Error("Preview page escaped its project");
+    const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(15000) });
+    const html = await response.text();
+    if (response.status !== 200 || !html.includes("Atlas Verification") || !html.includes("This site is not published.")) throw new Error("A hosted preview page was unavailable or incomplete");
+    if (!response.headers.get("content-security-policy")?.includes("form-action 'none'") || !response.headers.get("x-robots-tag")?.includes("noindex")) throw new Error("Hosted preview safety headers were missing");
+  }
+  const status = await api(`/api/genesis/operations?id=${encodeURIComponent(project.projectId)}`);
+  if (status.projectId !== project.projectId || status.status !== "ready") throw new Error("Stored website could not be read back");
+  const evidence = { mode: "website", projectId: project.projectId, previewUrl: project.previewUrl, pages: pages.length,
+    structure: project.verification.structure, browserChecks: project.verification.browserChecks, enquiryDelivery: project.verification.enquiryDelivery, deploymentState: project.deploymentState };
+  fs.writeFileSync("smoke-result.json", JSON.stringify(evidence, null, 2));
+  console.log(`Hosted website gate passed: ${pages.length} pages served and the stored project was read back. No publication or enquiry delivery was attempted.`);
+} else if (mode === "chat") {
   // Release gate: the conversation that failed in production must now get a
   // real, stored answer both ways the product asks for one. A reply that is
   // only the saved-work notice (no model could write the answer), a
   // "Stopped early" note, or an error event fails the gate.
   const message = (process.env.ATLAS_SMOKE_CHAT_MESSAGE || "").trim()
     || "Read https://example.com and tell me in two sentences what the page is for, then name one thing it does not say.";
-  const evidence = { mode: "chat", messageChars: message.length };
+  const evidence = { mode: "chat", messageChars: message.length, route };
   const judge = (label, outcome) => {
     const content = outcome.reply?.content ?? "";
     const problems = [];
     if (!content.trim()) problems.push("empty reply");
     if (!outcome.stored) problems.push("reply not persisted");
+    if (typeof outcome.servedBy?.provider !== "string" || !outcome.servedBy.provider.trim()
+      || typeof outcome.servedBy?.model !== "string" || !outcome.servedBy.model.trim()) problems.push("model authorship not confirmed");
     if (outcome.finalization) problems.push(`no model wrote the answer (${outcome.finalization.reason})`);
     if (/_Stopped early:/u.test(content)) problems.push("stopped early");
     evidence[label] = {
       conversationId: outcome.conversationId, replyChars: content.length, stored: Boolean(outcome.stored),
       steps: (outcome.steps ?? []).map((step) => ({ label: String(step.label).slice(0, 120), ok: Boolean(step.ok) })),
       ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.error ? { error: outcome.error } : {}),
+      ...(outcome.servedBy ? { servedBy: { provider: String(outcome.servedBy.provider), model: String(outcome.servedBy.model).slice(0, 120) } } : {}),
       passed: problems.length === 0 && !outcome.error,
     };
     const verdict = outcome.error ? `error: ${outcome.error}` : problems.length ? problems.join("; ") : "answered and stored";
-    console.log(`${label}: ${verdict} (${content.length} chars, ${evidence[label].steps.length} tool steps)`);
+    const served = evidence[label].servedBy ? `, written by ${evidence[label].servedBy.provider} ${evidence[label].servedBy.model}` : "";
+    console.log(`${label}: ${verdict} (${content.length} chars, ${evidence[label].steps.length} tool steps${served})`);
   };
 
   judge("nonStreaming", await api("/api/chat", { message }));
@@ -85,7 +136,7 @@ if (mode === "chat") {
     if (repository && repository.mergePolicy !== "manual") throw new Error("Coding smoke check requires manual PR review policy");
   }
   const objective = mode === "coder"
-    ? "Create docs/ATLAS-SMOKE-CHECK.md containing exactly one line: Atlas coding smoke check. Do not modify any other file. Use the repository write tools to create it, then finish."
+    ? `Create docs/ATLAS-SMOKE-CHECK-${randomUUID()}.md containing exactly one line: Atlas coding smoke check. Do not modify any other file. Use the repository write tools to create it, then finish.`
     : "Inspect Atlas and report its detected languages, frameworks, and manifests.";
   const task = await api("/api/tasks", { repository: "cornerstonemarketingus/atlas", branch: "main", mode, objective });
   if (!task.recorded) throw new Error("Task dispatched but history was not stored");

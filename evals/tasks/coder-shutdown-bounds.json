@@ -1,0 +1,32 @@
+{
+  "id": "coder-shutdown-bounds",
+  "category": "bug-localization",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "1e0909fb4630a81dd203e5a1987e21f763894392",
+  "objective": "runCoderProcess(command, args, cwd, timeoutMs, options) in scripts/runner/run-coder-process.mjs can hang after a timeout when an exited coder leaves a descendant holding its output pipes, and a throwing or rejecting onProgress observer crashes it. Add a cleanupMs option (default 1000, at most 5000): after SIGTERM, SIGKILL the process group and settle the result once cleanupMs passes even if the pipes are still open (destroy them). Validate timeoutMs, intervalMs, maxBytes and cleanupMs as positive safe integers within bounds, throwing RangeError before spawning. A sync throw or async rejection from onProgress must be ignored. The result shape ({ label, exitCode, timedOut, outputExceeded, ok, stdout, stderr }) is unchanged. scripts/runner/run-coder-process.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "f392d062fd180e54b55f09ffaa240a971c32410e",
+    "paths": [
+      "scripts/runner/run-coder-process.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "scripts/runner/run-coder-process.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "f392d062fd180e54b55f09ffaa240a971c32410e",
+    "paths": [
+      "scripts/runner/run-coder-process.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "runner",
+    "reliability"
+  ]
+}

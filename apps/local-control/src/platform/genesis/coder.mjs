@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyDifficulty, modelForDifficulty } from "../../agent/models/difficulty.mjs";
 import { DEFAULT_MODEL_ENDPOINT, assertSafeEndpoint, buildCoderCli, createCoderBuilder, isLoopback } from "../self-improve/runtime.mjs";
@@ -45,7 +45,7 @@ export function createGenesisCoder({ atlasRoot, dataDirectory, environment = pro
     cli ??= buildCoderCli(atlasRoot, { stdio: "ignore" });
     const builder = createCoderBuilder({ atlasRoot, cli, runsDirectory: join(dataDirectory, "genesis", "runs"), endpoint: { baseUrl, model: model.tag, apiKey }, contextWindow: String(model.context ?? 16_384), onOutput });
     const result = await builder({ worktree: workspace, objective, verifyDirectory: "." });
-    return { ...result, model: model.tag, modelReason: model.reason };
+    return { ...result, model: model.tag, modelReason: model.reason, usage: coderUsage(result.summary) };
   };
 
   /** Whether a model server answers; remote endpoints the owner configured are assumed reachable. */
@@ -64,4 +64,27 @@ export function createGenesisCoder({ atlasRoot, dataDirectory, environment = pro
   };
   coder.endpoint = baseUrl;
   return coder;
+}
+
+/**
+ * Model tokens one coder run used, summed from its own redacted audit trace
+ * (the builder's summary names the file). Null when the trace is unreadable,
+ * so a caller can tell "unmetered" from "free".
+ */
+export function coderUsage(summary, read = (path) => readFileSync(path, "utf8")) {
+  const path = /audit (\S+\.jsonl)\s*$/u.exec(String(summary ?? ""))?.[1];
+  if (!path) return null;
+  let text;
+  try { text = read(path); } catch { return null; }
+  let inputTokens = 0;
+  let outputTokens = 0;
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event.type !== "model.responded") continue;
+    inputTokens += Number.isFinite(event.payload?.inputTokens) ? event.payload.inputTokens : 0;
+    outputTokens += Number.isFinite(event.payload?.outputTokens) ? event.payload.outputTokens : 0;
+  }
+  return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
 }
