@@ -26,9 +26,15 @@ test("exact attempt API uses bounded requests without credential redirects", asy
   let calls = 0;
   const result = await verifyExecutionOutcome(identity, task, run, "fake-private-token", async (url, options) => {
     calls++; assert.equal(url, "https://api.github.com/repos/cornerstonemarketingus/atlas/actions/runs/123/attempts/1/jobs?per_page=100");
-    assert.equal(options.redirect, "error"); assert.equal(options.headers.authorization, "Bearer fake-private-token"); assert.ok(options.signal);
+    assert.equal(options.redirect, "manual"); assert.equal(options.headers.authorization, "Bearer fake-private-token"); assert.ok(options.signal);
     return Response.json(page([job]));
   });
   assert.equal(result.jobId, 456); assert.equal(calls, 1);
   await assert.rejects(verifyExecutionOutcome(identity, task, run, "fake-private-token", async () => new Response("private upstream error", { status: 429 })), error => !/private/.test(error.message));
+  let redirects = 0;
+  await assert.rejects(verifyExecutionOutcome(identity, task, run, "fake-private-token", async (_url, options) => {
+    redirects++; assert.equal(options.redirect, "manual");
+    return new Response(null, { status: 302, headers: { location: "https://foreign.test/credentials" } });
+  }), /verification unavailable/);
+  assert.equal(redirects, 1, "a redirect cannot trigger another credential-bearing request");
 });

@@ -912,3 +912,12 @@ serial daemon/Genesis tests pass locally. Fresh parallel Windows CI is required;
 no deadline was weakened and the previous failure was not discarded. #284 now
 contains current-main hosted receipt recovery integration for separate review.
 
+
+
+2026-10-19 Worker compatibility follow-through: CI found three redirect error
+modes incompatible with Workers. Verification now uses manual redirects and
+refuses non-success responses; a 302 regression confirms no second credential
+request. The scan now uses fileURLToPath and requires a nonempty source scan,
+so Windows cannot silently pass without inspecting files. Four focused verifier
+checks pass. Current-main build passes; fresh full web suite and CI are running.
+

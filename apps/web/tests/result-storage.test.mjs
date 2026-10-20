@@ -79,7 +79,7 @@ test("built Worker result callback enforces claim ownership after signed run ver
   let jobsStatus = 200;
   globalThis.fetch = async (url, options) => {
     if (String(url).includes("/.well-known/jwks")) return Response.json({ keys: [jwk] });
-    assert.equal(options.redirect, "error");
+    assert.equal(options.redirect, "manual");
     duringVerification();
     if (String(url).includes("/jobs?")) {
       assert.ok(String(url).includes(`/attempts/${attempt}/jobs?per_page=100`));

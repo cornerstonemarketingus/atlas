@@ -12,7 +12,7 @@ export async function verifySavedExecution(task, claim, token, fetcher = fetch) 
     workflow_ref: `${task.repository}/.github/workflows/${task.mode === "coder" ? "atlas-coder.yml" : "atlas-runner.yml"}@refs/heads/main` };
   const response = await fetcher(`https://api.github.com/repos/${task.repository}/actions/runs/${claim.runId}/attempts/${claim.runAttempt}`, {
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "atlas-control-plane" },
-    redirect: "error", signal: AbortSignal.timeout(10000),
+    redirect: "manual", signal: AbortSignal.timeout(10000),
   });
   if (!response.ok) { await response.body?.cancel(); throw new Error("Saved run verification unavailable"); }
   const run = await response.json();
