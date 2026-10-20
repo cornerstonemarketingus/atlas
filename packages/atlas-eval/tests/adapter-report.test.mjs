@@ -55,3 +55,18 @@ test("the checked-in tasks all load and have unique ids matching their files", a
   assert.ok(tasks.length >= 30);
   assert.ok(new Set(tasks.map((task) => task.category)).size >= 8);
 });
+
+test("Workers AI also receives its account id, and nothing else beyond the named key", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "eval-cli-wai-"));
+  const fake = join(dir, "cli.mjs");
+  await writeFile(fake, `console.log(JSON.stringify({ status: "completed", toolCalls: 0, inputTokens: 0, outputTokens: 0, summary: Object.keys(process.env).filter((k) => /CLOUDFLARE|TOKEN|SECRET/.test(k)).sort().join(",") }));`);
+  const env = { PATH: process.env.PATH, HOME: dir, ATLAS_WORKERS_AI_TOKEN: "k", CLOUDFLARE_ACCOUNT_ID: "a".repeat(32), OTHER_SECRET: "nope", GITHUB_MODELS_TOKEN: "nope" };
+  const outcome = await atlasCliAgent({ cliPath: fake, env })({ root: dir, objective: "x", target: "workers-ai:@cf/openai/gpt-oss-120b:ATLAS_WORKERS_AI_TOKEN", signal: new AbortController().signal });
+  assert.equal(outcome.message, "ATLAS_WORKERS_AI_TOKEN,CLOUDFLARE_ACCOUNT_ID");
+  const groq = await atlasCliAgent({ cliPath: fake, env })({ root: dir, objective: "x", target: "groq:openai/gpt-4.1-mini:GITHUB_MODELS_TOKEN:https://models.github.ai/inference", signal: new AbortController().signal });
+  assert.equal(groq.message, "GITHUB_MODELS_TOKEN", "other providers get no account id");
+});
+
+test("a GitHub Models target parses with its https base URL", () => {
+  assert.deepEqual(parseTarget("groq:openai/gpt-4.1-mini:GITHUB_MODELS_TOKEN:https://models.github.ai/inference"), { provider: "groq", model: "openai/gpt-4.1-mini", apiKeyEnv: "GITHUB_MODELS_TOKEN", baseUrl: "https://models.github.ai/inference" });
+});
