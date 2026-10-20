@@ -18,6 +18,17 @@ GROQ_API_KEY=... node packages/atlas-eval/src/cli.mjs run \
   --target groq:llama-3.3-70b-versatile:GROQ_API_KEY --out eval-report
 ```
 
+### Running without a paid key
+
+The CI run needs no purchased key:
+
+| Target | How it authenticates |
+|---|---|
+| `groq:openai/gpt-4.1-mini:GITHUB_MODELS_TOKEN:https://models.github.ai/inference` | GitHub Models, through the OpenAI-compatible path, with the run's own `GITHUB_TOKEN` (the job declares `models: read`). Free-tier rate limits apply. |
+| `workers-ai:@cf/openai/gpt-oss-120b:ATLAS_WORKERS_AI_TOKEN` | Cloudflare Workers AI, with the repository's existing `ATLAS_WORKERS_AI_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets (the same ones the coder workflow uses). |
+
+Dispatching "Atlas eval" with a blank target runs both (Workers AI only when its secrets exist). A weekly schedule (Monday 06:17 UTC) does the same and uploads the report artifact. The adapter passes Workers AI the non-secret account id plus the one named key, and nothing else from the environment.
+
 A target is `provider:model:API_KEY_ENV[:base-url]`. Only the *name* of the key
 variable is accepted; the key is read from the environment and passed to the
 coder process alone. Verification runs with an allowlisted environment (no keys).

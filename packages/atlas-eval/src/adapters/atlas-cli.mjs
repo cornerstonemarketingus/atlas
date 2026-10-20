@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PROVIDERS = ["anthropic", "groq", "openai", "workers-ai"];
+/** Non-secret settings a provider needs besides its key (Workers AI routes by account). */
+const PASS_THROUGH = Object.freeze({ "workers-ai": ["CLOUDFLARE_ACCOUNT_ID"] });
 
 /** `provider:model:API_KEY_ENV[:base-url]`. The key's value is read from the environment only. */
 export function parseTarget(spec) {
@@ -32,8 +34,9 @@ export function measureAuditLog(text) {
 }
 
 /**
- * Drives `atlas code` against the workspace. The child gets PATH, HOME and
- * the one named key variable, never the rest of this process's environment.
+ * Drives `atlas code` against the workspace. The child gets PATH, HOME, the
+ * one named key variable and the provider's non-secret settings (Workers AI's
+ * account id), never the rest of this process's environment.
  */
 export function atlasCliAgent({ cliPath, env = process.env, extraArgs = [] }) {
   return async ({ root, objective, target, signal }) => {
@@ -46,7 +49,8 @@ export function atlasCliAgent({ cliPath, env = process.env, extraArgs = [] }) {
       const args = [cliPath, "code", root, objective, "--provider", spec.provider, "--model", spec.model, "--api-key-env", spec.apiKeyEnv,
         ...(spec.baseUrl ? ["--base-url", spec.baseUrl] : []), "--no-verify", "--audit-log", auditLog, "--format", "json", ...extraArgs];
       const stdout = await new Promise((resolveRun, reject) => {
-        const child = spawn(process.execPath, args, { env: { PATH: env.PATH, HOME: env.HOME, [spec.apiKeyEnv]: key }, signal, windowsHide: true });
+        const extra = Object.fromEntries((PASS_THROUGH[spec.provider] ?? []).filter((name) => env[name]).map((name) => [name, env[name]]));
+        const child = spawn(process.execPath, args, { env: { PATH: env.PATH, HOME: env.HOME, ...extra, [spec.apiKeyEnv]: key }, signal, windowsHide: true });
         let out = "";
         let err = "";
         child.stdout.on("data", (chunk) => { if (out.length < 1_000_000) out += chunk; });
