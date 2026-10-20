@@ -48,6 +48,9 @@ export async function runTask({ task, target, agent, repoRoot }) {
     }
     evidence.agentStatus = outcome.status ?? null;
     if (outcome.message) evidence.agentMessage = String(outcome.message).slice(0, 500);
+    // CLI adapters return structured failures instead of throwing. Keep a
+    // provider/agent failure distinct from a model that completed a wrong fix.
+    if (outcome.status === "failed") failureClass ??= "agent_error";
 
     const changed = await workspace.changedPaths(baseline);
     evidence.changedPaths = changed.slice(0, 50);
