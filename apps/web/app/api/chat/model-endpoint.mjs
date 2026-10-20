@@ -22,9 +22,41 @@
  */
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1", "[::1]"];
+/**
+ * Hosted providers Atlas knows by origin, with the kind shown to the owner.
+ * The free-tier pool (providers.mjs) sends each provider's key only to its
+ * origin here; anything not listed is a model the owner runs.
+ */
+const HOSTED_KINDS = new Map([
+  ["https://api.groq.com", "groq"],
+  ["https://api.openai.com", "openai"],
+  ["https://api.cloudflare.com", "workers-ai"],
+  ["https://workers-ai.binding", "workers-ai"],
+  ["https://api.cerebras.ai", "cerebras"],
+  ["https://integrate.api.nvidia.com", "nvidia"],
+  ["https://generativelanguage.googleapis.com", "gemini"],
+  ["https://openrouter.ai", "openrouter"],
+]);
 /** Hosted providers answer within a minute; anything else is a model the owner runs, which may take longer. */
-const HOSTED_ORIGINS = new Set(["https://api.groq.com", "https://api.openai.com", "https://api.cloudflare.com", "https://workers-ai.binding"]);
+const HOSTED_ORIGINS = new Set(HOSTED_KINDS.keys());
 const SELF_HOSTED_TIMEOUT_MS = 300_000;
+/** The longest provider route chat walks (main model, Workers AI, Groq, the free-tier pool, OpenAI). */
+export const MAX_ROUTE_PROVIDERS = 10;
+
+/**
+ * A known provider's own key, for when ATLAS_CHAT_BASE_URL points straight at
+ * it and ATLAS_MODEL_API_KEY is empty. Never sent to any other origin.
+ */
+function providerKeyFor(environment, origin) {
+  const kind = HOSTED_KINDS.get(origin);
+  const key = kind === "groq" ? environment.GROQ_API_KEY
+    : kind === "cerebras" ? environment.CEREBRAS_API_KEY
+    : kind === "nvidia" ? environment.NVIDIA_API_KEY
+    : kind === "gemini" ? environment.GEMINI_API_KEY
+    : kind === "openrouter" ? environment.OPENROUTER_API_KEY
+    : "";
+  return (key || "").trim();
+}
 
 /**
  * A second model on the same endpoint for when the first is rate-limited.
@@ -41,7 +73,7 @@ function fallbackModelFor(environment, url, model) {
 }
 
 /** Model names as a provider writes them (e.g. "openai/gpt-oss-120b", "qwen3:32b"); nothing that could smuggle a separator. */
-const MODEL_NAME = /^[\w.:/@+-]{1,128}$/u;
+export const MODEL_NAME = /^[\w.:/@+-]{1,128}$/u;
 export const MAX_POOL_MODELS = 8;
 
 /**
@@ -64,7 +96,7 @@ function modelPoolFor(environment, model, fallback) {
 export function providerKind(baseUrl) {
   let origin;
   try { origin = new URL(baseUrl).origin; } catch { return "unknown"; }
-  return origin === "https://api.groq.com" ? "groq" : origin === "https://api.openai.com" ? "openai" : origin === "https://api.cloudflare.com" || origin === "https://workers-ai.binding" ? "workers-ai" : "self-hosted";
+  return HOSTED_KINDS.get(origin) ?? "self-hosted";
 }
 
 /** @returns {{ configured: boolean, reason?: string, baseUrl?: string, model?: string, apiKey?: string|null, fallbackModel?: string|null, models?: string[] }} */
@@ -94,7 +126,7 @@ export function resolveChatModel(environment = process.env) {
   }
 
   if (url.search || url.hash) return { configured: false, reason: "The model endpoint must not contain a query or fragment." };
-  if (!apiKey && url.origin === "https://api.groq.com") apiKey = (environment.GROQ_API_KEY || "").trim();
+  if (!apiKey) apiKey = providerKeyFor(environment, url.origin);
   const fallbackModel = fallbackModelFor(environment, url, model);
   return { configured: true, baseUrl: url.toString(), model, apiKey: apiKey || null, fallbackModel, models: modelPoolFor(environment, model, fallbackModel), ...(HOSTED_ORIGINS.has(url.origin) ? {} : { timeoutMs: SELF_HOSTED_TIMEOUT_MS }) };
 }

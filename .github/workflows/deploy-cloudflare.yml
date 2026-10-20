@@ -97,6 +97,15 @@ jobs:
           # Optional: Cloudflare Workers AI on this account (token with Workers AI permission only).
           ATLAS_WORKERS_AI_TOKEN: ${{ secrets.ATLAS_WORKERS_AI_TOKEN }}
           ATLAS_WORKERS_AI_MODEL: ${{ secrets.ATLAS_WORKERS_AI_MODEL }}
+          # Optional free-tier pool (docs/FREE-TIER-PROVIDERS.md): each key joins
+          # chat's Automatic route after Groq and before paid OpenAI, and is sent
+          # only to its own provider's fixed origin.
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Optional per-provider model override, e.g. "openrouter=qwen/qwen3-coder:free".
+          ATLAS_PROVIDER_MODELS: ${{ secrets.ATLAS_PROVIDER_MODELS }}
           # A second model on the same endpoint, tried when the first is
           # rate-limited ("none" turns it off). The runtime has read this since
           # the fallback was added, but it was never uploaded, so production
@@ -153,6 +162,11 @@ jobs:
             OPENAI_API_KEY \
             ATLAS_WORKERS_AI_TOKEN \
             ATLAS_WORKERS_AI_MODEL \
+            CEREBRAS_API_KEY \
+            NVIDIA_API_KEY \
+            GEMINI_API_KEY \
+            OPENROUTER_API_KEY \
+            ATLAS_PROVIDER_MODELS \
             CLOUDFLARE_ACCOUNT_ID \
             ATLAS_CHAT_MODELS \
             ATLAS_TAVILY_API_KEY \
@@ -189,6 +203,7 @@ jobs:
           echo "Sign-in needs: ATLAS_SESSION_SECRET, ATLAS_GITHUB_OAUTH_CLIENT_ID, ATLAS_GITHUB_OAUTH_CLIENT_SECRET"
           echo "Optional owner login: ATLAS_OWNER_GITHUB_LOGINS"
           echo "Chat can use the keyless Workers AI binding (subject to account quota), or ATLAS_CHAT_BASE_URL and ATLAS_CHAT_MODEL with a provider key. Workers AI REST also needs ATLAS_WORKERS_AI_TOKEN and CLOUDFLARE_ACCOUNT_ID."
+          echo "Optional free-tier chat pool (each key adds daily capacity): CEREBRAS_API_KEY, NVIDIA_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY; ATLAS_PROVIDER_MODELS overrides models"
           echo "Optional execution hosts: ATLAS_GENESIS_URL + ATLAS_GENESIS_TOKEN; ATLAS_AGENT_DISPATCH_URL + ATLAS_AGENT_DISPATCH_TOKEN"
           echo "Billing needs: ATLAS_STRIPE_SECRET_KEY, ATLAS_STRIPE_WEBHOOK_SECRET, ATLAS_STRIPE_PRICE_PRO, ATLAS_STRIPE_PRICE_TEAM"
           echo "Public repository variables: ATLAS_PUBLIC_URL, ATLAS_PRICE_DISPLAY_PRO, ATLAS_PRICE_DISPLAY_TEAM (display prices do not configure Stripe)"

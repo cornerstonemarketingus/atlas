@@ -1,6 +1,6 @@
 import { TASK_TOOL, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } from "./instant-tools.mjs";
-import { completionsUrl, providerKind, replyText } from "./model-endpoint.mjs";
+import { MAX_ROUTE_PROVIDERS, completionsUrl, providerKind, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
 import { classifyHttpFailure, classifyThrown, estimateRequestTokens } from "../../../../../packages/atlas-inference/src/index.mjs";
 
@@ -952,7 +952,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     // model, then its same-provider fallback model, then the cross-provider
     // fallback (Automatic → OpenAI). Each fallback gets an attempt of its own.
     const emptyChain = [];
-    for (let provider = endpoint, hops = 0; provider && hops < 5; provider = provider.providerFallback, hops += 1) {
+    for (let provider = endpoint, hops = 0; provider && hops < MAX_ROUTE_PROVIDERS; provider = provider.providerFallback, hops += 1) {
       emptyChain.push(provider);
       if (provider === endpoint && provider.fallbackModel && provider.fallbackModel !== provider.model) emptyChain.push({ ...provider, model: provider.fallbackModel, fallbackModel: null });
     }

@@ -823,3 +823,38 @@ Independent of the still-open medium-task/tool-budget investigation, default Win
 Build passes. Actual runner + main()-driven repair-loop checks:13tests11pass2platform skips0fail; the previously failing no-progress and elapsed-time CLI verification cases now pass on Windows. Full CLI suite:588tests580pass4fail4skip; four previously observed Windows CRLF/path/mode failures remain, so this is not an all-green local suite. Removing only the source adapter with the new test retained fails again; restoring/rebuilding passes. No Mode B fix, larger budget, verdict-path change or medium live evidence claimed.
 
 Next: publish this isolated verification repair, inspect exact-head CI/reviews and merge only ordinary-eligible all-green/no-blocker changes. Continue to preserve PR395 configured workflow review for medium-task dispatch and native320 signing review; do not infer identical-call loops from old argument-free traces.
+
+## 2026-10-20 — free-tier provider pool for hosted chat
+
+Live `verify-hosted` chat run 39105457659 failed because the whole route refused:
+
+- Groq refused the request as larger than its free per-minute allowance.
+- Workers AI had spent its free daily allocation.
+- OpenAI had no credits.
+
+The route was simply too short. Optional keys now add four hosted free tiers to Automatic, after Groq and before paid OpenAI: `CEREBRAS_API_KEY`, `NVIDIA_API_KEY`, `GEMINI_API_KEY` and `OPENROUTER_API_KEY`. `ATLAS_PROVIDER_MODELS` overrides a model.
+
+- Each key is sent only to its fixed origin.
+- No key means that provider is not in the route.
+- Cerebras declares its 64k free window, so oversized requests skip it.
+- 402 routes on; 401/403 still stop and are shown.
+- Each pool provider is selectable in the Model menu.
+- `ATLAS_CHAT_BASE_URL` pointed at a pool provider uses that provider's own key.
+- The route and empty-reply chain caps move from 5 to a shared `MAX_ROUTE_PROVIDERS` (10).
+- The deploy workflow maps and uploads the new secrets (protected path: owner review).
+
+Evidence:
+
+- New `tests/free-tier-providers.test.mjs` (8): it fails on unchanged main and passes now. It covers the whole route walking past every exhausted daily quota to the last free provider, with each origin receiving only its own key.
+- The deploy guard fails when a pool key is not uploaded (mutation check).
+- Related web suites pass: deploy-configuration, Workers AI, OpenAI, self-hosted, model-endpoint, free-recovery, agent-loop, allowance-fit, governed-send, provider-health.
+- Runner/local: 91 pass.
+- Not run here: full `npm test`, lint and tsc. The npm registry was unreachable from the session. The 34 build/package-dependent failures are identical with and without this change.
+
+Not covered:
+
+- No live acceptance yet.
+- The coder route still lacks the pool.
+- Free-tier data-use terms differ by provider (docs/FREE-TIER-PROVIDERS.md).
+
+Next: the owner adds keys and deploys, then runs `verify-hosted` chat; the printed route should list the new providers. Then extend `scripts/runner/coder-routes.mjs` and the atlas-cli providers with the same pool.
