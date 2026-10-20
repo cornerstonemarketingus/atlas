@@ -77,6 +77,8 @@ if (mode === "chat") {
     const problems = [];
     if (!content.trim()) problems.push("empty reply");
     if (!outcome.stored) problems.push("reply not persisted");
+    if (typeof outcome.servedBy?.provider !== "string" || !outcome.servedBy.provider.trim()
+      || typeof outcome.servedBy?.model !== "string" || !outcome.servedBy.model.trim()) problems.push("model authorship not confirmed");
     if (outcome.finalization) problems.push(`no model wrote the answer (${outcome.finalization.reason})`);
     if (/_Stopped early:/u.test(content)) problems.push("stopped early");
     evidence[label] = {

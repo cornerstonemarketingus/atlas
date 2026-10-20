@@ -3,6 +3,9 @@ import { test } from 'node:test';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 test('real coder smoke requests a fresh change on every invocation', async () => {
   const objectives = [];
@@ -32,4 +35,42 @@ test('real coder smoke requests a fresh change on every invocation', async () =>
     assert.notEqual(objectives[0], objectives[1], 'a completed previous smoke must not satisfy the next objective');
     for (const objective of objectives) assert.match(objective, /docs\/ATLAS-SMOKE-CHECK-[a-f0-9-]+\.md/u);
   } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+test('chat release gate requires model authorship in both response modes', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'atlas-chat-smoke-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let variant = 'unconfirmed';
+  const server = http.createServer(async (req, res) => {
+    if (req.headers['oai-authenticated-user-id']) { res.writeHead(401); res.end('{}'); return; }
+    if (req.url === '/api/setup/status') { res.end(JSON.stringify({ overall: 'ready', completedSteps: 8, totalSteps: 8 })); return; }
+    let data = ''; for await (const chunk of req) data += chunk;
+    const input = JSON.parse(data);
+    const outcome = { stored: true, conversationId: 'test', reply: { content: 'A saved reply can exist even when no model answered.' },
+      ...(variant === 'confirmed' || (variant === 'stream-unconfirmed' && !input.stream) ? { servedBy: { provider: 'test-provider', model: 'test-model' } } : {}) };
+    if (input.stream) {
+      res.setHeader('content-type', 'text/event-stream');
+      res.end('event: done\ndata: ' + JSON.stringify(outcome) + '\n\n');
+    } else { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(outcome)); }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  for (const scenario of ['unconfirmed', 'stream-unconfirmed', 'confirmed']) {
+    variant = scenario;
+    const child = spawn(process.execPath, [fileURLToPath(new URL('./smoke-hosted.mjs', import.meta.url))], {
+      cwd: directory, env: { ...process.env, ATLAS_SMOKE_MODE: 'chat', ATLAS_OPERATOR_TOKEN: 'test-only', ATLAS_SMOKE_BASE_URL: `http://127.0.0.1:${server.address().port}` }, stdio: 'pipe',
+    });
+    let output = '';
+    child.stdout.on('data', chunk => output += chunk);
+    child.stderr.on('data', chunk => output += chunk);
+    const code = await new Promise(resolve => child.on('close', resolve));
+    if (scenario !== 'confirmed') {
+      assert.notEqual(code, 0, output);
+      assert.match(output, /model authorship not confirmed/);
+      assert.match(output, /Chat release gate failed/);
+    } else {
+      assert.equal(code, 0, output);
+      assert.match(output, /Chat release gate passed/);
+    }
+  }
 });
