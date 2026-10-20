@@ -18,3 +18,21 @@ export async function loadTasks(dir) {
   }
   return tasks;
 }
+
+const DAY_MS = 86_400_000;
+
+/**
+ * One slice of the suite, for running it across days on a free daily quota.
+ * `spec` is `k/n` (slice k of n, 1-based) or `day/n` (the slice for the UTC
+ * day of `nowMs`, so a daily schedule walks every slice in n days). Tasks
+ * are dealt round-robin by id, so slices stay stable as tasks are added.
+ */
+export function selectShard(tasks, spec, nowMs = Date.now()) {
+  const match = /^(day|[1-9]\d*)\/([1-9]\d*)$/u.exec(String(spec));
+  if (!match) throw new Error(`--shard must be k/n or day/n, not ${spec}`);
+  const count = Number(match[2]);
+  const index = match[1] === "day" ? Math.floor(nowMs / DAY_MS) % count : Number(match[1]) - 1;
+  if (index >= count) throw new Error(`--shard ${spec}: slice is past ${count}`);
+  const sorted = [...tasks].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return { index: index + 1, count, tasks: sorted.filter((_, i) => i % count === index) };
+}

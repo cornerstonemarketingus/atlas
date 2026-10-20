@@ -29,6 +29,29 @@ The CI run needs no purchased key:
 
 Dispatching "Atlas eval" with a blank target runs both (Workers AI only when its secrets exist). A weekly schedule (Monday 06:17 UTC) does the same and uploads the report artifact. The adapter passes Workers AI the non-secret account id plus the one named key, and nothing else from the environment.
 
+#### Free quotas: what the first runs showed (2026-10-19)
+
+- **Workers AI** (run 39247409170): `actions-budget-guard` passed, then the
+  account's free daily allowance ran out about 11 minutes in and every later
+  task got HTTP 429. Before the quota ran out, two tasks hit the 2-minute agent
+  deadline and four used up their 12 turns. That run is not a baseline score.
+- **GitHub Models** (run 39247683371): the endpoint answered HTTP 200 with a
+  4-byte `text/plain` body instead of a chat completion, before any tool call.
+  The cause is still open; the error now prints bodies of 16 bytes or less, so
+  the next run shows what came back.
+
+So a free target cannot do all 35 tasks in one run. The harness handles this
+without dropping tasks:
+
+- A run refused with HTTP 429 is classed `quota`. It is left out of the pass
+  rate, because it measures the provider, not the model. The target's
+  remaining tasks are listed under "Not run" instead of being run into the
+  same refusal.
+- `--shard k/n` runs slice k of n, and `--shard day/n` picks the slice from
+  the UTC date. A daily schedule with `day/7` covers every task once a week,
+  each day's slice within the free allowance. Slices are dealt round-robin by
+  task id, so adding a task does not reshuffle them.
+
 A target is `provider:model:API_KEY_ENV[:base-url]`. Only the *name* of the key
 variable is accepted; the key is read from the environment and passed to the
 coder process alone. Verification runs with an allowlisted environment (no keys).
