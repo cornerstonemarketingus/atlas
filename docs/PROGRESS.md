@@ -823,3 +823,15 @@ Independent of the still-open medium-task/tool-budget investigation, default Win
 Build passes. Actual runner + main()-driven repair-loop checks:13tests11pass2platform skips0fail; the previously failing no-progress and elapsed-time CLI verification cases now pass on Windows. Full CLI suite:588tests580pass4fail4skip; four previously observed Windows CRLF/path/mode failures remain, so this is not an all-green local suite. Removing only the source adapter with the new test retained fails again; restoring/rebuilding passes. No Mode B fix, larger budget, verdict-path change or medium live evidence claimed.
 
 Next: publish this isolated verification repair, inspect exact-head CI/reviews and merge only ordinary-eligible all-green/no-blocker changes. Continue to preserve PR395 configured workflow review for medium-task dispatch and native320 signing review; do not infer identical-call loops from old argument-free traces.
+
+## 2026-10-20 — complete Windows CLI fixture portability (#411)
+
+Windows verification408 merged afdee0498e18b0f471b9649f7757e784d5a89439 after all exact-headCI39355503000 passed; mainCI39357421554 also passed. The default npm launch defect is repaired without touching active inference cli.ts work.
+
+Reproduced the four remaining Windows suite failures before edits. Corrected fixtures only: convert file URLs with fileURLToPath, set autocrlf=false only in the deliberately LF git-apply fixture repository, and compare undo mode restoration to the filesystem's actual initial mode. POSIX executable-bit setup remains asserted on POSIX. The checkpoint0600 assertion remains unchanged in a separate POSIX-only test, explicitly skipped on Windows where those mode bits do not express ACL privacy. Content, conflict/all-or-nothing, traversal, symlink and saved-checkpoint assertions remain; no runtime permissions or security policies changed.
+
+Build passed; fullCLI589tests584pass5platform skips0fail on this Windows host. Focused26tests25pass1POSIX skip0fail. Restoring original fixture assumptions reproduces the failures; restoring corrections passes again. Runner/local checks and fresh exact-head CI are recorded with the PR. This is portable verification coverage, not a Mode B algorithm repair.
+
+A normal browser sign-in attempt through Atlas's existing GitHub flow failed at token exchange before a usable session was established. No auth bypass, credential extraction or unreviewed workflow dispatch was attempted; temporary browser tab closed. The live medium-task diagnosis still needs an authorized runtime or configured owner review on PR395. Existing trivial coder acceptance39241361227/39241380949 and reviewablePR396 remain valid.
+
+Next: complete exact-head CI/no-blocker checks for this ordinary fixture repair; obtain configured workflow owner review on PR395, dispatch a fresh bounded medium saved task and replay argument-level evidence before selecting a B repair. Do not raise budgets or claim the original exhausted run was a loop without its missing evidence.

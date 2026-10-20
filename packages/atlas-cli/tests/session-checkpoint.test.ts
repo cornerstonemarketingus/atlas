@@ -23,6 +23,9 @@ const exists = (root: string, path: string) => stat(join(root, path)).then(() =>
 test("undo puts back updated, created, deleted and renamed files, with their mode", async (t) => {
   const root = await repository(t, { "src/a.ts": "a1\n", "src/gone.ts": "gone\n", "src/old.ts": "moved\n", "run.sh": "#!/bin/sh\n" });
   await chmod(join(root, "run.sh"), 0o755);
+  const originalMode = (await stat(join(root, "run.sh"))).mode & 0o777;
+  // Windows exposes native file modes, but does not implement POSIX executable bits.
+  if (process.platform !== "win32") assert.equal(originalMode, 0o755);
   const recorder = new SessionCheckpointRecorder(root);
   await recorder.recordBefore(["src/a.ts", "src/new.ts", "src/gone.ts", "src/old.ts", "src/moved.ts", "run.sh"]);
   // What the session did.
@@ -45,7 +48,7 @@ test("undo puts back updated, created, deleted and renamed files, with their mod
   assert.equal(await read(root, "src/old.ts"), "moved\n");
   assert.equal(await exists(root, "src/moved.ts"), false);
   assert.equal(await read(root, "run.sh"), "#!/bin/sh\n");
-  assert.equal((await stat(join(root, "run.sh"))).mode & 0o777, 0o755);
+  assert.equal((await stat(join(root, "run.sh"))).mode & 0o777, originalMode);
 });
 
 test("a file edited after the session is a conflict, and then nothing is restored", async (t) => {
@@ -126,6 +129,15 @@ test("checkpoints live inside .git and a session that changed nothing saves none
   const directory = await checkpointDirectory(root);
   assert.equal(directory, join(root, ".git", "atlas", "checkpoints"));
   assert.deepEqual(await readdir(directory), ["s1.json"]);
+});
+
+test("checkpoint files restrict POSIX permissions", { skip: process.platform === "win32" }, async (t) => {
+  const root = await repository(t, { "a.ts": "before\n" });
+  const recorder = new SessionCheckpointRecorder(root);
+  await recorder.recordBefore(["a.ts"]);
+  await writeFile(join(root, "a.ts"), "after\n");
+  await recorder.save("s1");
+  const directory = await checkpointDirectory(root);
   assert.equal((await stat(join(directory, "s1.json"))).mode & 0o777, 0o600);
 });
 
