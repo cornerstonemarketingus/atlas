@@ -838,6 +838,14 @@ Next: complete exact-head CI/no-blocker checks for this ordinary fixture repair;
 
 Portability validation follow-through: added actual Windows read-only restoration coverage, which passes and fails if chmod restoration is removed from the compiled runtime; restored implementation passes. POSIX0600 and executable-bit assertions remain on POSIX. Final fullCLI590tests585pass5platform skips0fail; runner/local91tests90pass1skip0fail. Next: require all fresh exact-head CI for the updated fixture PR; medium-task diagnosis still requires configured PR395 review or a working authorized normal sign-in, and is not complete.
 
+## 2026-10-20 — recurring business review admission and installation startup
+
+Business review PR404 merged b513774 after all exact-head CI39250479455 checks passed, including Linux and Windows daemon suites. Owner-configured business-review automations use the existing cumulative allowance and MissionService, claim an exact responsibility/due cycle atomically, recheck that cycle under the SQLite write lock, retain uncertain reservations and never advance review dates merely on mission completion. Eight new boundary tests and 42 affected checks passed; no live business outcome is asserted. Setup and limitations: BUSINESS-REVIEWS.md.
+
+Issue402 exposed a real deployment blocker: both Windows payload paths omitted atlas-contracts; MSI staging also omitted the engineering adapter's merge-decision import. Installer-only stale ownership takeover was documented on PR230, leaving its runner/model changes untouched. The fix stages these existing dependencies and adds real installed-daemon startup regressions for source installation and MSI staging. Both regressions fail against original scripts with ERR_MODULE_NOT_FOUND; repaired startup plus release checks passed14/14 locally. Actual WiX compile/sign and coder toolchain packaging remain unqualified; see LOCAL-INSTALLATION-ACCEPTANCE.md. Fresh integrated-head CI is required before merge.
+
+Live chat gate39249794671 failed streaming with a fixed error and no stored reply; non-streaming answered/stored via Groq. Preceding39249667886 failed non-streaming with rate-limit/billing exhaustion while streaming passed. Deployment39249464778 itself succeeded. Evidence is retained on issue238; generic streaming copy does not establish root cause. No repeat-until-green, provider spending or gate weakening. Next: complete installer CI/ordinary merge; separately package and verify the local coder toolchain, and resolve existing transport/capacity work before claiming two-mode live chat acceptance.
+
 
 ## 2026-10-19 — bounded cloud inference responses (#383)
 
