@@ -142,7 +142,7 @@ const unavailable = (reason, nextStep) => ({ status: "unavailable", reason, next
  * @param {{ insert: Function, get: Function, countSince: Function }} store
  * @param {{ tenantId: number, principal: string }} scope
  */
-export async function createHostedSite({ store, scope, requestId, userMessage, input = {}, now = () => new Date(), reserve = async (_id) => {} }) {
+export async function createHostedSite({ store, scope, requestId, userMessage, input = {}, now = () => new Date(), reserve = async () => {} }) {
   const plan = planHostedSite({ userMessage, description: input.description, template: input.template });
   if (!plan.ok) return failure(plan.code, plan.message);
   const id = `gen_${/^[0-9a-f-]{36}$/u.test(String(requestId)) ? requestId : crypto.randomUUID()}`;
