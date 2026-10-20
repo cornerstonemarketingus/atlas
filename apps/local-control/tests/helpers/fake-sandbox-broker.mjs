@@ -19,7 +19,7 @@ import { treeEntries } from "../../../web/sandbox/tree-manifest.mjs";
  */
 export async function startFakeBroker({ token, unavailable = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "atlas-fake-broker-"));
-  const state = { requests: [], sandboxes: new Map(), backups: new Map(), delayMs: 0, tamperOnRestore: false, echoAuthorization: false, unavailable };
+  const state = { requests: [], writes: [], sandboxes: new Map(), backups: new Map(), delayMs: 0, tamperOnRestore: false, echoAuthorization: false, unavailable };
   const folderOf = (name) => join(root, "sandboxes", name);
 
   function confined(base, path) {
@@ -80,6 +80,7 @@ export async function startFakeBroker({ token, unavailable = false } = {}) {
       if (!target) return [400, { code: "UNSAFE_PATH", message: "outside" }];
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(target, Buffer.from(body.contentBase64, "base64"));
+      state.writes.push({ sandbox: name, path: body.path, executable: body.executable });
       if (typeof body.executable === "boolean") chmodSync(target, body.executable ? 0o755 : 0o644);
       return [200, { path: body.path }];
     }

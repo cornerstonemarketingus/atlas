@@ -158,7 +158,14 @@ test("a local snapshot migrates to the cloud and back, verified by the same dige
     const { environment: cloud, receipt } = await migrateLocalSnapshotToCloud({ source: local, snapshot, env: configured(broker) });
     assert.equal(receipt.treeDigest, snapshot.treeDigest);
     assert.equal(cloud.id, "env-demo");
-    assert.ok(statSync(join(broker.folderOf("t1-env-demo"), "run.sh")).mode & 0o100, "the executable bit travels");
+    // The executable bit travels as git recorded it in the snapshot. Windows
+    // has no POSIX exec bit (git there records run.sh as 100644 and chmod is a
+    // no-op), so the mode comes from the snapshot, not from this platform.
+    const recordedMode = gitIn(local.store, "ls-tree", snapshot.commit, "run.sh").split(" ")[0];
+    if (process.platform !== "win32") assert.equal(recordedMode, "100755", "the fixture's run.sh is executable");
+    const upload = broker.state.writes.find((write) => write.sandbox === "t1-env-demo" && write.path === "run.sh");
+    assert.equal(upload?.executable, recordedMode === "100755", "the executable bit travels to the sandbox");
+    if (recordedMode === "100755") assert.ok(statSync(join(broker.folderOf("t1-env-demo"), "run.sh")).mode & 0o100, "and is set there");
 
     const cloudSnapshot = await cloud.snapshot({ manifest: { state: "building" } });
     assert.equal(cloudSnapshot.treeDigest, snapshot.treeDigest, "the same files digest the same in the cloud");
