@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -173,4 +173,16 @@ test("a finished command's leftover background processes are stopped", { skip: p
   const daemon = Number(await readFile(marker, "utf8"));
   await new Promise((resolveWait) => setTimeout(resolveWait, 100));
   assert.equal(await running(daemon), false);
+});
+
+
+test("Windows allowlisted npm launches without a shell or workspace PATH shim", { skip: process.platform !== "win32" }, async () => {
+  const { root, runner } = await fixture({ allowedExecutables: ["npm"], allowedEnvironmentVariables: ["PATH"], timeoutMs: 10_000 });
+  await writeFile(join(root, "npm.cmd"), "@echo WORKSPACE_SHIM_MUST_NOT_RUN\r\n@exit /b 71\r\n");
+  const result = await runner.run({ executable: "npm", args: ["--version"], environment: { PATH: root } });
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+$/u);
+  assert.doesNotMatch(result.stdout + result.stderr, /WORKSPACE_SHIM_MUST_NOT_RUN/u);
+  await assert.rejects(runner.run({ executable: process.execPath, args: ["--version"] }),
+    (error: unknown) => error instanceof SafeCommandError && error.code === "executable-not-allowed");
 });
