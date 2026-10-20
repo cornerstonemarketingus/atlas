@@ -125,13 +125,26 @@ These are development objectives. Atlas does not yet demonstrate unattended
 operation of arbitrary businesses, guaranteed search rankings or guaranteed
 revenue. Growth claims will be grounded in repeatable customer outcomes.
 
-## Advanced research
+## Compute resilience and advanced research
 
-The founder has identified quantum physics as an additional research direction.
-This public-main audit did not locate the underlying quantum/physics work.
-Its implementation status, experiments and results need to be reconciled before
-Atlas can claim a quantum capability or performance advantage. The current
-agent architecture runs on conventional software and model infrastructure.
+Atlas is designed to use customer-controlled local models alongside optional
+hosted inference. Its shared inference contracts, capacity tracking and recovery
+controls provide a foundation for handling provider throttling. The remaining
+work is end-to-end enforcement across hosted and CLI execution, durable
+continuation and verified fallback under real provider constraints. See
+[rate-limit investigation](docs/RATE-LIMIT-INVESTIGATION.md) and
+[remaining acceptance gates](TODO.md).
+
+**The goal is resilient execution, not bypassing provider quotas.** Atlas should
+queue and resume work, avoid duplicate calls, and route eligible tasks to
+available authorized backends. Local inference and deterministic tools can reduce
+external API dependence; adding workers or quantum hardware cannot raise an
+external provider's quota.
+
+Quantum computing is an exploratory research direction, not a shipped Atlas
+capability. Future work may include reproducible quantum-circuit simulation,
+optional QPU execution and classical baseline comparisons for suitable
+optimization problems. No quantum performance advantage is claimed.
 
 ## Start locally
 
