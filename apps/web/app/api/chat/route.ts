@@ -5,6 +5,7 @@ import { conversationWritable, recallForMemory, tenantAllowlist } from "../../..
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
+import { checkAndRecordChatUsage } from "../billing/plan.mjs";
 import { isDeploymentOwner } from "../tasks/self-protection.mjs";
 import { POST as startTask } from "../tasks/route";
 import { allowedRepositories } from "../tasks/dispatch.mjs";
@@ -22,8 +23,10 @@ import { governChain } from "../inference/governor-client.mjs";
 import { workerEnv } from "../inference/worker-env.mjs";
 import { createAgentTeam } from "./agent-team.mjs";
 import { instantToolDefinitions } from "./instant-tools.mjs";
-import { recoverableProjectCreator, reserveProjectReceipt } from "../genesis/receipts.mjs";
+import { reserveProjectReceipt } from "../genesis/receipts.mjs";
 import { genesisBridge } from "../genesis/bridge.mjs";
+import { projectBackend } from "../genesis/project-backend.mjs";
+import { hostedSiteStore } from "../../../db/hosted-sites.mjs";
 import { createProjectTools, userWantsPublic } from "./project-tools.mjs";
 import { classifyIntent } from "../../chat/intent.mjs";
 
@@ -38,6 +41,8 @@ export async function POST(request: Request) {
   let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown; stream?: unknown; provider?: unknown };
   try { body = await request.json() as typeof body; } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
 
+  if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ message: "Request body must be a JSON object." }, { status: 400 });
+
   const message = typeof body.message === "string" ? body.message.trim().slice(0, MAX_MESSAGE) : "";
   if (!message) return Response.json({ message: "Say something for Atlas to reply to." }, { status: 400 });
   const repository = typeof body.repository === "string" ? body.repository.slice(0, 140) : "";
@@ -48,10 +53,26 @@ export async function POST(request: Request) {
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
   const selection = body.provider ?? "auto";
-  if (typeof selection !== "string" || !chatProviderChoices(process.env).some((choice) => choice.id === selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
-  const resolved = resolveChatProvider(process.env, selection);
+  const workersAI = { ai: (workerEnv as { AI?: unknown }).AI };
+  if (typeof selection !== "string" || !chatProviderChoices(process.env, workersAI).some((choice) => choice.id === selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
+  const resolved = resolveChatProvider(process.env, selection, workersAI);
   if (!resolved.configured) {
     return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
+  }
+  // The hosted model pool is shared, so each signed-in account has a daily
+  // message cap (owners and operator tokens are exempt). Counted before any
+  // write or model call; if usage cannot be read the message is allowed and
+  // the gap is logged, because a database fault must not take chat down.
+  if (account.dbUserId !== null && !isDeploymentOwner(account)) {
+    try {
+      const usage = await checkAndRecordChatUsage(getDb(), account.dbUserId);
+      if (!usage.allowed) {
+        const retryAfter = Math.max(1, Math.ceil((Date.parse(usage.resetsAt) - Date.now()) / 1000));
+        return Response.json({ message: usage.reason, code: usage.code, tier: usage.tier, limit: usage.limit, resetsAt: usage.resetsAt, upgradeUrl: "/pricing" }, { status: 429, headers: { "retry-after": String(retryAfter) } });
+      }
+    } catch (error) {
+      try { console.warn(JSON.stringify({ atlas: "chat", event: "chat.usage_unavailable", error: error instanceof Error ? error.name : "unknown" })); } catch { /* logging never breaks a reply */ }
+    }
   }
   // Every model call reserves through the provider scope's quota ledger (Phase 1.2); none when unbound.
   const endpoint = await governChain(resolved, workerEnv);
@@ -63,11 +84,13 @@ export async function POST(request: Request) {
   let stored = true;
   let projectScope: { tenantId: number; principal: string } | undefined;
   let allowlist = new Set<string>();
+  let workspaceScope: ReturnType<typeof tenantScope> | null = null;
   try {
     db = getDb();
     // Tenancy (#71): threads belong to the caller's tenant; an id owned by another tenant or principal is never written to.
     const tenant = await resolveTenantContext(request, account, getD1());
     if (!tenant || !(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) throw new Error("Conversation is not writable in this workspace.");
+    workspaceScope = tenantScope(tenant);
     await db.insert(conversations)
       .values({ id: conversationId, tenantId: tenant.tenantId, requestedBy: account.userId, title: threadTitle(message), repository, branch, createdAt: now, updatedAt: now })
       .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now }, setWhere: and(eq(conversations.tenantId, tenant.tenantId), eq(conversations.requestedBy, account.userId)) });
@@ -90,8 +113,12 @@ export async function POST(request: Request) {
 
   // Stable prefix first (system prompt, then history) so the provider's prompt cache can reuse it; see turns.mjs.
   const bridge = genesisBridge(process.env, { owner: isDeploymentOwner(account) });
-  const projectCapabilities = await bridge.capabilities({ visibility: userWantsPublic(message) ? "public" : "private" });
-  const projectTools = createProjectTools({ create: recoverableProjectCreator({ create: bridge.create, reserve: (id: string) => reserveProjectReceipt(getD1(), projectScope, conversationId, id) }), status: bridge.status, requestId: randomUUID(), userMessage: message });
+  const nodeCapabilities = await bridge.capabilities({ visibility: userWantsPublic(message) ? "public" : "private" });
+  // Business websites can be built without a node; the model is told which builders actually exist.
+  const backend = projectBackend({ bridge, hosted: workspaceScope ? { store: hostedSiteStore(getD1()), scope: workspaceScope } : null, userMessage: message,
+    reserve: (id: string) => reserveProjectReceipt(getD1(), projectScope, conversationId, id) });
+  const projectCapabilities = { ...nodeCapabilities, hostedWebsites: backend.hostedAvailable };
+  const projectTools = createProjectTools({ create: backend.create, status: backend.status, requestId: randomUUID(), userMessage: message });
   const turns = chatTurns({ system: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository, projectCapabilities }), history, memory, message, historyTurns: HISTORY_TURNS });
 
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => classifyIntent(message).kind === "new_project_task"
@@ -204,10 +231,11 @@ async function startRequestedTasks(request: Request, { requests, errors }: TaskR
         headers: forwarded,
         body: JSON.stringify({ repository: task.repository, branch: taskBranch, mode: task.mode, objective: task.objective, conversationId: context.conversationId }),
       }));
-      const body = await result.json().catch(() => ({})) as { message?: string; taskId?: string; mergePolicy?: string };
-      outcome = result.ok
+      const body = await result.json().catch(() => ({})) as { message?: string; taskId?: string; mergePolicy?: string; status?: string };
+      // A saved request whose cloud run was not confirmed has not started; saying so keeps the person from waiting on nothing.
+      outcome = result.ok && body.status !== "dispatch-unknown"
         ? { ok: true, message: "started", taskId: body.taskId, mergePolicy: body.mergePolicy }
-        : { ok: false, message: body.message ?? `the task service answered ${result.status}` };
+        : { ok: false, message: result.ok ? `the request is saved${body.taskId ? ` (task ${body.taskId})` : ""}, but its cloud run was not confirmed. Check its progress before asking again` : body.message ?? `the task service answered ${result.status}` };
     } catch {
       outcome = { ok: false, message: "the task service could not be reached" };
     }
@@ -270,6 +298,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-  const endpoint = resolveChatProvider(process.env);
-  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null, providers: chatProviderChoices(process.env) }, { headers: { "cache-control": "no-store" } });
+  const bindings = { ai: (workerEnv as { AI?: unknown }).AI };
+  const endpoint = resolveChatProvider(process.env, "auto", bindings);
+  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null, providers: chatProviderChoices(process.env, bindings) }, { headers: { "cache-control": "no-store" } });
 }

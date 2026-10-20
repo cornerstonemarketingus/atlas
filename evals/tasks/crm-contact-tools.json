@@ -1,0 +1,35 @@
+{
+  "id": "crm-contact-tools",
+  "category": "multi-file-edit",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "ff1dd30ab67dcee34025944cc28b1a7ff71f8748",
+  "objective": "Add apps/local-control/src/agent/tools/crm-tools.mjs exporting HUBSPOT_CREDENTIAL (\"HUBSPOT_PRIVATE_APP_TOKEN\"), hubspotContacts({ token, fetchImpl }) and registerCrmTools(registry, { fetchImpl }). Register crm.find_contact (capability crm.read, no approval) and crm.create_contact (capability crm.write, risk high, requires approval), both needing the credential, zero retries, and a strict email schema. create reuses an existing contact (looked up by email via HubSpot's v3 contacts API with idProperty=email) without changing fields; otherwise it POSTs and then independently reads the contact back, failing NOT_VERIFIED unless id and fields match. Provider errors map to CONTACT_NOT_FOUND / NOT_AUTHORIZED / CRM_REQUEST_FAILED / CRM_UNAVAILABLE without echoing response bodies; redirects are refused. Wire it into registerWorkflowTools in workflow-tools.mjs. apps/local-control/tests/crm-tools.test.mjs and daemon-boot.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "1c3be5b66160a28c04e9c5b027f314442d3cbb1e",
+    "paths": [
+      "apps/local-control/tests/crm-tools.test.mjs",
+      "apps/local-control/tests/daemon-boot.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/crm-tools.test.mjs",
+      "apps/local-control/tests/daemon-boot.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "1c3be5b66160a28c04e9c5b027f314442d3cbb1e",
+    "paths": [
+      "apps/local-control/src/agent/tools/crm-tools.mjs",
+      "apps/local-control/src/agent/tools/workflow-tools.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "tools"
+  ]
+}

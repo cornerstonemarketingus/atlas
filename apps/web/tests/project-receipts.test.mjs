@@ -4,6 +4,8 @@ import { migratedDatabase } from "./helpers/d1-sqlite.mjs";
 import { resolveTenant, getConversation } from "../db/tenancy.mjs";
 import { createProjectConversation, reserveProjectReceipt, recoverableProjectCreator } from "../app/api/genesis/receipts.mjs";
 import { projectReceipts, latestProjectReceipt } from "../app/chat/project-receipts.mjs";
+import { projectBackend } from "../app/api/genesis/project-backend.mjs";
+import { hostedSiteStore } from "../db/hosted-sites.mjs";
 
 async function fixture(t) {
   const { sqlite, d1 } = migratedDatabase({ users: [[1, "alice"], [2, "bob"]] });
@@ -14,6 +16,26 @@ async function fixture(t) {
   return { sqlite, d1, scope };
 }
 const operationId = "operation_123456789";
+
+test("hosted fallback saves its actual operation id before persistence and recovers without creation", async t => {
+  const { d1, scope } = await fixture(t);
+  const store = hostedSiteStore(d1);
+  const bridge = { available: false, create: () => assert.fail("No external node"), status: () => assert.fail("Hosted receipt must use hosted status") };
+  const backend = projectBackend({ bridge, hosted: { store, scope }, reserve: id => reserveProjectReceipt(d1, scope, "thread", id) });
+  const requestId = "11111111-1111-4111-8111-111111111111";
+  const description = "Build a website for Acme Roofing in Duluth, Minnesota, with roofing and repair services.";
+  // Discard the creation response, as on a lost connection.
+  await backend.create({ requestId, description });
+  const [receipt] = projectReceipts((await getConversation(d1, scope, "thread")).events);
+  assert.equal(receipt.operationId, `gen_${requestId}`);
+  const recovered = await backend.status(receipt.operationId);
+  assert.equal(recovered.status, "ready");
+  assert.equal(recovered.deploymentState, "not-deployed");
+  const blocked = projectBackend({ bridge, hosted: { store, scope }, reserve: async () => { throw new Error("History offline"); } });
+  const refusedId = "22222222-2222-4222-8222-222222222222";
+  assert.equal((await blocked.create({ requestId: refusedId, description })).status, "unavailable");
+  assert.equal(await store.get(scope, `gen_${refusedId}`), null);
+});
 
 test("lost creation response leaves a scoped durable receipt that reopening history recovers without executing again", async t => {
   const { d1, scope } = await fixture(t);

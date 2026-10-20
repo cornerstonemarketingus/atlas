@@ -1,4 +1,91 @@
-# Atlas OS — production implementation queue — 2026-10-08
+# Atlas implementation backlog — evidence refresh 2026-10-15
+
+The owner's current order is: audit first, reliability, Genesis, persistent
+cloud execution, browser control, collaboration, business workflows, customer
+release. [ARCHITECTURE.md](ARCHITECTURE.md) separates source, runtime wiring,
+automated coverage, real sessions and deployed evidence. Historical rows below
+are retained for traceability and are superseded by this queue. No duplicate
+TODO is introduced. Check current ownership before each implementation.
+
+## Reliability slice — shared CLI output-budget admission (#330, 2026-10-17)
+
+The existing `BudgetedModelProvider` read remaining tokens before awaiting the
+provider and recorded usage afterward. Two wrappers sharing a five-token ledger
+could each dispatch with a five-token limit; the real HTTP regression spent six
+tokens before accounting rejected the second response. Queued cancellation also
+failed its original regression.
+
+Finite-output calls now serialize admission per ledger object, recompute the
+remaining limit after the preceding call settles, and keep cancellation prompt
+without permitting bypass of active work. Failures release admission; exhausted
+output prevents dispatch. Failed post-response accounting blocks later calls on
+that ledger instead of spending an incomplete snapshot. Direct same-ledger
+nesting is rejected rather than deadlocking. Existing CLI primary/repair routes
+already instantiate these wrappers; provider and credential ownership is intact.
+
+This is process-local coordination of participating wrappers, not a replacement
+for the hosted governor or a cross-process provider quota. Independent ledgers
+and unlimited-output calls remain parallel. Providers must honor output caps;
+input/cost are still measured afterward, so the first unestimated overrun cannot
+be prevented here. Already-active unlimited-output calls cannot be recalled.
+An adapter that never settles retains admission. A failed accounting ledger
+requires a new task/ledger; no automatic budget reset or durable cloud recovery
+is introduced. The focused PR/#330 records final tests, CI and review evidence.
+
+## Reliability slice — CLI retry cancellation (#305, 2026-10-17)
+
+The existing `RetryingModelProvider` is instantiated by the CLI's actual
+provider routes. Cancellation previously could still invoke a provider before
+the first attempt or after a resolving backoff, report a last-attempt rate
+failure instead of cancellation, or accept late success from an abort-ignoring
+adapter. Successful default backoffs also retained their abort listener.
+
+The focused change checks cancellation before dispatch, after completion and
+before handling provider failures; cancelled requests use the existing
+nonretryable `cancelled` error. Timer and abort paths remove their listener.
+Five new regressions fail against the original wrapper and pass with the fix;
+the real loopback HTTP fixture confirms exactly one request when cancellation
+occurs during backoff. Focused retry/fallback/timing validation passes 21/21;
+TypeScript build passes. Refreshed full Windows suite: 533 tests, 525 pass,
+four skips and four failures. Those Windows failures reproduce with
+the unmodified retry wrapper (CRLF, doubled drive path, and two POSIX-mode
+assertions). Remote CI status belongs to the focused PR.
+
+No provider, fallback configuration, credential, approval or shared quota
+implementation was replaced. The wrapper prevents subsequent dispatch and late
+success; it cannot forcibly stop an adapter that ignores AbortSignal or undo
+provider charges. Cross-runtime quota settlement remains in the queue. Active
+PROGRESS and provider documentation edits are preserved; #305 carries the
+handoff until integration.
+
+| Priority / task | Reuse and exact scope | Dependencies / ownership | Acceptance and required tests | Risk / owner intervention |
+|---|---|---|---|---|
+| P0: finish evidence audit | Existing ARCHITECTURE.md and this backlog; audited main b47f136, later-main delta reviewed separately | #279; preserve all active implementation PRs | Fresh suites, daemon HTTP restart/approval journey, exact-commit CI failure and hosted acceptance; document unavailable visual/native tests | Low; no runtime deployment |
+| P1: intermittent Windows boot diagnosis | `apps/local-control/tests/daemon-boot.test.mjs`, `src/main.mjs`, health/startup path | Coordinate build-reliability #165; current main CI 38834441308 passes Windows | Explain historical CI 38160397827's 15-second empty-output health timeout; reproduce or improve bounded diagnostics without concealing failure; actual Windows boot and affected suite | Medium; owner review only if protected startup policy or CI changes |
+| P0: untrusted coder isolation | Existing #253 runner validation/workflow changes; `scripts/runner/run-task.mjs` | #245 ownership; security/workflow review | Generated package scripts cannot access trusted publisher credentials or alter publisher; adversarial process/container test; timeout/cancel cleanup; no unrestricted-host fallback | High; protected owner review; no paid provisioning |
+| P0: credential and approval boundaries | #233/#235, vault, registry, authorized executor and broker | #234; reconcile overlap, preserve security policy | Scope and resolve credentials at execution, bind identity/task/environment/action/digest/expiry; revoke/cancel tests; zero credential values in prompts/audit/tool outputs; actual daemon transport tests | High; owner security review; configured credentials for live qualification |
+| P0: durable dispatch and action fencing | #270/#274/#276/#278/#282; D1 task intent/request identity, runner execution claims and result ownership | Existing claims, migrations, worker identity; compose with #266; #284 Genesis receipt recovery | Lost browser response or GitHub acknowledgement creates one logical task; duplicate/stale attempts cannot mutate/publish; crash and cancel/result races tested over SQL/HTTP and hosted runner | High; tenant/workflow review and migration authorization |
+| P0: interrupted automation/self-improvement | #252 automation service/store; #243 verified-head merge; #266 cancel receipts | Existing #248/#242/#260 claims | Unknown starting mission paused rather than replayed; stale head/base approval refused; late result cannot resurrect cancellation; kill/restart and race tests | High for merge policy; protected review remains required |
+| P1: shared inference quotas and budgets | `packages/atlas-inference/src`, hosted governor/client, CLI/local provider wrappers | #240 native streams, #200 CLI taxonomy, #230 local qualification; authenticated ledger boundary | Mixed hosted/local/runner concurrency cannot overspend; billing differs from 429; bounded retry/private fallback; stream/cancel/crash settle or expire reservation; real transport and ledger race tests | High; endpoint review and bounded model qualification budget; no GPU provisioning |
+| P1: reliability acceptance missions | Verified coder, kernel/missions, Actions tasks and #236 manifests | Isolation, broker, idempotency first | Repeated real-model coding with provider refusal, process interruption and disconnect; actual checks/artifacts, independent review, no repeated consequential tool; cost per verified result | Medium/high; configured model budget; never substitute model statements for checks |
+| P1: Genesis visual edit slice | #181; `platform/genesis/{service,executor,preview,inspector}.mjs`, UI selection/change requests | #74 ownership; rebase existing picker | Select element -> edit through real Genesis -> checks -> responsive preview; reject forged selection/path; actual CLI+Chromium. Then spacing/color/layout/delete/move/components separately | Medium/high; source/preview confinement review |
+| P1: Team Hahn Construction acceptance | Genesis editable spec/history/templates/publisher; hosted `app/api/genesis/bridge.mjs` and operations API (#272) | Reachable trusted node or cloud worker, business facts/brand/domain and publish account | Requirements -> approved spec -> responsive design -> iterative repair/version comparison -> repository -> authorized deploy -> public health and artifact; actual browser review; no manual coding | High; owner business facts, account/domain and deployment authorization |
+| P1: server-backed app deployment | Existing shared auth/database/files/secrets/jobs/queue templates and infrastructure/publisher tools | Scoped deploy broker, exact approval, execution host | Migrations, backups/restore, secrets, health and rollback; bad migration/release recovery tested; database-backed estimate endpoint verified | High; owner account/budget and protected review; no unapproved paid resources |
+| P1: persistent LOCAL/CLOUD/HYBRID | Local kernel/session/task stores, hosted D1/events, Actions workers/artifacts | Execution fencing/isolation; durable external files/checkpoints/receipts and lease identity | Real coding mission completes with owner's computer disconnected; worker death resumes from durable evidence; stale lease stops work; resource caps and logs; sandbox failure never falls back unrestricted | High; owner storage/runner configuration and budget; no GPU needed |
+| P2: cloud browser and takeover | Browser worker/computer APIs; #237 journal, #105 adapter, #61 mobile | Isolated cloud consumer, egress/approval controls and authenticated session artifacts | Real form workflow -> exact approval -> interruption/takeover -> hand-back -> fresh observe -> continuation; no auth/CAPTCHA/payment bypass or public profiles | High; protected review and hosted-browser configuration/budget |
+| P2: shared multi-agent runtime/review | Kernel, missions/team/family graph/Command Center; registry/DAG libraries; #236 | Shared evidence/budgets and reliable tool receipts | Bounded roles; separate reviewer catches planted defect before release; individual/mission controls; measured quality/cost versus single agent | Medium/high; model budget, reviewer independence and protected release review |
+| P2: approved connectors/skills | Existing MCP gateway/client and `platform/skills` package/registry/proposals/approvals | Capability boundary, signing, independent review, exact package approval | Gap -> proposal -> tested/reviewed signed package -> explicit install -> loaded tools; restart/tamper/revoke integration; no self-granted privileges | High; protected review and explicit installation authorization |
+| P2: business estimate workflow | Genesis form/API/backend queue, scoped memory, opportunity scout #223 and authorized notification connector | Deployed app/database and business content | Test estimate stored once -> owner notified -> status tracked to completion; retry failures visible; SEO/GEO measured through indexing/performance/visibility/conversion | Medium/high; owner notification authorization and retention/account configuration |
+| P2: customer-ready release | Setup/provider diagnosis, tenant/auth/repo routes, Windows installer/update, Capacitor; #203/#69/#77/#61 | Foundation and Genesis acceptance; billing only if offered | Fresh user completes real project; clean Windows install/update/rollback; mobile/keyboard usability, monitoring, permissions/retention; verified-only release claims | High; OAuth/native signing/optional Stripe owner setup and protected review |
+
+Next engineering selection follows delivery of this audit. Validate/reconcile
+the existing P0 boundary work first; diagnose the intermittent Windows startup
+observation within current ownership. Do not count unmerged code or a normal inspection run as a completed
+cloud coding, Genesis, browser or business acceptance mission.
+
+---
+
+# Historical production implementation queue — 2026-10-08
 
 This queue supersedes the historical branch checkmarks below. The current
 architecture inventory, existing capabilities, disconnected modules, PR

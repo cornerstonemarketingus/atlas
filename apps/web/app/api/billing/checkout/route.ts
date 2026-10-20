@@ -1,3 +1,4 @@
+import { customerFailure } from '../../customer-failure.mjs';
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { subscriptions } from "../../../../db/schema";
@@ -6,7 +7,7 @@ import { stripeConfiguration, createCheckoutSession } from "../stripe.mjs";
 
 const ALLOWED_TIERS = new Set(["pro", "team"]);
 
-export async function POST(request: Request) {
+async function handlePost(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account || account.dbUserId === null) {
     return Response.json({ message: "Sign in with GitHub is required to subscribe." }, { status: 401 });
@@ -38,7 +39,12 @@ export async function POST(request: Request) {
       cancelUrl: `${origin}/?checkout=cancelled`,
     });
     return Response.json({ url });
-  } catch (error) {
-    return Response.json({ message: error instanceof Error ? error.message : "Checkout session creation failed." }, { status: 502 });
+  } catch {
+    return customerFailure('checkout', 502);
   }
+}
+
+export async function POST(request: Request) {
+  try { return await handlePost(request); }
+  catch { return customerFailure('checkout'); }
 }

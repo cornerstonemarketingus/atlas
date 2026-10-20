@@ -62,6 +62,9 @@ export class AutomationStore {
       );
       CREATE INDEX IF NOT EXISTS automation_runs_by_automation ON automation_runs (automation_id, started_at DESC);
     `);
+    if (!this.#db.prepare("PRAGMA table_info(automations)").all().some((column) => column.name === "recovery_required")) {
+      this.#db.exec("ALTER TABLE automations ADD COLUMN recovery_required INTEGER NOT NULL DEFAULT 0");
+    }
   }
 
   close() { this.#db.close(); }
@@ -78,11 +81,11 @@ export class AutomationStore {
   }
 
   update(id, fields) {
-    const columns = { enabled: "enabled", pausedReason: "paused_reason", nextRunAt: "next_run_at", consecutiveFailures: "consecutive_failures" };
+    const columns = { enabled: "enabled", pausedReason: "paused_reason", nextRunAt: "next_run_at", consecutiveFailures: "consecutive_failures", recoveryRequired: "recovery_required" };
     const sets = Object.keys(fields).filter((key) => key in columns);
     if (sets.length === 0) return this.get(id);
     this.#db.prepare(`UPDATE automations SET ${sets.map((key) => `${columns[key]} = ?`).join(", ")}, updated_at = ? WHERE id = ?`)
-      .run(...sets.map((key) => (key === "enabled" ? (fields[key] ? 1 : 0) : fields[key])), new Date().toISOString(), id);
+      .run(...sets.map((key) => (["enabled", "recoveryRequired"].includes(key) ? (fields[key] ? 1 : 0) : fields[key])), new Date().toISOString(), id);
     return this.get(id);
   }
 
@@ -108,6 +111,26 @@ export class AutomationStore {
   runs(automationId, limit = 50) { return this.#db.prepare("SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY started_at DESC LIMIT ?").all(automationId, limit).map(decodeRun); }
   hasKey(automationId, key) { return Boolean(this.#db.prepare("SELECT 1 FROM automation_runs WHERE automation_id = ? AND trigger_key = ?").get(automationId, key)); }
   activeRuns() { return this.#db.prepare("SELECT * FROM automation_runs WHERE status IN ('starting', 'running')").all().map(decodeRun); }
+  /** Single-daemon startup only: an unacknowledged start may already have effects. */
+  recoverInterruptedStarts(now) {
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const interrupted = this.#db.prepare("SELECT id, automation_id FROM automation_runs WHERE status = 'starting' AND mission_id IS NULL").all();
+      for (const run of interrupted) {
+        this.#db.prepare("UPDATE automation_runs SET status = 'failed', message = ?, finished_at = ? WHERE id = ?")
+          .run("Start interrupted before its mission identity was saved; work may have started. Inspect existing missions before resuming.", now, run.id);
+      }
+      for (const id of new Set(interrupted.map((run) => run.automation_id))) {
+        this.#db.prepare("UPDATE automations SET enabled = 0, recovery_required = 1, paused_reason = ?, consecutive_failures = consecutive_failures + 1, updated_at = ? WHERE id = ?")
+          .run("Start outcome unknown after restart. Inspect existing missions, then resume this automation when safe.", now, id);
+      }
+      this.#db.exec("COMMIT");
+      return interrupted.length;
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   startedSince(automationId, since) {
     return this.#db.prepare("SELECT COUNT(*) AS count FROM automation_runs WHERE automation_id = ? AND started_at >= ? AND status NOT IN ('skipped', 'duplicate')").get(automationId, since).count;
   }
@@ -118,6 +141,7 @@ function decodeAutomation(row) {
     id: row.id, name: row.name, trigger: JSON.parse(row.trigger_json), action: JSON.parse(row.action_json),
     enabled: row.enabled === 1, pausedReason: row.paused_reason, maxRunsPerDay: row.max_runs_per_day,
     hasWebhook: Boolean(row.webhook_secret_hash), nextRunAt: row.next_run_at, consecutiveFailures: row.consecutive_failures,
+    recoveryRequired: row.recovery_required === 1,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
@@ -214,6 +238,9 @@ export class AutomationService {
    * `onEvent(summary)` receives every signed GitHub delivery (after the
    * signature check, before this automation's own event filter), so sleeping
    * goals can wake on the same webhook. It never affects the automation.
+   * One service owns a database for the lifetime of a daemon. Construction
+   * reconciles the previous process's starts; do not construct a second
+   * service against the database while the first is executing work.
    */
   constructor({ store, missionService, team = null, clock = () => Date.now(), onChange = () => {}, onEvent = () => {}, watch = fsWatch, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.#onEvent = onEvent;
@@ -225,6 +252,9 @@ export class AutomationService {
     this.#team = team;
     this.#clock = clock;
     this.#onChange = onChange;
+    // Main constructs this service before starting watchers, HTTP intake or
+    // schedule catch-up. Never do this in tick: live starts can be awaiting IO.
+    this.#store.recoverInterruptedStarts(new Date(this.#clock()).toISOString());
   }
 
   list() { return this.#store.list().map((automation) => this.#view(automation)); }
@@ -266,7 +296,7 @@ export class AutomationService {
 
   resume(id) {
     const automation = this.#require(id);
-    const resumed = this.#store.update(id, { enabled: true, pausedReason: null, consecutiveFailures: 0, nextRunAt: this.#nextFor(automation.trigger) });
+    const resumed = this.#store.update(id, { enabled: true, pausedReason: null, consecutiveFailures: 0, recoveryRequired: false, nextRunAt: this.#nextFor(automation.trigger) });
     this.#syncWatcher(resumed);
     return this.#view(resumed);
   }
@@ -400,7 +430,7 @@ export class AutomationService {
     const base = { id: `run-${randomUUID()}`, automationId: automation.id, triggerKind: trigger.kind, triggerKey: trigger.key, startedAt: now.toISOString(), input: trigger.input ?? null };
     // A redelivery is a duplicate whatever else is going on; checked before the guards.
     if (this.#store.hasKey(automation.id, trigger.key)) return { status: "duplicate", message: "Already handled; this trigger was not run again." };
-    if (!automation.enabled && trigger.kind !== "manual") {
+    if (!automation.enabled && (trigger.kind !== "manual" || automation.recoveryRequired)) {
       return this.#record(base, "skipped", `Not run: the automation is paused${automation.pausedReason ? ` (${automation.pausedReason})` : ""}.`);
     }
     this.#settle();

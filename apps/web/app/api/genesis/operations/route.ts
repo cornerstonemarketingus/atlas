@@ -1,40 +1,56 @@
-import { randomUUID } from "node:crypto";
 import { getD1 } from "../../../../db";
+import { randomUUID } from "node:crypto";
+import { createProjectConversation, reserveProjectReceipt } from "../receipts.mjs";
+import { hostedSiteStore } from "../../../../db/hosted-sites.mjs";
 import { resolveTenantContext, tenantScope } from "../../auth/tenant-context.mjs";
-import { createProjectConversation, recoverableProjectCreator, reserveProjectReceipt } from "../receipts.mjs";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
 import { isDeploymentOwner } from "../../tasks/self-protection.mjs";
 import { genesisBridge } from "../bridge.mjs";
+import { projectBackend } from "../project-backend.mjs";
 
-// This node belongs to the deployment owner, never to an arbitrary signed-in tenant.
+/** The caller's workspace for hosted creation, or null when it cannot be resolved (the node path still works for the owner). */
+async function hostedFor(request: Request, account: NonNullable<Awaited<ReturnType<typeof authenticatedAccount>>>) {
+  try {
+    const tenant = await resolveTenantContext(request, account, getD1());
+    return tenant ? { store: hostedSiteStore(getD1()), scope: tenantScope(tenant) } : null;
+  } catch { return null; }
+}
+
+// The Genesis node belongs to the deployment owner, never to an arbitrary signed-in tenant.
+// Any signed-in workspace member may build a website with the hosted builder, which runs no generated code.
 export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-  if (!isDeploymentOwner(account)) return Response.json({ message: "Deployment owner access is required for this Genesis node." }, { status: 403 });
   let input;
   try { input = await request.json(); } catch { return Response.json({ message: "Invalid JSON." }, { status: 400 }); }
+  const bridge = genesisBridge(process.env, { owner: isDeploymentOwner(account) });
   const conversationId = input?.conversationId ?? randomUUID();
-  const create = recoverableProjectCreator({
-    create: genesisBridge(process.env, { owner: true }).create,
+  let createdConversation = false;
+  const backend = projectBackend({ bridge, hosted: await hostedFor(request, account), userMessage: typeof input?.description === "string" ? input.description : "",
     reserve: async (id: string) => {
       const d1 = getD1();
       const tenant = await resolveTenantContext(request, account, d1);
       const scope = tenant ? tenantScope(tenant) : null;
-      if (!input?.conversationId) await createProjectConversation(d1, scope, conversationId);
+      if (!input?.conversationId && !createdConversation) { await createProjectConversation(d1, scope, conversationId); createdConversation = true; }
       return reserveProjectReceipt(d1, scope, conversationId, id);
-    },
-  });
-  const projectInput = { ...input };
-  delete projectInput.conversationId;
-  const result = await create(projectInput);
-  return Response.json({ ...result, conversationId }, { status: result.status === "unavailable" ? 503 : result.status === "failed" ? 400 : 202, headers: { "cache-control": "no-store" } });
+    } });
+  const projectInput = { ...input }; delete projectInput.conversationId;
+  const result = await backend.create(projectInput);
+  const status = result.status === "unavailable" ? 503 : result.status === "failed" ? 400 : result.status === "ready" ? 201 : 202;
+  return Response.json({ ...result, conversationId }, { status, headers: { "cache-control": "no-store" } });
 }
 
 export async function GET(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
-  if (!isDeploymentOwner(account)) return Response.json({ message: "Deployment owner access is required for this Genesis node." }, { status: 403 });
-  const bridge = genesisBridge(process.env, { owner: true });
   const id = new URL(request.url).searchParams.get("id");
+  const owner = isDeploymentOwner(account);
+  // A hosted website is read through its own workspace; node operations and capabilities stay owner-only.
+  if (id?.startsWith("gen_")) {
+    const backend = projectBackend({ bridge: genesisBridge(process.env, { owner }), hosted: await hostedFor(request, account) });
+    return Response.json(await backend.status(id), { headers: { "cache-control": "no-store" } });
+  }
+  if (!owner) return Response.json({ message: "Deployment owner access is required for this Genesis node." }, { status: 403 });
+  const bridge = genesisBridge(process.env, { owner: true });
   return Response.json(id ? await bridge.status(id) : await bridge.capabilities(), { headers: { "cache-control": "no-store" } });
 }

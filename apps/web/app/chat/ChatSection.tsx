@@ -60,6 +60,8 @@ export function ChatSection() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
+  // Set when the daily free-message cap is reached: the options after it are a local model, then a plan.
+  const [capReached, setCapReached] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [repository, setRepository] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(PROJECT_STORAGE_KEY) ?? "");
   const [branch, setBranch] = useState("main");
@@ -88,6 +90,9 @@ export function ChatSection() {
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
   const logSerial = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  const generation = useRef(0);
+  const busy = useRef(false);
+  const loading = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [scrollFollow] = useState(() => createScrollFollow(() => scrollRef.current));
@@ -146,20 +151,35 @@ export function ChatSection() {
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("conversation");
     if (!requested || !/^[0-9a-f-]{36}$/u.test(requested)) return;
+    const current = ++generation.current;
+    loading.current = true;
     void fetch(`/api/conversations/${encodeURIComponent(requested)}`, { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
       .then(async (detail: Detail | null) => {
-        if (!detail) return;
+        if (!detail) throw new Error("Conversation unavailable");
+        const liveTasks = await withLiveTaskStatus(detail.tasks ?? []);
+        if (current !== generation.current) return;
         resetFollowing();
         setConversationId(requested);
         setMessages(detail.messages ?? []);
-      setProjectOperation((previous) => latestProjectReceipt(detail.events, previous));
-        setTasks(await withLiveTaskStatus(detail.tasks ?? []));
+      setProjectOperation(previous => latestProjectReceipt(detail.events ?? [], previous));
+        setTasks(liveTasks);
       })
-      .catch(() => setNotice("That conversation could not be loaded."));
+      .catch(() => { if (current === generation.current) setNotice("That conversation could not be loaded."); })
+      .finally(() => { if (current === generation.current) loading.current = false; });
+    // The request counter intentionally uses its latest value during cleanup.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { generation.current++; loading.current = false; abortRef.current?.abort(); };
   }, [resetFollowing]);
 
   async function openThread(id: string) {
+    const current = ++generation.current;
+    abortRef.current?.abort();
+    busy.current = false;
+    loading.current = true;
+    setSending(false);
+    setStreaming(null); setThinking(""); setLiveSteps([]); setLiveAgents([]);
+    setSuggestion(null); setMessages([]); setTasks([]); setDraft("");
     setProjectOperation(null);
     resetFollowing();
     setStored(true);
@@ -167,15 +187,17 @@ export function ChatSection() {
     setNotice("");
     try {
       const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`, { cache: "no-store" });
-      if (!response.ok) { setMessages([]); return; }
+      if (!response.ok) throw new Error("Conversation unavailable");
       const detail = await response.json() as Detail;
-      // The previous workspace fetched this and then threw the messages away,
-      // so re-opening a thread showed an empty room. They are the thread.
+      const liveTasks = await withLiveTaskStatus(detail.tasks ?? []);
+      if (current !== generation.current) return;
       setMessages(detail.messages ?? []);
-        setProjectOperation((previous) => latestProjectReceipt(detail.events, previous));
-      setTasks(await withLiveTaskStatus(detail.tasks ?? []));
+      setProjectOperation(previous => latestProjectReceipt(detail.events ?? [], previous));
+      setTasks(liveTasks);
     } catch {
-      setNotice("That thread's history could not be loaded.");
+      if (current === generation.current) setNotice("That thread's history could not be loaded.");
+    } finally {
+      if (current === generation.current) loading.current = false;
     }
   }
 
@@ -192,19 +214,22 @@ export function ChatSection() {
     }
   }
 
-  function startNew() { setProjectOperation(null); resetFollowing(); setStored(true); abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
+  function startNew() { generation.current++; busy.current = false; loading.current = false; setSending(false); setThinking(""); setLiveSteps([]); setLiveAgents([]); setProjectOperation(null); resetFollowing(); setStored(true); abortRef.current?.abort(); setConversationId(null); setMessages([]); setTasks([]); setDraft(""); setNotice(""); setSuggestion(null); setStreaming(null); setItems([]); setSelectedItem(null); }
 
   useEffect(() => {
     if (!conversationId || !stored || sending) return;
     let active = true;
+    const current = generation.current;
     const refresh = async () => {
       try {
         const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, { cache: "no-store" });
         if (response.ok && active) {
           const detail = await response.json() as Detail;
+          const liveTasks = await withLiveTaskStatus(detail.tasks ?? []);
+          if (!active || current !== generation.current || loading.current || busy.current) return;
           setMessages(detail.messages ?? []);
-        setProjectOperation((previous) => latestProjectReceipt(detail.events, previous));
-          setTasks(await withLiveTaskStatus(detail.tasks ?? []));
+      setProjectOperation(previous => latestProjectReceipt(detail.events ?? [], previous));
+          setTasks(liveTasks);
         }
       } catch { /* Keep the last known conversation when offline. */ }
     };
@@ -226,10 +251,11 @@ export function ChatSection() {
   async function send(event: FormEvent) {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || sending) return;
+    if (!text || busy.current || loading.current) return;
     resetFollowing();
     setDraft("");
     setNotice("");
+    setCapReached(false);
     const intent = classifyIntent(text, { hasProject: Boolean(repository) });
     if (ready?.configured === false && intent.kind !== "chat") {
       showLocal(text);
@@ -237,10 +263,14 @@ export function ChatSection() {
       return;
     }
     showLocal(text);
-    await ask(text);
+    await ask(text, draft);
   }
 
-  async function ask(text: string) {
+  async function ask(text: string, submittedDraft = text) {
+    const current = ++generation.current;
+    busy.current = true;
+    let succeeded = false;
+    let diagnosed = false;
     setSuggestion(null);
     setSending(true);
     setStreaming("");
@@ -253,8 +283,11 @@ export function ChatSection() {
         body: JSON.stringify({ conversationId, message: text, repository, branch, stream: true, provider }),
         signal: controller.signal,
       });
+      if (current !== generation.current) { await response.body?.cancel(); return; }
       if (!response.ok || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
-        const result = await response.json().catch(() => ({})) as { message?: string; needsModelEndpoint?: boolean; conversationId?: string };
+        const result = await response.json().catch(() => ({})) as { message?: string; code?: string; needsModelEndpoint?: boolean; conversationId?: string };
+        if (current !== generation.current) return;
+        if (result.code === "CHAT_CAP_REACHED") setCapReached(true);
         setNotice(result.message ?? "The chat request failed without diagnostic details. Retry, or check the model and GitHub connections in Settings.");
         if (result.needsModelEndpoint) setReady({ configured: false, reason: result.message ?? null });
         return;
@@ -272,6 +305,7 @@ export function ChatSection() {
       addLog({ kind: "note", text: `› ${text.length > 120 ? `${text.slice(0, 120)}…` : text}` });
       for (;;) {
         const { value, done } = await reader.read();
+        if (current !== generation.current) { await reader.cancel(); return; }
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
           const data = item.data as { conversationId?: string; stored?: boolean; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
@@ -295,8 +329,9 @@ export function ChatSection() {
             setStreaming((current) => current ?? "");
             addLog({ kind: "agent", state: node.state, who: node.name, text: `${node.state === "running" || node.state === "planning" ? "▸" : node.state === "done" ? "✓" : node.state === "failed" ? "✕" : "·"} ${node.title}${node.summary && (node.state === "done" || node.state === "failed") && node.depth === 0 ? ` (${node.summary})` : ""} · ${node.state}` });
           }
-          else if (item.type === "error") { setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `✕ ${data?.message ?? "the reply failed"}` }); }
+          else if (item.type === "error") { diagnosed = true; setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `✕ ${data?.message ?? "the reply failed"}` }); }
           else if (item.type === "done" && data?.reply) {
+            succeeded = true;
             if (data.stored === false) {
               setStored(false);
               setNotice("This reply could not be saved. Keep this chat open to retain it; later replies may not remember earlier turns.");
@@ -310,22 +345,31 @@ export function ChatSection() {
           }
         }
       }
+      if (!succeeded && !diagnosed) setNotice("The reply ended before completion. Your message is ready to retry.");
       setVersion((value) => value + 1);
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError")) setNotice("Chat is temporarily unavailable. Your message was kept above; try again in a moment.");
+      if (current === generation.current && !(error instanceof DOMException && error.name === "AbortError")) setNotice("Chat is temporarily unavailable. Your message is ready to retry.");
     } finally {
-      abortRef.current = null;
-      setStreaming(null);
-      setThinking("");
-      setLiveSteps([]);
-      setLiveAgents([]);
-      setSending(false);
+      if (current === generation.current) {
+        if (!succeeded) setDraft((value) => value || submittedDraft);
+        busy.current = false;
+        abortRef.current = null;
+        setStreaming(null);
+        setThinking("");
+        setLiveSteps([]);
+        setLiveAgents([]);
+        setSending(false);
+      }
     }
   }
 
   function stop() { abortRef.current?.abort(); }
 
   async function startProjectTask(item: Suggestion) {
+    if (busy.current || loading.current) return;
+    const current = ++generation.current;
+    busy.current = true;
+    let succeeded = false;
     setSuggestion(null);
     setSending(true);
     try {
@@ -335,33 +379,48 @@ export function ChatSection() {
         body: JSON.stringify({ repository, branch, mode: item.mode ?? "coder", objective: item.text, conversationId }),
       });
       const result = await response.json() as { conversationId?: string; message?: string };
+      if (current !== generation.current) return;
       if (!response.ok) { setNotice(result.message ?? "Atlas could not start that task."); return; }
-      if (result.conversationId) { setConversationId(result.conversationId); await openThread(result.conversationId); }
+      succeeded = true;
+      if (result.conversationId) await openThread(result.conversationId);
       setVersion((value) => value + 1);
     } catch {
-      setNotice("Atlas could not reach the task service. Nothing was started.");
+      if (current === generation.current) setNotice("Atlas could not confirm the task. Check task history before retrying.");
     } finally {
-      setSending(false);
+      if (current === generation.current) {
+        if (!succeeded) setDraft((value) => value || item.text);
+        busy.current = false; setSending(false);
+      }
     }
   }
 
   async function startNewProject(item: Suggestion) {
+    if (busy.current || loading.current) return;
+    const current = ++generation.current;
+    busy.current = true;
+    let succeeded = false;
     setSuggestion(null); setSending(true);
     try {
       const response = await fetch("/api/genesis/operations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId, requestId: crypto.randomUUID(), name: `atlas-project-${crypto.randomUUID().slice(0, 8)}`, description: item.text, template: "web-app", visibility: userWantsPublic(item.text) ? "public" : "private", host: "github" }) });
       const result = await response.json();
+      if (current !== generation.current) return;
       if (!response.ok) setNotice(result.message ?? "New project creation is unavailable.");
-      else setProjectOperation(result);
-    } catch { setNotice("Project creation could not be confirmed. Check Genesis before retrying."); }
-    finally { setSending(false); }
+      else { succeeded = true; setProjectOperation(result); }
+    } catch { if (current === generation.current) setNotice("Project creation could not be confirmed. Check Genesis before retrying."); }
+    finally { if (current === generation.current) { if (!succeeded) setDraft((value) => value || item.text); busy.current = false; setSending(false); } }
   }
 
   async function startComputerTask(item: Suggestion) {
+    if (busy.current || loading.current) return;
+    const current = ++generation.current;
+    busy.current = true;
+    let succeeded = false;
     setSuggestion(null);
     setSending(true);
     try {
       const listed = await fetch("/api/computer/devices", { cache: "no-store" });
       const devices = listed.ok ? ((await listed.json()) as { devices?: Device[] }).devices ?? [] : [];
+      if (current !== generation.current) return;
       const usable = devices.filter((device) => !device.revokedAt);
       const device = usable.find((candidate) => candidate.status === "online") ?? usable[0];
       if (!device) { setNotice("No computer is paired yet. Open Computer to pair your PC, then send this again."); return; }
@@ -371,13 +430,18 @@ export function ChatSection() {
         body: JSON.stringify({ deviceId: device.id, executionProvider: "windows", objective: item.text }),
       });
       const result = await response.json() as { message?: string };
+      if (current !== generation.current) return;
       if (!response.ok) { setNotice(result.message ?? "Atlas could not start that computer task."); return; }
+      succeeded = true;
       setMessages((items) => [...items, { id: `local-${Date.now()}-task`, role: "assistant", createdAt: new Date().toISOString(),
         content: `Started on **${device.name}**${device.status === "online" ? "" : " (it will begin when that computer comes online)"}. I will pause for your approval before anything consequential. Follow it in [Computer control](/automation).` }]);
     } catch {
-      setNotice("Atlas could not reach the computer service. Nothing was started.");
+      if (current === generation.current) setNotice("Atlas could not confirm the computer task. Check Computer before retrying.");
     } finally {
-      setSending(false);
+      if (current === generation.current) {
+        if (!succeeded) setDraft((value) => value || item.text);
+        busy.current = false; setSending(false);
+      }
     }
   }
 
@@ -474,6 +538,7 @@ export function ChatSection() {
           : <button className="send" aria-label="Send" disabled={sending || !draft.trim()}>{sending ? "…" : "↑"}</button>}
       </div>
       {notice && <p className="composer-notice" role="status">{notice}</p>}
+      {capReached && <p className="composer-notice cap-options">Keep going free on your own computer: <a href="/guide#local-model">run a local model</a>. Or <a href="/pricing">choose a plan</a> for a higher daily limit.</p>}
     </form>
   </AtlasShell>;
 }

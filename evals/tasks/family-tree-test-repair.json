@@ -1,0 +1,42 @@
+{
+  "id": "family-tree-test-repair",
+  "category": "test-repair",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "770a07d59526b9a7da9bdecca4b79c80ddcfc22e",
+  "objective": "The default agent family seed in apps/local-control/src/platform/family/default-families.mjs was deliberately changed: the Construction family (its parent and its five estimating agents) is out of Atlas's scope and was removed, and the Reviewer no longer holds estimate.read. The source change is correct and must not be modified. The test \"seedFamilies builds the default tree through the policy path and familyTree renders it\" in apps/local-control/tests/platform-family.test.mjs still expects the old tree and fails. Update that test so it asserts the new tree exactly (parents, children, oversight relationship counts, total agent count and family count); keep every other test, and do not delete or weaken assertions beyond what the change requires.",
+  "setup": {
+    "fromCommit": "ff9eb9dc5e44d411623d6c22dd329e1e58729bb2",
+    "paths": [
+      "apps/local-control/src/platform/family/default-families.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/test-repair-check.mjs",
+      "{workspace}",
+      "{repo}",
+      "--base",
+      "770a07d59526b9a7da9bdecca4b79c80ddcfc22e",
+      "--fixed",
+      "ff9eb9dc5e44d411623d6c22dd329e1e58729bb2",
+      "--test",
+      "apps/local-control/tests/platform-family.test.mjs",
+      "--source",
+      "apps/local-control/src/platform/family/default-families.mjs",
+      "--mutate"
+    ]
+  },
+  "solution": {
+    "fromCommit": "ff9eb9dc5e44d411623d6c22dd329e1e58729bb2",
+    "paths": [
+      "apps/local-control/tests/platform-family.test.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "test-repair"
+  ]
+}
