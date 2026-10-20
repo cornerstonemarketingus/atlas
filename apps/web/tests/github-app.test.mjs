@@ -42,7 +42,7 @@ test("a refused installation token names the step that failed, never the body", 
 test("observer installation tokens use Actions read and bounded redirect-refusing transport", async () => {
   const configuration = githubAppConfiguration({ ATLAS_GITHUB_APP_ID: "123", ATLAS_GITHUB_INSTALLATION_ID: "456", ATLAS_GITHUB_APP_PRIVATE_KEY: pem });
   await createInstallationToken(configuration, async (_url, options) => {
-    assert.equal(options.redirect, "error"); assert.ok(options.signal);
+    assert.equal(options.redirect, "manual"); assert.ok(options.signal);
     assert.deepEqual(JSON.parse(options.body).permissions, { actions: "read" });
     return Response.json({ token: "github-observer-read-token" });
   }, { actions: "read" });

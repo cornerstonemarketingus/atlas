@@ -26,7 +26,7 @@ export function executionOutcome(identity, task, run, page, now = Date.now()) {
 export async function verifyExecutionOutcome(identity, task, run, token, fetcher = fetch) {
   const response = await fetcher(`https://api.github.com/repos/${task.repository}/actions/runs/${identity.run_id}/attempts/${identity.run_attempt}/jobs?per_page=100`, {
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "atlas-control-plane" },
-    redirect: "error", signal: AbortSignal.timeout(10000),
+    redirect: "manual", signal: AbortSignal.timeout(10000),
   });
   if (!response.ok) { await response.body?.cancel(); throw new Error("Execution job verification unavailable"); }
   return executionOutcome(identity, task, run, await response.json());

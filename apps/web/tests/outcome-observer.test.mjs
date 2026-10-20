@@ -109,7 +109,7 @@ test("runtime makes no credential request when inactive and sends only bounded m
   await configureObservation(f.d1, scope, f.task.taskId, null, true, Date.now());
   let reads = 0;
   const response = await scheduledOutcomeObservation({ DB: f.d1, ATLAS_GITHUB_TOKEN: "fake-observer-token" }, async (url, options) => {
-    reads++; assert.equal(options.redirect, "error"); assert.ok(options.signal); assert.equal(options.headers.authorization, "Bearer fake-observer-token");
+    reads++; assert.equal(options.redirect, "manual"); assert.ok(options.signal); assert.equal(options.headers.authorization, "Bearer fake-observer-token");
     assert.match(String(url), /^https:\/\/api.github.com\/repos\/cornerstonemarketingus\/atlas\/actions\/runs\/101\/attempts\/1/);
     const sha = "a".repeat(40);
     return String(url).includes("/jobs?") ? Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 101, run_attempt: 1, status: "completed", conclusion: "failure", head_sha: sha, head_branch: "main", workflow_name: "Atlas Coder", completed_at: new Date(Date.now()-1000).toISOString() }] }) : Response.json({ id: 101, run_attempt: 1, event: "workflow_dispatch", head_branch: "main", head_sha: sha, path: ".github/workflows/atlas-coder.yml", display_title: `Atlas Coder · task ${f.task.taskId}`, repository: { id: 1337761549, full_name: "cornerstonemarketingus/atlas" } });
@@ -148,7 +148,7 @@ test("built Worker exposes authenticated opt-in and scheduled observation with n
   const previous = Object.fromEntries(Object.keys(config).map(key => [key, process.env[key]])); Object.assign(process.env, config);
   const originalFetch = globalThis.fetch; let reads = 0;
   globalThis.fetch = async (url, options) => {
-    reads++; assert.equal(options.redirect, "error"); assert.equal(options.headers.authorization, "Bearer fake-observer-github");
+    reads++; assert.equal(options.redirect, "manual"); assert.equal(options.headers.authorization, "Bearer fake-observer-github");
     const sha = "a".repeat(40);
     return String(url).includes("/jobs?") ? Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 101, run_attempt: 1, status: "completed", conclusion: "cancelled", head_sha: sha, head_branch: "main", workflow_name: "Atlas Coder", completed_at: new Date(Date.now()-1000).toISOString() }] }) : Response.json({ id: 101, run_attempt: 1, event: "workflow_dispatch", head_branch: "main", head_sha: sha, path: ".github/workflows/atlas-coder.yml", display_title: `Atlas Coder · task ${f.task.taskId}`, repository: { id: 1337761549, full_name: "cornerstonemarketingus/atlas" } });
   };

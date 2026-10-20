@@ -42,7 +42,7 @@ export async function createInstallationToken(configuration, fetcher = fetch, { 
   if (actions !== "read" && actions !== "write") throw new Error("Invalid Actions permission");
   const jwt = await createGitHubAppJwt(configuration);
   const response = await fetcher(`${githubApi}/app/installations/${configuration.installationId}/access_tokens`, {
-    method: "POST", redirect: "error", signal: AbortSignal.timeout(10000),
+    method: "POST", redirect: "manual", signal: AbortSignal.timeout(10000),
     headers: { accept: "application/vnd.github+json", authorization: `Bearer ${jwt}`, "content-type": "application/json", "user-agent": "atlas-control-plane", "x-github-api-version": "2022-11-28" },
     // Keep each token limited to the one currently supported repository and
     // the sole permission needed to dispatch and read Actions runs.

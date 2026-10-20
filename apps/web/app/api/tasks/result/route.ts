@@ -45,7 +45,7 @@ export async function POST(request: Request) {
     if (!token) return Response.json({ message: "Run verification unavailable." }, { status: 503 });
     const response = await fetch(`https://api.github.com/repos/${task.repository}/actions/runs/${identity.run_id}`, {
       headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "atlas-control-plane" },
-      redirect: "error", signal: AbortSignal.timeout(10000),
+      redirect: "manual", signal: AbortSignal.timeout(10000),
     });
     if (!response.ok) return Response.json({ message: "Run verification unavailable." }, { status: 503 });
     const run = await response.json();
