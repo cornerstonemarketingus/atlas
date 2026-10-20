@@ -23,3 +23,14 @@ export async function readTaskRequests({ requestKey, cursor, fetcher = fetch, si
   if (!response.ok) throw new Error("Saved requests are unavailable. Try again later.");
   return response.json();
 }
+
+/** @param {{requestKey: string, fetcher?: typeof fetch, signal?: AbortSignal}} options */
+export async function reconcileTaskRequest({ requestKey, fetcher = fetch, signal }) {
+  if (!TASK_REQUEST_KEY.test(requestKey)) throw new Error("Invalid request identity");
+  const response = await fetcher(`/api/tasks/requests/${encodeURIComponent(requestKey)}/reconcile`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}", cache: "no-store",
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
+  });
+  if (!response.ok) throw new Error("Execution evidence is unavailable. Refresh saved requests before checking again. No task was started.");
+  return response.json();
+}

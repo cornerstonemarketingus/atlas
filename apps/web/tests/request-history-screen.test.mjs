@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
-import { readTaskRequests, requestExplanation } from "../app/build/request-inspection-client.mjs";
+import { readTaskRequests, requestExplanation, reconcileTaskRequest } from "../app/build/request-inspection-client.mjs";
 
 const key = "11111111-1111-4111-8111-111111111111";
 const saved = (objective) => ({ requestKey: key, createdAt: "2026-10-17 00:00:00", state: "task-saved", receiptState: "reserved", outcomeStatus: null,
@@ -42,7 +42,7 @@ function history() {
     require(name) {
       if (name === "react") return react;
       if (name === "react/jsx-runtime") return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) };
-      if (name.endsWith("request-inspection-client.mjs")) return { requestExplanation, readTaskRequests: options => readTaskRequests({ ...options, fetcher }) };
+      if (name.endsWith("request-inspection-client.mjs")) return { requestExplanation, readTaskRequests: options => readTaskRequests({ ...options, fetcher }), reconcileTaskRequest: options => reconcileTaskRequest({ ...options, fetcher }) };
       if (name.endsWith(".css")) return {};
       throw new Error(`Unexpected component import: ${name}`);
     },
@@ -62,13 +62,57 @@ function history() {
     click(label) { const target = button(label); assert.ok(target, label); assert.equal(target.props.disabled, false, label); target.props.onClick(); commit(); },
     poll() { for (const callback of [...timers.values()]) callback(); commit(); },
     update() { version++; commit(); },
-    page(n, objective, nextCursor = null) { requests[n].resolve(Response.json({ requests: [saved(objective)], nextCursor })); },
+    page(n, objective, nextCursor = null, execution = null) { const row = saved(objective); row.task.execution = execution; requests[n].resolve(Response.json({ requests: [row], nextCursor })); },
     detail(n, objective) { requests[n].resolve(Response.json({ request: saved(objective) })); },
     text() { return JSON.stringify(render()); },
     unmount() { mounted = false; for (const slot of slots) slot?.cleanup?.(); },
     writesAfterUnmount: () => writesAfterUnmount,
   };
 }
+
+test("saved requests show verified job evidence without implying code validation or retry authority", async () => {
+  const panel = history(); panel.toggle(true);
+  const execution = { runId: 123, runAttempt: 1, claimedAt: "2026-10-18T00:00:00Z", expiresAt: "2026-10-18T06:00:00Z", outcome: null };
+  panel.page(0, "Check website", null, execution); await settle();
+  assert.doesNotMatch(panel.text(), /GitHub execution job|Verified by Atlas/);
+  panel.poll();
+  panel.page(1, "Check website", null, { ...execution, outcome: { jobId: 456, conclusion: "failure", completedAt: "2026-10-18T00:01:00Z", verifiedAt: "2026-10-18T00:02:00Z" } });
+  await settle();
+  assert.match(panel.text(), /GitHub execution job/);
+  assert.match(panel.text(), /failure/);
+  assert.match(panel.text(), /Verified by Atlas/);
+  assert.match(panel.text(), /This job result does not prove code validation or authorize a retry/);
+  assert.ok(panel.requests.every(request => request.options.method === "GET" && request.options.body === undefined));
+  panel.unmount();
+});
+
+for (const outcome of ["success", "failure"]) {
+  test(`abandoned reconciliation ${outcome} cannot overwrite reopened history`, async () => {
+    const panel = history(); panel.toggle(true);
+    panel.page(0, "Original", null, { runId: 123, runAttempt: 1, outcome: null }); await settle();
+    panel.click("Reconcile execution"); panel.poll(); panel.poll();
+    assert.equal(panel.requests.length, 2, "polling must not overlap pending evidence verification");
+    assert.equal(panel.requests[1].options.method, "POST");
+    assert.equal(panel.requests[1].options.body, "{}", "run identity remains server-selected");
+    panel.toggle(false); assert.equal(panel.requests[1].options.signal.aborted, true);
+    panel.toggle(true); panel.page(2, "Reopened"); await settle();
+    if (outcome === "success") panel.detail(1, "STALE_RECEIPT"); else panel.requests[1].reject(new Error("old evidence unavailable"));
+    await settle();
+    assert.match(panel.text(), /Reopened/);
+    assert.doesNotMatch(panel.text(), /STALE_RECEIPT|Execution evidence checked|Execution evidence is unavailable/);
+    assert.equal(panel.requests.filter(request => request.options.method === "POST").length, 1);
+    panel.unmount();
+  });
+}
+
+test("unmount fences a cancellation-ignoring reconciliation response", async () => {
+  const panel = history(); panel.toggle(true);
+  panel.page(0, "Original", null, { runId: 123, runAttempt: 1, outcome: null }); await settle();
+  panel.click("Reconcile execution"); panel.unmount();
+  assert.equal(panel.requests[1].options.signal.aborted, true);
+  panel.detail(1, "Late receipt"); await settle();
+  assert.equal(panel.writesAfterUnmount(), 0);
+});
 
 test("saved-request polling is single-flight and skips hidden tabs", async () => {
   const panel = history(); panel.toggle(true);

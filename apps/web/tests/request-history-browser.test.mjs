@@ -35,15 +35,22 @@ test("actual saved-request panel recovers after close, refresh and paging on des
     const page = await browser.newPage({ viewport });
     const errors = []; const calls = []; const details = [];
     let phase = "Initial request";
+    let execution = null;
+    const row = objective => { const request = saved(objective); request.task.execution = execution; return request; };
     let detailArrived;
     page.on("pageerror", error => errors.push(error.message));
     await page.route("**/api/tasks/requests**", async route => {
       const request = route.request(); calls.push({ method: request.method(), body: request.postData() });
+      if (new URL(request.url()).pathname.endsWith("/reconcile")) {
+        assert.equal(request.method(), "POST"); assert.equal(request.postData(), "{}");
+        execution = { ...execution, outcome: { jobId: 456, conclusion: "failure", completedAt: "2026-10-18T00:01:00Z", verifiedAt: "2026-10-18T00:02:00Z" } };
+        await route.fulfill({ json: { request: row(phase), cached: false } }); return;
+      }
       if (new URL(request.url()).pathname.endsWith(`/${key}`)) {
         details.push(route); detailArrived?.(); return;
       }
       const older = new URL(request.url()).searchParams.has("cursor");
-      await route.fulfill({ json: { requests: [saved(older ? "Older request page" : phase)], nextCursor: older ? null : "older-page" } });
+      await route.fulfill({ json: { requests: [row(older ? "Older request page" : phase)], nextCursor: older ? null : "older-page" } });
     });
     const check = async () => {
       const arrived = new Promise(resolve => { detailArrived = resolve; });
@@ -79,6 +86,16 @@ test("actual saved-request panel recovers after close, refresh and paging on des
     assert.ok((await page.getByRole("button", { name: "Check request" }).boundingBox()).height >= 44);
     assert.ok(calls.length >= 6);
     assert.ok(calls.every(call => call.method === "GET" && call.body === null));
+    execution = { runId: 123, runAttempt: 1, claimedAt: "2026-10-18T00:00:00Z", expiresAt: "2026-10-18T06:00:00Z", outcome: null };
+    await page.getByRole("button", { name: "Refresh requests" }).click();
+    const reconcile = page.getByRole("button", { name: "Reconcile execution" });
+    await reconcile.waitFor(); assert.ok((await reconcile.boundingBox()).height >= 44);
+    await reconcile.click();
+    await page.getByText("Execution evidence checked. No task was started or retried.", { exact: true }).waitFor();
+    assert.match(await page.locator("body").innerText(), /GitHub execution job 456: failure/);
+    assert.match(await page.locator("body").innerText(), /does not prove code validation or authorize a retry/);
+    assert.equal(await reconcile.count(), 0);
+    assert.equal(calls.filter(call => call.method === "POST").length, 1);
     assert.deepEqual(errors, []);
     await page.close();
   }

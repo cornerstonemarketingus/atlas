@@ -74,34 +74,112 @@ test("built Worker result callback enforces claim ownership after signed run ver
   const originalFetch = globalThis.fetch; const previousToken = process.env.ATLAS_GITHUB_TOKEN; process.env.ATLAS_GITHUB_TOKEN = "fake-result-token";
   let attempt = 1;
   let duringVerification = () => {};
+  let jobStatus = "completed";
+  let jobConclusion = "failure";
+  let jobsStatus = 200;
   globalThis.fetch = async (url, options) => {
     if (String(url).includes("/.well-known/jwks")) return Response.json({ keys: [jwk] });
-    assert.equal(options.redirect, "error");
+    assert.equal(options.redirect, "manual");
     duringVerification();
-    return Response.json({ id: 123, run_attempt: attempt, event: "workflow_dispatch", head_branch: "main", path: ".github/workflows/atlas-coder.yml", display_title: `Atlas Coder · task ${taskId}` });
+    if (String(url).includes("/jobs?")) {
+      assert.ok(String(url).includes(`/attempts/${attempt}/jobs?per_page=100`));
+      return Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 123, run_attempt: attempt, status: jobStatus, conclusion: jobConclusion, head_branch: "main", workflow_name: "Atlas Coder", head_sha: "a".repeat(40), completed_at: "2026-10-15T00:00:00Z" }] }, { status: jobsStatus });
+    }
+    return Response.json({ id: 123, head_sha: "a".repeat(40), run_attempt: attempt, event: "workflow_dispatch", head_branch: "main", path: ".github/workflows/atlas-coder.yml", display_title: `Atlas Coder · task ${taskId}` });
   };
   t.after(() => { globalThis.fetch = originalFetch; delete globalThis.__resultEnv; if (previousToken === undefined) delete process.env.ATLAS_GITHUB_TOKEN; else process.env.ATLAS_GITHUB_TOKEN = previousToken; });
   const { default: worker } = await import(new URL("../dist/server/index.js", import.meta.url));
-  const invoke = token => worker.fetch(new Request("https://atlas.test/api/tasks/result", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ taskId, summary: "Reported tests failed", correlationId: f.task.correlationId }) }), globalThis.__resultEnv, { waitUntil() {}, passThroughOnException() {} });
+  const invoke = token => worker.fetch(new Request("https://atlas.test/api/tasks/result", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ taskId, summary: "Reported tests failed", outcome: { conclusion: "success", jobId: 999 }, correlationId: f.task.correlationId }) }), globalThis.__resultEnv, { waitUntil() {}, passThroughOnException() {} });
   assert.equal((await invoke("forged")).status, 401);
   assert.equal((await invoke(await sign())).status, 409);
   assert.deepEqual(counts(f), [0, 0]);
   await grantTaskExecution(f.d1, f.task, identity);
   assert.equal((await invoke(await sign({ ...claims, repository_id: "999" }))).status, 403);
+  jobStatus = "in_progress";
+  assert.equal((await invoke(await sign())).status, 503);
+  assert.deepEqual(counts(f), [0, 0]);
+  jobStatus = "completed"; jobsStatus = 429;
+  const rateLimited = await invoke(await sign());
+  assert.equal(rateLimited.status, 503);
+  assert.match((await rateLimited.json()).message, /verification temporarily unavailable.*Retry result delivery; do not rerun the task/);
+  assert.deepEqual(counts(f), [0, 0]);
+  jobsStatus = 200;
   // The initial task read is no longer authoritative after the remote run check.
   const linkedRunBefore = f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id;
   duringVerification = () => f.sqlite.exec("UPDATE tasks SET objective = 'Changed after callback admission'");
   assert.equal((await invoke(await sign())).status, 409);
   assert.deepEqual(counts(f), [0, 0]);
   assert.equal(f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id, linkedRunBefore);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM task_execution_outcomes").get().n, 0);
   duringVerification = () => {};
   f.sqlite.prepare("UPDATE tasks SET objective = ?").run(f.task.objective);
   assert.equal((await invoke(await sign())).status, 200);
   assert.equal((await invoke(await sign())).status, 200);
+  assert.equal(f.sqlite.prepare("SELECT conclusion FROM task_execution_outcomes").get().conclusion, "failure");
+  jobConclusion = "success";
+  assert.equal((await invoke(await sign())).status, 409);
+  jobConclusion = "failure";
   attempt = 2;
   assert.equal((await invoke(await sign({ ...claims, run_attempt: "2" }))).status, 409);
   assert.deepEqual(counts(f), [1, 1]);
-  f.sqlite.exec("DROP TABLE task_execution_claims"); attempt = 1;
+  f.sqlite.exec("DROP TABLE task_execution_outcomes"); attempt = 1;
   const unavailable = await invoke(await sign());
   assert.equal(unavailable.status, 503); assert.doesNotMatch(await unavailable.text(), /SQL|no such table|fake-result-token/);
+});
+
+const outcome = { runId: 123, runAttempt: 1, jobId: 456, headSha: "a".repeat(40), conclusion: "failure", completedAt: "2026-10-15T00:00:00.000Z" };
+const observedAt = "2026-10-15T00:01:00.000Z";
+
+test("receipt, summary and audit commit once and refuse conflicting observations", async t => {
+  const f = await fixture(t); await grantTaskExecution(f.d1, f.task, identity);
+  assert.equal(await saveRunnerResult(f.d1, f.task, identity, "reported", observedAt, outcome), true);
+  const saved = f.sqlite.prepare("SELECT * FROM task_execution_outcomes").get();
+  assert.equal(saved.verified_at, observedAt); assert.equal(saved.conclusion, "failure");
+  assert.equal(await saveRunnerResult(f.d1, f.task, identity, "replay", "2026-10-15T01:00:00.000Z", outcome), true);
+  for (const changed of [{ conclusion: "success" }, { jobId: 457 }, { headSha: "b".repeat(40) }, { completedAt: "2026-10-15T00:02:00.000Z" }, { runAttempt: 2 }]) assert.equal(await saveRunnerResult(f.d1, f.task, identity, "conflict", observedAt, { ...outcome, ...changed }), false);
+  assert.deepEqual(f.sqlite.prepare("SELECT * FROM task_execution_outcomes").get(), saved);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM run_events WHERE kind = 'execution-outcome'").get().n, 1);
+  assert.deepEqual(counts(f), [1, 1]);
+  assert.throws(() => f.sqlite.exec("UPDATE task_execution_outcomes SET conclusion = 'success'"), /immutable/);
+  assert.throws(() => f.sqlite.exec("DELETE FROM task_execution_outcomes"), /immutable/);
+});
+
+test("outcome audit failure rolls back the whole delivery and missing migration refuses", async t => {
+  const f = await fixture(t); await grantTaskExecution(f.d1, f.task, identity);
+  f.sqlite.exec("CREATE TRIGGER fail_outcome_audit BEFORE INSERT ON run_events WHEN NEW.kind = 'execution-outcome' BEGIN SELECT RAISE(ABORT, 'private failure'); END");
+  await assert.rejects(saveRunnerResult(f.d1, f.task, identity, "rollback", observedAt, outcome));
+  assert.deepEqual(counts(f), [0, 0]);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM task_execution_outcomes").get().n, 0);
+  f.sqlite.exec("DROP TABLE task_execution_outcomes");
+  await assert.rejects(saveRunnerResult(f.d1, f.task, identity, "missing storage", observedAt, outcome));
+  assert.deepEqual(counts(f), [0, 0]);
+});
+
+test("outcome cannot be saved without the same tenant and principal claim, including legacy tasks", async t => {
+  const f = await fixture(t);
+  assert.equal(await saveRunnerResult(f.d1, f.task, identity, "unclaimed", observedAt, outcome), false);
+  f.sqlite.exec("UPDATE tasks SET dispatch_state = 'legacy'"); f.task.dispatchState = "legacy";
+  assert.equal(await saveRunnerResult(f.d1, f.task, identity, "legacy report", observedAt, outcome), false);
+  f.sqlite.exec("UPDATE tasks SET dispatch_state = 'dispatched'"); f.task.dispatchState = "dispatched";
+  await grantTaskExecution(f.d1, f.task, identity);
+  for (const changes of [{ tenantId: 2 }, { requestedBy: "foreign" }]) assert.equal(await saveRunnerResult(f.d1, { ...f.task, ...changes }, identity, "foreign", observedAt, outcome), false);
+  f.sqlite.exec("UPDATE task_execution_claims SET requested_by = 'foreign'");
+  assert.equal(await saveRunnerResult(f.d1, f.task, identity, "foreign claim", observedAt, outcome), false);
+  assert.deepEqual(counts(f), [0, 0]);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM task_execution_outcomes").get().n, 0);
+});
+
+test("mobile inspection exposes only an exact scoped outcome and does not mutate receipts", async t => {
+  const { inspectTaskRequest } = await import("../app/api/tasks/request-inspection.mjs");
+  const f = await fixture(t); await grantTaskExecution(f.d1, f.task, identity);
+  f.sqlite.prepare("INSERT INTO task_requests (tenant_id, requested_by, request_key, fingerprint, correlation_id, state) VALUES (1, 'operator', ?, ?, ?, 'reserved')").run(taskId, "a".repeat(64), f.task.correlationId);
+  await saveRunnerResult(f.d1, f.task, identity, "private runner summary", observedAt, outcome);
+  const detail = await inspectTaskRequest(f.d1, { tenantId: 1, principal: "operator" }, taskId);
+  assert.deepEqual(detail.task.execution.outcome, { jobId: 456, conclusion: "failure", completedAt: outcome.completedAt, verifiedAt: observedAt });
+  assert.doesNotMatch(JSON.stringify(detail), /private runner summary|headSha|requestedBy/);
+  assert.equal(await inspectTaskRequest(f.d1, { tenantId: 1, principal: "foreign" }, taskId), null);
+  assert.equal(await inspectTaskRequest(f.d1, { tenantId: 2, principal: "operator" }, taskId), null);
+  f.sqlite.exec("UPDATE task_execution_claims SET run_attempt = 2");
+  assert.equal((await inspectTaskRequest(f.d1, { tenantId: 1, principal: "operator" }, taskId)).task.execution.outcome, null);
+  assert.equal(f.sqlite.prepare("SELECT run_attempt FROM task_execution_outcomes").get().run_attempt, 1);
 });
