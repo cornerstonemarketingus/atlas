@@ -141,6 +141,21 @@ test("checkpoint files restrict POSIX permissions", { skip: process.platform ===
   assert.equal((await stat(join(directory, "s1.json"))).mode & 0o777, 0o600);
 });
 
+test("undo restores the Windows read-only attribute", { skip: process.platform !== "win32" }, async (t) => {
+  const root = await repository(t, { "a.ts": "before\n" });
+  const target = join(root, "a.ts");
+  await chmod(target, 0o444);
+  assert.equal((await stat(target)).mode & 0o222, 0);
+  const recorder = new SessionCheckpointRecorder(root);
+  await recorder.recordBefore(["a.ts"]);
+  await chmod(target, 0o666);
+  await writeFile(target, "after\n");
+  await recorder.save("s1");
+  await undoSession(root);
+  assert.equal(await read(root, "a.ts"), "before\n");
+  assert.equal((await stat(target)).mode & 0o222, 0);
+});
+
 test("paths outside the repository or through a symlink are neither recorded nor restored", async (t) => {
   const root = await repository(t, { "a.ts": "1\n" });
   const outside = await repository(t, { "secret.txt": "keep\n" });
