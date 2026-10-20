@@ -125,14 +125,6 @@ These are development objectives. Atlas does not yet demonstrate unattended
 operation of arbitrary businesses, guaranteed search rankings or guaranteed
 revenue. Growth claims will be grounded in repeatable customer outcomes.
 
-## Advanced research
-
-The founder has identified quantum physics as an additional research direction.
-This public-main audit did not locate the underlying quantum/physics work.
-Its implementation status, experiments and results need to be reconciled before
-Atlas can claim a quantum capability or performance advantage. The current
-agent architecture runs on conventional software and model infrastructure.
-
 ## Start locally
 
 Install Node.js, Git and a compatible model runtime. Individual packages declare

@@ -216,7 +216,7 @@ evidence, not a new local run or proof of healthy production credentials.
   intervention rate, cost, uptime and customer evidence. Website/app fixtures
   do not establish that Atlas can autonomously operate a complete business.
 
-### Capability growth and advanced research
+### Capability growth
 
 - [ ] Complete the capability loop: detect a gap, build a skill, independently
   test/review it, approve its digest, install it and record provenance.
@@ -225,10 +225,6 @@ evidence, not a new local run or proof of healthy production credentials.
 - [ ] Expand compiler-backed language intelligence and incremental indexing.
 - [ ] Complete enterprise governance, stable SDKs, commercial metering and
   general document/spreadsheet/presentation creation where roadmap requires.
-- [ ] Reconcile the founder-identified quantum physics research with its
-  actual branch/files, hypotheses, experiments and reproducible results.
-  No quantum/physics implementation or validated advantage was found in this
-  audit of public main; research is not a shipped product capability.
 
 ## Completion standard
 
