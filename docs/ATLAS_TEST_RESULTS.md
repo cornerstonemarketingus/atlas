@@ -145,3 +145,11 @@ request. The scan now uses fileURLToPath and requires a nonempty source scan,
 so Windows cannot silently pass without inspecting files. Four focused verifier
 checks pass. Current-main build passes; fresh full web suite and CI are running.
 
+
+
+Final local Worker compatibility verification (2026-10-19): production build
+passes; full web suite is 640 total, 635 pass, five optional browser skips, zero
+failures. The corrected Windows source scanner inspects real files. Focused lint
+passes for all changed source/tests. Fresh exact-head CI remains required; the
+failed 6ac1336 Windows and f262407 redirect results are retained in this handoff.
+
