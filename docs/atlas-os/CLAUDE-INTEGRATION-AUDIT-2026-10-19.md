@@ -34,7 +34,12 @@ into this report. GitHub secret presence does not establish credential validity.
   success. Both streaming and JSON responses must carry provider/model authorship
   metadata. Regression fixtures reject unconfirmed text in either mode.
 - Corrected the hosted-site stylesheet regression on #391 for Windows CRLF
-  checkouts. All 14 focused hosted-site and bridge tests pass after the fix.
+  checkouts. All 14 focused hosted-site and bridge tests pass after the fix;
+  fresh full CI passed and #391 was merged as `08cd01f`.
+- Added a `website` mode to the hosted verification workflow. It creates one
+  saved, unpublished preview, checks every reported page without credentials,
+  checks CSP/noindex headers and reads back the scoped project. It deliberately
+  makes no model, publishing or enquiry-delivery calls.
 
 ## Configuration inventory
 
@@ -60,7 +65,7 @@ into this report. GitHub secret presence does not establish credential validity.
 
 | PR | Finding | Release condition |
 | --- | --- | --- |
-| #391 hosted websites | A substantial implementation exists, not just a missing key. It builds escaped static pages without executing user code. It is distinct from a full app/API node or publication service. Review covered owner/node separation, workspace/principal scoping, preview paths and CSP. | The 0016 schema blocker is repaired. Fresh CI after the Windows stylesheet fix, merge/deploy and a real authenticated create/preview journey are still required. Public preview links are bearer capabilities; forms do not deliver enquiries. |
+| #391 hosted websites | Reviewed, Windows stylesheet check corrected, full CI passed and merged as `08cd01f`. It builds escaped static pages without executing user code. Review covered owner/node separation, workspace/principal scoping, preview paths and CSP. | The 0016 schema blocker is repaired. A new model-free verification mode in this audit checks the deployed create/preview/persistence journey after deployment. Public preview links are bearer capabilities; forms do not deliver enquiries. Apps/APIs and publication remain separate capabilities. |
 | #397 free-provider fabric | Unmerged; audit snapshot showed no completed main CI checks on its head. Adds `CEREBRAS_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY` and per-provider model/tier settings. | Rebase/integrate #364 and verify every new coder provider's quota-origin mapping: current main's governor only names Groq, OpenAI, Anthropic and Workers AI. Do not merge a new route that throws when the governor is configured. Verify training-tier restrictions with real conversation/tool histories. No training opt-in or paid-tier declaration was set by this audit. |
 | #398 RunPod | Initial Windows CI failed with SQLite file locks. During this audit Claude pushed ownership-aware provider/service cleanup and tracked every fixture handle (`a394ab6`, integrated in `1ad01f1`). The latest 19 focused tests pass on Windows; an incomplete local alternative was not pushed. | Fresh full CI and real account/endpoint/image acceptance remain required, plus `ATLAS_RUNPOD_API_KEY`, `ATLAS_RUNPOD_ENDPOINT_ID`, explicit `ATLAS_GPU_MONTHLY_CAP_USD`. Keep the default cap zero. Remote render input upload and GPU render routing remain follow-ups. |
 | #400 Cloudflare sandboxes | Windows CI fails the executable-bit round-trip assertion. Cloud/local snapshot semantics must be reconciled across Windows and POSIX rather than ignoring a digest mismatch. Default `sandbox.config.json` is disabled. | Fix and test migration semantics, review SDK/container boundary, then obtain Workers Paid, create the backup R2 bucket, configure previews and deploy the enabled build. Local `ATLAS_CLOUD_SANDBOX_URL` and vault `ATLAS_CLOUD_SANDBOX_TOKEN` must match the broker's operator authentication. Genesis does not automatically select this environment yet. |
@@ -78,7 +83,7 @@ live acceptance, budgets and integration work are separate release conditions.
   Groq/Workers AI were limited and OpenAI reported unavailable credits/billing.
   The old streaming check accepted stored text without positive authorship
   metadata. This audit strengthens that check; it does not claim quota recovery.
-- Focused audit regressions: 8 deployment/smoke tests pass; 14 hosted-site/bridge
+- Focused audit regressions: 9 deployment/smoke tests pass; 14 hosted-site/bridge
   tests and the latest 19 RunPod tests pass on Windows. The earlier #235/#364
   boundary run passed 31 tests. All 11 workflow files and their shell steps
   validate when the checker uses the installed Git Bash; the system WSL shim
@@ -95,7 +100,7 @@ live acceptance, budgets and integration work are separate release conditions.
 1. Land this deployment/verification fix and redeploy so existing price variables
    reach the Worker. Confirm configured prices are displayed without enabling
    checkout while Stripe remains incomplete.
-2. Complete #391's updated CI and hosted create/preview journey; report source,
+2. Run the hosted create/preview journey after #391's merge; report source,
    placeholders, structural checks and delivery/publishing limitations truthfully.
 3. Diagnose the GitHub Models non-JSON response before further model samples;
    the completed workflow currently records a failed task, not a valid baseline.
