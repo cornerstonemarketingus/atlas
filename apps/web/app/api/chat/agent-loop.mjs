@@ -61,6 +61,53 @@ function spendAttempt(options) {
   return true;
 }
 
+/** A reply refitted to a small allowance keeps at least this much room to answer. */
+export const MIN_FITTED_REPLY_TOKENS = 1_024;
+/** Headroom kept under a stated allowance for tokenizer differences. */
+const ALLOWANCE_MARGIN_TOKENS = 256;
+
+/**
+ * Reshape a request so it fits a per-request token allowance (a free Groq
+ * tier refuses any request whose prompt plus max_tokens exceeds its
+ * tokens-per-minute limit, however long one waits). In order: a smaller reply
+ * budget; shorter tool results; then the oldest earlier turns of the
+ * conversation, never the system prompt, the person's latest message or the
+ * work done since it. Sizes use the same estimator as the ledger.
+ * Returns { turns, maxTokens }, or null when nothing fits.
+ */
+export function fitToAllowance(turns, { tools, maxTokens = MAX_REPLY_TOKENS }, limitTokens) {
+  const budget = limitTokens - ALLOWANCE_MARGIN_TOKENS;
+  const room = (candidate) => budget - estimateRequestTokens({ messages: candidate, tools: tools ?? undefined });
+  const fitted = (candidate) => room(candidate) >= Math.min(maxTokens, MIN_FITTED_REPLY_TOKENS)
+    ? { turns: candidate, maxTokens: Math.min(maxTokens, room(candidate)) } : null;
+  const whole = fitted(turns);
+  if (whole) return whole;
+  const compacted = compactOversizedTools(turns);
+  const first = compacted[0]?.role === "system" ? 1 : 0;
+  const latestUser = compacted.findLastIndex((turn) => turn.role === "user");
+  for (let dropped = 0; dropped === 0 || first + dropped <= latestUser; dropped += 1) {
+    const result = fitted([...compacted.slice(0, first), ...compacted.slice(first + dropped)]);
+    if (result) return result;
+  }
+  return null;
+}
+
+/**
+ * The allowance from a provider's too-large refusal ("Limit 8000, Requested
+ * 9513"), in the ledger estimator's units: the provider counts tokens its own
+ * way, so its limit is scaled by how it counted this very request. Numbers
+ * only; the rest of the body is never used.
+ */
+export function statedLimitTokens(body, turns, { tools, maxTokens = MAX_REPLY_TOKENS }) {
+  const match = /Limit\s+(\d+),\s*Requested\s+(\d+)/iu.exec(String(body ?? ""));
+  if (!match) return null;
+  const limit = Number(match[1]);
+  const statedPrompt = Number(match[2]) - maxTokens;
+  const estimatedPrompt = estimateRequestTokens({ messages: turns, tools: tools ?? undefined });
+  if (!Number.isSafeInteger(limit) || limit < 1 || !(statedPrompt > 0)) return null;
+  return Math.floor(limit * estimatedPrompt / statedPrompt);
+}
+
 /** Only the capacity headers go to the ledger: never a body, a key or any other header. */
 function capacityHeaders(headers) {
   const kept = {};
@@ -92,15 +139,27 @@ export async function governedSend(endpoint, turns, options) {
   const requestId = crypto.randomUUID();
   // The ledger grants the first candidate with room: this model, then the rest of the pool.
   const candidates = [endpoint.model, ...(endpoint.models ?? []).filter((model) => model !== endpoint.model)];
-  const estimatedTokens = estimateRequestTokens({ messages: turns, tools: options.tools ?? undefined }) + (options.maxTokens ?? MAX_REPLY_TOKENS);
+  let estimatedTokens = estimateRequestTokens({ messages: turns, tools: options.tools ?? undefined }) + (options.maxTokens ?? MAX_REPLY_TOKENS);
   let waited = 0;
   let target = endpoint;
   let answered = false;
+  let refitted = false;
   for (;;) {
     const grant = await governor.reserve({ requestId, models: candidates, estimatedTokens, latencyClass: options.latencyClass ?? governor.latencyClass, priority: options.priority ?? 0 });
     answered ||= Boolean(grant);
     if (grant?.granted && grant.model !== endpoint.model && candidates.includes(grant.model)) target = { ...endpoint, model: grant.model };
     if (!grant || grant.granted) break;
+    // Larger than every candidate's allowance: reshape once to the largest one rather than give up.
+    const fit = grant.permanent && grant.reason === "request_exceeds_allowance" && !refitted && Number.isFinite(grant.limitTokens)
+      ? fitToAllowance(turns, options, grant.limitTokens) : null;
+    if (fit) {
+      refitted = true;
+      turns = fit.turns;
+      options = { ...options, maxTokens: fit.maxTokens };
+      estimatedTokens = estimateRequestTokens({ messages: turns, tools: options.tools ?? undefined }) + fit.maxTokens;
+      inferenceDiagnostic("inference.request_refitted", { model: endpoint.model, provider: providerHost(endpoint), limitTokens: grant.limitTokens, maxTokens: fit.maxTokens });
+      continue;
+    }
     if (grant.permanent) return permanentRefusal(grant);
     const waitMs = Number.isFinite(grant.waitMs) && grant.waitMs > 0 ? Math.ceil(grant.waitMs) : 1_000;
     if (waited + waitMs > MAX_GOVERNOR_WAIT_MS) {
@@ -311,14 +370,16 @@ async function sendWithRateLimitRetry(endpoint, turns, options) {
     options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: 429, category: "billing", retryAfterMs: null });
     return Response.json({ error: { code: "insufficient_quota" } }, { status: 429 });
   }
-  const send = async messages => {
-    const response = await governedSend(endpoint, messages, options);
+  const send = async (messages, overrides = {}) => {
+    const response = await governedSend(endpoint, messages, { ...options, ...overrides });
     if (TRANSIENT_STATUSES.has(response.status)) {
       const body = response.status === 429 ? await response.clone().text().catch(() => "") : "";
       const category = response.status === 429 ? rateLimitDetails(body).category : "unavailable";
       if (category === "billing") options.billingBlocked?.add(endpoint.baseUrl);
       // Who refused and why, in fixed categories only (never provider text).
       options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: response.status, category, retryAfterMs: response.status === 429 ? retryAfterMs(response.headers, body) : null });
+    } else if (response.status === 413) {
+      options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: 413, category: "input_too_large", retryAfterMs: null });
     } else if ([401, 402, 403, 404].includes(response.status)) {
       // A refusal that waiting cannot fix: say which provider, so the owner knows which key or setting to check.
       options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: response.status, category: response.status === 404 ? "not_found" : response.status === 402 ? "billing" : "credential", retryAfterMs: null });
@@ -326,12 +387,20 @@ async function sendWithRateLimitRetry(endpoint, turns, options) {
     return response;
   };
   let response = await send(turns);
-  if (response.status !== 429 || response.headers.has("x-atlas-budget-exhausted")) return response;
+  if (![413, 429].includes(response.status) || response.headers.has("x-atlas-budget-exhausted")) return response;
   const body = await response.clone().text().catch(() => "");
   const detail = rateLimitDetails(body);
+  if (response.status === 413 && detail.category !== "input_too_large") return response;
   if (detail.category === "billing") { options.billingBlocked?.add(endpoint.baseUrl); return response; }
   const wait = retryAfterMs(response.headers, body);
   if (detail.category === "input_too_large") {
+    // The provider stated its allowance: fit to it. Otherwise only shorter tool results can help.
+    const limit = statedLimitTokens(body, turns, options);
+    const fit = limit ? fitToAllowance(turns, options, limit) : null;
+    if (fit && (fit.turns !== turns || fit.maxTokens !== (options.maxTokens ?? MAX_REPLY_TOKENS))) {
+      await response.body?.cancel().catch(() => {});
+      return send(fit.turns, { maxTokens: fit.maxTokens });
+    }
     const compacted = compactOversizedTools(turns);
     if (compacted.some((turn, index) => turn !== turns[index]) && (!response.headers.has("retry-after") || wait <= MAX_RATE_LIMIT_WAIT_MS)) {
       if (response.headers.has("retry-after")) await (options.sleep ?? sleep)(wait);
@@ -362,10 +431,10 @@ async function callConfiguredModel(endpoint, turns, options) {
 }
 
 /**
- * Not now (429, 5xx), or this account has no credit (402) or the model is gone (404): another provider may serve.
+ * Not now (429, 5xx), this account has no credit (402), the model is gone (404) or the request is over its allowance (413): another provider may serve.
  * A rejected credential (401/403) is deliberately not routed around: it is a setup error the owner must see.
  */
-const ROUTABLE_STATUSES = new Set([...TRANSIENT_STATUSES, 402, 404]);
+const ROUTABLE_STATUSES = new Set([...TRANSIENT_STATUSES, 402, 404, 413]);
 
 /** Why a target cannot take this request (a fixed word), or null. Unknown limits are not limits. */
 export function incompatibility(target, turns, options) {

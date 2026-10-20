@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { AtlasMark } from "../AtlasMark.js";
 import { DiffLines } from "./MessageBody.js";
 import type { LogLine, WorkItem } from "./Workspace.js";
+import { activityTaskStatus, pollActivity } from "./activity-poll.mjs";
 
 type Task = { taskId: string; objective: string; mode: string; status?: string; executionProvider?: string; run?: { id?: number; url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
 type Step = { label: string; state: "done" | "running" | "pending" | "failed"; startedAt: string | null; completedAt: string | null };
@@ -14,9 +15,10 @@ const TERMINAL = new Set(["succeeded", "completed", "failed", "timed_out", "canc
 const MODE_TITLE: Record<string, string> = { coder: "Changing code", inspect: "Reviewing the code", debug: "Debugging" };
 const MARK: Record<Step["state"], string> = { done: "✓", running: "●", pending: "○", failed: "✕" };
 
-function seconds(step: Step) {
+function seconds(step: Step, now: number) {
   if (!step.startedAt) return "";
-  const end = step.completedAt ? Date.parse(step.completedAt) : Date.now();
+  const end = step.completedAt ? Date.parse(step.completedAt) : now;
+  if (!Number.isFinite(end) || !Number.isFinite(Date.parse(step.startedAt))) return "";
   const total = Math.max(0, Math.round((end - Date.parse(step.startedAt)) / 1000));
   return total < 60 ? `${total}s` : `${Math.floor(total / 60)}m ${total % 60}s`;
 }
@@ -44,6 +46,8 @@ export function TaskActivity({ task, onLog, onChanges, onOpenFile }: {
   readonly onOpenFile?: (id: string) => void;
 }) {
   const [activity, setActivity] = useState<Activity | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const [now, setNow] = useState(Date.now);
   const [changes, setChanges] = useState<Changes | null>(null);
   const [openDiff, setOpenDiff] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -54,7 +58,8 @@ export function TaskActivity({ task, onLog, onChanges, onOpenFile }: {
   const callbacks = useRef({ onLog, onChanges });
   useEffect(() => { callbacks.current = { onLog, onChanges }; });
   const [open, setOpen] = useState(true);
-  const live = !TERMINAL.has(task.status ?? "dispatched");
+  const status = activityTaskStatus(activity, task.status ?? "dispatched");
+  const live = !TERMINAL.has(status);
   const runId = task.run?.id;
 
   async function cancelRun() {
@@ -79,19 +84,20 @@ export function TaskActivity({ task, onLog, onChanges, onOpenFile }: {
   }
 
   useEffect(() => {
-    let active = true;
-    const load = async () => {
-      try {
-        const query = runId ? `?runId=${runId}` : "";
-        const response = await fetch(`/api/tasks/${encodeURIComponent(task.taskId)}/activity${query}`, { cache: "no-store" });
-        if (response.ok && active) setActivity(await response.json() as Activity);
-      } catch { /* keep the last known steps */ }
-    };
-    void load();
-    if (!live) return () => { active = false; };
-    const timer = setInterval(() => { void load(); }, 4_000);
-    return () => { active = false; clearInterval(timer); };
+    const query = runId ? `?runId=${runId}` : "";
+    return pollActivity({
+      url: `/api/tasks/${encodeURIComponent(task.taskId)}/activity${query}`,
+      onActivity: (value: Activity) => setActivity(value),
+      onUnavailable: setUnavailable,
+      repeat: live,
+    });
   }, [task.taskId, runId, live]);
+
+  useEffect(() => {
+    if (!live) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [live]);
 
   // Each step's state change goes to the terminal once.
   useEffect(() => {
@@ -131,14 +137,16 @@ export function TaskActivity({ task, onLog, onChanges, onOpenFile }: {
       <b>Atlas</b>
       <button type="button" className="activity-head" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         <span className={live ? "activity-dot live" : "activity-dot"} aria-hidden="true" />
-        <span><strong>{MODE_TITLE[task.mode] ?? "Working"}</strong> · {headline(task)}</span>
+        <span><strong>{MODE_TITLE[task.mode] ?? "Working"}</strong> · {unavailable && live ? "Waiting for a status update…" : headline({ ...task, status })}</span>
         <span className="activity-toggle" aria-hidden="true">{open ? "▾" : "▸"}</span>
       </button>
       <p className="activity-objective">{task.objective}</p>
+      {unavailable && <p role="status" className="activity-objective">Live progress is unavailable. Retrying… The steps below show the last received update.</p>}
+      {live && current && !unavailable && <p className="activity-objective">This step is still running. Reading, editing and tests can take several minutes.</p>}
       {open && <ol className="activity-steps">
         {steps.length === 0 && <li className="pending"><span aria-hidden="true">○</span>Waiting for GitHub to start the run…</li>}
         {steps.map((step, index) => <li key={`${step.label}-${index}`} className={step.state}>
-          <span aria-hidden="true">{MARK[step.state]}</span>{step.label}<small>{seconds(step)}</small>
+          <span aria-hidden="true">{MARK[step.state]}</span>{step.label}<small>{seconds(step, now)}</small>
         </li>)}
       </ol>}
       {!open && current && <p className="activity-now">Now: {current.label}</p>}

@@ -35,7 +35,9 @@ export async function GET(request: Request, context: { params: Promise<{ taskId:
   if (!token) return Response.json({ message: "Live progress is unavailable: no GitHub credential." }, { status: 503 });
 
   const run = await fetchGitHubJson(workflowRunRequest({ token, repository: row.repository, runId }));
-  if (!run || !runBelongsToTask(run, taskId)) return Response.json({ message: "Unknown task." }, { status: 404 });
+  if (!run) return Response.json({ message: "Live progress is temporarily unavailable." }, { status: 503 });
+  if (!runBelongsToTask(run, taskId)) return Response.json({ message: "Unknown task." }, { status: 404 });
   const jobs = await fetchGitHubJson({ url: `https://api.github.com/repos/${row.repository}/actions/runs/${runId}/jobs?per_page=10`, init: { method: "GET", headers: githubReadHeaders(token) } });
-  return Response.json(activityFromRun(run, jobs ?? {}), { headers: { "cache-control": "no-store" } });
+  if (!jobs) return Response.json({ message: "Live steps are temporarily unavailable." }, { status: 503 });
+  return Response.json(activityFromRun(run, jobs), { headers: { "cache-control": "no-store" } });
 }

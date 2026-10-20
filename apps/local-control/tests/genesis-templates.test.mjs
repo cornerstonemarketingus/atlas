@@ -105,6 +105,27 @@ test("a named business keeps its name, location, services and the pages the owne
   assert.ok(spec.acceptanceCriteria.includes("Framing page shows its heading and content"));
 });
 
+const HAHN_SHORT = "Build a responsive website for Team Hahn Construction in Eagan, Minnesota, specializing in wood framing, windows, doors, and housewrap.";
+
+test("a business named without 'a … business' still keeps its name, city and services", () => {
+  const spec = inferSpecification(HAHN_SHORT);
+  assert.equal(spec.name, "Team Hahn Construction");
+  assert.deepEqual(spec.location, { city: "Eagan", region: "Minnesota" });
+  assert.deepEqual(spec.business, { kind: "construction", noun: "company", phrase: "construction company" });
+  assert.equal(spec.services.length, 4);
+  assert.ok(spec.services.some((service) => /housewrap/iu.test(service)));
+  assert.equal(inferSpecification("Build a website for Acme Roofing.").name, "Acme Roofing");
+});
+
+test("a capitalised phrase after 'for' is only a business name when it ends in a business or trade word", () => {
+  assert.equal(inferSpecification("Build a website for John Smith").name, "Website");
+  assert.equal(inferSpecification("Build a REST API for Inventory Items").name, "Item API");
+  assert.equal(inferSpecification("Build a sales dashboard for Big Retail Inc in Texas").name, "Sales Dashboard");
+  // "in <City>, <Region>" is a place only when the region is a US state.
+  assert.equal(inferSpecification("Build a website for my roofing company in Excel, Word").location, null);
+  assert.deepEqual(inferSpecification("Build a website for my roofing company in Duluth, Minnesota").location, { city: "Duluth", region: "Minnesota" });
+});
+
 test("the generated site states no testimonials, credentials or promises the owner did not give, and has local SEO data", () => withRoot(async (root) => {
   const spec = inferSpecification(HAHN);
   const workspace = await createWorkspace({ root, projectId: "gen_12345678-aaaa-bbbb-cccc-1234567890ab", spec, templateId: "static-site" });

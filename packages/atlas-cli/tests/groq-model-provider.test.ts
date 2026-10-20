@@ -265,3 +265,61 @@ test("a pacing wait honours cancellation", async () => {
   await assert.rejects(provider.complete(request, { signal: controller.signal }), (error: unknown) =>
     error instanceof ModelProviderError && error.code === "cancelled");
 });
+
+const tooLarge = (limit: number, requested: number, status = 413) => new Response(JSON.stringify({ error: {
+  message: `Request too large for model \`openai/gpt-oss-120b\` in organization \`org_x\` service tier \`on_demand\` on tokens per minute (TPM): Limit ${limit}, Requested ${requested}, please reduce your message size and try again.`,
+  type: "tokens", code: "rate_limit_exceeded" } }), { status });
+const ok = () => new Response(JSON.stringify({ id: "r", model: "llama-3.3-70b-versatile",
+  choices: [{ finish_reason: "stop", message: { role: "assistant", content: "done" } }],
+  usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } }), { status: 200 });
+
+test("a request over the per-minute allowance is refitted to the stated limit and sent once more", async () => {
+  for (const status of [413, 429]) {
+    const sent: { max_tokens?: number }[] = [];
+    const provider = new GroqModelProvider({ apiKey: "key", models: [model], fetchImplementation: fakeFetch((_input, init) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return sent.length === 1 ? tooLarge(8_000, 9_000, status) : ok();
+    }) });
+    const result = await provider.complete({ ...request, maxOutputTokens: 4_096 });
+    assert.equal(result.finishReason, "stop");
+    assert.equal(sent.length, 2);
+    // Prompt was 9,000 - 4,096 = 4,904 tokens; the reply budget shrinks to fit under the limit.
+    assert.equal(sent[1]?.max_tokens, 8_000 - 256 - 4_904);
+    // Later turns are fitted before they are sent, without another refusal.
+    await provider.complete({ ...request, maxOutputTokens: 4_096 });
+    assert.equal(sent.length, 3);
+    assert.ok((sent[2]?.max_tokens ?? 0) <= 8_000 - 256 - 4_904);
+  }
+});
+
+test("when the reply budget alone cannot fit, older re-readable tool output is replaced and the rest kept", async () => {
+  const big = "x".repeat(30_000);
+  const conversation: ModelRequest = { model: "llama-3.3-70b-versatile", maxOutputTokens: 4_096, tools: [{ name: "repository.read_source", description: "read", inputSchema: { type: "object", properties: {} } }], messages: [
+    { role: "user", content: [{ type: "text", text: "Fix the bug." }] },
+    { role: "assistant", content: [{ type: "tool-call", id: "c1", name: "repository.read_source", arguments: {} }] },
+    { role: "tool", toolCallId: "c1", isError: false, content: [{ type: "text", text: big }] },
+  ] };
+  const sent: { max_tokens?: number; messages: { content?: unknown }[] }[] = [];
+  const provider = new GroqModelProvider({ apiKey: "key", models: [model], fetchImplementation: fakeFetch((_input, init) => {
+    sent.push(JSON.parse(String(init?.body)));
+    return sent.length === 1 ? tooLarge(8_000, 14_096) : ok();
+  }) });
+  await provider.complete(conversation);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1]?.max_tokens, 1_024);
+  const second = JSON.stringify(sent[1]?.messages);
+  assert.doesNotMatch(second, /x{1000}/u);
+  assert.match(second, /Fix the bug\./u);
+  assert.match(second, /Read result omitted/u);
+});
+
+test("a refusal that cannot be refitted, or that names no limit, is raised as a capacity failure without waiting", async () => {
+  const noLimit = new GroqModelProvider({ apiKey: "key", models: [model], fetchImplementation: fakeFetch(() =>
+    new Response(JSON.stringify({ error: { message: "Request too large on tokens per minute (TPM). Please try again in 7s." } }), { status: 413 })) });
+  await assert.rejects(noLimit.complete(request), (error: unknown) => error instanceof ModelProviderError && error.code === "provider-failure" && /capacity/.test(error.message));
+  let calls = 0;
+  const tiny = new GroqModelProvider({ apiKey: "key", models: [model], fetchImplementation: fakeFetch(() => { calls += 1; return tooLarge(300, 9_000, 429); }) });
+  await assert.rejects(tiny.complete({ ...request, maxOutputTokens: 4_096 }), (error: unknown) =>
+    error instanceof ModelProviderError && error.code === "provider-failure" && !error.retryable && error.retryAfterMs === undefined && /capacity/.test(error.message));
+  assert.equal(calls, 1);
+});

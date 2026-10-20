@@ -1,0 +1,32 @@
+{
+  "id": "dangling-symlink-confinement",
+  "category": "bug-localization",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "f392d062fd180e54b55f09ffaa240a971c32410e",
+  "objective": "Repository tools confine paths with apps/local-control/src/agent/tools/path-confinement.mjs, but a dangling symbolic link inside the repository (one whose target does not exist yet and lies outside the root) is treated as an ordinary missing file, so repository.write through it creates a file outside the repository. Make the real-path resolution follow a symbolic link even when its target is missing (resolve the link with lstat/readlink, then append the missing segments, with a bound on link depth) so repository.read and repository.write of such a link fail with PATH_ESCAPES_REPOSITORY and nothing is created outside. apps/local-control/tests/tool-families.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "912a7eb989f40d7dfc0c5418440419c12c84a282",
+    "paths": [
+      "apps/local-control/tests/tool-families.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/tool-families.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "912a7eb989f40d7dfc0c5418440419c12c84a282",
+    "paths": [
+      "apps/local-control/src/agent/tools/path-confinement.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "security"
+  ]
+}

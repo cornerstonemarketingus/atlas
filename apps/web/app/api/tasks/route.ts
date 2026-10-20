@@ -130,7 +130,7 @@ async function dispatchTask(request: Request, correlationId: string): Promise<Re
   try {
     const outcome = await dispatchSavedTask(getD1(), { taskId, tenantId: tenant.tenantId, account, task, conversationId, mergePolicy, executionProvider: runner, correlationId }, () => githubToken
       ? dispatchGitHub({ token: githubToken, workflow, task, taskId, mergePolicy, correlationId })
-      : fetch(endpoint!, { method: "POST", redirect: "error", signal: AbortSignal.timeout(10000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json", [CORRELATION_HEADER]: correlationId }, body: JSON.stringify({ taskId, ...task, requestedBy: account.userId, commitMode: "approval-required" }) }));
+      : fetch(endpoint!, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(10000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json", [CORRELATION_HEADER]: correlationId }, body: JSON.stringify({ taskId, ...task, requestedBy: account.userId, commitMode: "approval-required" }) }));
     if (outcome.state === "rejected") {
       const failure = githubToken ? explainDispatchFailure(outcome.response!, { workflow, repository: task.repository, credential }) : { message: "The autonomous task dispatcher rejected the task." };
       return Response.json({ ...identity, ...failure, recorded: true, status: "dispatch-rejected", message: `${failure.message} The saved request was not accepted.` }, { status: 502 });
