@@ -1,0 +1,35 @@
+{
+  "id": "goal-mission-cancellation",
+  "category": "multi-file-edit",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "86d6e39ccd1791e63dd000bc9c3ece8c51ab1e51",
+  "objective": "When a persistent goal ends (cancelled, expired or achieved) in apps/local-control/src/agent/goals.mjs its running mission keeps going. On finishing, persist the terminal state with missionStopPending: true (when the goal has a missionId) before cancelling the mission through missions.control(id, \"cancel\"); clear the flag once the mission is done or missing. If the stop fails or is not acknowledged, record a mission_stop_failed observation and throw GoalError MISSION_STOP_FAILED (HTTP 503 in goal-routes.mjs) while keeping the intent; add GoalStore.pendingMissionStops() and retry pending stops on every tick without waking the ended goal. A refused stop must not block other goals expiring or lose events. apps/local-control/tests/goal-cancellation.test.mjs and goals.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "66d15a27cf1c633ddf40ff8b96ad84a6436975d5",
+    "paths": [
+      "apps/local-control/tests/goal-cancellation.test.mjs",
+      "apps/local-control/tests/goals.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/goal-cancellation.test.mjs",
+      "apps/local-control/tests/goals.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "66d15a27cf1c633ddf40ff8b96ad84a6436975d5",
+    "paths": [
+      "apps/local-control/src/agent/goals.mjs",
+      "apps/local-control/src/agent/goal-routes.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "recovery"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "actions-budget-guard",
+  "category": "feature",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "b543eae4b209f1a5f62e454f5dff6e63c453f024",
+  "objective": "Create scripts/runner/actions-budget.mjs so a long coder run is refused when it would spend the month's GitHub Actions allowance. Export DEFAULT_ESTIMATED_RUN_MINUTES (120), DEFAULT_RESERVE_MINUTES (300) and evaluateActionsBudget({ includedMinutes, usedMinutes, estimatedRunMinutes, reserveMinutes }) returning { decision, remaining, reason }: \"unknown\" when either count is missing or not finite; \"allow\" with a reason mentioning 'No metered Actions allowance' when includedMinutes is 0; otherwise remaining = max(0, included - used) and \"block\" when remaining - run < reserve (exact equality allows), with a reason stating '<used> of <included> minutes used', '<remaining> remaining', 'about <run>' and the '<reserve>-minute reserve'. Running the file as a script reads ATLAS_ESTIMATED_RUN_MINUTES, ATLAS_ACTIONS_MINUTES_RESERVE, GH_TOKEN and ATLAS_BILLING_ACCOUNT. scripts/runner/actions-budget.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "de564edff8f4e59cefc71474c61e3fc39a7d5d3f",
+    "paths": [
+      "scripts/runner/actions-budget.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "scripts/runner/actions-budget.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "de564edff8f4e59cefc71474c61e3fc39a7d5d3f",
+    "paths": [
+      "scripts/runner/actions-budget.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "runner",
+    "budget"
+  ]
+}

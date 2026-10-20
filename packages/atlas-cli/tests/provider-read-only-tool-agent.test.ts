@@ -312,7 +312,10 @@ for (const alias of ["repo.search", "repo_browser.search", "repository_search", 
     assert.equal(message?.role === "tool" ? message.isError : undefined, false);
     assert.equal(message?.role === "tool" ? message.toolCallId : undefined, "alias");
     const entry = audit.snapshot().find(event => event.type === "tool.requested");
-    assert.deepEqual(entry?.payload, { requestId: "alias:model:1", toolCallId: "alias",
+    assert.ok(entry?.type === "tool.requested");
+    const { argumentsDigest, ...auditMetadata } = entry.payload as import("../src/domain/session-audit.js").ToolRequestedPayload;
+    assert.match(argumentsDigest ?? "", /^hmac-sha256:[0-9a-f]{64}$/u);
+    assert.deepEqual(auditMetadata, { requestId: "alias:model:1", toolCallId: "alias",
       toolId: canonical, argumentCount: 1, requestedToolId: alias, repair: "automatic" });
   });
 }
@@ -351,3 +354,60 @@ for (const scenario of ["ambiguous", "unoffered", "unoffered-exact", "deny", "as
     }
   });
 }
+
+
+test("audit argument identity is canonical, private and local to one run", async () => {
+  const sensitive = "private-argument-value-never-audit";
+  let executions = 0;
+  const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
+  target.register({ name: tool.name, description: "Inspect", risk: "low", validateInput: input => input,
+    execute: async () => { executions++; return {}; } });
+  const responses = (prefix: string): ModelResponse[] => [
+    response(prefix + "one", [
+      { type: "tool-call", id: "a", name: tool.name, arguments: { query: sensitive, nested: { a: 1, b: [2, 3] } } },
+      { type: "tool-call", id: "b", name: tool.name, arguments: { nested: { b: [2, 3], a: 1 }, query: sensitive } },
+      { type: "tool-call", id: "c", name: tool.name, arguments: { query: sensitive, nested: { a: 1, b: [3, 2] } } },
+    ], "tool-calls"), response(prefix + "two", [{ type: "text", text: "Complete" }], "stop"),
+  ];
+  const provider = new MockModelProvider({ metadata, responses: [...responses("first"), ...responses("second")] });
+  const audit = new InMemorySessionAuditLog();
+  const agent = new ProviderReadOnlyToolAgent({ provider, model: "test", registry: target, tools: [tool], audit });
+  const run = async (sessionId: string) => {
+    const start = audit.snapshot().length;
+    const beforeExecutions = executions;
+    const result = await agent.run({ sessionId, objective: "Inspect", evidence: [], scope: { kind: "global" }, context: { repositoryId: "atlas" } });
+    assert.equal(result.status, "completed");
+    assert.equal(result.trace.toolCalls, 3);
+    assert.equal(executions - beforeExecutions, 3, "diagnostics must not suppress repeated execution");
+    assert.doesNotMatch(JSON.stringify(audit.snapshot()), new RegExp(sensitive, "u"));
+    const digests = audit.snapshot().slice(start).filter(e => e.type === "tool.requested").map(e => (e.payload as { argumentsDigest?: string }).argumentsDigest);
+    for (const digest of digests) assert.match(digest ?? "", /^hmac-sha256:[0-9a-f]{64}$/u);
+    assert.equal(digests[0], digests[1], "object key order must not disguise an identical call");
+    assert.notEqual(digests[0], digests[2], "array order remains meaningful");
+    return digests[0];
+  };
+  assert.notEqual(await run("first"), await run("second"), "a reused agent must rotate its unpublished key for each run");
+});
+
+test("recovered invalid inputs spend the existing tool-call budget", async () => {
+  let validations = 0;
+  let executions = 0;
+  const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: "allow", rules: [] } });
+  target.register({ name: tool.name, description: "Inspect", risk: "low", validateInput: () => {
+    validations++; throw new RepositoryToolInputError("Unknown tool input field: path");
+  }, execute: async () => { executions++; return {}; } });
+  const provider = new MockModelProvider({ metadata, responses: [
+    response("bad", [1, 2, 3].map(id => ({ type: "tool-call" as const, id: String(id), name: tool.name, arguments: { path: "bad" } })), "tool-calls"),
+    response("never", [{ type: "text", text: "Must not continue" }], "stop"),
+  ] });
+  const audit = new InMemorySessionAuditLog();
+  const result = await new ProviderReadOnlyToolAgent({ provider, model: "test", registry: target, tools: [tool], audit, maximumToolCalls: 2 }).run({
+    sessionId: "bad-input-budget", objective: "Inspect", evidence: [], scope: { kind: "global" }, context: { repositoryId: "atlas" },
+  });
+  assert.equal(result.status, "blocked");
+  assert.match(result.status === "blocked" ? result.message : "", /Tool-call limit reached/u);
+  assert.equal(validations, 2);
+  assert.equal(executions, 0);
+  assert.equal(provider.requests.length, 1);
+  assert.equal(audit.snapshot().filter(e => e.type === "tool.completed").length, 2);
+});

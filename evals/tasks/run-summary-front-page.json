@@ -1,0 +1,32 @@
+{
+  "id": "run-summary-front-page",
+  "category": "feature",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "e984466b4d276cdaaa28838f79fdb7f830c990f5",
+  "objective": "Create scripts/runner/run-summary.mjs exporting renderRunSummary({ task, status, code }), a pure function that turns a coder run's task.json, status.json and code result into GitHub job-summary markdown: lead with the verdict, report how far the run got (turns, tool calls, tokens), separate failing checks the change introduced from ones already failing, list changed files with what happened to each, say plainly when a completed run changed nothing, render from no input at all without throwing, escape pipes and collapse newlines in table cells, truncate runaway messages and cap long edit lists, and fall back to a readable line for an unknown status. When run as a script it reads ATLAS_OUTPUT_DIR, redacts the output and appends to GITHUB_STEP_SUMMARY, never exiting non-zero. The exact expectations are in scripts/runner/run-summary.test.mjs, which must pass.",
+  "setup": {
+    "fromCommit": "58f62f4db47d16647d49c46480273ac60e5d3d1a",
+    "paths": [
+      "scripts/runner/run-summary.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "scripts/runner/run-summary.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "58f62f4db47d16647d49c46480273ac60e5d3d1a",
+    "paths": [
+      "scripts/runner/run-summary.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "runner",
+    "reporting"
+  ]
+}

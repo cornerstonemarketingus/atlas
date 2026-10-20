@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from "node:crypto";
 import type {
   ReadOnlyToolAgentOptions,
   ReadOnlyToolAgentRequest,
@@ -11,6 +12,15 @@ import { resolveOfferedToolName } from "./tool-name-resolution.js";
 import { boundCoderContext } from "../model/bounded-coder-context.js";
 
 const EMPTY_USAGE: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+
+function digestArguments(input: Record<string, unknown>, key: Buffer): string {
+  const canonical = JSON.stringify(input, (_name, value: unknown) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+    const object = value as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(object).sort().map(name => [name, object[name]]));
+  });
+  return "hmac-sha256:" + createHmac("sha256", key).update(canonical).digest("hex");
+}
 
 export class ProviderReadOnlyToolAgent {
   readonly #maximumTurns: number;
@@ -38,6 +48,8 @@ export class ProviderReadOnlyToolAgent {
   }
 
   public async run(request: ReadOnlyToolAgentRequest): Promise<ReadOnlyToolAgentResult> {
+    // Equality is useful within this run only. Never persist the random key or raw arguments.
+    const argumentsDigestKey = randomBytes(32);
     if (request.sessionId.trim().length === 0 || request.objective.trim().length === 0 || request.objective.length > 10_000) {
       throw new Error("Read-only tool agent requires a session ID and an objective of at most 10,000 characters.");
     }
@@ -143,6 +155,7 @@ export class ProviderReadOnlyToolAgent {
             toolId: canonicalName ?? call.name,
             ...(canonicalName !== undefined && canonicalName !== call.name ? { requestedToolId: call.name, repair: "automatic" as const } : {}),
             argumentCount: Object.keys(call.arguments).length,
+            argumentsDigest: digestArguments(call.arguments, argumentsDigestKey),
           });
           let result: Awaited<ReturnType<typeof this.options.registry.execute>>;
           try {
