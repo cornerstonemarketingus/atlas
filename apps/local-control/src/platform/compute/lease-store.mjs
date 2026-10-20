@@ -21,6 +21,7 @@ export const PENDING_STATES = Object.freeze(["terminating", "settling"]);
 const AUDIT_FIELDS = Object.freeze([
   "jobId", "taskId", "provider", "gpuType", "instanceId", "reason", "outcome", "reservedMicroUsd", "actualMicroUsd",
   "releasedMicroUsd", "excessMicroUsd", "maxLifetimeSec", "estHourlyUsd", "estMinutes", "error", "holder", "unattributed",
+  "monthlyCapMicroUsd", "monthSpentMicroUsd",
 ]);
 
 function requireTenant(tenantId) {
@@ -78,6 +79,45 @@ export class ComputeLeaseStore {
       lease.reservedMicroUsd, lease.rateMicroUsdPerSec, lease.maxLifetimeSec, lease.idleTimeoutSec,
       lease.createdAt, lease.createdAt, lease.leaseExpiresAt, lease.deadlineAt);
     return this.get(lease.tenantId, lease.id);
+  }
+
+  /**
+   * The tenant's GPU spend for leases created in [fromMs, toMs). A settled
+   * lease counts its final bill, or the full reservation when the bill could
+   * not be proven (what the task budget keeps too). A live or pending lease
+   * counts its reservation, or a larger known bill. The monthly cap is checked
+   * against this. It is durable because it comes from the lease rows.
+   */
+  spend(tenantId, fromMs, toMs) {
+    requireTenant(tenantId);
+    const row = this.#db.prepare(`SELECT
+        COALESCE(SUM(CASE WHEN state = 'settled' THEN COALESCE(actual_micro_usd, reserved_micro_usd) ELSE 0 END), 0) AS settled,
+        COALESCE(SUM(CASE WHEN state <> 'settled' THEN MAX(reserved_micro_usd, COALESCE(actual_micro_usd, 0)) ELSE 0 END), 0) AS reserved
+      FROM compute_leases WHERE tenant_id = ? AND created_at >= ? AND created_at < ?`).get(tenantId, fromMs, toMs);
+    const settledMicroUsd = Number(row.settled); const reservedMicroUsd = Number(row.reserved);
+    return { settledMicroUsd, reservedMicroUsd, totalMicroUsd: settledMicroUsd + reservedMicroUsd };
+  }
+
+  /**
+   * Inserts the lease only if the tenant's spend in [fromMs, toMs) plus this
+   * lease's reservation stays within `capMicroUsd`. Check and insert run in
+   * one IMMEDIATE transaction, so two processes sharing the database cannot
+   * both pass. Returns the lease, or null when the cap would be exceeded.
+   */
+  insertWithinCap(lease, { capMicroUsd, fromMs, toMs }) {
+    requireTenant(lease.tenantId);
+    if (!Number.isInteger(capMicroUsd) || capMicroUsd < 0) throw new Error("capMicroUsd must be a non-negative integer.");
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const { totalMicroUsd } = this.spend(lease.tenantId, fromMs, toMs);
+      if (totalMicroUsd + lease.reservedMicroUsd > capMicroUsd) { this.#db.exec("ROLLBACK"); return null; }
+      const inserted = this.insert(lease);
+      this.#db.exec("COMMIT");
+      return inserted;
+    } catch (error) {
+      try { this.#db.exec("ROLLBACK"); } catch { /* already rolled back */ }
+      throw error;
+    }
   }
 
   get(tenantId, id) {

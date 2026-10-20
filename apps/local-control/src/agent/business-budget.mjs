@@ -16,6 +16,9 @@ export class BusinessBudget {
         limits TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS business_budget_scope ON business_budget_reservations(business_id);`);
+    db.exec(`CREATE TABLE IF NOT EXISTS business_budget_admissions (
+      admission_key TEXT PRIMARY KEY, mission_id TEXT NOT NULL UNIQUE REFERENCES business_budget_reservations(mission_id)
+    )`);
   }
   rows(id) {
     return this.db.prepare("SELECT * FROM business_budget_reservations WHERE business_id=? ORDER BY created_at,mission_id LIMIT ?").all(id, MAX_RESERVATIONS);
@@ -45,9 +48,22 @@ export class BusinessBudget {
       accounting: "Reservations are execution upper bounds; observed usage is a lower bound, not a cash receipt. Reservations remain held across cancellation, failure, completion and retry.",
     };
   }
-  reserve(business, missionId, limits) {
+  reserve(business, missionId, limits, admissionKey = null, checkAdmission = null) {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      // Trusted service preconditions must observe the same locked state as
+      // the allowance/cycle claim, including writes from another connection.
+      if (checkAdmission && !checkAdmission()) {
+        this.db.exec("COMMIT");
+        return { created: false, reason: "not-current" };
+      }
+      if (admissionKey !== null) {
+        const previous = this.db.prepare("SELECT r.mission_id,r.state FROM business_budget_admissions a JOIN business_budget_reservations r ON r.mission_id=a.mission_id WHERE a.admission_key=? AND r.business_id=?").get(admissionKey, business.id);
+        if (previous) {
+          this.db.exec("COMMIT");
+          return { missionId: previous.mission_id, state: previous.state, created: false };
+        }
+      }
       if (business.executionBudgetVersion !== 1) throw failure("BUSINESS_BUDGET_HISTORY_UNCERTAIN", "Business predates cumulative accounting; historical usage is uncertain. Create a new explicitly budgeted business before launching.");
       const rows = this.rows(business.id);
       if (rows.length >= MAX_RESERVATIONS) throw failure("BUSINESS_BUDGET_LEDGER_FULL", "Business execution reservation ledger is full; no further launches admitted.");
@@ -60,7 +76,9 @@ export class BusinessBudget {
         }
       }
       this.db.prepare("INSERT INTO business_budget_reservations VALUES (?,?,?,?,?)").run(missionId, business.id, JSON.stringify(limits), "launch-uncertain", new Date().toISOString());
+      if (admissionKey !== null) this.db.prepare("INSERT INTO business_budget_admissions VALUES (?,?)").run(admissionKey, missionId);
       this.db.exec("COMMIT");
+      return { missionId, state: "launch-uncertain", created: true };
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   created(id) { this.db.prepare("UPDATE business_budget_reservations SET state='created' WHERE mission_id=?").run(id); }
