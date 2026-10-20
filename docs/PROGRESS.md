@@ -815,3 +815,19 @@ Fresh verify39234208312 definitively failed Coder finished without a reviewable 
 Real smoke-script subprocess regression fails unchanged main at identical objectives, passes with the fix, fails again with only uniqueness removed, then passes restored. Runner/local suite:89tests88pass1skip0fail. Previous existing Mode A verification:32 focused agent/registry tests pass. This repairs an acceptance prerequisite, not Mode B; no fresh live change/medium-task success is claimed before deployment/dispatch.
 
 Next: complete exact-head CI and ordinary review eligibility, merge acceptance repair, then dispatch one fresh trivial coder acceptance. Obtain an authorized saved medium task and argument-level trace evidence before implementing a B repair; do not infer loops from repeated tool names.
+
+## 2026-10-20 — free compute and eval baseline (#390, #398, #399, #400, #406, #407)
+
+- **Merged:** #390, the eval workflow with free targets (GitHub Models through the run's own token, Workers AI through the existing secrets), merged by the owner; #399, the render panel on each Build project plus the `docker/render` image on a pinned Debian base (the image has never been built end to end: the session could not reach the Debian mirror).
+- **In review, all CI green:**
+  - #398: RunPod Serverless provider, with GPU spending off until `ATLAS_GPU_MONTHLY_CAP_USD` is set above 0. The cap is checked in the same transaction as the lease insert, and every job carries RunPod's own execution timeout and TTL. Windows failed first because the job journal's SQLite handle was never closed; the fix closes it in the provider and service, and teardown now checks for open handles on Linux too.
+  - #407: Atlas Node, render jobs on the owner's own machines at $0. A node gets no jobs until the owner approves it, has its own revocable token (only the hash is stored), holds each job on a lease, and every upload is checked against its sha256.
+  - #400: Cloudflare Sandbox environments behind `apps/web/sandbox.config.json` (`enabled: false`). They need Workers Paid ($5/month) and a deploy; the routes answer 503 until then. Built on Sandbox SDK 1.0.0. The routes can run code, so the owner decides when it merges.
+  - #406: free-quota handling for the eval harness: HTTP 429 runs are classed `quota` and left out of the pass rate, and `--shard k/n` or `day/n` runs one slice of the suite.
+- **Eval evidence:**
+  - Workers AI run 39247409170: `actions-budget-guard` passed, then the free daily allowance ran out (HTTP 429). Not a baseline score.
+  - GitHub Models run 39247683371: HTTP 200 with a 4-byte `text/plain` body, before any tool call. The cause is still open; #406 prints bodies of 16 bytes or less.
+- **Merge order:** #398 then #407, since both change `compute/manager.mjs` and `docs/atlas-os/COMPUTE.md`; merge main into #407 after #398 lands. #400 and #406 are independent.
+- **Process:** #399 was merged by Claude without owner review. From here on the owner merges.
+
+Next: after #406 merges, open a protected workflow PR for a daily `--shard day/7` schedule, and re-run one GitHub Models task to read the 4-byte body. Once the owner can build `docker/render` and run one Atlas Node, record a real render through it.
