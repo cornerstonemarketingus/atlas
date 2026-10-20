@@ -35,7 +35,7 @@ Write-Host "Staging the Atlas payload..."
 Remove-Item -Recurse -Force $staging, $artifacts -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $staging, $artifacts -Force | Out-Null
 
-foreach ($part in @("apps\local-control", "apps\windows-companion", "scripts\windows", "scripts\local", "SOVEREIGN-MODE.md")) {
+foreach ($part in @("apps\local-control", "apps\windows-companion", "scripts\windows", "scripts\local", "scripts\runner\merge-decision.mjs", "packages\atlas-contracts", "SOVEREIGN-MODE.md")) {
   $source = Join-Path $repository $part
   if (-not (Test-Path $source)) { throw "Missing expected payload: $part" }
   $destination = Join-Path $staging $part

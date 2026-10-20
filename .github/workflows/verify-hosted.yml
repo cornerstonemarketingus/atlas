@@ -3,11 +3,11 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Feature to verify (coder opens a small documentation PR)
+        description: Feature to verify (coder opens a documentation PR; website saves an unpublished preview without model calls)
         required: true
         default: inspect
         type: choice
-        options: [inspect, coder, chat]
+        options: [inspect, coder, chat, website]
       message:
         description: Chat only. The conversation to verify (for the release gate, the one that failed in production). Runs streaming and non-streaming.
         required: false

@@ -21,6 +21,10 @@ import { detectRequirements } from "./requirements.mjs";
  *  4. `reconcile()`: lists Atlas-tagged instances and terminates any without
  *     a live lease. Run it at startup (with `takeover`) and on an interval.
  *
+ * Above all four, a tenant-scoped monthly cap (`monthlyCapMicroUsd`,
+ * default 0 = GPU spending off): a provision is refused when the UTC month's
+ * settled bills plus held reservations plus this reservation would pass it.
+ *
  * Instances are terminated when their job succeeds or fails. The actual
  * provider bill is then settled against the reservation: the unused part is
  * released through TaskBudget.release (idempotent by lease ref), an overrun
@@ -42,6 +46,14 @@ export class ComputeError extends Error {
   }
 }
 
+/** The UTC calendar month containing `ms`, as [fromMs, toMs) and "YYYY-MM". */
+export function monthWindow(ms) {
+  const date = new Date(ms);
+  const fromMs = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+  const toMs = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
+  return { fromMs, toMs, month: new Date(fromMs).toISOString().slice(0, 7) };
+}
+
 const leaseRef = (leaseId) => `compute-lease:${leaseId}`;
 const leaseTag = (leaseId) => `atlas-lease:${leaseId}`;
 const tagValue = (tags, prefix) => (tags ?? []).find(tag => tag.startsWith(prefix))?.slice(prefix.length) ?? null;
@@ -59,6 +71,7 @@ export class ComputeManager {
   #locks = new Map();
   #timer = null;
   #clearTimer = null;
+  #monthlyCapMicroUsd;
 
   /**
    * @param options.store PlatformTaskStore holding the job tasks and their budgets
@@ -67,10 +80,13 @@ export class ComputeManager {
    * @param options.clock () => ms, or { now() }
    */
   constructor({ store, leaseDb = ":memory:", leases = undefined, providers = [], clock = () => Date.now(), idleTimeoutSec = DEFAULT_IDLE_TIMEOUT_SEC,
-    maxLifetimeCapSec = DEFAULT_MAX_LIFETIME_CAP_SEC, lifetimeSafety = DEFAULT_LIFETIME_SAFETY, localHardware = null, managerId = randomUUID() } = {}) {
+    maxLifetimeCapSec = DEFAULT_MAX_LIFETIME_CAP_SEC, lifetimeSafety = DEFAULT_LIFETIME_SAFETY, localHardware = null, managerId = randomUUID(),
+    monthlyCapMicroUsd = 0 } = {}) {
     if (!store) throw new ComputeError("INVALID_ARGUMENT", "ComputeManager needs the platform task store for budgets.");
     if (!Number.isInteger(idleTimeoutSec) || idleTimeoutSec <= 0) throw new ComputeError("INVALID_ARGUMENT", "idleTimeoutSec must be a positive integer.");
     if (!Number.isInteger(maxLifetimeCapSec) || maxLifetimeCapSec <= 0) throw new ComputeError("INVALID_ARGUMENT", "maxLifetimeCapSec must be a positive integer.");
+    if (!Number.isSafeInteger(monthlyCapMicroUsd) || monthlyCapMicroUsd < 0) throw new ComputeError("INVALID_ARGUMENT", "monthlyCapMicroUsd must be a non-negative integer (0 turns GPU spending off).");
+    this.#monthlyCapMicroUsd = monthlyCapMicroUsd;
     this.#store = store;
     this.#leases = leases ?? new ComputeLeaseStore(leaseDb);
     for (const provider of providers) this.#providers.set(assertProvider(provider).name, provider);
@@ -87,6 +103,17 @@ export class ComputeManager {
   getLease(tenantId, leaseId) { return this.#leases.get(tenantId, leaseId); }
   listLeases(tenantId, options) { return this.#leases.list(tenantId, options); }
   listAudit(tenantId, options) { return this.#leases.listAudit(tenantId, options); }
+
+  /**
+   * The tenant's GPU spend for the current UTC month against the monthly cap:
+   * settled bills plus reservations still held. `remainingMicroUsd` is what
+   * one more provision may reserve.
+   */
+  monthlySpend(tenantId) {
+    const { fromMs, toMs, month } = monthWindow(this.#now());
+    const spend = this.#leases.spend(tenantId, fromMs, toMs);
+    return { month, capMicroUsd: this.#monthlyCapMicroUsd, ...spend, remainingMicroUsd: Math.max(0, this.#monthlyCapMicroUsd - spend.totalMicroUsd) };
+  }
 
   /** Picks the cheapest provider/GPU that meets the job's requirements; `null` plan when it should run locally. */
   async plan(job, { tenantId = undefined } = {}) {
@@ -118,22 +145,36 @@ export class ComputeManager {
     if (!choice) return { runLocally: true, requirements };
 
     const wantedSec = requirements.maxMinutes ? Math.ceil(requirements.maxMinutes * 60) : Math.ceil(choice.estMinutes * 60 * this.#lifetimeSafety);
-    let maxLifetimeSec; let reservedMicroUsd;
+    // Monthly cap: the tenant's settled + reserved GPU spend this UTC month
+    // may never pass monthlyCapMicroUsd (0 = GPU spending off).
+    const window = monthWindow(this.#now());
+    const capMicroUsd = this.#monthlyCapMicroUsd;
+    const refuseCap = (spent) => {
+      this.#leases.audit(tenantId, null, "cap.refused", this.#now(), { jobId: job.id, taskId, provider: choice.provider, monthlyCapMicroUsd: capMicroUsd, monthSpentMicroUsd: spent });
+      return capMicroUsd === 0
+        ? new ComputeError("GPU_SPENDING_OFF", "GPU spending is off: the monthly GPU cap is 0 (set ATLAS_GPU_MONTHLY_CAP_USD).")
+        : new ComputeError("MONTHLY_CAP_EXCEEDED", `This GPU job would take the month's GPU spend past the cap of ${capMicroUsd} micro-USD.`, { capMicroUsd, spentMicroUsd: spent, estimate: choice.estMicroUsd });
+    };
+    let maxLifetimeSec; let reservedMicroUsd; let budget = null;
     if (choice.rateMicroUsdPerSec === 0) {
-      // A free provider spends nothing, so nothing is reserved. The lease,
-      // max lifetime, idle timeout and reconciler still apply, and a bill it
-      // reports anyway is charged truthfully at settlement.
+      // A free provider spends nothing, so nothing is reserved and the
+      // monthly cap does not apply. The lease, max lifetime, idle timeout and
+      // reconciler still do, and a bill it reports anyway is charged
+      // truthfully at settlement.
       maxLifetimeSec = Math.min(this.#maxLifetimeCapSec, wantedSec);
       reservedMicroUsd = 0;
     } else {
       // Stop 1: reserve the worst case before anything is provisioned.
-      const budget = new TaskBudget({ store: this.#store, tenantId, taskId });
+      budget = new TaskBudget({ store: this.#store, tenantId, taskId });
       const remaining = budget.snapshot().remaining.costMicroUsd;
       if (remaining === undefined) throw new ComputeError("NO_APPROVED_BUDGET", "The task has no approved costMicroUsd budget; GPU time is never rented without one.");
       if (choice.estMicroUsd > remaining) {
         throw new ComputeError("ESTIMATE_EXCEEDS_BUDGET", `Estimated GPU cost ${choice.estMicroUsd} micro-USD exceeds the remaining ${remaining}.`, { estimate: choice.estMicroUsd, remaining });
       }
-      maxLifetimeSec = Math.min(this.#maxLifetimeCapSec, wantedSec, Math.floor(remaining / choice.rateMicroUsdPerSec));
+      const spentThisMonth = this.#leases.spend(tenantId, window.fromMs, window.toMs).totalMicroUsd;
+      const capLeft = capMicroUsd - spentThisMonth;
+      if (choice.estMicroUsd > capLeft || capLeft <= 0) throw refuseCap(spentThisMonth);
+      maxLifetimeSec = Math.min(this.#maxLifetimeCapSec, wantedSec, Math.floor(remaining / choice.rateMicroUsdPerSec), Math.floor(capLeft / choice.rateMicroUsdPerSec));
       if (maxLifetimeSec <= 0) throw new ComputeError("ESTIMATE_EXCEEDS_BUDGET", "The remaining budget does not cover one second of GPU time.");
       reservedMicroUsd = choice.rateMicroUsdPerSec * maxLifetimeSec;
       try {
@@ -145,11 +186,19 @@ export class ComputeManager {
     }
 
     const now = this.#now();
-    const lease = this.#leases.insert({
-      tenantId, id: randomUUID(), jobId: job.id, taskId, provider: choice.provider, gpuType: choice.gpuType, holder: this.managerId,
+    const leaseId = randomUUID();
+    // The cap is re-checked atomically with the insert, so another process
+    // sharing the lease database cannot slip a lease in between.
+    const leaseRow = {
+      tenantId, id: leaseId, jobId: job.id, taskId, provider: choice.provider, gpuType: choice.gpuType, holder: this.managerId,
       reservedMicroUsd, rateMicroUsdPerSec: choice.rateMicroUsdPerSec, maxLifetimeSec, idleTimeoutSec: this.#idleTimeoutSec,
       createdAt: now, leaseExpiresAt: now + this.#idleTimeoutSec * 1000, deadlineAt: now + maxLifetimeSec * 1000,
-    });
+    };
+    const lease = budget === null ? this.#leases.insert(leaseRow) : this.#leases.insertWithinCap(leaseRow, { capMicroUsd, fromMs: window.fromMs, toMs: window.toMs });
+    if (!lease) {
+      budget.release({ costMicroUsd: reservedMicroUsd }, { ref: `compute-cap-refused:${leaseId}` });
+      throw refuseCap(this.#leases.spend(tenantId, window.fromMs, window.toMs).totalMicroUsd);
+    }
     this.#leases.audit(tenantId, lease.id, "reserve", now, { jobId: job.id, taskId, provider: choice.provider, gpuType: choice.gpuType,
       reservedMicroUsd, maxLifetimeSec, estHourlyUsd: choice.estHourlyUsd, estMinutes: choice.estMinutes });
     const controller = new AbortController();
@@ -159,9 +208,12 @@ export class ComputeManager {
     const provider = this.#providers.get(choice.provider);
     let instance;
     try {
-      // `tenantId` and `job` are for providers that run the job themselves (Atlas Nodes); a GPU cloud ignores them.
+      // `input` is the job's work for providers that take it at submission
+      // (serverless queues such as RunPod); `tenantId` and `job` are for
+      // providers that run the job themselves (Atlas Nodes). Others ignore them.
       instance = await provider.provision({ gpuType: choice.gpuType, maxLifetimeSec,
-        tags: [ATLAS_TAG, `atlas-tenant:${tenantId}`, leaseTag(lease.id), `atlas-job:${job.id}`], tenantId, job });
+        tags: [ATLAS_TAG, `atlas-tenant:${tenantId}`, leaseTag(lease.id), `atlas-job:${job.id}`], tenantId, job,
+        ...(job.input !== undefined ? { input: job.input } : {}) });
     } catch (error) {
       this.#leases.audit(tenantId, lease.id, "provision.failed", this.#now(), { jobId: job.id, provider: choice.provider, error: String(error?.code ?? "PROVISION_FAILED") });
       await this.#end(tenantId, lease.id, "provision_failed", { provisionFailed: true });

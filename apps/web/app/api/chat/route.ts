@@ -24,6 +24,8 @@ import { workerEnv } from "../inference/worker-env.mjs";
 import { createAgentTeam } from "./agent-team.mjs";
 import { instantToolDefinitions } from "./instant-tools.mjs";
 import { genesisBridge } from "../genesis/bridge.mjs";
+import { projectBackend } from "../genesis/project-backend.mjs";
+import { hostedSiteStore } from "../../../db/hosted-sites.mjs";
 import { createProjectTools, userWantsPublic } from "./project-tools.mjs";
 import { classifyIntent } from "../../chat/intent.mjs";
 
@@ -80,11 +82,13 @@ export async function POST(request: Request) {
   let memory = "";
   let stored = true;
   let allowlist = new Set<string>();
+  let workspaceScope: ReturnType<typeof tenantScope> | null = null;
   try {
     db = getDb();
     // Tenancy (#71): threads belong to the caller's tenant; an id owned by another tenant or principal is never written to.
     const tenant = await resolveTenantContext(request, account, getD1());
     if (!tenant || !(await conversationWritable(getD1(), tenantScope(tenant), conversationId))) throw new Error("Conversation is not writable in this workspace.");
+    workspaceScope = tenantScope(tenant);
     await db.insert(conversations)
       .values({ id: conversationId, tenantId: tenant.tenantId, requestedBy: account.userId, title: threadTitle(message), repository, branch, createdAt: now, updatedAt: now })
       .onConflictDoUpdate({ target: conversations.id, set: { updatedAt: now }, setWhere: and(eq(conversations.tenantId, tenant.tenantId), eq(conversations.requestedBy, account.userId)) });
@@ -106,8 +110,11 @@ export async function POST(request: Request) {
 
   // Stable prefix first (system prompt, then history) so the provider's prompt cache can reuse it; see turns.mjs.
   const bridge = genesisBridge(process.env, { owner: isDeploymentOwner(account) });
-  const projectCapabilities = await bridge.capabilities({ visibility: userWantsPublic(message) ? "public" : "private" });
-  const projectTools = createProjectTools({ create: bridge.create, status: bridge.status, requestId: randomUUID(), userMessage: message });
+  const nodeCapabilities = await bridge.capabilities({ visibility: userWantsPublic(message) ? "public" : "private" });
+  // Business websites can be built without a node; the model is told which builders actually exist.
+  const backend = projectBackend({ bridge, hosted: workspaceScope ? { store: hostedSiteStore(getD1()), scope: workspaceScope } : null, userMessage: message });
+  const projectCapabilities = { ...nodeCapabilities, hostedWebsites: backend.hostedAvailable };
+  const projectTools = createProjectTools({ create: backend.create, status: backend.status, requestId: randomUUID(), userMessage: message });
   const turns = chatTurns({ system: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository, projectCapabilities }), history, memory, message, historyTurns: HISTORY_TURNS });
 
   const startTasks = (calls: ReturnType<typeof taskRequestsFrom>) => classifyIntent(message).kind === "new_project_task"
