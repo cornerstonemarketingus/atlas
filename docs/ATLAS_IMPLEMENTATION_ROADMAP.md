@@ -130,3 +130,12 @@ build/typecheck and all 599 executed web tests pass. The five browser skips were
 optional configuration skips; separately configured desktop/mobile Edge acceptance
 passed. Latest PR CI and protected review remain independent gates.
 
+
+
+2026-10-19 CI recovery: 6ac1336 failed Windows daemon startup and concurrent
+Genesis completion (828 pass, two failures, 20 skips). Integrated current main
+afdee04 through #282, including the existing Genesis fixture correction. All 11
+serial daemon/Genesis tests pass locally. Fresh parallel Windows CI is required;
+no deadline was weakened and the previous failure was not discarded. #284 now
+contains current-main hosted receipt recovery integration for separate review.
+

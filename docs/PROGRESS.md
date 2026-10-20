@@ -903,3 +903,12 @@ Independent of the still-open medium-task/tool-budget investigation, default Win
 Build passes. Actual runner + main()-driven repair-loop checks:13tests11pass2platform skips0fail; the previously failing no-progress and elapsed-time CLI verification cases now pass on Windows. Full CLI suite:588tests580pass4fail4skip; four previously observed Windows CRLF/path/mode failures remain, so this is not an all-green local suite. Removing only the source adapter with the new test retained fails again; restoring/rebuilding passes. No Mode B fix, larger budget, verdict-path change or medium live evidence claimed.
 
 Next: publish this isolated verification repair, inspect exact-head CI/reviews and merge only ordinary-eligible all-green/no-blocker changes. Continue to preserve PR395 configured workflow review for medium-task dispatch and native320 signing review; do not infer identical-call loops from old argument-free traces.
+
+
+2026-10-19 CI recovery: 6ac1336 failed Windows daemon startup and concurrent
+Genesis completion (828 pass, two failures, 20 skips). Integrated current main
+afdee04 through #282, including the existing Genesis fixture correction. All 11
+serial daemon/Genesis tests pass locally. Fresh parallel Windows CI is required;
+no deadline was weakened and the previous failure was not discarded. #284 now
+contains current-main hosted receipt recovery integration for separate review.
+
