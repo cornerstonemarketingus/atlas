@@ -11,7 +11,11 @@ into this report. GitHub secret presence does not establish credential validity.
 - Reviewed and merged #390 (`2f99b6e`): evals can use the workflow's short-lived
   GitHub Models token with `models: read`, without purchasing a provider key.
   Dispatched a single-task GitHub Models run, [39355131361](https://github.com/cornerstonemarketingus/atlas/actions/runs/39355131361).
-  Dispatch is not a successful baseline; its final artifact is the evidence.
+  The workflow completed, but the task failed with zero tool calls/tokens:
+  the endpoint returned HTTP 200 with a four-byte, non-JSON text response.
+  This is a failed sample, not a successful model baseline. The audit also fixes
+  structured agent failures being mislabeled as `tests_failed`, while retaining
+  independent verification as the authority on whether an artifact is correct.
 - Production lacked `genesis_projects`. A read-only schema inspection confirmed
   tenant, task-request and execution-claim tables but no Genesis project table.
   Applied only additive migration `0016_project_genesis.sql`, including its
@@ -58,7 +62,7 @@ into this report. GitHub secret presence does not establish credential validity.
 | --- | --- | --- |
 | #391 hosted websites | A substantial implementation exists, not just a missing key. It builds escaped static pages without executing user code. It is distinct from a full app/API node or publication service. Review covered owner/node separation, workspace/principal scoping, preview paths and CSP. | The 0016 schema blocker is repaired. Fresh CI after the Windows stylesheet fix, merge/deploy and a real authenticated create/preview journey are still required. Public preview links are bearer capabilities; forms do not deliver enquiries. |
 | #397 free-provider fabric | Unmerged; audit snapshot showed no completed main CI checks on its head. Adds `CEREBRAS_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY` and per-provider model/tier settings. | Rebase/integrate #364 and verify every new coder provider's quota-origin mapping: current main's governor only names Groq, OpenAI, Anthropic and Workers AI. Do not merge a new route that throws when the governor is configured. Verify training-tier restrictions with real conversation/tool histories. No training opt-in or paid-tier declaration was set by this audit. |
-| #398 RunPod | Windows CI fails with SQLite file locks during test cleanup. `RunpodProvider` opens its own journal connection, while fixtures close only their tracked stores. Production lifecycle also needs ownership-aware connection cleanup. | Fix resource ownership and shutdown; fresh CI; real account/endpoint/image and `ATLAS_RUNPOD_API_KEY`, `ATLAS_RUNPOD_ENDPOINT_ID`, explicit `ATLAS_GPU_MONTHLY_CAP_USD`. Keep the default cap zero. Remote render input upload and GPU render routing remain follow-ups. |
+| #398 RunPod | Initial Windows CI failed with SQLite file locks. During this audit Claude pushed ownership-aware provider/service cleanup and tracked every fixture handle (`a394ab6`, integrated in `1ad01f1`). The latest 19 focused tests pass on Windows; an incomplete local alternative was not pushed. | Fresh full CI and real account/endpoint/image acceptance remain required, plus `ATLAS_RUNPOD_API_KEY`, `ATLAS_RUNPOD_ENDPOINT_ID`, explicit `ATLAS_GPU_MONTHLY_CAP_USD`. Keep the default cap zero. Remote render input upload and GPU render routing remain follow-ups. |
 | #400 Cloudflare sandboxes | Windows CI fails the executable-bit round-trip assertion. Cloud/local snapshot semantics must be reconciled across Windows and POSIX rather than ignoring a digest mismatch. Default `sandbox.config.json` is disabled. | Fix and test migration semantics, review SDK/container boundary, then obtain Workers Paid, create the backup R2 bucket, configure previews and deploy the enabled build. Local `ATLAS_CLOUD_SANDBOX_URL` and vault `ATLAS_CLOUD_SANDBOX_TOKEN` must match the broker's operator authentication. Genesis does not automatically select this environment yet. |
 
 The RunPod, sandbox and free-vendor implementations were not merged merely
@@ -75,7 +79,10 @@ live acceptance, budgets and integration work are separate release conditions.
   The old streaming check accepted stored text without positive authorship
   metadata. This audit strengthens that check; it does not claim quota recovery.
 - Focused audit regressions: 8 deployment/smoke tests pass; 14 hosted-site/bridge
-  tests pass on Windows. The earlier #235/#364 boundary run passed 31 tests.
+  tests and the latest 19 RunPod tests pass on Windows. The earlier #235/#364
+  boundary run passed 31 tests. All 11 workflow files and their shell steps
+  validate when the checker uses the installed Git Bash; the system WSL shim
+  cannot run Bash in this environment.
 - Missing external credentials cannot be generated from their names. A new
   provider key must be created in the user's provider account; Stripe endpoint
   secrets and prices must match that account. Optional integrations should remain
@@ -90,8 +97,8 @@ live acceptance, budgets and integration work are separate release conditions.
    checkout while Stripe remains incomplete.
 2. Complete #391's updated CI and hosted create/preview journey; report source,
    placeholders, structural checks and delivery/publishing limitations truthfully.
-3. Record the single-task GitHub Models artifact as passed, failed or blocked,
-   not as a baseline simply because its workflow was dispatched.
+3. Diagnose the GitHub Models non-JSON response before further model samples;
+   the completed workflow currently records a failed task, not a valid baseline.
 4. Restore one usable model allowance and rerun the strengthened streaming and
    non-streaming chat gate. Do not keep hammering exhausted provider routes.
 5. Configure Stripe and optional services from a secure account-owned source;
