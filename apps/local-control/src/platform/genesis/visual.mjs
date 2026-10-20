@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -17,10 +17,13 @@ function containedFile(root, name) {
 }
 
 function buildFile(project, name) {
-  // Check both boundaries: a dist asset must not link into private workspace
-  // files, and dist itself must not link outside the project.
-  const file = containedFile(project.workspace, `dist/${name}`);
-  if (file !== containedFile(resolve(project.workspace, "dist"), name)) throw new VisualError("The build asset changed.");
+  const workspace = realpathSync(project.workspace);
+  const dist = resolve(workspace, "dist");
+  const directory = lstatSync(dist);
+  if (directory.isSymbolicLink() || !directory.isDirectory()) throw new VisualError("The build directory must be a real directory.");
+  // Keep assets inside both the workspace and its actual build directory.
+  const file = containedFile(workspace, `dist/${name}`);
+  if (file !== containedFile(dist, name)) throw new VisualError("The build asset changed.");
   return file;
 }
 

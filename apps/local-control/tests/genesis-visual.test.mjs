@@ -36,6 +36,22 @@ test("design assets cannot follow links into private workspace files", async () 
 });
 
 const TOKEN = "visual-editor-owner-test-token-0123456789";
+test("design rejects a build directory linked back to the workspace", async () => {
+  const root = mkdtempSync(join(tmpdir(), "atlas-visual-build-link-"));
+  let preview;
+  try {
+    writeFileSync(join(root, "site.json"), JSON.stringify({ pages: [{ id: "home", headline: "Home", intro: "Intro" }] }));
+    writeFileSync(join(root, "index.html"), '<h1 data-atlas-source="home:headline">Home</h1>');
+    symlinkSync(root, join(root, "dist"), process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(async () => {
+      preview = await startDesignPreview({ workspace: root, plan: { template: "static-site" }, version: 1 }, "http://127.0.0.1:4317");
+    }, /build directory/u);
+  } finally {
+    await preview?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
+});
+
 async function fixture(run) {
   const root = mkdtempSync(join(tmpdir(), "atlas-visual-"));
   const store = new GenesisStore(join(root, "genesis.sqlite"));
