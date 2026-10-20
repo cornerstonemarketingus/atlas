@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -31,11 +31,13 @@ async function fixture(t, { idleTimeoutSec = 600, monthlyCapMicroUsd = BIG_CAP }
   const opened = [];
   const f = {
     clock, server, directory, leaseFile, store: null,
+    /** Every database handle must be closed before the directory is removed: Windows will not delete an open SQLite file. */
+    track(handle) { opened.push(handle); return handle; },
     openStore() { f.store = new PlatformTaskStore(storeFile, { clock: () => new Date(clock.now()) }); opened.push(f.store); return f.store; },
     /** A fresh adapter over the same journal file, as a restarted daemon would build it. */
     provider(options = {}) {
-      return new RunpodProvider({ endpointId: server.endpointId, apiKey: API_KEY, baseUrl: server.baseUrl, db: leaseFile, clock,
-        workerIdleTimeoutSec: IDLE_SEC, coldStartAllowanceSec: COLD_SEC, queueTtlSec: QUEUE_TTL_SEC, requestTimeoutMs: 2_000, ...options });
+      return f.track(new RunpodProvider({ endpointId: server.endpointId, apiKey: API_KEY, baseUrl: server.baseUrl, db: leaseFile, clock,
+        workerIdleTimeoutSec: IDLE_SEC, coldStartAllowanceSec: COLD_SEC, queueTtlSec: QUEUE_TTL_SEC, requestTimeoutMs: 2_000, ...options }));
     },
     manager(options = {}) {
       const leases = new ComputeLeaseStore(leaseFile); opened.push(leases);
@@ -51,9 +53,24 @@ async function fixture(t, { idleTimeoutSec = 600, monthlyCapMicroUsd = BIG_CAP }
   t.after(async () => {
     await server.close();
     for (const handle of opened) { try { handle.close(); } catch { /* already closed */ } }
+    // Windows refuses to delete a SQLite file that is still open (EBUSY). Where /proc exists,
+    // catch the same leak on every platform: no descriptor may still point into the directory.
+    const leaked = await openFilesUnder(directory);
     await rm(directory, { recursive: true, force: true });
+    assert.deepEqual(leaked, [], "every database handle the test opened is closed");
   });
   return f;
+}
+
+/** Files under `directory` this process still holds open (Linux /proc; [] where /proc/self/fd is unavailable). */
+async function openFilesUnder(directory) {
+  let fds;
+  try { fds = await readdir("/proc/self/fd"); } catch { return []; }
+  const open = [];
+  for (const fd of fds) {
+    try { const target = await readlink(`/proc/self/fd/${fd}`); if (target.startsWith(directory)) open.push(target.slice(directory.length)); } catch { /* fd closed meanwhile */ }
+  }
+  return open.sort();
 }
 
 const renderJob = (id = "job-1", input = {}) => ({ id, kind: "render", estMinutes: 10, input });
@@ -100,8 +117,7 @@ test("a lifetime too short for RunPod's minimums is refused and the reservation 
 
 test("runJob polls a job from IN_QUEUE to COMPLETED, saves its output as an artifact, and settles the derived bill", async t => {
   const f = await fixture(t); const manager = f.manager();
-  const artifacts = new ArtifactStore({ root: join(f.directory, "artifacts") });
-  t.after(() => artifacts.close?.());
+  const artifacts = f.track(new ArtifactStore({ root: join(f.directory, "artifacts") }));
   const task = f.task();
   const seen = [];
   const result = await manager.runJob({
@@ -344,7 +360,7 @@ test("the monthly cap refuses a provision once settled + reserved spend would pa
 
 test("the cap check and the lease insert are atomic in the lease store", async t => {
   const f = await fixture(t);
-  const leases = new ComputeLeaseStore(f.leaseFile); t.after(() => leases.close());
+  const leases = f.track(new ComputeLeaseStore(f.leaseFile));
   const base = { tenantId: "owner", jobId: "j", taskId: "t", provider: "runpod", gpuType: "AMPERE_24", holder: "h", rateMicroUsdPerSec: 1,
     maxLifetimeSec: 10, idleTimeoutSec: 10, createdAt: 100, leaseExpiresAt: 200, deadlineAt: 200 };
   const window = { capMicroUsd: 1_000, fromMs: 0, toMs: 1_000 };
@@ -425,13 +441,13 @@ test("the daemon service is off by default and makes no request until configured
   const base = { credentials, store: f.store, leaseDb: f.leaseFile, fetchImpl, clock: f.clock };
   assert.equal((await createComputeService({ ...base, env: {} })).enabled, false);
   assert.equal((await createComputeService({ ...base, env: { ATLAS_RUNPOD_ENDPOINT_ID: f.server.endpointId }, credentials: async () => null })).enabled, false);
-  const off = await createComputeService({ ...base, env: { ATLAS_RUNPOD_ENDPOINT_ID: f.server.endpointId, ATLAS_RUNPOD_BASE_URL: f.server.baseUrl } });
+  const off = f.track(await createComputeService({ ...base, env: { ATLAS_RUNPOD_ENDPOINT_ID: f.server.endpointId, ATLAS_RUNPOD_BASE_URL: f.server.baseUrl } }));
   assert.equal(off.enabled, true); assert.equal(off.provisioning, false);
   await assert.rejects(off.manager.start({ tenantId: "owner", taskId: f.task().id, job: renderJob() }), { code: "GPU_SPENDING_OFF" });
   assert.equal(calls, 0);
   assert.doesNotMatch(JSON.stringify(off), /TESTKEY/);
-  const on = await createComputeService({ ...base, env: { ATLAS_RUNPOD_ENDPOINT_ID: f.server.endpointId, ATLAS_RUNPOD_BASE_URL: f.server.baseUrl,
-    ATLAS_GPU_MONTHLY_CAP_USD: "25", ATLAS_RUNPOD_IDLE_TIMEOUT_SEC: "5", ATLAS_RUNPOD_COLD_START_SEC: "25" } });
+  const on = f.track(await createComputeService({ ...base, env: { ATLAS_RUNPOD_ENDPOINT_ID: f.server.endpointId, ATLAS_RUNPOD_BASE_URL: f.server.baseUrl,
+    ATLAS_GPU_MONTHLY_CAP_USD: "25", ATLAS_RUNPOD_IDLE_TIMEOUT_SEC: "5", ATLAS_RUNPOD_COLD_START_SEC: "25" } }));
   assert.equal(on.provisioning, true); assert.equal(on.capMicroUsd, 25_000_000);
   const { lease } = await on.manager.start({ tenantId: "owner", taskId: f.task().id, job: renderJob() });
   assert.equal(calls, 1);

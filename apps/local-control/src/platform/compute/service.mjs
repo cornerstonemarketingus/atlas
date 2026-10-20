@@ -64,6 +64,8 @@ export async function createComputeService({ env = process.env, credentials, sto
   const provisioning = cap.capMicroUsd > 0;
   return {
     enabled: true, provisioning, manager, provider, capMicroUsd: cap.capMicroUsd,
+    /** Stops the reconciler and releases both database handles. */
+    close() { manager.stopReconciler(); manager.leases.close(); provider.close(); },
     reason: provisioning
       ? `RunPod endpoint configured; GPU spend capped at ${cap.capMicroUsd / 1_000_000} USD per month.`
       : `RunPod endpoint configured but ATLAS_GPU_MONTHLY_CAP_USD is ${cap.valid ? "0" : "invalid"}: GPU spending is off (the reconciler still cleans up).`,

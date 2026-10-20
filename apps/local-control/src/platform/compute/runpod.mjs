@@ -142,6 +142,7 @@ export class RunpodProvider {
   #queueTtlSec;
   #requestTimeoutMs;
   #outputs = new Map();
+  #ownsDb = false;
 
   /**
    * @param options.endpointId   the RunPod Serverless endpoint that runs Atlas's worker image
@@ -182,7 +183,8 @@ export class RunpodProvider {
     this.#coldStartSec = positiveInt(coldStartAllowanceSec, "coldStartAllowanceSec", { allowZero: true });
     this.#queueTtlSec = positiveInt(queueTtlSec, "queueTtlSec");
     this.#requestTimeoutMs = positiveInt(requestTimeoutMs, "requestTimeoutMs");
-    this.#db = typeof db === "string" ? new DatabaseSync(db) : db;
+    this.#ownsDb = typeof db === "string";
+    this.#db = this.#ownsDb ? new DatabaseSync(db) : db;
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS runpod_jobs (
         local_id TEXT PRIMARY KEY, endpoint_id TEXT NOT NULL, job_id TEXT UNIQUE, state TEXT NOT NULL, tags_json TEXT NOT NULL,
@@ -192,6 +194,13 @@ export class RunpodProvider {
       );
       CREATE INDEX IF NOT EXISTS runpod_jobs_state ON runpod_jobs (state);
     `);
+  }
+
+  /** Closes the journal if this provider opened it (an open SQLite handle locks the file on Windows). */
+  close() {
+    if (!this.#ownsDb) return;
+    this.#ownsDb = false; // idempotent on every Node version (isOpen is not in all 22.x releases)
+    this.#db.close();
   }
 
   /** Seconds billed around each job's execution: worker idle timeout plus the cold-start allowance. */
