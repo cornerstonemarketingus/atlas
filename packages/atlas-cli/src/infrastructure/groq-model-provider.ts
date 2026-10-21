@@ -203,9 +203,8 @@ export class GroqModelProvider implements ModelProvider {
       parsed = JSON.parse(text);
     } catch (cause) {
       throw new ModelProviderError({
-        // Shape only; a body is shown only when it is too short to echo the
-        // prompt or a credential (a bare "OK" from the wrong path, say).
-        message: `Groq endpoint returned invalid JSON (HTTP ${response.status}, ${response.headers.get("content-type") ?? "no content-type"}, ${Buffer.byteLength(text)} bytes${Buffer.byteLength(text) <= 16 ? `: ${JSON.stringify(text)}` : ""})`,
+        // Even short bodies can contain private text or a password.
+        message: `Groq endpoint returned invalid JSON (HTTP ${response.status}, ${response.headers.get("content-type") ?? "no content-type"}, ${Buffer.byteLength(text)} bytes)`,
         code: "provider-failure",
         providerId: this.metadata.id,
         retryable: false,

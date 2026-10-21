@@ -25,7 +25,7 @@ const DAY_MS = 86_400_000;
  * One slice of the suite, for running it across days on a free daily quota.
  * `spec` is `k/n` (slice k of n, 1-based) or `day/n` (the slice for the UTC
  * day of `nowMs`, so a daily schedule walks every slice in n days). Tasks
- * are dealt round-robin by id, so slices stay stable as tasks are added.
+ * are dealt round-robin by id. Adding or removing tasks can change slices.
  */
 export function selectShard(tasks, spec, nowMs = Date.now()) {
   const match = /^(day|[1-9]\d*)\/([1-9]\d*)$/u.exec(String(spec));
