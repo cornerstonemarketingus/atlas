@@ -931,3 +931,11 @@ Three report regressions failed unchanged main; focused report/adapter/quota
 suite passes 13/13. Full affected package validation remains in progress at
 this checkpoint. No live model score or provider acceptance is claimed.
 Next: complete affected package and exact-head CI before ordinary merge.
+
+## 2026-10-21 — model authorship on task-dispatch completion (#435)
+
+The normal converse completion returned servedBy, but its early task-dispatch return dropped that receipt even when the model supplied introductory text. Preserve the same bounded actual provider/model metadata on that branch. Tool-only runtime acknowledgements still have no authorship field. Both JSON and streaming branch regressions fail before the change; affected agent-loop/free-vendor suites pass23/23. This is a metadata correction, not a semantic business verification or proof of the sole live streaming root cause. Latest live gate39553786887 returned/stored streaming text without confirmed authorship while non-streaming had a Groq receipt; no repeated live test claimed passing. Broad web/build/lint and exact-head CI remain release checks.
+
+Parallel continuation under the owner's explicit request: prebuilt local coder packaging reuses stale230 staging with an explicit installed marker while keeping developer builds; postmerge407 Atlas Node cancellation has real stalled-network regressions; postmerge406 category reports are being aligned to exclude quota refusals truthfully. Existing397 now owns vendor catalog/trust/routing; conflicting414 needs reconciliation before any independent merge. Preserve active ownership and protected workflow review.
+
+Eval438 validation follow-through: full affected atlas-eval package suite passed39/39 after the focused13/13 checks. Initial exact-head CI39598725107 and eval-fixtures39598725261 passed before this documentation-only integration with chat440. Fresh integrated-head CI remains required.
