@@ -302,6 +302,7 @@ const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, 
 const server = createLocalControlServer({
   store,
   token,
+  model: process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
   runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
   license,
   runtime,

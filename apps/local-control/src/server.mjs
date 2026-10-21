@@ -177,7 +177,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (agentRoutes && request.method === "GET" && request.url === "/v1/models/health") { if (await agentRoutes.handle(request, response, identity)) return; }
     if (!runtime && (request.url ?? "").startsWith("/v1/sessions")) return send(response, 503, { message: "The Atlas agent runtime is not running in this process." });
     if (request.method === "GET" && request.url === "/v1/tasks") return send(response, 200, { tasks: store.list() });
-    if (request.method === "GET" && request.url === "/v1/models") { try { return send(response, 200, await discoverModels()); } catch (error) { return send(response, 503, { message: error instanceof Error ? error.message : "Model discovery failed.", models: [] }); } }
+    if (request.method === "GET" && request.url === "/v1/models") { try { const discovered = await discoverModels(); return send(response, 200, { ...discovered, defaultModel: discovered.models.includes(model) ? model : discovered.models[0] ?? null }); } catch (error) { return send(response, 503, { message: error instanceof Error ? error.message : "Model discovery failed.", models: [] }); } }
     if (request.method === "POST" && request.url === "/v1/tasks") {
       if (identity.role !== "admin") return send(response, 403, { message: "Only the local owner can create coding tasks." });
       const body = await parseBody(request, response); if (!body) return;

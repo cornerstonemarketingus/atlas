@@ -382,11 +382,13 @@ async function selectSession(id,{replay=true}={}){
  if(detail.ok){const v=await detail.json();q('#session-repository').value=v.session.repository||'';runStatus.textContent='Session '+v.session.status+'.'}
 }
 async function loadSessions(){
+ const modelResponse=await api('/v1/models');
+ if(modelResponse.ok){const discovered=await modelResponse.json();const picker=q('#session-model');const selected=picker.dataset.loaded?picker.value:discovered.defaultModel;if(discovered.models.length){picker.innerHTML=discovered.models.map(m=>'<option>'+esc(m)+'</option>').join('');if(discovered.models.includes(selected))picker.value=selected;picker.dataset.loaded='true'}}
  const response=await api('/v1/sessions');if(!response.ok)return;
  const list=(await response.json()).sessions;
  q('#session-picker').innerHTML='<option value="">New conversation…</option>'+list.map(s=>'<option value="'+s.id+'"'+(s.id===sessionId?' selected':'')+'>'+esc(s.title)+' · '+esc(s.status)+'</option>').join('');
  const executors=await api('/v1/executors');
- if(executors.ok)q('#session-executor').innerHTML=(await executors.json()).executors.map(e=>'<option value="'+esc(e)+'">'+esc(e)+'</option>').join('');
+ if(executors.ok){const choices=(await executors.json()).executors;const picker=q('#session-executor');const selected=picker.dataset.loaded?picker.value:'conversation';picker.innerHTML=choices.map(e=>'<option value="'+esc(e)+'">'+esc(e)+'</option>').join('');if(choices.includes(selected))picker.value=selected;picker.dataset.loaded='true'}
 }
 q('#session-picker').onchange=e=>{if(e.target.value)selectSession(e.target.value);else{sessionId='';sessionStorage.removeItem('atlas-session');transcript.innerHTML='';runStatus.textContent=''}};
 q('#turn-form').onsubmit=async e=>{
