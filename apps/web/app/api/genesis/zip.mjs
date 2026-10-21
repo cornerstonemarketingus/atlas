@@ -31,7 +31,7 @@ const encoder = new TextEncoder();
 /** Names must be relative, forward-slash, with no traversal, control characters or duplicates. */
 function checkName(name, seen) {
   if (typeof name !== "string" || name === "" || name.length > 500) throw new TypeError("Invalid ZIP entry name.");
-  if (name.startsWith("/") || name.endsWith("/") || name.includes("\\") || /[\u0000-\u001f\u007f]/u.test(name)) throw new TypeError(`Unsafe ZIP entry name: ${name}`);
+  if (name.startsWith("/") || name.endsWith("/") || name.includes("\\") || [...name].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f)) throw new TypeError(`Unsafe ZIP entry name: ${name}`);
   if (name.split("/").some((part) => part === "" || part === "." || part === "..")) throw new TypeError(`Unsafe ZIP entry name: ${name}`);
   if (seen.has(name)) throw new TypeError(`Duplicate ZIP entry name: ${name}`);
   seen.add(name);
