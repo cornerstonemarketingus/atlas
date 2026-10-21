@@ -43,17 +43,28 @@ export async function governorCall(stub, method, argument) {
   }
 }
 
+const ACCOUNT_PAUSE_KINDS = new Set(["BILLING", "AUTHENTICATION", "PERMISSION"]);
+
 /**
  * Setup-status readout: is a governor bound, and does a round trip to the
- * chat endpoint's scope work? Counts only; no scope, key digest or request id.
+ * chat endpoint's scope work? Counts and failure categories only; no scope,
+ * key digest, model name or request id. `limitedModels` counts models the
+ * ledger is currently holding back (a rate or daily limit, or an open
+ * circuit); `accountPause` is set while the whole provider account is paused
+ * (out of credit, key refused, no permission) and says until when.
  */
 export async function governorReadiness(endpoint, environment) {
   if (!environment?.INFERENCE_GOVERNOR) return { bound: false };
   if (!endpoint?.configured) return { bound: true, reachable: null };
   const snapshot = await governorCall(governorFor(await quotaScopeFor(endpoint), environment), "snapshot");
-  return snapshot
-    ? { bound: true, reachable: true, models: Object.keys(snapshot.models).length, reservations: snapshot.reservations, waiting: snapshot.waiting.length }
-    : { bound: true, reachable: false };
+  if (!snapshot) return { bound: true, reachable: false };
+  const models = Object.values(snapshot.models ?? {});
+  const limitedModels = models.filter((entry) => (entry?.blockedUntil ?? null) !== null || entry?.health?.state === "OPEN").length;
+  const account = snapshot.account;
+  const accountPause = account && Number.isFinite(account.openUntil)
+    ? { kind: ACCOUNT_PAUSE_KINDS.has(account.kind) ? account.kind : "OTHER", until: new Date(account.openUntil).toISOString() }
+    : null;
+  return { bound: true, reachable: true, models: models.length, reservations: snapshot.reservations, waiting: snapshot.waiting.length, limitedModels, accountPause };
 }
 
 /**

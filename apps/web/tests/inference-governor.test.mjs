@@ -87,7 +87,25 @@ test("setup readiness reports counts only", async () => {
   const namespace = { idFromName: (name) => name, get: () => ({ fetch: (request) => handleGovernorRequest(core, request) }) };
   assert.deepEqual(await governorReadiness({ configured: false }, { INFERENCE_GOVERNOR: namespace }), { bound: true, reachable: null });
   const ready = await governorReadiness({ configured: true, baseUrl: "https://api.groq.com/openai/v1", apiKey: "k" }, { INFERENCE_GOVERNOR: namespace });
-  assert.deepEqual(ready, { bound: true, reachable: true, models: 0, reservations: 0, waiting: 0 });
+  assert.deepEqual(ready, { bound: true, reachable: true, models: 0, reservations: 0, waiting: 0, limitedModels: 0, accountPause: null });
+});
+
+test("setup readiness reports held-back models and an account pause as categories only", async () => {
+  const storage = fakeStorage();
+  const core = createGovernorCore({ storage, now: () => 1_000 });
+  const namespace = { idFromName: (name) => name, get: () => ({ fetch: (request) => handleGovernorRequest(core, request) }) };
+  const endpoint = { configured: true, baseUrl: "https://api.groq.com/openai/v1", apiKey: "gsk_live_secret" };
+  // Route through the same scope the readiness call will read.
+  await core.reserve({ requestId: "limited", models: ["private-model-a"], estimatedTokens: 10 });
+  await core.release({ requestId: "limited", status: 429, retryAfterMs: 60_000 });
+  await core.reserve({ requestId: "billing", models: ["private-model-b"], estimatedTokens: 10 });
+  await core.release({ requestId: "billing", kind: "BILLING" });
+  const ready = await governorReadiness(endpoint, { INFERENCE_GOVERNOR: namespace });
+  assert.equal(ready.reachable, true);
+  assert.equal(ready.limitedModels, 1, "the rate-limited model is held back; the account pause is reported on its own");
+  assert.equal(ready.accountPause.kind, "BILLING");
+  assert.match(ready.accountPause.until, /^\d{4}-\d{2}-\d{2}T/u);
+  assert.doesNotMatch(JSON.stringify(ready), /private-model|gsk_live_secret|groq/u);
 });
 
 test("the Durable Object speaks the governor protocol and rejects anything else", async () => {
