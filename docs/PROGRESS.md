@@ -910,6 +910,71 @@ Validation: production web build and lint passed; full web suite 620 tests, 615 
 - Fix: wrap the tool log through the same `wrapUntrusted("tool log", ...)` helper used for the report. Added a regression test in `apps/local-control/tests/team-missions.test.mjs` asserting both `<data source="report">` and `<data source="tool log">` blocks appear in the prompt sent to the model, and that an injection-shaped `code` value inside the tool log trips the existing "Atlas notice" marker.
 - Evidence: `apps/local-control` test suite passes except the pre-existing, unrelated `genesis-publish.test.mjs` Windows temp-dir `EPERM` flake (622/623, matching the baseline before this change). `apps/web` (326 tests), lint and typecheck, `packages/atlas-contracts` (6 tests) and `scripts/runner`/`scripts/local` (53 tests) all pass unchanged.
 - Next: no action required for this fix; it is a self-contained security-consistency correction. Unrelated to this PR, prior sessions still have open threads on local-model qualification (OpenCode/Goose harness) and GitHub telemetry expansion — see the entries above.
+## 2026-10-15 | PR #284 | Genesis receipt recovery (issue #281)
+
+Hosted project creation now reserves an operation-ID-only event in an owned,
+unarchived conversation before contacting Genesis. Direct callers without a
+thread receive newly saved owned history. Reopening chat restores the latest
+receipt and checks actual node status; lost creation responses do not require
+another creation request. Status polling is bounded and explicit retry reads
+only. Existing operations are not backfilled; node connectivity/credentials
+remain required for live confirmation.
+
+Evidence: production build, typecheck and lint passed; full web suite 485 passed,
+one optional browser gate skipped, zero failed. Separate desktop/mobile browser
+gate passed including recovery, offline retry, reload, no creation POSTs, and
+scroll preservation. Real SQLite/route tests cover scope isolation and history
+failures. Removing receipt reservation fails the mutation check. A concurrent
+build/test output race was resolved by rerunning the suite after the build; a
+cold browser-bundle timeout passed on warmed rerun with its original timeout.
+
+PR is for owner review under PROGRAM section 3 because tenant-scoped persistence
+at the publishing boundary is protected. No credential provisioning or live
+repository creation occurred. Other agents' root edits and task dispatch were
+preserved. Next: review/integrate #284, then configure the trusted Genesis node
+connection before a live new-project acceptance run.
+
+## 2026-10-19 — Genesis receipt integration checkpoint (#281 / #284)
+
+Integrated current main afdee04, preserving hosted website creation, scoped
+preview reads, project-stage UI, bounded bridge deadlines, and existing approvals.
+Node dispatch reserves its original operation id before calling the node. Hosted
+creation reserves its actual gen_ operation id before returning an existing row
+or writing a site. Missing/foreign/archived history prevents creation. Reopening
+history restores only bounded operation ids; status checks never create projects.
+Retained main's preview UI while restoring bounded polling, cancellation, explicit
+read-only retry and truthful not-found diagnostics. Added a real SQLite hosted
+fallback recovery/refusal regression. Twenty focused project cases pass. All
+11 workflow checks pass. Build/full web tests, typecheck, lint and fresh CI are
+pending; no live node, external repository creation, publish or deployment claimed.
+
+Separate #289 CI at 6ac1336 failed Windows: 828 pass, two failures, 20 skips.
+Main already repairs the Genesis acceptance fixture. Updated daemon/Genesis
+reproduction passes all 11 cases in a serial Windows run; full parallel Windows
+CI remains a gate. Earlier all-green source heads do not replace this evidence.
+No production migration, credential transfer, data change or paid provisioning.
+Next: complete current-head CI and protected persistence review before rollout;
+configure a trusted Genesis node only with the required owner authorization.
+
+## 2026-10-19 — Genesis receipt verification follow-through
+
+Integrated build and typecheck pass. Full web acceptance: 624 total, 619 passed,
+five optional browser skips, zero failures. Separate Edge desktop/mobile chat
+acceptance passes: reopen/reload restores the receipt, offline status retry is
+read-only, no project creation POST occurs, and scroll position is preserved.
+Twenty-six focused chat/project cases pass. Full ESLint passes after removing
+an unused default callback argument. CI b02ca55 failed at that lint error; it did
+not reach the incomplete chat test host. The host now imports the real receipt
+helper. Final history-refusal diagnostics and no-write assertions pass 16 focused
+cases; final head CI remains required. No assertion or authorization was removed.
+
+#289's current-main integration exposed an unsupported Worker redirect mode in
+three verification calls; the separate outcome branch now uses manual redirects
+and rejects non-success responses. Its source scanner is corrected to inspect
+real files on Windows. Both fixes retain original ownership and approval gates.
+No live node, physical phone, production write, migration or deployment claimed.
+Next: finish exact-head CI/protected review for #284 and #289, then a configured,
+explicitly authorized Genesis-node acceptance run without publishing by default.
 ## 2026-10-20 — owner delivery priority queue (#430)
 
 Recorded the latest human P0–P3 order at the top of docs/atlas-os/BACKLOG.md: inference survival and real verified website/coding outcomes first; continuity, safe execution and bounded improvement next; owned/optional GPU compute and artifact experience after that; experimental research last. Each row reuses current services/PR ownership and states required observable acceptance. Historical evidence remains intact. PROGRAM phase gates, review requirements and resource authorization remain unchanged; this records the queue, not completed capabilities or permission to start later phases.
