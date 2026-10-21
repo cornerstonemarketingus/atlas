@@ -33,6 +33,8 @@ export type ReplayOutcome = "completed" | "blocked" | "failed" | "unfinished";
 export interface ReplayToolCall {
   readonly toolCallId: string;
   readonly toolId: string;
+  /** Private equality fingerprint, comparable only within its original run. */
+  readonly argumentsDigest?: string;
   readonly requestedAt: string;
   readonly decision?: "allow" | "ask" | "deny";
   readonly policyReason?: string;
@@ -129,6 +131,7 @@ interface MutableTurn {
 interface MutableToolCall {
   toolCallId: string;
   toolId: string;
+  argumentsDigest?: string;
   requestedAt: string;
   decision?: "allow" | "ask" | "deny" | undefined;
   policyReason?: string | undefined;
@@ -242,9 +245,11 @@ export function reconstructSessions(events: readonly SessionEvent[]): readonly R
 
     if (event.type === "tool.requested") {
       const toolCallId = text(payload, "toolCallId") ?? `call-${draft.toolIndex.size + 1}`;
+      const digest = text(payload, "argumentsDigest");
       const call: MutableToolCall = {
         toolCallId,
         toolId: text(payload, "toolId") ?? "(unknown tool)",
+        ...(digest !== undefined && /^hmac-sha256:[0-9a-f]{64}$/u.test(digest) ? { argumentsDigest: digest } : {}),
         requestedAt: event.occurredAt,
       };
       draft.toolIndex.set(toolCallId, call);
@@ -317,6 +322,7 @@ function finalize(draft: Draft): ReplaySession {
       toolCalls: turn.toolCalls.map((call) => ({
         toolCallId: call.toolCallId,
         toolId: call.toolId,
+        ...(call.argumentsDigest === undefined ? {} : { argumentsDigest: call.argumentsDigest }),
         requestedAt: call.requestedAt,
         ...(call.decision === undefined ? {} : { decision: call.decision }),
         ...(call.policyReason === undefined ? {} : { policyReason: call.policyReason }),

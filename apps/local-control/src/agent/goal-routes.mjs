@@ -11,7 +11,7 @@ import { GoalError } from "./goals.mjs";
  * POST   /v1/goals/:id/wake         wake now
  */
 const ID = "goal-[0-9a-f-]{36}";
-const STATUS = { INVALID_GOAL: 400, UNKNOWN_GOAL: 404, GOAL_FINISHED: 409 };
+const STATUS = { INVALID_GOAL: 400, UNKNOWN_GOAL: 404, GOAL_FINISHED: 409, MISSION_STOP_FAILED: 503 };
 
 export function createGoalRoutes({ goals, parseBody, send }) {
   const fail = (response, error) => (error instanceof GoalError

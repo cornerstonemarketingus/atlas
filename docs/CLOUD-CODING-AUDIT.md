@@ -127,3 +127,7 @@ lease adapter over existing task contracts, with cancellation, orphan cleanup,
 idempotent receipts and tenant-scoped artifacts. Coordinate that contract with
 the existing runtime/security claims before starting it; retain Actions as an
 optional execution adapter.
+
+## 2026-10-21 maintenance integration
+
+Integrated current main without dropping its provider routing, repair limits or hosted execution-claim preflight. The two source conflicts were in CLI usage text and runner imports; both validation isolation and execution fencing remain wired. TypeScript compilation passed. Focused container validation and hosted configuration checks: 14 passed, 3 real-Docker tests skipped on this host. All 12 workflows parse and every shell step validates using Git Bash. Fresh Linux container acceptance and required CI remain the merge gate; no production container or deployment was started by this integration.

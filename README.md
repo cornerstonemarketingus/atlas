@@ -1,33 +1,34 @@
 # Atlas — Build it. Run it. Grow it.
 
-**An autonomous operating system for building software and scaling digital work.**
+**An autonomous software platform. From idea to operation.**
 
-Atlas brings app creation, software engineering, computer control and persistent
-automation into one workspace. Give it a goal: it can plan the work, build and
-test supported websites and applications, inspect the result in a browser,
-coordinate parallel agents and publish through approved integrations.
+Atlas turns goals into working software and repeatable digital work. It brings
+repositories, websites, applications, agents, tools and computer control into
+one platform: plan the work, create the product, test it, repair failures and
+carry the result forward through approved publishing and persistent automation.
 
-The ambition is larger: **turn an idea into a complete business, then keep
-improving its software, operations and discoverability.** Atlas is building
-toward a continuous launch-and-growth workflow spanning websites, full
-applications, SEO, generative engine optimization (GEO), customer workflows and
-recurring operations. The software-building foundations are implemented;
-complete business operation and continuous SEO/GEO growth remain roadmap work.
+**Give it a goal. Build what comes next.**
 
-## Why it matters
+Software creation is the foundation. The larger ambition is **autonomous
+business creation**: turn an idea into a product, launch it, connect its customer
+and operational workflows, then keep improving it. Websites, full applications,
+games and other digital products belong in that vision. Supported website/app/API
+creation works today; a dedicated game-creation workflow and complete business
+operation remain development goals.
 
-Businesses repeatedly pay the coordination cost between ideas, developers,
-websites, marketing tools and day-to-day operations. Atlas aims to compress that
-cycle in one persistent system: **goal → build → verify → launch → operate →
-improve**. A successful workflow can become an automation; verified outcomes
-can inform future model choices; approved software improvements can expand what
-Atlas can do next.
+## Why Atlas matters
 
-The investment thesis is a platform for repeatable digital execution, with
-expansion from software creation into ongoing business operations. Its
-differentiation rests on customer-owned compute and credentials, a shared agent
-runtime, evidence-backed verification and policy-controlled autonomy. Commercial
-advantage and business-growth outcomes still require measured validation.
+The expensive part of building a business is often the coordination: connecting
+an idea to developers, websites, tools, deployment and daily operations. Atlas
+aims to bring that work into one continuous mission:
+
+**Goal → create → verify → launch → operate → improve.**
+
+Its investment thesis is to become the execution layer between an idea and an
+operating business. The opportunity extends from building software to operating
+it, automating recurring work and expanding the capabilities available to the
+next mission. The product combines customer-owned compute and credentials,
+persistent agents, verifiable results and policy-controlled autonomy.
 
 ## What Atlas can do today
 
@@ -47,6 +48,57 @@ advantage and business-growth outcomes still require measured validation.
 See [the reconciled todo list](TODO.md) for evidence and remaining work,
 [Genesis](docs/atlas-os/GENESIS.md) for app-builder boundaries, and
 [sovereign mode](SOVEREIGN-MODE.md) for local ownership and remote access.
+
+## Child agents and advanced orchestration
+
+Atlas's most advanced capabilities connect creation to persistent execution:
+
+- **Child agents and specialist teams:** mission children and agent families
+  divide work into scoped tasks, with roles spanning engineering, design,
+  research, computer operations and review. Parallel coder lanes work in
+  isolated worktrees and return evidence for comparison.
+- **Command Center:** see mission and lane status, execution traces, competing
+  versions and pause/resume/cancel controls.
+- **Shared agent kernel:** chat, team steps, coder lanes and Genesis builds use
+  a common goal-driven execution abstraction with mounted capabilities and
+  explicit world state.
+- **World-state and repository impact graphs:** relate packages, files, imports
+  and tests, then trace what a proposed change could affect.
+- **Scoped memory and provenance:** retain bounded context and verified team
+  outcomes, with records of where the evidence came from.
+- **Capability economics:** choose local mission models using verified run
+  history, estimated time, privacy and configured limits.
+- **Adaptive autonomy:** assess action risk and tighten owner policy where
+  needed; suggested policy changes require owner acceptance.
+- **Persistent missions and sleeping goals:** retain progress and recovery
+  state; bounded goals can wake on signed GitHub events.
+- **Durable automations:** schedules, webhooks, GitHub events and file changes
+  start normal missions with history, duplicate guards and failure handling.
+- **Verified software creation:** generated backend modules, baseline-aware
+  checks, bounded repairs, responsive browser inspection and optional vision
+  review help turn an idea into a working product.
+- **Remote browser and computer control:** paired Windows execution and
+  revocable phone access connect software work to the customer's machine.
+- **Provider-neutral intelligence and MCP:** local model hosting, optional
+  hosted providers, inference quota controls and scoped connector tools.
+- **Guarded self-improvement and innovation:** isolated changes, checks,
+  independent review and an opportunity-to-decision pipeline support controlled
+  expansion of Atlas's capabilities.
+
+These are implemented slices across the local and hosted products, with scope
+and remaining integration work recorded in [TODO](TODO.md) and
+[ROADMAP](docs/ROADMAP.md). The standalone child-agent registry, broader
+organization graph, adversarial-review tiers and end-to-end skill installation
+loop still require integration; they are not all enabled in every surface.
+
+## Four pillars
+
+| Pillar | What it means |
+| --- | --- |
+| **Create** | Build repositories, websites, apps and APIs; expand into games and other digital products. |
+| **Execute** | Coordinate agents that write code, run checks, repair failures and operate computers. |
+| **Operate** | Carry work through persistent missions, remote control and recurring automations. |
+| **Grow** | Connect product iteration, business workflows, SEO/GEO and reusable capabilities to measured outcomes. |
 
 ## Autonomy that can grow
 
@@ -127,7 +179,7 @@ current product work lives in the packages and apps above.
 [Issues](https://github.com/cornerstonemarketingus/atlas/issues)
 
 **Suggested GitHub About description:**
-Autonomous AI operating system for building websites and apps, operating computers,
-and automating digital work. Local-first agents with remote control and verified
-execution; building toward complete business launch, continuous SEO/GEO growth,
-and reusable capabilities.
+Autonomous software platform for repositories, websites and apps, with child
+agents, computer control and persistent automation. From idea to operation:
+building toward games, complete business creation, SEO/GEO growth and reusable
+capabilities.

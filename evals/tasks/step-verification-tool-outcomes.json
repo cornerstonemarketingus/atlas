@@ -1,0 +1,32 @@
+{
+  "id": "step-verification-tool-outcomes",
+  "category": "bug-localization",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "b9b2bee8375aa4c75f87ba58d1d24c39cef8c488",
+  "objective": "verifyStep in apps/local-control/src/agent/team/step-executor.mjs lets the model mark an agent step verified even when one of the step's tool actions failed or was denied. Record each tool outcome during the act loop as { actionKey, status }, where actionKey is a sha256 of the tool name and raw arguments (never persisted), and pass them to verifyStep({ ..., toolOutcomes }). Before asking the model, keep only the latest outcome per actionKey; if any is not succeeded, return { passed: false, checker: \"deterministic-tool-outcomes\", reason } naming how many actions await approval and how many failed. A successful retry of the exact same action clears its earlier failure; a different action does not. apps/local-control/tests/team-missions.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "2518738a75e27b98707db73d72c19d3136991f8f",
+    "paths": [
+      "apps/local-control/tests/team-missions.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/team-missions.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "2518738a75e27b98707db73d72c19d3136991f8f",
+    "paths": [
+      "apps/local-control/src/agent/team/step-executor.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "safety"
+  ]
+}

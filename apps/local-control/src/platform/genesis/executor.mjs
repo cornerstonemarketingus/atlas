@@ -1,10 +1,14 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { addedLines, diffStats, git } from "../engineering/git.mjs";
 import { evaluateChange } from "../self-improve/policy.mjs";
+import { DEFAULT_LOOP_POLICY, decideIteration, failureFingerprint } from "../loop-policy.mjs";
 import { executionOrder } from "./planner.mjs";
 import { getTemplate } from "./templates/index.mjs";
 import { commitWorkspace, createWorkspace, projectFolderName } from "./workspace.mjs";
+import { STATE_LABELS } from "./lifecycle.mjs";
+import { EnvironmentError } from "../environments/environment.mjs";
+import { GenesisEnvironments, SNAPSHOT_STATES } from "../environments/genesis.mjs";
 
 /**
  * Carries an approved Genesis project to a verified, running application,
@@ -23,10 +27,19 @@ import { commitWorkspace, createWorkspace, projectFolderName } from "./workspace
  * - repairing: a failure becomes a bounded repair objective carrying its
  *   evidence. A repair may not delete tests, reduce the number of tests or
  *   add secret-shaped text (the self-improvement change policy); otherwise it
- *   is rolled back. Repairs stop at the project's repair budget.
+ *   is rolled back. Repairs stop at the project's repair budget, the loop's
+ *   time and token limits, or as soon as the same failure has survived
+ *   `maxSameFailure` repairs (loop-policy.mjs); the stop says which.
  * - previewing / reviewing: the injected preview manager starts the app and
  *   the injected inspector checks it; their failures are repaired the same
  *   way. One bounded polish pass follows a clean review when a coder exists.
+ *
+ * - persistence: each stage starts from a verified environment snapshot
+ *   (platform/environments); after a restart, `recover()` restores the
+ *   latest snapshot in a fresh folder and continues with a resume receipt.
+ *   External side effects go through `effect(key, perform)` (passed to the
+ *   coder), a ledger that never repeats a completed effect and stops on one
+ *   whose outcome is in doubt.
  *
  * Every step is a lifecycle transition with evidence. Nothing is marked done
  * without a check, and a missing capability (no model for a coder task, no
@@ -73,7 +86,7 @@ export class GenesisExecutor {
    *   kernel?: { begin: (spec: object) => { runId: string, act: Function, finish: Function } } | null,
    * }} options
    */
-  constructor({ genesis, projectsRoot, runCheck, coder = null, preview = null, inspector = null, checkTimeoutMs = 600_000, log = () => {}, now = () => Date.now(), kernel = null }) {
+  constructor({ genesis, projectsRoot, runCheck, coder = null, preview = null, inspector = null, checkTimeoutMs = 600_000, log = () => {}, now = () => Date.now(), kernel = null, loopPolicy = {}, snapshotsRoot = null }) {
     this.genesis = genesis;
     this.store = genesis.store;
     this.tenantId = genesis.tenantId;
@@ -83,12 +96,15 @@ export class GenesisExecutor {
     this.preview = preview;
     this.inspector = inspector;
     this.checkTimeoutMs = checkTimeoutMs;
+    this.loopPolicy = { ...DEFAULT_LOOP_POLICY, ...loopPolicy };
     this.log = log;
     this.now = now;
     this.running = new Map();
     // The agent kernel: each build drive is a kernel run (goal, stages as actions, outcome).
     this.kernel = kernel;
     this.kernelRuns = new Map();
+    // Persistent environments: snapshots live beside the projects folder and outlive any workspace.
+    this.environments = new GenesisEnvironments({ store: this.store, tenantId: this.tenantId, projectsRoot, snapshotsRoot: snapshotsRoot ?? join(dirname(projectsRoot), "snapshots"), runCheck, now: () => new Date(this.now()) });
   }
 
   #project(id) { return this.store.get(this.tenantId, id); }
@@ -104,6 +120,89 @@ export class GenesisExecutor {
   }
 
   isRunning(id) { return this.running.has(id); }
+
+  /**
+   * Runs an external side effect at most once per project and key.
+   * done → the recorded receipt is returned and `perform` is not called;
+   * in flight (claimed, never completed: Atlas stopped mid-effect) → it may
+   * have happened, so this throws EFFECT_IN_DOUBT and the build is blocked
+   * until a person settles it; failed → `perform` may run again.
+   */
+  async effect(projectId, key, perform, intent = {}) {
+    const name = String(key ?? "");
+    if (!/^[\w.:-]{1,120}$/u.test(name)) throw new Error("An effect key is 1-120 letters, digits, _ . : or -.");
+    const prior = this.store.effect(projectId, name);
+    if (prior?.status === "done") return { replayed: true, receipt: prior.receipt };
+    if (!this.store.claimEffect(projectId, name, intent)) {
+      const error = new Error(`An external action ("${name}") was started before Atlas stopped and may already have happened. Check it, then mark it done or not done before resuming.`);
+      Object.assign(error, { code: "EFFECT_IN_DOUBT", key: name, intent: this.store.effect(projectId, name)?.intent ?? intent });
+      throw error;
+    }
+    let receipt;
+    try { receipt = await perform(); }
+    catch (error) { this.store.failEffect(projectId, name, error instanceof Error ? error.message : error); throw error; }
+    this.store.completeEffect(projectId, name, receipt ?? {});
+    return { replayed: false, receipt: receipt ?? {} };
+  }
+
+  #effectFor(projectId) { return (key, perform, intent) => this.effect(projectId, key, perform, intent); }
+
+  /**
+   * After a restart: the service pauses every project caught mid-work (as
+   * before), then each one with a snapshot of the stage it was in is
+   * restored from that snapshot and resumed. Returns one receipt per project.
+   */
+  async recover({ actor = "recovery" } = {}) {
+    const receipts = [];
+    for (const project of this.genesis.recover()) receipts.push(await this.resumeFromSnapshot(project.id, { actor }));
+    return receipts;
+  }
+
+  /**
+   * Restores a project's latest verified snapshot into a fresh folder and
+   * continues from it, recorded as a lifecycle transition whose evidence is
+   * the resume receipt (snapshot, digests, folders, side effects).
+   * - paused/blocked: resumes the interrupted stage, only when the latest
+   *   snapshot was taken at the start of that stage;
+   * - ready/published/failed: goes back to building on the restored files,
+   *   so the restored project is verified again before it is ready.
+   * A snapshot that fails verification is never used: the project is held
+   * (blocked) with the reason, or left as it was.
+   */
+  async resumeFromSnapshot(id, { actor = "owner" } = {}) {
+    const project = this.#project(id);
+    if (this.running.has(id)) return { projectId: id, restored: false, reason: "running" };
+    const record = this.store.latestSnapshot(id);
+    const hold = ["paused", "blocked"].includes(project.state);
+    const target = hold ? project.resumeTo : ["ready", "published", "failed"].includes(project.state) ? "building" : null;
+    if (!target) return { projectId: id, restored: false, reason: `A ${project.state} project cannot be restored.` };
+    if (!record) return { projectId: id, restored: false, reason: "no-snapshot" };
+    if (hold && record.state !== target) return { projectId: id, restored: false, reason: "no-snapshot-for-stage", snapshotState: record.state, resumeTo: target };
+    let restored;
+    try {
+      restored = await this.environments.restoreLatest(project);
+    } catch (error) {
+      if (!(error instanceof EnvironmentError)) throw error;
+      const refusal = { kind: "resume-refused", code: error.code, message: error.message, snapshot: record.snapshot.id, details: error.details };
+      if (hold) this.genesis.advance(id, "blocked", { reason: `The saved snapshot failed verification (${error.code}), so Atlas did not restore it. Check the project folder, then resume.`, evidence: refusal, actor });
+      return { projectId: id, restored: false, refused: true, ...refusal };
+    }
+    const { manifest } = record.snapshot;
+    const evidence = {
+      kind: "resume-receipt",
+      snapshot: { id: record.snapshot.id, seq: record.snapshot.seq, state: record.state, takenAt: record.snapshot.createdAt, commit: record.snapshot.commit, treeDigest: record.snapshot.treeDigest, manifestDigest: record.snapshot.manifestDigest },
+      verified: restored.receipt.verified,
+      files: restored.receipt.files,
+      workspace: restored.receipt.folder,
+      previousWorkspace: project.workspace,
+      lastVerifiedCheck: manifest.lastVerifiedCheck ? { at: manifest.lastVerifiedCheck.at, steps: manifest.lastVerifiedCheck.results.map((r) => ({ name: r.name, exitCode: r.exitCode })) } : null,
+      effects: { completed: this.store.effects(id, { status: "done" }).map((e) => e.key), inDoubt: this.store.effects(id, { status: "in_flight" }).map((e) => e.key) },
+    };
+    this.store.restoreTasks(this.tenantId, id, manifest.tasks, { kind: "restored", snapshot: record.snapshot.id });
+    this.log(`${target}: restored ${id} from snapshot ${record.snapshot.seq}`);
+    this.genesis.advance(id, target, { reason: `Restored from snapshot ${record.snapshot.seq} (${STATE_LABELS[record.state].toLowerCase()}) and verified; continuing.`, evidence, patch: { workspace: restored.receipt.folder, repairsUsed: hold ? manifest.repairsUsed : 0 }, actor });
+    return { projectId: id, restored: true, state: target, ...evidence };
+  }
 
   /** A coder exists and its model server answers. */
   async #coderReady() {
@@ -153,11 +252,19 @@ export class GenesisExecutor {
   async #driveSteps(id) {
     try {
       for (let steps = 0; steps < MAX_STEPS; steps += 1) {
-        if (!(await this.#step(this.#project(id)))) return this.genesis.view(id);
+        if (!(await this.#step(this.#project(id)))) {
+          const settled = this.#project(id);
+          if (settled.state === "ready") await this.environments.checkpoint(settled).catch((error) => this.log(`snapshot at ready failed: ${error.message}`));
+          return this.genesis.view(id);
+        }
       }
       throw new Error(`The build did not settle after ${MAX_STEPS} steps.`);
     } catch (error) {
       const project = this.#project(id);
+      if (error?.code === "EFFECT_IN_DOUBT" && !["cancelled", "paused", "blocked"].includes(project.state)) {
+        this.#move(id, "blocked", error.message, { kind: "effect-in-doubt", effect: error.key, intent: error.intent });
+        return this.genesis.view(id);
+      }
       if (!["failed", "cancelled", "paused", "blocked", "ready", "published"].includes(project.state)) {
         this.#move(id, "failed", `Stopped by an error: ${error instanceof Error ? error.message : "unknown error"}`, { kind: "error", message: String(error?.stack ?? error).slice(0, 4000) });
       }
@@ -167,6 +274,8 @@ export class GenesisExecutor {
 
   /** One stage; true when the project moved on and the drive should continue. */
   async #step(project) {
+    // Each stage starts from a snapshot, so a restart resumes it from a verified copy of its starting files.
+    if (SNAPSHOT_STATES.includes(project.state)) await this.environments.checkpoint(project);
     switch (project.state) {
       case "approved":
       case "scaffolding": return this.#scaffold(project);
@@ -240,7 +349,7 @@ export class GenesisExecutor {
       const before = await head(project.workspace);
       this.#task(project.id, task.id, { status: "running", attempt: true, evidence: { kind: "start", attempt } });
       const objective = `${task.objective}\n\nThis is one step of building "${project.spec.name}". Verification for this step: ${task.verification.join("; ")}. Keep existing behaviour and tests working; add tests for what you add.`;
-      const result = await this.coder({ workspace: project.workspace, objective, task, attempt, kind: "task" });
+      const result = await this.coder({ workspace: project.workspace, objective, task, attempt, kind: "task", effect: this.#effectFor(project.id) });
       const guard = await this.#guard(project.workspace, before);
       if (!guard.allowed) {
         await git(project.workspace, ["reset", "-q", "--hard", before]);
@@ -316,12 +425,39 @@ export class GenesisExecutor {
       this.#move(project.id, "failed", `${failure.check ? `The ${failure.check} step` : "Verification"} failed and no coding model is available to repair it. Set one up under Models, then ask Atlas to try again.`, evidence);
       return false;
     }
-    if (project.repairsUsed >= project.repairBudget) {
-      this.#move(project.id, "failed", `Still failing after ${project.repairsUsed} repair attempt(s): ${explained.summary}`.slice(0, 900), evidence);
+    const fingerprint = failureFingerprint(failure);
+    evidence.failure.fingerprint = fingerprint;
+    const loop = this.#loopState(project);
+    const decision = decideIteration({
+      policy: { ...this.loopPolicy, maxIterations: Math.min(project.repairBudget, this.loopPolicy.maxIterations ?? Infinity) },
+      iterations: loop.iterations, startedAt: loop.startedAt, now: this.now(), fingerprint,
+    });
+    if (!decision.proceed) {
+      const { proceed, message, ...receipt } = decision;
+      this.#move(project.id, "failed", `${message}: ${explained.summary}`.slice(0, 900), { ...evidence, loop: receipt });
       return false;
     }
     this.#move(project.id, "repairing", `Fixing: ${explained.summary}`.slice(0, 900), evidence);
     return true;
+  }
+
+  /** The repairs made since this build cycle started (the last move to "building"). */
+  #loopState(project) {
+    const transitions = this.store.transitions(this.tenantId, project.id);
+    let start = 0;
+    for (let i = transitions.length - 1; i >= 0; i -= 1) if (transitions[i].to === "building") { start = i; break; }
+    const cycle = transitions.slice(start);
+    const iterations = [];
+    let target = null;
+    for (const t of cycle) {
+      if (t.to === "repairing" && t.evidence?.kind === "failure") target = t.evidence.failure?.fingerprint ?? null;
+      if (t.evidence?.kind === "repair-result") {
+        iterations.push({ fingerprint: target, tokens: Number.isFinite(t.evidence.tokens) ? t.evidence.tokens : null, changed: Boolean(t.evidence.commit) });
+        target = null;
+      }
+    }
+    const startedAt = Date.parse(cycle[0]?.at ?? "") || this.now();
+    return { iterations, startedAt };
   }
 
   async #repair(project) {
@@ -338,14 +474,16 @@ export class GenesisExecutor {
         failure?.findings ? `Observed in the running app:\n${JSON.stringify(failure.findings, null, 1).slice(0, 2500)}` : "",
         failure?.output ? `Output:\n${String(failure.output).slice(-2500)}` : "",
         "Do not delete or weaken tests, and do not change what the tests expect unless the test itself is wrong.",
+        previousRejection(transitions),
       ].filter(Boolean).join("\n\n");
-    const result = await this.coder({ workspace: project.workspace, objective, task: { id: polish ? entry.evidence.task.id : "repair", title: polish ? "Polish" : "Repair" }, attempt: project.repairsUsed + 1, kind: polish ? "polish" : "repair" });
+    const result = await this.coder({ workspace: project.workspace, objective, task: { id: polish ? entry.evidence.task.id : "repair", title: polish ? "Polish" : "Repair" }, attempt: project.repairsUsed + 1, kind: polish ? "polish" : "repair", effect: this.#effectFor(project.id) });
     const guard = await this.#guard(project.workspace, before);
     if (!guard.allowed) await git(project.workspace, ["reset", "-q", "--hard", before]);
     const commit = guard.allowed ? await commitWorkspace(project.workspace, polish ? "Polish the interface (Atlas)" : `Repair ${failure?.check ?? "failure"} (Atlas, attempt ${project.repairsUsed + 1})`) : null;
     if (polish) this.#task(project.id, entry.evidence.task.id, { status: guard.allowed ? "passed" : "failed", attempt: true, evidence: { kind: "polish", ok: result.ok, commit, violations: guard.violations, summary: String(result.summary ?? "").slice(-1000) } });
     this.#move(project.id, "verifying", guard.allowed ? `${polish ? "Polish" : "Repair"} applied${commit ? "" : " (no changes)"}; checking again.` : `${polish ? "Polish" : "Repair"} rejected (${guard.violations.map((v) => v.rule).join(", ")}) and rolled back; checking again.`, {
       kind: polish ? "polish-result" : "repair-result", ok: result.ok, commit, model: result.model ?? null, violations: guard.violations, summary: String(result.summary ?? "").slice(-1500),
+      tokens: Number.isFinite(result.usage?.totalTokens) ? result.usage.totalTokens : null,
     }, polish ? {} : { repairsUsed: project.repairsUsed + 1 });
     return true;
   }
@@ -390,6 +528,13 @@ export class GenesisExecutor {
     this.#move(project.id, "ready", `Ready: ${project.spec.name} is running at ${project.preview?.url}.`, { kind: "ready", summary: readySummary(project, tasks, inspection) });
     return false;
   }
+}
+
+/** Tells the next repair why the last one was rolled back, so it does not repeat it. */
+function previousRejection(transitions) {
+  const last = [...transitions].reverse().find((t) => t.evidence?.kind === "repair-result");
+  const rules = last?.evidence?.violations?.map((v) => v.rule) ?? [];
+  return rules.length ? `Your previous repair was rolled back because it broke these rules: ${[...new Set(rules)].join(", ")}. Fix the code instead.` : "";
 }
 
 async function countTestsAt(folder, commit) {

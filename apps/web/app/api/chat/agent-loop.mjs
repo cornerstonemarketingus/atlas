@@ -2,7 +2,7 @@ import { TASK_TOOL, taskRequestsFromCalls } from "./atlas-knowledge.mjs";
 import { instantToolDefinitions, isInstantTool, pendingLabel, runInstantTool } from "./instant-tools.mjs";
 import { completionsUrl, providerKind, replyText } from "./model-endpoint.mjs";
 import { createDeltaParser } from "./stream.mjs";
-import { classifyHttpFailure, classifyThrown, estimateRequestTokens } from "../../../../../packages/atlas-inference/src/index.mjs";
+import { TRUST, classifyHttpFailure, classifyThrown, estimateRequestTokens, qualifiesForTraining } from "../../../../../packages/atlas-inference/src/index.mjs";
 
 /**
  * The agent loop behind one chat reply.
@@ -61,6 +61,53 @@ function spendAttempt(options) {
   return true;
 }
 
+/** A reply refitted to a small allowance keeps at least this much room to answer. */
+export const MIN_FITTED_REPLY_TOKENS = 1_024;
+/** Headroom kept under a stated allowance for tokenizer differences. */
+const ALLOWANCE_MARGIN_TOKENS = 256;
+
+/**
+ * Reshape a request so it fits a per-request token allowance (a free Groq
+ * tier refuses any request whose prompt plus max_tokens exceeds its
+ * tokens-per-minute limit, however long one waits). In order: a smaller reply
+ * budget; shorter tool results; then the oldest earlier turns of the
+ * conversation, never the system prompt, the person's latest message or the
+ * work done since it. Sizes use the same estimator as the ledger.
+ * Returns { turns, maxTokens }, or null when nothing fits.
+ */
+export function fitToAllowance(turns, { tools, maxTokens = MAX_REPLY_TOKENS }, limitTokens) {
+  const budget = limitTokens - ALLOWANCE_MARGIN_TOKENS;
+  const room = (candidate) => budget - estimateRequestTokens({ messages: candidate, tools: tools ?? undefined });
+  const fitted = (candidate) => room(candidate) >= Math.min(maxTokens, MIN_FITTED_REPLY_TOKENS)
+    ? { turns: candidate, maxTokens: Math.min(maxTokens, room(candidate)) } : null;
+  const whole = fitted(turns);
+  if (whole) return whole;
+  const compacted = compactOversizedTools(turns);
+  const first = compacted[0]?.role === "system" ? 1 : 0;
+  const latestUser = compacted.findLastIndex((turn) => turn.role === "user");
+  for (let dropped = 0; dropped === 0 || first + dropped <= latestUser; dropped += 1) {
+    const result = fitted([...compacted.slice(0, first), ...compacted.slice(first + dropped)]);
+    if (result) return result;
+  }
+  return null;
+}
+
+/**
+ * The allowance from a provider's too-large refusal ("Limit 8000, Requested
+ * 9513"), in the ledger estimator's units: the provider counts tokens its own
+ * way, so its limit is scaled by how it counted this very request. Numbers
+ * only; the rest of the body is never used.
+ */
+export function statedLimitTokens(body, turns, { tools, maxTokens = MAX_REPLY_TOKENS }) {
+  const match = /Limit\s+(\d+),\s*Requested\s+(\d+)/iu.exec(String(body ?? ""));
+  if (!match) return null;
+  const limit = Number(match[1]);
+  const statedPrompt = Number(match[2]) - maxTokens;
+  const estimatedPrompt = estimateRequestTokens({ messages: turns, tools: tools ?? undefined });
+  if (!Number.isSafeInteger(limit) || limit < 1 || !(statedPrompt > 0)) return null;
+  return Math.floor(limit * estimatedPrompt / statedPrompt);
+}
+
 /** Only the capacity headers go to the ledger: never a body, a key or any other header. */
 function capacityHeaders(headers) {
   const kept = {};
@@ -92,15 +139,27 @@ export async function governedSend(endpoint, turns, options) {
   const requestId = crypto.randomUUID();
   // The ledger grants the first candidate with room: this model, then the rest of the pool.
   const candidates = [endpoint.model, ...(endpoint.models ?? []).filter((model) => model !== endpoint.model)];
-  const estimatedTokens = estimateRequestTokens({ messages: turns, tools: options.tools ?? undefined }) + (options.maxTokens ?? MAX_REPLY_TOKENS);
+  let estimatedTokens = estimateRequestTokens({ messages: turns, tools: options.tools ?? undefined }) + (options.maxTokens ?? MAX_REPLY_TOKENS);
   let waited = 0;
   let target = endpoint;
   let answered = false;
+  let refitted = false;
   for (;;) {
     const grant = await governor.reserve({ requestId, models: candidates, estimatedTokens, latencyClass: options.latencyClass ?? governor.latencyClass, priority: options.priority ?? 0 });
     answered ||= Boolean(grant);
     if (grant?.granted && grant.model !== endpoint.model && candidates.includes(grant.model)) target = { ...endpoint, model: grant.model };
     if (!grant || grant.granted) break;
+    // Larger than every candidate's allowance: reshape once to the largest one rather than give up.
+    const fit = grant.permanent && grant.reason === "request_exceeds_allowance" && !refitted && Number.isFinite(grant.limitTokens)
+      ? fitToAllowance(turns, options, grant.limitTokens) : null;
+    if (fit) {
+      refitted = true;
+      turns = fit.turns;
+      options = { ...options, maxTokens: fit.maxTokens };
+      estimatedTokens = estimateRequestTokens({ messages: turns, tools: options.tools ?? undefined }) + fit.maxTokens;
+      inferenceDiagnostic("inference.request_refitted", { model: endpoint.model, provider: providerHost(endpoint), limitTokens: grant.limitTokens, maxTokens: fit.maxTokens });
+      continue;
+    }
     if (grant.permanent) return permanentRefusal(grant);
     const waitMs = Number.isFinite(grant.waitMs) && grant.waitMs > 0 ? Math.ceil(grant.waitMs) : 1_000;
     if (waited + waitMs > MAX_GOVERNOR_WAIT_MS) {
@@ -208,7 +267,8 @@ function sendModel(endpoint, turns, { stream, tools, toolChoice = "auto", fetche
   const url = new URL(endpoint.baseUrl);
   const localQwen = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && /^qwen3:(0\.6b|1\.7b)$/iu.test(endpoint.model);
   reasoningEffort ??= localQwen ? "none" : undefined;
-  return fetcher(completionsUrl(endpoint.baseUrl), {
+  // A provider reached through a Worker binding brings its own transport; everything else is HTTP.
+  return (endpoint.transport ?? fetcher)(completionsUrl(endpoint.baseUrl), {
     method: "POST",
     signal: AbortSignal.timeout(endpoint.timeoutMs ?? REQUEST_TIMEOUT_MS),
     headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}), ...(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}) },
@@ -310,14 +370,16 @@ async function sendWithRateLimitRetry(endpoint, turns, options) {
     options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: 429, category: "billing", retryAfterMs: null });
     return Response.json({ error: { code: "insufficient_quota" } }, { status: 429 });
   }
-  const send = async messages => {
-    const response = await governedSend(endpoint, messages, options);
+  const send = async (messages, overrides = {}) => {
+    const response = await governedSend(endpoint, messages, { ...options, ...overrides });
     if (TRANSIENT_STATUSES.has(response.status)) {
       const body = response.status === 429 ? await response.clone().text().catch(() => "") : "";
       const category = response.status === 429 ? rateLimitDetails(body).category : "unavailable";
       if (category === "billing") options.billingBlocked?.add(endpoint.baseUrl);
       // Who refused and why, in fixed categories only (never provider text).
       options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: response.status, category, retryAfterMs: response.status === 429 ? retryAfterMs(response.headers, body) : null });
+    } else if (response.status === 413) {
+      options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: 413, category: "input_too_large", retryAfterMs: null });
     } else if ([401, 402, 403, 404].includes(response.status)) {
       // A refusal that waiting cannot fix: say which provider, so the owner knows which key or setting to check.
       options.trail?.push({ model: endpoint.model, host: providerHost(endpoint), status: response.status, category: response.status === 404 ? "not_found" : response.status === 402 ? "billing" : "credential", retryAfterMs: null });
@@ -325,12 +387,20 @@ async function sendWithRateLimitRetry(endpoint, turns, options) {
     return response;
   };
   let response = await send(turns);
-  if (response.status !== 429 || response.headers.has("x-atlas-budget-exhausted")) return response;
+  if (![413, 429].includes(response.status) || response.headers.has("x-atlas-budget-exhausted")) return response;
   const body = await response.clone().text().catch(() => "");
   const detail = rateLimitDetails(body);
+  if (response.status === 413 && detail.category !== "input_too_large") return response;
   if (detail.category === "billing") { options.billingBlocked?.add(endpoint.baseUrl); return response; }
   const wait = retryAfterMs(response.headers, body);
   if (detail.category === "input_too_large") {
+    // The provider stated its allowance: fit to it. Otherwise only shorter tool results can help.
+    const limit = statedLimitTokens(body, turns, options);
+    const fit = limit ? fitToAllowance(turns, options, limit) : null;
+    if (fit && (fit.turns !== turns || fit.maxTokens !== (options.maxTokens ?? MAX_REPLY_TOKENS))) {
+      await response.body?.cancel().catch(() => {});
+      return send(fit.turns, { maxTokens: fit.maxTokens });
+    }
     const compacted = compactOversizedTools(turns);
     if (compacted.some((turn, index) => turn !== turns[index]) && (!response.headers.has("retry-after") || wait <= MAX_RATE_LIMIT_WAIT_MS)) {
       if (response.headers.has("retry-after")) await (options.sleep ?? sleep)(wait);
@@ -361,14 +431,17 @@ async function callConfiguredModel(endpoint, turns, options) {
 }
 
 /**
- * Not now (429, 5xx), or this account has no credit (402) or the model is gone (404): another provider may serve.
- * A rejected credential (401/403) is deliberately not routed around: it is a setup error the owner must see.
+ * Not now (429, 5xx), this account has no credit (402), the model is gone (404), the request is over its allowance (413),
+ * or this provider rejected Atlas's credential (401/403): another provider may serve. A credential refusal still
+ * reaches the refusal trail and the logs, so a bad key is reported even when another provider answers.
  */
-const ROUTABLE_STATUSES = new Set([...TRANSIENT_STATUSES, 402, 404]);
+const ROUTABLE_STATUSES = new Set([...TRANSIENT_STATUSES, 401, 402, 403, 404, 413]);
 
 /** Why a target cannot take this request (a fixed word), or null. Unknown limits are not limits. */
 export function incompatibility(target, turns, options) {
   const capabilities = target.capabilities ?? {};
+  // A free tier that may train on prompts gets only Atlas's own system prompt and what the person typed.
+  if (target.tier === TRUST.TRAINS && !qualifiesForTraining(turns)) return "trust";
   if (options.tools && capabilities.tools === false) return "tools";
   if (options.stream && capabilities.streaming === false) return "streaming";
   if (capabilities.contextTokens && estimateRequestTokens({ messages: turns, tools: options.tools ?? undefined }) + (options.maxTokens ?? MAX_REPLY_TOKENS) > capabilities.contextTokens) return "context";
@@ -390,6 +463,11 @@ function nextCompatible(endpoint, turns, options) {
 /** Preserve existing same-provider recovery before crossing to a configured, compatible provider. */
 export async function callModel(endpoint, turns, options) {
   const next = nextCompatible(endpoint, turns, options);
+  // The lead obeys the same trust rule as every fallback.
+  if (incompatibility(endpoint, turns, options) === "trust") {
+    if (next) return callModel(next, turns, options);
+    return Response.json({ error: { code: "ATLAS_NO_ALLOWED_PROVIDER", message: "No configured model may receive this request." } }, { status: 503 });
+  }
   let response;
   try { response = await callConfiguredModel(endpoint, turns, options); }
   catch (error) {
@@ -553,13 +631,14 @@ export function synthesisMessage({ objective, steps, toolResults, partial, failu
 }
 
 /** When every attempt at a final answer failed: the work, in words, so it is never lost. */
-function workSummary({ steps, failure }) {
+function workSummary({ steps, failure, toolFailures = [] }) {
   const done = steps.filter((step) => step.ok).map((step) => `- ${step.label}`);
   const failed = steps.filter((step) => !step.ok).map((step) => `- ${step.label}`);
   return [
     "I could not reach a model to write up the answer, so here is the work as it stands.",
     done.length ? `What I completed:\n${done.join("\n")}` : "",
     failed.length ? `What did not work:\n${failed.join("\n")}` : "",
+    toolFailures.length ? `Required action:\n${[...new Set(toolFailures)].join("\n")}` : "",
     failure ? `Why it stopped: ${failure}` : "",
     "These results are saved in this conversation. Ask me to continue and I will pick up from here.",
   ].filter(Boolean).join("\n\n");
@@ -642,6 +721,10 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
   const synthesisAttempts = { used: 0, max: MAX_ATTEMPTS_PER_STEP * 2 };
   const steps = [];
   const toolResults = [];
+  const failedLookups = new Map();
+  const toolFailures = [];
+  let githubBlocked = null;
+  const quotaBlocked = new Map();
   let text = "";
   let toolsSupported = true;
   // What the most recent model response said in words. An answer is only
@@ -786,6 +869,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     if (instant.length === 0 || round === maxRounds) break;
     working.push({ role: "assistant", content: result.text || null, tool_calls: calls });
     let used = 0;
+    let hadToolFailure = false;
     for (const call of calls) {
       if (!runnable(call.function.name)) {
         working.push({ role: "tool", tool_call_id: call.id, content: `You cannot use '${call.function.name}'. Use an offered tool or report what you found instead.` });
@@ -798,19 +882,46 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       used += 1;
       const handler = handlers[call.function.name];
       emit("tool", { id: call.id, label: handler ? handler.pending ?? `Running ${call.function.name.replaceAll("_", " ")}…` : pendingLabel(call), state: "running", ...tag });
-      const outcome = handler ? await handler(call, { emit }) : await runInstantTool(call, toolContext);
+      // Only read-only instant lookups are deduplicated. Never automatically
+      // retry a custom handler: it may have performed consequential work.
+      let fingerprint;
+      if (!handler) {
+        let args;
+        try { args = JSON.parse(call.function.arguments); } catch { args = call.function.arguments; }
+        fingerprint = `${call.function.name}:${JSON.stringify(args, args && typeof args === "object" ? Object.keys(args).sort() : undefined)}`;
+      }
+      const repositoryLookup = ["search_repository_code", "read_repository_file"].includes(call.function.name);
+      // Search and Contents have separate GitHub quota buckets. A search
+      // quota failure must not block a direct read using the core bucket.
+      const connectionBlocked = repositoryLookup && (githubBlocked || quotaBlocked.get(call.function.name));
+      let outcome = connectionBlocked || (fingerprint && failedLookups.get(fingerprint));
+      if (outcome) outcome = { ...outcome, label: connectionBlocked ? `${call.function.name} blocked by GitHub ${outcome.error.category}` : `Repeated failed ${call.function.name} skipped`, content: `${outcome.content}\n${connectionBlocked ? "GitHub repository calls are blocked for this reply by the connection or quota failure." : "This identical failed request was not sent again."} Correct its parameters or use another available tool; continue the original user task.` };
+      else {
+        try { outcome = handler ? await handler(call, { emit }) : await runInstantTool(call, toolContext); }
+        catch { outcome = { ok: false, label: `${call.function.name} failed`, content: `${call.function.name} failed unexpectedly. Its completion is unconfirmed. Continue with other safe tools; do not repeat a potentially consequential operation.` }; }
+        if (!outcome.ok && fingerprint) failedLookups.set(fingerprint, outcome);
+        if (!outcome.ok && repositoryLookup && ["authentication", "integration_unavailable"].includes(outcome.error?.category)) githubBlocked = outcome;
+        if (!outcome.ok && repositoryLookup && outcome.error?.category === "quota") quotaBlocked.set(call.function.name, outcome);
+      }
+      if (!outcome.ok && outcome.error) {
+        const error = outcome.error;
+        toolFailures.push(`${call.function.name}: ${error.cause ?? error.category}. ${error.action ?? "Check the connection or correct the parameters before continuing."}`);
+      }
       emit("tool", { id: call.id, label: outcome.label, state: outcome.ok ? "done" : "failed", ...tag, ...(outcome.preview ? { preview: outcome.preview } : {}) });
       steps.push({ label: outcome.label, ok: outcome.ok });
       toolResults.push(`${outcome.label}\n${outcome.content}`);
       working.push({ role: "tool", tool_call_id: call.id, content: outcome.content });
+      if (!outcome.ok) hadToolFailure = true;
     }
+    if (hadToolFailure) working.push({ role: "user", content: "A tool operation failed, not the entire task. Continue toward the original request: correct invalid parameters, use a different available tool or already retrieved evidence. Do not repeat an identical failed call, bypass permissions, or retry an exhausted quota. If no safe recovery remains, identify the failed operation, known cause and required action. Never claim an operation succeeded without a successful result." });
     // Everything the model asked for ran; it has not written its answer yet.
     lastText = "";
   }
 
   if (fatal) {
     unfinished = { status: "incomplete", reason: fatal, completedSteps: steps.filter((step) => step.ok).length, failedSteps: steps.filter((step) => !step.ok).length };
-    const note = `${text.trim() ? "\n\n" : ""}_Stopped early: ${fatal}_`;
+    const details = toolFailures.length ? `\n\nUnresolved tool operation:\n${[...new Set(toolFailures)].join("\n")}` : "";
+    const note = `${text.trim() ? "\n\n" : ""}_Stopped early: ${fatal}_${details}`;
     text += note;
     emit("delta", { text: note });
   } else if (failure || !lastText.trim()) {
@@ -919,12 +1030,18 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
     // Every attempt failed. The completed work is still the answer's substance; say so plainly.
     emit("tool", { id: progressId, label: "Could not reach a model to write the answer", state: "failed", ...tag });
     unfinished = { status: "incomplete", reason, completedSteps: steps.filter((step) => step.ok).length, failedSteps: steps.filter((step) => !step.ok).length };
-    const summary = workSummary({ steps, failure: reason });
+    const summary = workSummary({ steps, failure: reason, toolFailures });
     const addition = `${text.trim() ? "\n\n" : ""}${summary}`;
     text += addition;
     emit("delta", { text: addition });
   }
 
+  if (!unfinished && toolFailures.length && !steps.some(step => step.ok)) {
+    const reason = [...new Set(toolFailures)].join("\n");
+    unfinished = { status: "incomplete", reason, completedSteps: 0, failedSteps: steps.length };
+    const note = `\n\nUnresolved tool operation:\n${reason}`;
+    text += note; emit("delta", { text: note });
+  }
   const finish = (reply) => ({ reply, steps, ...(unfinished ? { finalization: unfinished } : {}), ...(servedBy ? { servedBy } : {}) });
   return finish(text.trim());
 }

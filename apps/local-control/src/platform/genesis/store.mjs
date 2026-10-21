@@ -47,6 +47,10 @@ export class GenesisStore {
     this.#db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA busy_timeout = 5000;
+      CREATE TABLE IF NOT EXISTS genesis_operations (
+        id TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS genesis_projects (
         id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
@@ -108,11 +112,48 @@ export class GenesisStore {
     for (const column of ["kind TEXT NOT NULL DEFAULT 'push'", "plan_json TEXT"]) {
       try { this.#db.exec(`ALTER TABLE genesis_publish_requests ADD COLUMN ${column}`); } catch { /* already present */ }
     }
+    // Environment snapshots (platform/environments) and the external side-effect ledger that makes resume replay-safe.
+    this.#db.exec(`
+      CREATE TABLE IF NOT EXISTS genesis_snapshots (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL REFERENCES genesis_projects(id),
+        snapshot_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        transition_seq INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS genesis_snapshots_project_idx ON genesis_snapshots(project_id, seq);
+      CREATE TABLE IF NOT EXISTS genesis_effects (
+        project_id TEXT NOT NULL REFERENCES genesis_projects(id),
+        effect_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        intent_json TEXT NOT NULL,
+        receipt_json TEXT,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, effect_key)
+      );
+    `);
     // Additive migration for databases created before tasks recorded their executor.
     try { this.#db.exec("ALTER TABLE genesis_tasks ADD COLUMN executor TEXT NOT NULL DEFAULT 'template'"); } catch { /* already present */ }
   }
 
   close() { this.#db.close(); }
+
+  operation(id) {
+    return parse(this.#db.prepare("SELECT value_json FROM genesis_operations WHERE id = ?").get(id)?.value_json);
+  }
+
+  operations() {
+    return this.#db.prepare("SELECT value_json FROM genesis_operations").all().map((row) => parse(row.value_json));
+  }
+
+  saveOperation(value) {
+    this.#db.prepare("INSERT INTO genesis_operations(id, value_json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value_json = excluded.value_json").run(value.id, json(value));
+    return value;
+  }
 
   #stamp() { return this.#now().toISOString(); }
 
@@ -248,6 +289,91 @@ export class GenesisStore {
     if (!row) return null;
     this.#db.prepare("DELETE FROM genesis_publish_requests WHERE approval_id = ?").run(String(approvalId));
     return { approvalId: row.approval_id, projectId: row.project_id, remote: row.remote, commit: row.commit_sha, kind: row.kind ?? "push", plan: parse(row.plan_json) };
+  }
+
+  /** Puts task statuses back to what a restored snapshot recorded (work after the snapshot was discarded with its files). */
+  restoreTasks(tenantId, id, recorded, evidence) {
+    this.#row(tenantId, id);
+    const byId = new Map((recorded ?? []).map((task) => [task.id, task]));
+    for (const task of this.tasks(tenantId, id)) {
+      const saved = byId.get(task.id);
+      if (!saved || (saved.status === task.status && saved.attempts === task.attempts)) continue;
+      if (!TASK_STATES.includes(saved.status)) continue;
+      const list = [...task.evidence, { at: this.#stamp(), ...evidence, from: task.status, to: saved.status }].slice(-20);
+      this.#db.prepare("UPDATE genesis_tasks SET status = ?, attempts = ?, evidence_json = ?, updated_at = ? WHERE project_id = ? AND task_id = ?")
+        .run(saved.status, Number.isInteger(saved.attempts) ? saved.attempts : task.attempts, boundedEvidence(list), this.#stamp(), id, task.id);
+    }
+    return this.tasks(tenantId, id);
+  }
+
+  /** A verified environment snapshot taken when the project entered `state` (transition `transitionSeq`). */
+  recordSnapshot(projectId, { state, transitionSeq, snapshot }) {
+    this.#db.prepare("INSERT INTO genesis_snapshots (project_id, snapshot_id, state, transition_seq, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(projectId, snapshot.id, state, transitionSeq, json(snapshot), this.#stamp());
+    return this.latestSnapshot(projectId);
+  }
+
+  #snapshotRow(row) {
+    return row ? { seq: row.seq, state: row.state, transitionSeq: row.transition_seq, createdAt: row.created_at, snapshot: parse(row.snapshot_json) } : null;
+  }
+
+  latestSnapshot(projectId) {
+    return this.#snapshotRow(this.#db.prepare("SELECT * FROM genesis_snapshots WHERE project_id = ? ORDER BY seq DESC LIMIT 1").get(projectId));
+  }
+
+  snapshots(projectId) {
+    return this.#db.prepare("SELECT * FROM genesis_snapshots WHERE project_id = ? ORDER BY seq").all(projectId).map((row) => this.#snapshotRow(row));
+  }
+
+  /**
+   * The external side-effect ledger. An effect is claimed (intent recorded,
+   * status in_flight) before it runs and completed (status done, receipt)
+   * after, so a restart can tell "done" (replay the receipt, never repeat)
+   * from "in doubt" (it may have happened; a person decides) from "failed"
+   * (the performer said it did not happen; it may be tried again).
+   */
+  effect(projectId, key) {
+    const row = this.#db.prepare("SELECT * FROM genesis_effects WHERE project_id = ? AND effect_key = ?").get(projectId, String(key));
+    return row ? { key: row.effect_key, status: row.status, intent: parse(row.intent_json, {}), receipt: parse(row.receipt_json), attempts: row.attempts, createdAt: row.created_at, updatedAt: row.updated_at } : null;
+  }
+
+  effects(projectId, { status = null } = {}) {
+    const rows = status
+      ? this.#db.prepare("SELECT effect_key FROM genesis_effects WHERE project_id = ? AND status = ? ORDER BY created_at, effect_key").all(projectId, status)
+      : this.#db.prepare("SELECT effect_key FROM genesis_effects WHERE project_id = ? ORDER BY created_at, effect_key").all(projectId);
+    return rows.map((row) => this.effect(projectId, row.effect_key));
+  }
+
+  /** Records the intent; true when this caller may perform the effect now (new, or a previous attempt failed). */
+  claimEffect(projectId, key, intent = {}) {
+    return this.#tx(() => {
+      const prior = this.effect(projectId, key);
+      const at = this.#stamp();
+      if (!prior) {
+        this.#db.prepare("INSERT INTO genesis_effects (project_id, effect_key, status, intent_json, created_at, updated_at) VALUES (?, ?, 'in_flight', ?, ?, ?)").run(projectId, String(key), boundedEvidence(intent), at, at);
+        return true;
+      }
+      if (prior.status !== "failed") return false;
+      this.#db.prepare("UPDATE genesis_effects SET status = 'in_flight', intent_json = ?, receipt_json = NULL, attempts = attempts + 1, updated_at = ? WHERE project_id = ? AND effect_key = ?").run(boundedEvidence(intent), at, projectId, String(key));
+      return true;
+    });
+  }
+
+  completeEffect(projectId, key, receipt) {
+    this.#db.prepare("UPDATE genesis_effects SET status = 'done', receipt_json = ?, updated_at = ? WHERE project_id = ? AND effect_key = ? AND status = 'in_flight'").run(boundedEvidence(receipt ?? {}), this.#stamp(), projectId, String(key));
+    return this.effect(projectId, key);
+  }
+
+  failEffect(projectId, key, reason) {
+    this.#db.prepare("UPDATE genesis_effects SET status = 'failed', receipt_json = ?, updated_at = ? WHERE project_id = ? AND effect_key = ? AND status = 'in_flight'").run(boundedEvidence({ error: String(reason ?? "failed").slice(0, 1000) }), this.#stamp(), projectId, String(key));
+    return this.effect(projectId, key);
+  }
+
+  /** A person settles an in-doubt effect: it happened (done, with what they saw) or it did not (failed, may be retried). */
+  resolveEffect(projectId, key, { happened, note = "" }) {
+    this.#db.prepare("UPDATE genesis_effects SET status = ?, receipt_json = ?, updated_at = ? WHERE project_id = ? AND effect_key = ? AND status = 'in_flight'")
+      .run(happened ? "done" : "failed", boundedEvidence({ resolvedBy: "owner", note: String(note).slice(0, 500) }), this.#stamp(), projectId, String(key));
+    return this.effect(projectId, key);
   }
 
   /** Projects that were mid-work when Atlas stopped. */

@@ -31,12 +31,21 @@ test("built chat answers in both modes without D1 and rejects unconfigured model
   const { default: worker } = await import(new URL("../dist/server/index.js", import.meta.url));
   const context = { waitUntil() {}, passThroughOnException() {} };
   const headers = { authorization: "Bearer test-local-chat", "content-type": "application/json" };
-  const invoke = (method, body, auth = true) => worker.fetch(new Request("http://localhost/api/chat", { method, headers: auth ? headers : {}, ...(body ? { body: JSON.stringify(body) } : {}) }), {}, context);
+  const invoke = (method, body, auth = true) => worker.fetch(new Request("http://localhost/api/chat", { method, headers: auth ? headers : {}, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }), {}, context);
   assert.equal((await invoke("GET", undefined, false)).status, 401);
   const catalog = await (await invoke("GET")).json();
   assert.ok(catalog.providers.some((choice) => choice.id === "configured:qwen3:1.7b"));
   assert.equal(JSON.stringify(catalog).includes("test-local-chat"), false);
   assert.equal((await invoke("POST", { message: "Hello", provider: "configured:unknown" })).status, 400);
+  assert.equal(calls.length, 0);
+  for (const invalid of [null, [], "hello", 42, {}]) {
+    const rejected = await invoke("POST", invalid);
+    assert.equal(rejected.status, 400);
+    assert.equal(typeof (await rejected.json()).message, "string");
+  }
+  const history = await worker.fetch(new Request("http://localhost/api/conversations/00000000-0000-0000-0000-000000000000", { headers }), {}, context);
+  assert.equal(history.status, 503);
+  assert.equal((await history.json()).message, "Conversation history is unavailable.");
   assert.equal(calls.length, 0);
   const response = await invoke("POST", { message: "Hello", provider: "configured:qwen3:1.7b" });
   assert.equal(response.status, 200);

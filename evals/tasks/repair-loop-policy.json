@@ -1,0 +1,33 @@
+{
+  "id": "repair-loop-policy",
+  "category": "feature",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "c7466638e50abdc6c05c9a60cced9e4d7a8901be",
+  "objective": "Add apps/local-control/src/platform/loop-policy.mjs for bounding autonomous repair loops. Export DEFAULT_LOOP_POLICY (frozen { maxIterations: 3, maxWallMs: 6h, maxTokens: null, maxSameFailure: 2 }), STOP_REASONS, failureFingerprint(failure) (16-hex sha256 of stage, check, exitCode and the last 1500 chars of output with ANSI codes, directory prefixes, hex hashes and numbers normalised, so the same failure on another machine matches), decideIteration({ policy, iterations, startedAt, now, fingerprint }) returning { proceed, reason, message, iterations, elapsedMs, tokens, unmeteredIterations, sameFailure, fingerprint } and stopping, in order, on iteration-limit, time-limit, spend-limit, then no-progress, and loopPolicyFromEnvironment(env, warn) reading ATLAS_REPAIR_MAX_MINUTES and ATLAS_REPAIR_MAX_TOKENS (positive integers; anything else warns and keeps the default). Also export coderUsage(summary, read) from platform/genesis/coder.mjs: sum inputTokens/outputTokens of model.responded events in the JSONL audit file named by 'audit <path>.jsonl' at the end of the summary; null when there is no such file or it cannot be read. apps/local-control/tests/loop-policy.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "e00a49050841f932b970bc1f710d38054b1e870a",
+    "paths": [
+      "apps/local-control/tests/loop-policy.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/loop-policy.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "e00a49050841f932b970bc1f710d38054b1e870a",
+    "paths": [
+      "apps/local-control/src/platform/loop-policy.mjs",
+      "apps/local-control/src/platform/genesis/coder.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "genesis"
+  ]
+}

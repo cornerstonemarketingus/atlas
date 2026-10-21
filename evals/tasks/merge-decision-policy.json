@@ -1,0 +1,32 @@
+{
+  "id": "merge-decision-policy",
+  "category": "feature",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "15f03ab644876175f637089b4315ec0779968e44",
+  "objective": "Create scripts/runner/merge-decision.mjs exporting decideMergeAction(policy, checkRuns) returning 'merge-now', 'wait' or 'hold' for a coder-opened pull request. 'none' merges immediately; 'ci-gated' waits when no checks have reported or any is not completed, holds when any failed (failure, cancelled, timed_out, action_required, stale) or has an unrecognised conclusion, and merges when all are success, neutral or skipped; 'manual' and unknown policies hold. scripts/runner/merge-decision.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "14a0e92428a1283facb4b2944701cf7449f79cc1",
+    "paths": [
+      "scripts/runner/merge-decision.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "scripts/runner/merge-decision.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "14a0e92428a1283facb4b2944701cf7449f79cc1",
+    "paths": [
+      "scripts/runner/merge-decision.mjs"
+    ]
+  },
+  "timeoutMs": 120000,
+  "tags": [
+    "history",
+    "runner",
+    "policy"
+  ]
+}
