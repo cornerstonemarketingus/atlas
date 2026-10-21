@@ -1,3 +1,5 @@
+import { atlasAuthored } from "../../../../../packages/atlas-inference/src/catalog.mjs";
+
 /**
  * The messages sent to the model for one chat reply, ordered for the
  * provider's prompt cache (Groq, OpenAI and vLLM reuse only a byte-identical
@@ -17,7 +19,8 @@
  */
 export function chatTurns({ system, history = [], memory = "", message, historyTurns = 20 }) {
   return [
-    { role: "system", content: system },
+    // Registered as Atlas's own words: the only system message a training tier may see.
+    atlasAuthored({ role: "system", content: system }),
     ...history.slice(-historyTurns).map((turn) => ({ role: turn.role === "assistant" ? "assistant" : "user", content: turn.content })),
     ...(memory ? [{ role: "system", content: `<data source="earlier conversations and recent runs in this workspace">\n${memory.replace(/<(\s*\/?\s*)data\b/giu, "&lt;$1data")}\n</data>` }] : []),
     { role: "user", content: message },

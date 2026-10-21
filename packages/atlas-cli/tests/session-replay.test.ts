@@ -240,3 +240,32 @@ test("main() actually dispatches to replay", async () => {
     process.stderr.write = originalWrite;
   }
 });
+
+test("main replay exposes only valid private argument digests in text and JSON", async () => {
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "atlas-replay-digest-"));
+  const path = join(root, "audit.jsonl");
+  const digest = "hmac-sha256:" + "a".repeat(64);
+  const trace = completeSession().map(e => e.type === "tool.requested" ? { ...e, payload: { ...e.payload, argumentsDigest: digest } } : e);
+  await writeFile(path, trace.map(e => JSON.stringify(e)).join("\n"));
+  const original = process.stdout.write;
+  let output = "";
+  process.stdout.write = ((text: string) => { output += String(text); return true; }) as typeof process.stdout.write;
+  try {
+    assert.equal(await main(["replay", path]), 0);
+    assert.match(output, new RegExp(digest, "u"));
+    output = "";
+    assert.equal(await main(["replay", path, "--format", "json"]), 0);
+    assert.equal(JSON.parse(output).sessions[0].turns[0].toolCalls[0].argumentsDigest, digest);
+    output = "";
+    const malformed = trace.map(e => e.type === "tool.requested" ? { ...e, payload: { ...e.payload, argumentsDigest: "PRIVATE_RAW_ARGUMENT" } } : e);
+    await writeFile(path, malformed.map(e => JSON.stringify(e)).join("\n"));
+    assert.equal(await main(["replay", path]), 0);
+    assert.doesNotMatch(output, /PRIVATE_RAW_ARGUMENT/u);
+  } finally {
+    process.stdout.write = original;
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -3,6 +3,8 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { taskStorageReadiness } from '../app/api/tasks/storage-readiness.mjs';
+import { isDeploymentOwner } from '../app/api/tasks/self-protection.mjs';
+import { customerFailure } from '../app/api/customer-failure.mjs';
 import { migratedDatabase } from './helpers/d1-sqlite.mjs';
 
 test('task history readiness checks columns, including a skipped correlation migration', async () => {
@@ -49,7 +51,7 @@ test('real setup GET reports missing task columns and withholds database error t
     }).outputText.replaceAll('export async function', 'async function').replace(/export \{\};?/g, '');
     let database = d1;
     const dependencies = {
-      getD1: () => database, getDb: () => ({ run: async () => {} }), sql: () => {}, taskStorageReadiness,
+      getD1: () => database, getDb: () => ({ run: async () => {} }), sql: () => {}, taskStorageReadiness, isDeploymentOwner, customerFailure,
       authenticatedAccount: async () => ({ userId: 'operator', dbUserId: null }),
       githubOAuthConfiguration: () => ({ configured: true }), stripeConfiguration: () => ({ configured: false }),
       githubAppConfiguration: () => ({ configured: false }), platformGitHubToken: () => 'fixture',

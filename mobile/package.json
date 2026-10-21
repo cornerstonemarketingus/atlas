@@ -9,10 +9,11 @@
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/secure-storage.mjs && node --check src/bridge.mjs && node --check src/deep-link-handler.mjs",
+    "check": "node --check src/secure-storage.mjs && node --check src/bridge.mjs && node --check src/deep-link-handler.mjs && node --check scripts/render-icons.mjs",
     "sync": "cap sync",
     "open:ios": "cap open ios",
-    "open:android": "cap open android"
+    "open:android": "cap open android",
+    "icons:render": "node scripts/render-icons.mjs"
   },
   "dependencies": {
     "@capacitor/app": "8.1.1",

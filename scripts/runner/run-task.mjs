@@ -1,9 +1,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { runCoderProcess } from "./run-coder-process.mjs";
-import { resolveCoderRoutes } from "./coder-routes.mjs";
+import { PROVIDER_KEY_VARIABLES, isValidRoute, resolveCoderRoutes } from "./coder-routes.mjs";
 import path from "node:path";
 import { correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
+import { enforceHostedExecutionLease } from "./claim-execution.mjs";
+
+// Also fence cached pre-claim workflow definitions that check out current main policy.
+enforceHostedExecutionLease(process.env);
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const outputDirectory = process.env.ATLAS_OUTPUT_DIR;
@@ -181,7 +185,6 @@ if (metadata.mode === "inspect") {
   // clear status instead of a CLI usage error buried in a log, and so this
   // never becomes a way to name an arbitrary environment variable to read.
   const providerInput = (process.env.ATLAS_CODER_PROVIDER || "").trim().toLowerCase();
-  const PROVIDER_KEY_VARIABLES = { anthropic: "ANTHROPIC_API_KEY", groq: "GROQ_API_KEY", openai: "OPENAI_API_KEY", "workers-ai": "ATLAS_WORKERS_AI_TOKEN" };
   if (providerInput && !Object.hasOwn(PROVIDER_KEY_VARIABLES, providerInput)) {
     const known = Object.keys(PROVIDER_KEY_VARIABLES).join(", ");
     writeStatus("failed", `ATLAS_CODER_PROVIDER '${providerInput}' is not recognised; expected one of: ${known}.`);
@@ -192,7 +195,7 @@ if (metadata.mode === "inspect") {
   try { routePlan = resolveCoderRoutes(process.env); }
   catch (error) { writeStatus("failed", error.message); console.error(error.message); process.exit(2); }
   const { provider, model, apiKeyVariable } = routePlan;
-  console.log("Coder route: " + provider + "/" + model + "; configured fallbacks: " + routePlan.fallbacks.map((route) => route.split(":").slice(0, 2).join("/")).join(", "));
+  console.log("Coder route: " + provider + "/" + model + "; configured fallbacks: " + routePlan.fallbacks.map((route) => route.split(":").slice(0, -1).join("/")).join(", "));
   // A self-hosted OpenAI-compatible server (vLLM, Ollama, llama.cpp) usually
   // has no API key at all, so requiring one would make it impossible to run
   // your own model. The placeholder is applied ONLY when a custom endpoint is
@@ -232,7 +235,7 @@ if (metadata.mode === "inspect") {
   if (/^[0-5]$/.test(repairAttempts)) codeArgs.push("--max-repair-attempts", repairAttempts);
   const fallbacks = routePlan.fallbacks;
   for (const fallback of fallbacks) {
-    if (!/^(?:anthropic|groq|openai|workers-ai):[A-Za-z0-9@._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY|OPENAI_API_KEY|ATLAS_WORKERS_AI_TOKEN)$/.test(fallback)) {
+    if (!isValidRoute(fallback)) {
       writeStatus("failed", "ATLAS_CODER_FALLBACKS contains an invalid route. Expected provider:model:API_KEY_ENV.");
       console.error("Atlas coder mode: invalid fallback route.");
       process.exit(2);
@@ -245,7 +248,7 @@ if (metadata.mode === "inspect") {
   if (escalation) {
     try { resolveCoderRoutes({ ...process.env, ATLAS_CODER_FALLBACKS: escalation }); }
     catch (error) { writeStatus("failed", error.message); console.error(error.message); process.exit(2); }
-    if (!/^(?:anthropic|groq|openai|workers-ai):[A-Za-z0-9@._/-]+:(?:ANTHROPIC_API_KEY|GROQ_API_KEY|OPENAI_API_KEY|ATLAS_WORKERS_AI_TOKEN)$/.test(escalation)) {
+    if (!isValidRoute(escalation)) {
       writeStatus("failed", "ATLAS_CODER_ESCALATION is invalid. Expected provider:model:API_KEY_ENV.");
       console.error("Atlas coder mode: invalid escalation route.");
       process.exit(2);
@@ -256,6 +259,7 @@ if (metadata.mode === "inspect") {
     ["ATLAS_CODER_RETRY_ATTEMPTS", "--retry-attempts", 1, 5],
     ["ATLAS_CODER_ESCALATION_ATTEMPTS", "--escalation-attempts", 1, 5],
     ["ATLAS_CODER_RETRY_MAX_DELAY_MS", "--retry-max-delay-ms", 0, 120_000],
+    ["ATLAS_CODER_CAPACITY_WAIT_MS", "--capacity-wait-ms", 0, 3_600_000],
     ["ATLAS_TOKEN_BUDGET", "--token-budget", 1, 1_000_000],
     ["ATLAS_MAX_TURNS", "--max-turns", 1, 32],
     ["ATLAS_OUTPUT_TOKENS_PER_TURN", "--output-tokens-per-turn", 256, 32_768],

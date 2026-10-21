@@ -42,3 +42,37 @@ Official requirements checked for this pass: [Apple account deletion](https://de
 Mission #291 remains recovery while signed in, not an unattended scheduler. Tenant persistence review, shared migration integration and authenticated mission acceptance are open. Task dispatch/request/result ownership PRs must integrate without duplicate dispatch or stale-attempt completion. CRM tools merged but have no selected/configured live account acceptance. Cloud networking checks next need authenticated reconnect/offline/timeout/tenant tests and the pending isolation/approval reviews; no production policy or credential change is included here.
 
 Next: complete this branch's CI, then coordinate the non-streaming and client/history privacy boundaries with active owners; fix packaging and association delivery using actual production identifiers before requesting store review.
+
+## Account and billing follow-through — issue #323
+
+The account-customer-errors branch closes the inspected billing checkout/portal exception and deletion status/request response paths. Unexpected failures return fixed customer copy, a UUID reference and no-store headers; server correlation logs contain only the fixed operation and reference. Raw provider/database/auth exception content is neither returned nor logged by this boundary. This does not add an admin diagnostic console or remove exposure paths elsewhere in Atlas.
+
+Deletion responses expose only validated lifecycle status and request time, excluding operator notes and internal account fields. Existing authentication, account-scoped predicates, owner restriction, DELETE confirmation and billing success behavior remain. Null/array/scalar confirmation bodies receive 400 instead of throwing. The actual account component ignores arbitrary backend failure messages, handles invalid JSON/network uncertainty, prevents concurrent deletion submissions and claims success only after a valid pending receipt.
+
+All three actual-handler regression cases failed against unchanged origin/main before passing on this branch, covering sentinel provider/database/auth errors, malformed bodies and a private operator note. Actual phone-width React acceptance verifies safe billing copy, double-submit fencing, invalid-JSON recovery and a successful deletion receipt with no page errors. These use injected service/browser fixtures; no real customer deletion or payment was performed, and deployed authenticated acceptance remains pending. The separate JSON/history/project/model-output exposure rows above remain open.
+
+## Deletion status recovery — issue #325
+
+An uncertain deletion response now blocks another submission until an explicit status read succeeds. A missing, failed, malformed or stalled initial status response also blocks mutation and offers a safe refresh action. Reads and writes have bounded deadlines; an expired POST is treated as uncertain, never automatically retried. A subsequent pending receipt recovers the existing request without another POST. This is client recovery, not a new server-wide exactly-once guarantee across devices.
+
+Appearance changes now update theme only, avoiding unnecessary account/status requests that could overwrite the deletion view. Status reads use cancellation and generation fencing; pending receipts are validated and projected before display. The actual phone-width component regression fails against unchanged main (it previously enabled retry after failure) and passes with the repair, including lost acknowledgement recovery, initial failure, bounded stalled reads and theme isolation. Server authentication, scoping, confirmation and deletion processing are unchanged. No real customer deletion was executed.
+
+
+## Account overview boundary — issue #343
+
+The account overview GET now reuses the fixed customer failure contract for authentication, database, plan and usage exceptions. Unexpected failures return503 with no-store and a support reference, never raw backend text. Existing signed-out/owner/customer responses and account/period predicates are preserved and tested at the actual handler boundary. This does not close other chat/history/settings/provider disclosure paths or establish deployed adversarial acceptance.
+
+
+## Repository settings boundary — issue #357
+
+Unexpected repository-settings authentication, tenant resolution and storage failures now use the existing fixed503 customer failure response with a support reference and no-store. Raw database exceptions and schema/migration instructions no longer cross these handlers. Tenant/role/deployment allowlist/default-tenant merge-policy checks, input validation and scoped writes are unchanged and covered through actual handler tests. This is a response-boundary repair, not a new authorization model, migration deployment or completion of other privacy paths.
+
+
+## Customer Connections projection — issue #371
+
+Setup status uses the established deployment-owner check before any infrastructure probes. Customer responses contain only account-connected state and no database/migration/provider/governor/credential configuration; operator responses retain the existing diagnostics. The actual Connections component distinguishes account status from infrastructure readiness, hides operator billing setup from customers and renders fixed status/model failure copy for customers. Authentication and owner identity logic are consumed unchanged. The separately owned chat GET metadata contract remains outside this repair; no universal confidentiality, production acceptance or backend health claim follows from account-connected status.
+
+
+## Connections read recovery — issue #378
+
+The Connections component bounds the complete status fetch/body read to12seconds and offers explicit retry with fixed safe failure copy. It aborts replaced/unmounted reads and fences late responses, including unauthorized responses after unmount. Malformed status is rejected before rendering. Actual phone-component acceptance exercises these failure/recovery boundaries and the preserved owner/customer projection. This client deadline does not prove backend health or forcibly stop an abort-ignoring server.

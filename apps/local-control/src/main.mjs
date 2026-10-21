@@ -25,6 +25,7 @@ import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
 import { BusinessService } from "./agent/business-service.mjs";
+import { registerBusinessTools } from "./agent/tools/business-tools.mjs";
 import { createMissionEvidenceVerifier } from "./agent/mission-evidence.mjs";
 import { createLaneApplier } from "./agent/lane-apply.mjs";
 import { AutomationService, AutomationStore } from "./platform/automations/service.mjs";
@@ -58,6 +59,7 @@ import { createCredentialVault } from "./agent/credential-vault.mjs";
 import { openInBrowser, ownerAccount, resolveOwnerToken, signInUrl } from "./identity/owner.mjs";
 import { RemoteAccess } from "./remote/access.mjs";
 import { ACTIVE_STATES, GenesisService, GenesisStore } from "./platform/genesis/index.mjs";
+import { loopPolicyFromEnvironment } from "./platform/loop-policy.mjs";
 import { GenesisExecutor } from "./platform/genesis/executor.mjs";
 import { registerGenesisTools } from "./platform/genesis/tools.mjs";
 import { GenesisPublisher } from "./platform/genesis/publish.mjs";
@@ -66,6 +68,10 @@ import { PreviewManager } from "./platform/genesis/preview.mjs";
 import { createInspector } from "./platform/genesis/inspector.mjs";
 import { createVisionReviewer } from "./platform/genesis/vision.mjs";
 import { createGenesisCoder } from "./platform/genesis/coder.mjs";
+import { ArtifactStore, recordGenesisArtifact } from "./platform/artifacts/index.mjs";
+import { RenderRunner } from "./platform/render/index.mjs";
+import { createComputeService } from "./platform/compute/service.mjs";
+import { LOCAL_OWNER_ID, NodeProvider, NodeService } from "./platform/nodes/index.mjs";
 import { runCheck } from "./platform/self-improve/runtime.mjs";
 import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
 import { createVercelAdapter } from "./agent/infrastructure/vercel.mjs";
@@ -201,7 +207,7 @@ const automationStore = new AutomationStore(join(dataDirectory, "automations.sql
 // Goals sleep between events and wake on signed GitHub deliveries (Track B7).
 const goalStore = new GoalStore(join(dataDirectory, "goals.sqlite"));
 const goals = new GoalService({ store: goalStore, missionService, world });
-const automations = new AutomationService({ store: automationStore, missionService, team, onEvent: (event) => goals.onEvent(event) });
+const automations = new AutomationService({ store: automationStore, missionService, team, businessService, onEvent: (event) => goals.onEvent(event) });
 automations.startWatchers();
 const automationTimer = setInterval(() => {
   automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`));
@@ -214,6 +220,42 @@ if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.len
 // A schedule that fell due while Atlas was stopped runs once now.
 automations.tick().catch((error) => console.error(`Automation catch-up failed: ${error.message}`));
 
+// What Atlas made (websites, apps, videos, 3D models), content-addressed under the data directory.
+const artifacts = new ArtifactStore({ root: join(dataDirectory, "artifacts") });
+// Rendering (ffmpeg, headless Blender) runs only inside the container sandbox, never on the host.
+// It uses the terminal's container runtime and an image per tool; without both it reports itself unavailable.
+const renderRunner = new RenderRunner({
+  container: process.env.ATLAS_TERMINAL_CONTAINER_RUNTIME?.trim() ? { runtime: process.env.ATLAS_TERMINAL_CONTAINER_RUNTIME.trim() } : undefined,
+  images: {
+    ...(process.env.ATLAS_RENDER_FFMPEG_IMAGE?.trim() ? { ffmpeg: process.env.ATLAS_RENDER_FFMPEG_IMAGE.trim() } : {}),
+    ...(process.env.ATLAS_RENDER_BLENDER_IMAGE?.trim() ? { blender: process.env.ATLAS_RENDER_BLENDER_IMAGE.trim() } : {}),
+  },
+  artifactStore: artifacts,
+});
+// Atlas Nodes: machines the owner brings dial out to this daemon and render jobs in their own container sandbox.
+// They cost $0 and are always the first provider.
+const nodeService = new NodeService({
+  db: join(dataDirectory, "nodes.sqlite"), artifacts, root: join(dataDirectory, "nodes"),
+  isOwner: ({ userId }) => userId === LOCAL_OWNER_ID,
+});
+const nodeProvider = new NodeProvider({ service: nodeService });
+// Rented GPU compute (issue #353): RunPod Serverless behind a monthly cap, after the nodes. Off unless
+// ATLAS_RUNPOD_ENDPOINT_ID, ATLAS_RUNPOD_API_KEY (vault or env) are set; provisions also need
+// ATLAS_GPU_MONTHLY_CAP_USD > 0. Render jobs do not route here yet (docs/atlas-os/COMPUTE.md).
+const compute = await createComputeService({
+  env: process.env,
+  credentials: async (name) => (await vault.get(name).catch(() => null)) ?? process.env[name] ?? null,
+  store: platformStore,
+  leaseDb: join(dataDirectory, "compute.sqlite"),
+  freeProviders: [nodeProvider],
+}).catch((error) => ({ enabled: false, reason: `Compute configuration rejected: ${error.code ?? error.message}` }));
+console.log(`Compute: ${compute.reason}`);
+if (compute.enabled) {
+  compute.manager.startReconciler({
+    onReport: (report) => { if (report.errors.length || report.orphansTerminated.length) store.audit("compute.reconcile", JSON.stringify({ ended: report.ended.length, orphans: report.orphansTerminated.length, errors: report.errors.map(e => e.error) })); },
+    onError: (error) => store.audit("compute.reconcile.error", String(error?.code ?? "RECONCILE_FAILED")),
+  }).catch((error) => store.audit("compute.reconcile.error", String(error?.code ?? "RECONCILE_FAILED")));
+}
 // Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
 const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
 let genesisCreation = null;
@@ -223,6 +265,8 @@ const genesis = new GenesisService({
   onChange: (project) => {
     store.audit("genesis.transition", `${project.name}: ${project.state}`);
     if (project.state === "ready") genesisCreation?.onReady(project.id);
+    // A ready project is recorded as a website/app artifact; failing to record it never blocks the project.
+    if (project.state === "ready") recordGenesisArtifact({ artifacts, project }).catch((error) => store.audit("artifacts.error", `${project.name}: ${error.message}`));
     // Approved or resumed work starts (or continues) without the owner running anything.
     if ((project.state === "approved" || ACTIVE_STATES.includes(project.state)) && genesisExecutor && !genesisExecutor.isRunning(project.id)) genesisExecutor.run(project.id).catch(() => {});
   },
@@ -238,8 +282,18 @@ const genesisExecutor = new GenesisExecutor({
   coder: createGenesisCoder({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan, intelligence: genesis.intelligence }),
   preview: genesisPreviews,
   inspector: createInspector({ artifactsRoot: join(dataDirectory, "genesis", "inspections"), vision: createVisionReviewer() }),
+  // Repair loops stop at a time/token limit or when a failure stops moving (loop-policy.mjs).
+  loopPolicy: loopPolicyFromEnvironment(process.env, (line) => console.log(`Genesis: ${line}`)),
 });
-for (const project of genesis.recover()) console.log(`Genesis: ${project.name} was interrupted and is paused.`);
+// Interrupted projects are paused, then restored from the snapshot taken when their stage started
+// (verified against its digests) and resumed; each restore is a transition carrying a resume receipt.
+try {
+  for (const receipt of await genesisExecutor.recover()) {
+    console.log(receipt.restored ? `Genesis: ${receipt.projectId} restored from snapshot ${receipt.snapshot.seq} and resumed.` : `Genesis: ${receipt.projectId} was interrupted and is paused (${receipt.code ?? receipt.reason}).`);
+  }
+} catch (error) {
+  console.error(`Genesis recovery failed: ${error.message}`);
+}
 // Publishing a finished project is external: it goes through the publish.remote policy and the normal approvals.
 const genesisPublisher = new GenesisPublisher({
   genesis,
@@ -285,6 +339,9 @@ const server = createLocalControlServer({
   automations,
   world,
   goals,
+  artifacts,
+  render: renderRunner,
+  nodes: nodeService,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -352,6 +409,8 @@ function shutdown() {
     world.close();
     workforceRuntime.close();
     businessService.close();
+    compute.close?.();
+    nodeService.close();
     platformStore.close();
     store.close();
     process.exit(0);
@@ -426,6 +485,9 @@ function buildToolRegistry() {
   // Genesis is created after the registry; the tools look it up when they run.
   registerGenesisTools(registry, () => genesis, () => genesisPublisher);
   registerWorkflowTools(registry);
+  // Deferred lookup: BusinessService is initialized after the shared registry.
+  // business.read remains denied until the owner opts in through Policies.
+  registerBusinessTools(registry, () => businessService);
   // The browser family is registered whether or not a companion is attached:
   // its tools then fail closed with "no browser on this machine", which is a
   // better answer than the model never learning the capability exists.

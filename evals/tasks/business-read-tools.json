@@ -1,0 +1,33 @@
+{
+  "id": "business-read-tools",
+  "category": "feature",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "68d19791a67bb93aaa10afcf53db6ea03cc5f986",
+  "objective": "Add apps/local-control/src/agent/tools/business-tools.mjs exporting registerBusinessTools(registry, getBusinessService). Register four read-only tools with capability business.read, risk low, no approval, effects { writes: false } and strict schemas (additionalProperties false): business.list, business.inspect ({ businessId }, BUSINESS_NOT_FOUND when absent), business.due and business.plan ({ businessId, template } where template is construction-launch (default) or self-improvement; returns the service's plan with executed: false and limitations, never starting a mission). Each result includes operation and mode: \"read-only\". When getBusinessService() returns nothing, fail with ToolError BUSINESS_UNAVAILABLE. Register them in apps/local-control/src/main.mjs with a deferred service lookup. apps/local-control/tests/business-tools.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "482948b36eee62a94b6de7801b0c75a4861383cf",
+    "paths": [
+      "apps/local-control/tests/business-tools.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "apps/local-control/tests/business-tools.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "482948b36eee62a94b6de7801b0c75a4861383cf",
+    "paths": [
+      "apps/local-control/src/agent/tools/business-tools.mjs",
+      "apps/local-control/src/main.mjs"
+    ]
+  },
+  "timeoutMs": 300000,
+  "tags": [
+    "history",
+    "local-control",
+    "tools"
+  ]
+}

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getEventListeners } from "node:events";
+import { createServer } from "node:http";
 import { ModelProviderError, type ModelProvider, type ModelProviderMetadata, type ModelResponse } from "../src/model/model-provider.js";
 import { RetryingModelProvider } from "../src/infrastructure/retrying-model-provider.js";
 
@@ -150,4 +152,68 @@ test("prefers the wait carried on the error over one in its message", async () =
 test("rejects an out-of-range maximumAttempts", () => {
   assert.throws(() => new RetryingModelProvider(new ScriptedProvider([response()]), { maximumAttempts: 0 }), RangeError);
   assert.throws(() => new RetryingModelProvider(new ScriptedProvider([response()]), { maximumAttempts: 11 }), RangeError);
+});
+
+const cancelled = (error: unknown) => error instanceof ModelProviderError
+  && error.code === "cancelled" && !error.retryable;
+
+test("an already cancelled request never invokes the provider", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("private cancellation reason"));
+  const inner = new ScriptedProvider([response()]);
+  await assert.rejects(new RetryingModelProvider(inner).complete(
+    { model: "test", messages: [] }, { signal: controller.signal }), cancelled);
+  assert.equal(inner.callCount, 0);
+});
+
+test("completed default backoffs remove their abort listeners", async () => {
+  const controller = new AbortController();
+  const inner = new ScriptedProvider([rateLimitError(), response()]);
+  const provider = new RetryingModelProvider(inner, { baseDelayMs: 1 });
+  await provider.complete({ model: "test", messages: [] }, { signal: controller.signal });
+  assert.equal(inner.callCount, 2);
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+});
+
+test("cancellation during backoff prevents another real HTTP attempt even if sleep resolves", async (t) => {
+  let requests = 0;
+  const server = createServer((_request, reply) => { requests++; reply.writeHead(503); reply.end(); });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve()); server.closeAllConnections();
+  }));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const controller = new AbortController();
+  const inner: ModelProvider = {
+    metadata,
+    async complete() {
+      // Deliberately no signal handling: the retry boundary itself must stop
+      // dispatch, independently of an adapter's cancellation implementation.
+      const result = await fetch(`http://127.0.0.1:${address.port}`);
+      await result.arrayBuffer();
+      throw rateLimitError();
+    },
+  };
+  let sleeps = 0;
+  const provider = new RetryingModelProvider(inner, {
+    sleep: async () => { sleeps++; controller.abort(); },
+  });
+  await assert.rejects(provider.complete({ model: "test", messages: [] }, { signal: controller.signal }), cancelled);
+  assert.equal(requests, 1);
+  assert.equal(sleeps, 1);
+});
+
+test("a cancelled last-attempt failure is reported as cancellation", async () => {
+  const controller = new AbortController();
+  const inner: ModelProvider = { metadata, async complete() { controller.abort(); throw rateLimitError(); } };
+  await assert.rejects(new RetryingModelProvider(inner, { maximumAttempts: 1 }).complete(
+    { model: "test", messages: [] }, { signal: controller.signal }), cancelled);
+});
+
+test("a late provider success cannot complete a cancelled request", async () => {
+  const controller = new AbortController();
+  const inner: ModelProvider = { metadata, async complete() { controller.abort(); return response(); } };
+  await assert.rejects(new RetryingModelProvider(inner).complete(
+    { model: "test", messages: [] }, { signal: controller.signal }), cancelled);
 });

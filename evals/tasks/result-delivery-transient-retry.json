@@ -1,0 +1,32 @@
+{
+  "id": "result-delivery-transient-retry",
+  "category": "bug-localization",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "d42d7d0bc60f88a8b56ba24806e5e37b105dccef",
+  "objective": "deliverResult in scripts/runner/report-result.mjs only retries HTTP 5xx; a dropped connection throws immediately and loses the task result. Retry recognised transient transport failures (connection reset/refused, timeouts, DNS flakes, including AggregateError of them) up to three attempts with a short doubling wait, resending the identical body. Redirect refusals and other configuration errors stay terminal and must not leak error details. scripts/runner/report-result.test.mjs must pass.",
+  "setup": {
+    "fromCommit": "4f89f197888d1b5e5e3241aad78f21d9982c54d4",
+    "paths": [
+      "scripts/runner/report-result.test.mjs"
+    ]
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "--test",
+      "scripts/runner/report-result.test.mjs"
+    ]
+  },
+  "solution": {
+    "fromCommit": "4f89f197888d1b5e5e3241aad78f21d9982c54d4",
+    "paths": [
+      "scripts/runner/report-result.mjs"
+    ]
+  },
+  "timeoutMs": 120000,
+  "tags": [
+    "history",
+    "runner",
+    "reliability"
+  ]
+}

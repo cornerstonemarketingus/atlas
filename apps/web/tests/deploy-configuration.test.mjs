@@ -18,7 +18,7 @@ const chatDirectory = join(root, "apps/web/app/api/chat");
 function uploadStepEnvironment() {
   const step = workflow.slice(workflow.indexOf("- name: Upload Worker runtime secrets"));
   const envBlock = step.slice(0, step.indexOf("run: |"));
-  return new Set([...envBlock.matchAll(/^\s+([A-Z][A-Z0-9_]+):\s*\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}/gmu)].map(([, name, secret]) => {
+  return new Set([...envBlock.matchAll(/^\s+([A-Z][A-Z0-9_]+):\s*\$\{\{\s*(?:secrets|vars)\.([A-Z0-9_]+)\s*\}\}/gmu)].map(([, name, secret]) => {
     assert.equal(name, secret, `${name} must come from the secret of the same name`);
     return name;
   }));
@@ -75,10 +75,22 @@ test("the model variables are mapped and uploaded, the fallback included", () =>
   }
 });
 
-test("everything uploaded is mapped from a secret, so no upload is silently empty", () => {
+test("everything uploaded is mapped from a repository setting, so no upload is silently empty", () => {
   const environment = uploadStepEnvironment();
   const unmapped = [...uploadedNames()].filter((name) => !environment.has(name));
   assert.deepEqual(unmapped, []);
+});
+
+test("billing display, canonical origin and independent dispatch settings reach the Worker", () => {
+  const uploaded = uploadedNames();
+  for (const name of ["ATLAS_PUBLIC_URL", "ATLAS_PRICE_DISPLAY_PRO", "ATLAS_PRICE_DISPLAY_TEAM"]) {
+    assert.ok(workflow.includes(name + ": ${{ vars." + name + " }}"));
+    assert.ok(uploaded.has(name), `${name} must reach the Worker`);
+  }
+  for (const name of ["ATLAS_AGENT_DISPATCH_URL", "ATLAS_AGENT_DISPATCH_TOKEN"]) {
+    assert.ok(uploadStepEnvironment().has(name));
+    assert.ok(uploaded.has(name), `${name} must reach the Worker`);
+  }
 });
 
 test("setup status reports chat readiness as flags, never values", () => {
@@ -92,4 +104,20 @@ test("setup status reports chat readiness as flags, never values", () => {
   assert.equal(chatReadiness({ ATLAS_CHAT_BASE_URL: "https://api.groq.com/openai/v1", ATLAS_CHAT_MODEL: "m", ATLAS_CHAT_FALLBACK_MODEL: "none" }).fallbackModelConfigured, false);
   assert.equal(chatReadiness({}).configured, false);
   assert.equal(chatReadiness({}).modelPoolSize, 0);
+});
+
+test("every variable the shared vendor catalog reads is mapped and uploaded", async () => {
+  const { VENDORS, TRUST } = await import("../../../packages/atlas-inference/src/catalog.mjs");
+  const environment = uploadStepEnvironment();
+  const uploaded = uploadedNames();
+  const names = ["ATLAS_ALLOW_TRAINING_PROVIDERS"];
+  for (const vendor of Object.values(VENDORS)) {
+    if (vendor.id === "groq") continue; // groqModel() and its upload predate the catalog
+    names.push(vendor.keyVariable, `ATLAS_${vendor.id.toUpperCase()}_MODEL`);
+    if (vendor.tier === TRUST.TRAINS) names.push(`ATLAS_${vendor.id.toUpperCase()}_TIER`);
+  }
+  for (const name of names) {
+    assert.ok(environment.has(name), `${name} is not mapped from secrets`);
+    assert.ok(uploaded.has(name), `${name} is not uploaded`);
+  }
 });
