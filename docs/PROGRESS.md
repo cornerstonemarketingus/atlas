@@ -916,3 +916,15 @@ Next: finish eligible P0 inference deployment/chat verification and actual websi
 Integrated current main b989b5a into PR431, retaining both independent progress histories and the eight requested priority rows. Provider397 merged externally as c848c5e and deployment39522378601 succeeded. Hosted runs39522548783 and39522564249 both reported route groq -> workers-ai -> openai, then failed waiting20minutes for runner/delivered findings. These are failed acceptance receipts, not evidence of newly configured providers or a passing chat release. New vendor secret names remain absent; no secrets were read or added. No repeat unchanged smoke was dispatched.
 
 Next: require fresh exact-head CI for the integrated queue PR; investigate the actual saved-task/findings failures with existing owners, obtain provisioned eligible provider keys, and complete fresh medium coder diagnosis through an authorized claim path. Preserve configured workflow review on395 and all native/tenant holds.
+
+## 2026-10-21 — task-dispatch model authorship (#434)
+
+The actual chat gate39553786887 failed streaming only: a257-character reply was stored without servedBy; non-streaming stored a148-character Groq/openai/gpt-oss-20b reply and passed. Route remained groq/workers-ai/openai, so no new provider key or expanded route acceptance is claimed. Earlier39522548783 and39522564249 were inspect and coder runs respectively, not chat; both timed out waiting for delivered findings.
+
+Independently reproduced a matching source defect: model text plus start_atlas_task reaches an early return that drops already-recorded provider/model metadata. This matches the artifact shape but does not prove the exact live model tool selection. After human Proceed and coordination comment on active414, changed only that early return to carry existing servedBy when present. No route/provider-pool, dispatch, authentication, workflow, approval, budget or verification policy changes. Task confirmations without model text remain uncredited.
+
+Eight boundary cases cover streaming/non-streaming, primary/fallback providers and model-text/task-only responses. Before the fix, four authorship cases fail and four task-only cases pass; after the fix all eight pass. Removing only the source fix fails the same guard again; restoring passes. Production build, typecheck/lint and full suite results remain pending and must be recorded before release claims.
+
+Next: complete build/full-suite verification, publish the narrow repair, require all exact-head CI/no blockers before ordinary merge, then deploy through the configured workflow and run one fresh chat gate. Preserve active414/417 changes and configured review gates; no P0 completion claim from this local regression alone.
+
+Verification follow-through: production build passed; full web suite673tests668pass5optional skips0fail. The eight new boundary cases pass after restore; no assertions were weakened. Lint/typecheck outcome will be confirmed separately before publication. Next: publish after remaining checks, inspect exact-head CI, then eligible deployment and one fresh hosted chat gate.
