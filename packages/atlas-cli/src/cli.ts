@@ -30,6 +30,8 @@ import { CloudModelProvider } from "./infrastructure/cloud-model-provider.js";
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
 import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provider.js";
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
+import { GovernedModelProvider } from "./infrastructure/governed-model-provider.js";
+import { governorFromEnvironment } from "./infrastructure/inference-governor-client.js";
 import { FallbackModelProvider } from "./infrastructure/fallback-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
 import { OUTPUT_TOKENS_PER_TURN_RANGE, selectCoderProvider } from "./model/coder-provider-selection.js";
@@ -79,9 +81,9 @@ const USAGE = `Usage:
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
-  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|openai|workers-ai] [--api-key-env <ENV_VAR>]
+  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|openai|workers-ai|cerebras|gemini|openrouter|mistral] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
-       [--retry-attempts N] [--retry-max-delay-ms N]
+       [--retry-attempts N] [--retry-max-delay-ms N] [--capacity-wait-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N] [--max-repair-ms N] [--max-same-failure N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
@@ -501,6 +503,18 @@ export function coderToolCallLimit(maximumTurns: number): number {
  * limit; an explicit per-turn output ceiling means a paid tier, where a
  * request can carry far more of the repository.
  */
+/**
+ * provider:model:API_KEY_ENV, where the model may itself contain colons
+ * (OpenRouter's "openai/gpt-oss-20b:free"): the first and last segments are
+ * the provider and the key variable, everything between is the model.
+ */
+export function splitRouteSpecification(specification: string | undefined): [string, string, string] | undefined {
+  const parts = specification?.split(":") ?? [];
+  if (parts.length < 3) return undefined;
+  const route: [string, string, string] = [parts[0]!, parts.slice(1, -1).join(":"), parts.at(-1)!];
+  return route.some((part) => part.trim().length === 0) ? undefined : route;
+}
+
 export function groqRequestByteLimit(outputTokensPerTurn: number | undefined): number {
   return outputTokensPerTurn === undefined ? 18_000 : 160_000;
 }
@@ -543,8 +557,9 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const verifyTimeoutOption = readOptionalInteger(args, "--verify-timeout-ms", 1_000, 1_800_000);
   const retryAttemptsOption = readOptionalInteger(args, "--retry-attempts", 1, 5);
   const retryMaxDelayOption = readOptionalInteger(args, "--retry-max-delay-ms", 0, 120_000);
+  const capacityWaitOption = readOptionalInteger(args, "--capacity-wait-ms", 0, 3_600_000);
   const outputTokensPerTurn = readOptionalInteger(args, "--output-tokens-per-turn", OUTPUT_TOKENS_PER_TURN_RANGE.minimum, OUTPUT_TOKENS_PER_TURN_RANGE.maximum);
-  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null || retryAttemptsOption === null || retryMaxDelayOption === null || outputTokensPerTurn === null) return 2;
+  if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null || retryAttemptsOption === null || retryMaxDelayOption === null || capacityWaitOption === null || outputTokensPerTurn === null) return 2;
   const tokenBudget = tokenBudgetOption ?? 16_384;
   const selection = selectCoderProvider({
     provider: providerOption,
@@ -688,18 +703,21 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       : routeSelection.profile.providerId === "groq"
         ? new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) })
         : new CloudModelProvider({ providerId: routeSelection.profile.providerId, apiKey: routeApiKey, models: routeCapabilities, ...(process.env["CLOUDFLARE_ACCOUNT_ID"] ? { accountId: process.env["CLOUDFLARE_ACCOUNT_ID"] } : {}) });
-    return new RetryingModelProvider(new RedactingModelProvider(upstream, new PatternSecretRedactor()), retryOptions);
+    // With a shared governor configured, every physical attempt (retries included) reserves capacity
+    // against the same provider ledger hosted chat uses; without one this is unchanged.
+    const governor = governorFromEnvironment(process.env, { providerId: routeSelection.profile.providerId, apiKey: routeApiKey, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
+    const redacted = new RedactingModelProvider(upstream, new PatternSecretRedactor());
+    return new RetryingModelProvider(governor === undefined ? redacted : new GovernedModelProvider(redacted, governor, { maximumWaitMs: Math.min(30_000, retryOptions.maximumDelayMs) }), retryOptions);
   };
   const routes = [{ provider: makeRoute(model, selection.selection, apiKey, endpoint), model }];
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] !== "--fallback") continue;
-    const specification = args[index + 1];
-    const parts = specification?.split(":") ?? [];
-    if (parts.length !== 3 || parts.some((part) => part.trim().length === 0)) {
+    const parts = splitRouteSpecification(args[index + 1]);
+    if (parts === undefined) {
       console.error("--fallback must use provider:model:API_KEY_ENV.");
       return 2;
     }
-    const [fallbackProvider, fallbackModel, fallbackKeyEnvironment] = parts as [string, string, string];
+    const [fallbackProvider, fallbackModel, fallbackKeyEnvironment] = parts;
     const fallbackSelection = selectCoderProvider({ provider: fallbackProvider, model: fallbackModel, apiKeyEnvironmentVariable: fallbackKeyEnvironment, tokenBudget, outputTokensPerTurn });
     if (!fallbackSelection.ok) { console.error(fallbackSelection.message); return 2; }
     const fallbackKey = process.env[fallbackSelection.selection.apiKeyEnvironmentVariable];
@@ -709,7 +727,11 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     }
     routes.push({ provider: makeRoute(fallbackModel, fallbackSelection.selection, fallbackKey), model: fallbackModel });
   }
-  const routedProvider = routes.length === 1 ? routes[0]!.provider : new FallbackModelProvider(routes);
+  // When every route is out of capacity, wait for the soonest stated reset
+  // rather than lose the run's work (docs/atlas-os/INFERENCE-FABRIC.md).
+  // Five minutes by default: the runner bounds the whole coder process at fifteen.
+  const capacityWaitMs = capacityWaitOption ?? 300_000;
+  const routedProvider = new FallbackModelProvider(routes, { capacityWaitMs });
   // Retries, fallbacks and escalation share one outer budget ledger, so
   // changing routes or models cannot reset the task's hard output-token ceiling.
   const budgetLedger = new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget });
@@ -722,12 +744,12 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   if (args.includes("--escalate")) {
     const specification = readRequiredOption(args, "--escalate");
     if (specification === null) return 2;
-    const parts = specification.split(":");
-    if (parts.length !== 3 || parts.some((part) => part.trim().length === 0)) {
+    const parts = splitRouteSpecification(specification);
+    if (parts === undefined) {
       console.error("--escalate must use provider:model:API_KEY_ENV.");
       return 2;
     }
-    const [escalationProvider, escalationModel, escalationKeyEnvironment] = parts as [string, string, string];
+    const [escalationProvider, escalationModel, escalationKeyEnvironment] = parts;
     const escalationSelection = selectCoderProvider({ provider: escalationProvider, model: escalationModel, apiKeyEnvironmentVariable: escalationKeyEnvironment, tokenBudget, outputTokensPerTurn });
     if (!escalationSelection.ok) { console.error(escalationSelection.message); return 2; }
     const escalationKey = process.env[escalationSelection.selection.apiKeyEnvironmentVariable];

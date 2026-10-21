@@ -203,7 +203,8 @@ export class GroqModelProvider implements ModelProvider {
       parsed = JSON.parse(text);
     } catch (cause) {
       throw new ModelProviderError({
-        message: "Groq endpoint returned invalid JSON",
+        // Even short bodies can contain private text or a password.
+        message: `Groq endpoint returned invalid JSON (HTTP ${response.status}, ${response.headers.get("content-type") ?? "no content-type"}, ${Buffer.byteLength(text)} bytes)`,
         code: "provider-failure",
         providerId: this.metadata.id,
         retryable: false,

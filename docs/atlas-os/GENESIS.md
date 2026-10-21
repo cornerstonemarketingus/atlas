@@ -233,10 +233,11 @@ A Genesis project is a persistent environment: it can stop and resume later
 with its files, state and checkpoints intact.
 
 - **Contract** (`environment.mjs`): `describe · exec · files · snapshot ·
-  restore · destroy`, with declared capabilities. `LocalEnvironment`
-  (`local.mjs`) is the only implementation. `cloudflare-sandbox` is a named
-  seam (`CLOUD_SEAM`) with no code behind it yet: asking for it returns
-  `UNAVAILABLE`.
+  restore · destroy`, with declared capabilities. Genesis runs on
+  `LocalEnvironment` (`local.mjs`). `CloudflareSandboxEnvironment`
+  (`cloudflare.mjs`) is the cloud implementation; it is **not live until the
+  owner deploys it** (see "Cloud environments" below). Until then, asking for
+  `cloudflare-sandbox` returns `UNAVAILABLE` with that reason.
 - **Snapshot.** When each stage starts (scaffolding on a change, building,
   verifying, repairing, previewing, reviewing) and when the project becomes
   ready, the executor commits the workspace. The commit is copied into
@@ -278,6 +279,155 @@ with its files, state and checkpoints intact.
   Verification reinstalls and rebuilds them, so a running app's local data
   is not carried over. Digests are not signed: someone who can write both
   the database and the snapshot store can forge both.
+
+## Cloud environments: Cloudflare Sandboxes (decision D2, issue #351)
+
+**Status: built and tested, off by default, not live.** Cloudflare
+Sandboxes need the Workers Paid plan ($5/month). Until the owner enables the
+sandbox build and deploys, the Worker carries no container code and every
+broker call answers `503 UNAVAILABLE` with the reason ("needs the Workers
+Paid plan, the sandbox build and a deploy"). The local client then also
+reports `UNAVAILABLE`. Atlas never falls back from a sandbox to the host.
+
+It uses Sandbox SDK **1.0** (`@cloudflare/sandbox@1.0.0`, pinned). In 1.0
+the 0.x `getSandbox()` / `exec()` / `exposePort()` / `createBackup()` calls
+are gone. Instead:
+
+- our own Durable Object (`AtlasSandbox`) starts its container through
+  `ctx.container` (`durable_object` scheduling policy) and runs commands
+  with `ctx.container.exec(argv)`;
+- `Files` reads and writes files;
+- `DirectoryBackup` saves snapshots to R2;
+- previews go through `getTcpPort(port).fetch()`.
+
+### How it fits together
+
+| Piece | File | Job |
+|---|---|---|
+| Client | `apps/local-control/src/platform/environments/cloudflare.mjs` | `CloudflareSandboxEnvironment`: the Environment contract over HTTPS, plus the migrations below |
+| Broker | `apps/web/app/api/sandbox/broker.mjs`, routes `app/api/sandbox/[id]` and `[id]/[operation]` | Owner-only auth, the tenant-scoped sandbox name `t<tenantId>-<id>`, input validation |
+| Sandbox object | `apps/web/worker/sandbox-core.mjs`, `sandbox-object.mjs` | One container per environment: exec, files, tree, snapshot, restore, destroy, preview |
+| Image | `apps/web/sandbox/Dockerfile`, `tree-manifest.mjs` | Node 24 + git + coreutils; `sandbox-shim` 1.0.0; the tree helper |
+| Build switch | `apps/web/sandbox.config.json`, `sandbox/wrangler-sandbox.mjs`, `worker/index-sandbox.ts` | Adds the container, Durable Object, migration and R2 bucket only when enabled |
+
+### Behavior and guarantees
+
+- **Auth.** The routes accept only the deployment owner: the operator token
+  as a Bearer credential, or an operator session. This is the same gate as
+  the Genesis node routes. A sandbox runs arbitrary code.
+- **Tenancy.** The tenant comes from the caller's resolved workspace, never
+  from the request body. Each tenant's snapshots sit under their own R2 prefix
+  `tenants/<id>/`, so a backup record from another tenant does not restore.
+- **exec**
+  - Takes argv only, never a shell line.
+  - Runs under GNU `timeout`, which also stops any processes the command
+    starts. A hard SIGKILL follows if needed.
+  - Time is 1 s to 30 min, default 10 min. Output is capped at 1 MiB per
+    stream (default 256 KiB), and `truncated` reports when the cap was hit.
+  - The container starts with Internet access **off**, unless the
+    environment was created with `internet: true`.
+- **files**
+  - Paths are relative to `/workspace/project`.
+  - `..`, absolute paths and `.git/` are refused.
+  - Paths are also resolved with `realpath` inside the container, so a
+    symlink cannot lead out of the workspace.
+  - Files over 8 MiB are not transferred.
+- **snapshot**
+  - The workspace is saved with `DirectoryBackup` (R2, `tar+zstd`), keeping
+    `.git` and leaving out gitignored files. The record carries R2's sha256
+    of the archive.
+  - The tree entries come from `tree-manifest.mjs`: path, git mode and the
+    sha256 of each file.
+  - The client turns those entries into the tree digest with
+    `digestTreeEntries`, the same function `LocalEnvironment` uses. A
+    workspace therefore digests identically in either place; a test proves
+    this on a real repository.
+- **restore**
+  - Goes only into a *fresh* sandbox; an existing one gets `409 EXISTS`.
+  - The SDK checks the archive's sha256. The client then recomputes the tree
+    digest and compares it to the snapshot's.
+  - On any mismatch the fresh sandbox is destroyed and the restore fails
+    closed with `DIGEST_MISMATCH` or `BACKUP_INTEGRITY`.
+- **Migration.** Both directions are verified against the same digest.
+  - `migrateLocalSnapshotToCloud` reads the files from the local snapshot
+    repository and checks them against the snapshot's digest *before*
+    uploading anything, which catches a tampered store. It then uploads them
+    to a fresh sandbox and checks the cloud tree.
+  - `migrateCloudSnapshotToLocal` restores into a temporary sandbox,
+    downloads the files, commits them to a fresh folder, and checks the local
+    digest. The temporary sandbox is always destroyed.
+  - Symlinks and submodules are refused (`UNSUPPORTED`) for now.
+- **destroy** removes the container and the object's record. Snapshots in
+  R2 are kept.
+- **Previews.** A preview is served at `https://<port>-<token>.<previewDomain>/`.
+  - The token is 128 random bits. It is stored in the sandbox and in a
+    registry object, and checked in constant time.
+  - Each preview is its own origin, so it never sees the app's cookies.
+  - Previews need a custom domain with a wildcard DNS record and route.
+    Without one, `preview` answers `PREVIEW_NOT_CONFIGURED`.
+- **Credentials.**
+  - The client reads `ATLAS_CLOUD_SANDBOX_URL` and the token
+    `ATLAS_CLOUD_SANDBOX_TOKEN`, from the environment or the credential
+    vault.
+  - The URL must be https; plain http is allowed only on loopback, for tests.
+  - The token is the Worker's `ATLAS_OPERATOR_TOKEN`. It is held privately,
+    sent only as the Authorization header, and scrubbed from every error,
+    even when the broker echoes it.
+
+### Owner steps to turn it on
+
+1. **Plan.** Move the Cloudflare account to Workers Paid (Containers require it).
+2. **R2 bucket.** `npx wrangler r2 bucket create atlas-sandbox-backups`, or use
+   another name and set `backupBucket` in `apps/web/sandbox.config.json`.
+3. **API token.** The `CLOUDFLARE_API_TOKEN` repository secret that deploys the
+   Worker needs Containers edit and R2 edit permissions as well as Workers.
+4. **Enable the build.** Set `"enabled": true` in `apps/web/sandbox.config.json`.
+   Optionally set `"previewDomain": "<a domain you own>"`, add a wildcard DNS
+   record and a Worker route `*.<domain>/*` for it.
+   - The file is not a protected path. Enabling it with no paid plan makes
+     the deploy fail, so only the owner should flip it.
+   - The deploy workflow (`deploy-cloudflare.yml`, protected) needs **no
+     change**: it already builds with `npm run build` and deploys
+     `dist/server/wrangler.json`. GitHub's `ubuntu-latest` runner has the
+     Docker that `wrangler deploy` uses to build the image.
+5. **Deploy.** Merge to `main`, or run "Deploy Atlas web to Cloudflare Workers".
+   - No new Worker secret is needed: the broker uses `ATLAS_OPERATOR_TOKEN`,
+     which is already uploaded.
+6. **Point the daemon at it.** On the machine running the daemon, set
+   `ATLAS_CLOUD_SANDBOX_URL=https://<your Worker host>`, and store the
+   operator token as `ATLAS_CLOUD_SANDBOX_TOKEN` in the credential vault (or
+   the environment).
+7. **Check it.** `curl -H "Authorization: Bearer $TOKEN" -X POST https://<host>/api/sandbox/smoke`
+   should answer `{ "exists": true, ... }` rather than `503 UNAVAILABLE`. Then
+   delete the sandbox with `DELETE /api/sandbox/smoke`.
+
+The binding the enabled build adds (generated into `dist/server/wrangler.json`):
+
+```jsonc
+{
+  "main": "./worker/index-sandbox.ts",
+  "containers": [{ "name": "atlas-sandbox", "class_name": "AtlasSandbox", "scheduling_policy": "durable_object",
+                   "images": { "atlas": { "dockerfile": "<abs path>/apps/web/sandbox/Dockerfile" } } }],
+  "durable_objects": { "bindings": [/* INFERENCE_GOVERNOR, */ { "name": "ATLAS_SANDBOX", "class_name": "AtlasSandbox" }] },
+  "migrations": [/* v1-inference-governor, */ { "tag": "v2-atlas-sandbox", "new_sqlite_classes": ["AtlasSandbox"] }],
+  "r2_buckets": [{ "binding": "ATLAS_SANDBOX_BACKUPS", "bucket_name": "atlas-sandbox-backups" }],
+  "vars": { "ATLAS_SANDBOX_PREVIEW_DOMAIN": "<previewDomain, only when set>" }
+}
+```
+
+**Turning it off after it has been deployed** is not just `"enabled": false`.
+The deployed `AtlasSandbox` class must first be deleted with a migration
+`{ "tag": "v3-remove-atlas-sandbox", "deleted_classes": ["AtlasSandbox"] }`,
+and that deletes every sandbox's record. The snapshots in R2 survive.
+
+### Known limits
+
+- Snapshot digests come from a helper inside the sandbox. A compromised
+  sandbox could lie about its own tree. The archive's sha256 is checked by
+  the SDK, but the archive is also produced inside the sandbox.
+- Files move as base64 JSON, at most 8 MiB each.
+- Genesis does not yet choose the cloud kind on its own: it needs an explicit
+  `resolveEnvironmentKind("cloudflare-sandbox")` from a caller.
 
 ## Testing with the real coder and a browser
 
@@ -356,5 +506,16 @@ Without a runtime and an image it reports itself unavailable and never runs on t
   - 422: the render ran but failed.
   - 503: no sandbox, or no image configured.
   - 400: the job was refused by the render policy.
+
+The local console has a **Render a clip** panel on each Build project page (`ui.mjs`):
+- It shows what `GET /v1/render` reports, including the reason when rendering is unavailable.
+- For the owner only, it shows a form with ffmpeg presets:
+  - a title card with the sanitized project name as its caption;
+  - a test pattern.
+- The form submits `POST /v1/render/jobs`.
+- When the render finishes, the panel plays the resulting video artifact and lists the project's artifacts.
+- A paired device sees the panel's status but gets no form.
+
+`docker/render/` holds a project-owned, digest-pinned ffmpeg + headless Blender image for `ATLAS_RENDER_FFMPEG_IMAGE` / `ATLAS_RENDER_BLENDER_IMAGE`; see its README. `tests/render-ui.test.mjs` covers the panel against the real HTTP handler, plus a real-browser pass that runs when `ATLAS_TEST_PLAYWRIGHT` is set.
 
 `tests/sprint-journey.test.mjs` runs the cross-lane journey through the real HTTP handler: sentence → verified project → sandboxed render → video artifact (Range-served) → workspace lost → restore from snapshot → render again. In CI the container runtime is a stand-in; the real-container render is in `platform-render.test.mjs`.

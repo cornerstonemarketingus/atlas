@@ -25,7 +25,8 @@ async function fixture(t, { idleTimeoutSec = 120 } = {}) {
     openStore() { f.store = new PlatformTaskStore(storeFile, { clock: () => new Date(clock.now()) }); opened.push(f.store); return f.store; },
     manager(options = {}) {
       const leases = new ComputeLeaseStore(leaseFile); opened.push(leases);
-      return new ComputeManager({ store: f.store, leases, providers: [options.provider ?? provider], clock, idleTimeoutSec, ...options });
+      // These tests exercise the four stops; the monthly cap has its own tests and is set out of the way here.
+      return new ComputeManager({ store: f.store, leases, providers: [options.provider ?? provider], clock, idleTimeoutSec, monthlyCapMicroUsd: 1_000_000_000, ...options });
     },
     task(budget = { costMicroUsd: 1_000_000 }, parentTaskId = null, tenantId = "owner") {
       return f.store.createTask({ tenantId, userId: "user", objective: "Render a scene on a rented GPU", successCriteria: ["Frames saved"], budget, parentTaskId });

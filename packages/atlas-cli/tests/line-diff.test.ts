@@ -108,6 +108,8 @@ test("git apply accepts the editor's diffs", async (t) => {
   const after = before.replace("const v10 = 10;\n", "const v10 = 11;\nconst extra = true;\n").replace("const v50 = 50;\n", "");
   await writeFile(join(root, "src/values.ts"), before);
   execFileSync("git", ["init", "-q"], { cwd: root });
+  // This fixture deliberately supplies LF bytes; do not inherit user checkout conversion.
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: root });
 
   const editor = new SafeRepositoryFileEditor();
   const plan = await editor.preview(root, {

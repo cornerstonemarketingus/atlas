@@ -67,8 +67,9 @@ Responsibilities and due dates survive daemon restarts and mission completion.
 An owner label records accountability; it does not grant an agent permissions.
 Review requires a completed mission scoped to the same business with child
 evidence. Recording a review does not establish that every business KPI passed.
-Due responsibilities are surfaced for supervision; no background dispatcher
-automatically runs them yet.
+Due responsibilities are surfaced for supervision. The owner can explicitly
+configure [recurring preparation automations](BUSINESS-REVIEWS.md); assigning a
+responsibility alone never enables background work.
 
 Current execution uses isolated coding worktrees. Completion means reviewable
 preparation artifacts exist, not that hosting is live, CRM delivery succeeded or
@@ -116,6 +117,6 @@ model-supplied role argument would not establish that identity.
 
 Next integration work: connect owner-scoped conversation mutations, route
 operational steps through the authorized tool executor, verify receipts and live
-health checks, reconcile actual business spending receipts, dispatch recurring reviews
-with leases and deduplication, and connect improvement proposals to protected
+health checks, reconcile actual business spending receipts, strengthen review
+acceptance with independent KPI evidence, and connect improvement proposals to protected
 repository review and deployment policies.

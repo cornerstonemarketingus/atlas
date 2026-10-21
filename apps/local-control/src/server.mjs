@@ -28,10 +28,11 @@ import { AUTONOMY_LEVELS, assessAction, suggestRelaxations } from "./agent/kerne
 import { createAutomationRoutes, createWebhookRoute } from "./platform/automations/routes.mjs";
 import { createArtifactRoutes } from "./platform/artifacts/routes.mjs";
 import { createRenderRoutes } from "./platform/render/routes.mjs";
+import { createNodeRoutes } from "./platform/nodes/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, accountRoutes = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, nodes = null, accountRoutes = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -62,6 +63,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const worldRoutes = world ? createWorldRoutes({ world, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const artifactRoutes = artifacts ? createArtifactRoutes({ artifacts, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const renderRoutes = render ? createRenderRoutes({ render, genesis, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  // Atlas Nodes: owner machines that dial in for render jobs. Failed node tokens are rate limited per client.
+  const nodeRoutes = nodes ? createNodeRoutes({ service: nodes, tenantFor: artifactTenantFor, limiter, limits: { limit: 20, windowMs: 60_000 }, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const goalRoutes = goals ? createGoalRoutes({ goals, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, automations, goals, send: (response, status, value) => { send(response, status, value); return true; } });
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
@@ -108,6 +111,11 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     }
     // Webhook triggers authenticate with the secret in their own path, not a bearer token.
     if (webhookRoute && (request.url ?? "").startsWith("/v1/hooks/")) { if (await webhookRoute(request, response)) return; }
+    // A node authenticates with its own revocable token, which reaches nothing but the node routes.
+    if ((request.url ?? "").startsWith("/v1/node/")) {
+      if (!nodeRoutes) return send(response, 503, { message: "Atlas Nodes are not enabled in this process." });
+      if (await nodeRoutes.handleNode(request, response)) return;
+    }
     const identity = authenticate(request.headers.authorization, expected, store);
     if (!identity) return send(response, 401, { message: "A valid local Atlas or paired-device token is required." });
     // Off this machine, phones and laptops use their own paired, revocable token, not the owner's.
@@ -134,6 +142,10 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (/^\/v1\/render(\/|\?|$)/u.test(request.url ?? "")) {
       if (!renderRoutes) return send(response, 503, { message: "Rendering is not configured in this process." });
       if (await renderRoutes(request, response, identity)) return;
+    }
+    if (/^\/v1\/nodes(\/|\?|$)/u.test(request.url ?? "")) {
+      if (!nodeRoutes) return send(response, 503, { message: "Atlas Nodes are not enabled in this process." });
+      if (await nodeRoutes.handleOwner(request, response, identity)) return;
     }
     if (remoteRoutes && (request.url ?? "").startsWith("/v1/remote")) { if (await remoteRoutes(request, response, identity)) return; }
 

@@ -104,10 +104,37 @@ function introducedBusiness(prompt) {
   return { name: match[1].trim(), business: { kind: kind || null, noun: match[3].toLowerCase(), phrase: `${kind ? `${kind} ` : ""}${match[3]}`.toLowerCase() } };
 }
 
-/** "based in Eagan, Minnesota": where the business is, for local SEO. Never guessed when absent. */
+const TRADE_WORDS = "construction|roofing|plumbing|landscaping|electric|electrical|painting|remodeling|renovation|framing|builders|contractors|contracting|masonry|concrete|excavating|siding|flooring|hvac|heating|cooling|cleaning|carpentry|restoration";
+
+/**
+ * "…for Team Hahn Construction in Eagan, Minnesota, specializing in…": the
+ * owner named the business without describing it as "a … business". Only a
+ * capitalised multi-word name directly after "for" counts, and only when what
+ * follows looks like a description (a place, a comma, "specializing in"), so
+ * "for Inventory Items" or "for my shop" never become a business name.
+ */
+function namedBusiness(prompt) {
+  const match = new RegExp(`\\bfor\\s+((?:[A-Z][\\w&'.-]*)(?:\\s+[A-Z][\\w&'.-]*){1,5})(?=\\s+(?:in|near|of|at)\\s+[A-Z]|\\s*,|\\s+(?:specializ|offering|providing|that|which|who|with)|\\s*[.!]|\\s*$)`, "u").exec(prompt);
+  if (!match) return null;
+  const words = match[1].trim().split(/\s+/u);
+  const last = words.at(-1).replace(/[.!]+$/u, "").toLowerCase();
+  const name = words.join(" ").replace(/[.!]+$/u, "");
+  // The name must end in a business or trade word; a bare person or product name is not assumed to be a company.
+  if (new RegExp(`^(?:${BUSINESS_NOUNS})$`, "u").test(last)) return { name, business: { kind: null, noun: last, phrase: last } };
+  if (!new RegExp(`^(?:${TRADE_WORDS})$`, "u").test(last)) return null;
+  const kind = /^(?:builders|contractors|contracting)$/u.test(last) ? "construction" : last;
+  return { name, business: { kind, noun: "company", phrase: `${kind} company` } };
+}
+
+const US_REGIONS = "Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming";
+
+/** "based in Eagan, Minnesota" or "… Construction in Eagan, Minnesota": where the business is, for local SEO. Never guessed when absent. */
 function businessLocation(prompt) {
-  const match = /\b(?:based|located|serving|headquartered)\s+(?:in|near|around)\s+([A-Z][A-Za-z'-]+(?:\s[A-Z][A-Za-z'-]+){0,2})(?:,\s*([A-Z][A-Za-z'-]+(?:\s[A-Z][A-Za-z'-]+)?))?/u.exec(prompt);
-  return match ? { city: match[1], region: match[2] ?? null } : null;
+  const stated = /\b(?:based|located|serving|headquartered)\s+(?:in|near|around)\s+([A-Z][A-Za-z'-]+(?:\s[A-Z][A-Za-z'-]+){0,2})(?:,\s*([A-Z][A-Za-z'-]+(?:\s[A-Z][A-Za-z'-]+)?))?/u.exec(prompt);
+  if (stated) return { city: stated[1], region: stated[2] ?? null };
+  // A bare "in <City>, <State>" counts only when the region really is a US state, so "in Excel, Word" is never a place.
+  const bare = new RegExp(`\\bin\\s+([A-Z][A-Za-z'-]+(?:\\s[A-Z][A-Za-z'-]+){0,2}),\\s*(${US_REGIONS})\\b`, "u").exec(prompt);
+  return bare ? { city: bare[1], region: bare[2] } : null;
 }
 
 /** "specializes in A, B, C, and D": the services the owner actually offers. */
@@ -324,9 +351,9 @@ function questionsFor({ prompt, integrations }) {
 export function inferSpecification(prompt, { answers = {} } = {}) {
   const text = String(prompt ?? "").trim();
   if (!text) throw new Error("Describe what to build.");
-  const introduced = introducedBusiness(text);
-  const business = businessType(text) ?? introduced?.business ?? null;
   const { archetype, reasons } = classify(text);
+  const introduced = introducedBusiness(text) ?? (archetype === "website" ? namedBusiness(text) : null);
+  const business = businessType(text) ?? introduced?.business ?? null;
   const booking = has(text, /\b(booking|bookings|book|appointments?|reservations?|schedul\w*)\b/u);
   const entityDefs = detectEntities(text, archetype);
   const entities = entityDefs.map((entity) => ({ name: entity.name, fields: entity.fields.map((key) => field(key, entity.name)) }));

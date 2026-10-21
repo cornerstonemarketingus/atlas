@@ -2,12 +2,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendEntry, atlasCliAgent, draftTask, loadTasks, readLog, recurringFailures, runTask, toJson, toMarkdown, validateFixture } from "./index.mjs";
+import { appendEntry, atlasCliAgent, draftTask, loadTasks, readLog, recurringFailures, runTask, selectShard, toJson, toMarkdown, validateFixture } from "./index.mjs";
 
 const USAGE = `atlas-eval validate [--tasks dir] [--only id]
 atlas-eval dogfood add --task <text> --outcome success|failed|abandoned [--failure-class slug] --model <name> --input-tokens N --output-tokens N --intervention yes|no [--notes text]
 atlas-eval dogfood check | drafts [--threshold N] [--write-drafts dir]
-atlas-eval run --target provider:model:API_KEY_ENV[:base-url] [--target ...] [--tasks dir] [--only id] [--out report-prefix]`;
+atlas-eval run --target provider:model:API_KEY_ENV[:base-url] [--target ...] [--tasks dir] [--only id] [--shard k/n|day/n] [--out report-prefix]`;
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
 
@@ -48,7 +48,13 @@ async function main(args) {
   if (command === "dogfood") return dogfood(args);
   const dir = resolve(option(args, "--tasks") ?? join(repoRoot, "evals/tasks"));
   const only = option(args, "--only");
-  const tasks = (await loadTasks(dir)).filter((task) => only === undefined || task.id === only);
+  let tasks = (await loadTasks(dir)).filter((task) => only === undefined || task.id === only);
+  const shard = option(args, "--shard");
+  if (shard !== undefined) {
+    const slice = selectShard(tasks, shard);
+    console.log(`shard ${slice.index}/${slice.count}: ${slice.tasks.length} of ${tasks.length} tasks`);
+    tasks = slice.tasks;
+  }
   if (tasks.length === 0) { console.error("no tasks matched"); return 2; }
   if (command === "validate") {
     let failed = 0;
@@ -65,12 +71,22 @@ async function main(args) {
     if (targets.length === 0) { console.error(USAGE); return 2; }
     const agent = atlasCliAgent({ cliPath: join(repoRoot, "packages/atlas-cli/dist/src/cli.js") });
     const results = [];
+    const notRun = [];
     for (const target of targets) for (const task of tasks) {
+      // Once a provider refuses for quota, the rest of its tasks would only
+      // record the same refusal; list them as not run and move on.
+      if (results.some((r) => r.target === target && r.failureClass === "quota")) { notRun.push({ taskId: task.id, target, reason: "quota" }); continue; }
       const result = await runTask({ task, target, agent, repoRoot });
       console.log(`${result.passed ? "pass" : "fail"} ${task.id} ${target} ${result.failureClass ?? ""}`);
+      // Why a run failed, so a CI log alone can tell a weak model from a broken setup.
+      if (!result.passed) {
+        const why = result.evidence.agentError ?? result.evidence.agentMessage ?? result.evidence.infraError ?? "";
+        console.log(`  agent: ${result.evidence.agentStatus ?? "none"}; tool calls ${result.toolCalls}; tokens ${result.tokens.input}/${result.tokens.output}${why ? `; ${String(why).replace(/\s+/gu, " ").slice(0, 240)}` : ""}`);
+      }
       results.push(result);
     }
-    const report = { results, tasks, generatedAt: new Date().toISOString() };
+    if (notRun.length > 0) console.log(`not run (quota): ${notRun.length}`);
+    const report = { results, tasks, notRun, generatedAt: new Date().toISOString() };
     const out = option(args, "--out");
     if (out) { await writeFile(`${out}.json`, toJson(report)); await writeFile(`${out}.md`, toMarkdown(report)); }
     else console.log(toMarkdown(report));
