@@ -28,7 +28,7 @@ test("reconciliation verifies only exact saved attempt metadata and immutable re
   const calls = [];
   const fetcher = async (url, options) => {
     calls.push(String(url)); assert.equal(options.redirect, "manual"); assert.equal(options.headers.authorization, "Bearer fake-github"); assert.ok(options.signal);
-    return String(url).includes("/jobs?") ? Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 123, run_attempt: 1, head_sha: outcome.headSha, head_branch: "main", workflow_name: "Atlas Coder", status: "completed", conclusion: "cancelled", completed_at: outcome.completedAt }] }) : Response.json(run);
+    return String(url).includes("/jobs?") ? Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 123, run_attempt: 1, head_sha: outcome.headSha, head_branch: "main", workflow_name: run.display_title, status: "completed", conclusion: "cancelled", completed_at: outcome.completedAt }] }) : Response.json(run);
   };
   assert.deepEqual((await verifySavedExecution(task, { runId: 123, runAttempt: 1 }, "fake-github", fetcher)).outcome, outcome);
   assert.equal(calls[0], "https://api.github.com/repos/cornerstonemarketingus/atlas/actions/runs/123/attempts/1");
@@ -98,7 +98,7 @@ test("built Worker enforces authentication, same-origin intent and scoped exact-
   globalThis.fetch = async (url, options) => {
     calls++; assert.equal(options.redirect, "manual"); assert.equal(options.headers.authorization, "Bearer github-reconcile");
     assert.match(String(url), /^https:\/\/api.github.com\/repos\/cornerstonemarketingus\/atlas\/actions\/runs\/123\/attempts\/1/);
-    return String(url).includes("/jobs?") ? Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 123, run_attempt: 1, head_sha: outcome.headSha, head_branch: "main", workflow_name: "Atlas Coder", status: jobStatus, conclusion: "cancelled", completed_at: outcome.completedAt }] }) : Response.json(liveRun);
+    return String(url).includes("/jobs?") ? Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 123, run_attempt: 1, head_sha: outcome.headSha, head_branch: "main", workflow_name: run.display_title, status: jobStatus, conclusion: "cancelled", completed_at: outcome.completedAt }] }) : Response.json(liveRun);
   };
   t.after(() => { globalThis.fetch = originalFetch; delete globalThis.__reconcileEnv; for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   const { default: worker } = await import(new URL("../dist/server/index.js", import.meta.url));

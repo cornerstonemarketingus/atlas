@@ -944,3 +944,18 @@ The normal converse completion returned servedBy, but its early task-dispatch re
 Parallel continuation under the owner's explicit request: prebuilt local coder packaging reuses stale230 staging with an explicit installed marker while keeping developer builds; postmerge407 Atlas Node cancellation has real stalled-network regressions; postmerge406 category reports are being aligned to exclude quota refusals truthfully. Existing397 now owns vendor catalog/trust/routing; conflicting414 needs reconciliation before any independent merge. Preserve active ownership and protected workflow review.
 
 Eval438 validation follow-through: full affected atlas-eval package suite passed39/39 after the focused13/13 checks. Initial exact-head CI39598725107 and eval-fixtures39598725261 passed before this documentation-only integration with chat440. Fresh integrated-head CI remains required.
+
+
+## 2026-10-21 — verified receipt run-title repair (issue #432)
+
+#372 merged cb71137; successful Cloudflare39522378601 included it after an
+initial secret-upload deployment race. D1 migrations0017-0020/0022-0023 succeeded
+in39094569327. Hosted inspect39522548783 and coder39522564249 timed out: execution
+jobs succeeded but result reporting failed. Actual GitHub job workflow_name is
+the task-specific run title, not the static Atlas Coder/Runner label.
+Reused native verifier and scoped immutable storage; both run and job title must
+match the exact saved task. Real-metadata regression failed before repair; 11
+focused tests passed after, and two weakened title guards failed assertions.
+Also preserves explicit redirect refusal tests and repairs the Windows source
+scan (guard mutation failed as expected). Full build/CI/live revalidation pending.
+No new permissions, migration, claim release or coding retry introduced.
