@@ -27,7 +27,7 @@ test("reconciliation verifies only exact saved attempt metadata and immutable re
   const task = { taskId, repository: run.repository.full_name, mode: "coder", executionProvider: "managed", githubRunId: 123 };
   const calls = [];
   const fetcher = async (url, options) => {
-    calls.push(String(url)); assert.equal(options.redirect, "error"); assert.equal(options.headers.authorization, "Bearer fake-github"); assert.ok(options.signal);
+    calls.push(String(url)); assert.equal(options.redirect, "manual"); assert.equal(options.headers.authorization, "Bearer fake-github"); assert.ok(options.signal);
     return String(url).includes("/jobs?") ? Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 123, run_attempt: 1, head_sha: outcome.headSha, head_branch: "main", workflow_name: "Atlas Coder", status: "completed", conclusion: "cancelled", completed_at: outcome.completedAt }] }) : Response.json(run);
   };
   assert.deepEqual((await verifySavedExecution(task, { runId: 123, runAttempt: 1 }, "fake-github", fetcher)).outcome, outcome);
@@ -96,7 +96,7 @@ test("built Worker enforces authentication, same-origin intent and scoped exact-
   const previous = Object.fromEntries(Object.keys(configuration).map(key => [key, process.env[key]])); Object.assign(process.env, configuration);
   const originalFetch = globalThis.fetch; let jobStatus = "in_progress"; let calls = 0; let liveRun = run;
   globalThis.fetch = async (url, options) => {
-    calls++; assert.equal(options.redirect, "error"); assert.equal(options.headers.authorization, "Bearer github-reconcile");
+    calls++; assert.equal(options.redirect, "manual"); assert.equal(options.headers.authorization, "Bearer github-reconcile");
     assert.match(String(url), /^https:\/\/api.github.com\/repos\/cornerstonemarketingus\/atlas\/actions\/runs\/123\/attempts\/1/);
     return String(url).includes("/jobs?") ? Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 123, run_attempt: 1, head_sha: outcome.headSha, head_branch: "main", workflow_name: "Atlas Coder", status: jobStatus, conclusion: "cancelled", completed_at: outcome.completedAt }] }) : Response.json(liveRun);
   };
@@ -125,4 +125,13 @@ test("built Worker enforces authentication, same-origin intent and scoped exact-
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM conversation_messages WHERE id LIKE 'result:%'").get().n, 0);
   f.sqlite.exec("DROP TABLE task_execution_outcomes");
   const unavailable = await invoke(); assert.equal(unavailable.status, 503); assert.doesNotMatch(await unavailable.text(), /SQL|no such table|github-reconcile/);
+});
+
+test("saved-run redirects cannot authorize a receipt or leak response content", async () => {
+  let calls = 0;
+  await assert.rejects(verifySavedExecution({ taskId, repository: run.repository.full_name, mode: "coder" }, { runId: 123, runAttempt: 1 }, "fake-github", async (_url, options) => {
+    calls++; assert.equal(options.redirect, "manual");
+    return new Response("PRIVATE_REDIRECT_BODY", { status: 301, headers: { location: "https://private.invalid/credential" } });
+  }), error => !/PRIVATE_REDIRECT|private.invalid/.test(String(error)));
+  assert.equal(calls, 1);
 });

@@ -42,9 +42,19 @@ test("a refused installation token names the step that failed, never the body", 
 test("observer installation tokens use Actions read and bounded redirect-refusing transport", async () => {
   const configuration = githubAppConfiguration({ ATLAS_GITHUB_APP_ID: "123", ATLAS_GITHUB_INSTALLATION_ID: "456", ATLAS_GITHUB_APP_PRIVATE_KEY: pem });
   await createInstallationToken(configuration, async (_url, options) => {
-    assert.equal(options.redirect, "error"); assert.ok(options.signal);
+    assert.equal(options.redirect, "manual"); assert.ok(options.signal);
     assert.deepEqual(JSON.parse(options.body).permissions, { actions: "read" });
     return Response.json({ token: "github-observer-read-token" });
   }, { actions: "read" });
   await assert.rejects(createInstallationToken(configuration, () => assert.fail("Invalid scopes must not reach GitHub"), { actions: "admin" }));
+});
+
+test("installation-token redirects are rejected without following or leaking their response", async () => {
+  const configuration = githubAppConfiguration({ ATLAS_GITHUB_APP_ID: "123", ATLAS_GITHUB_INSTALLATION_ID: "456", ATLAS_GITHUB_APP_PRIVATE_KEY: pem });
+  let calls = 0;
+  await assert.rejects(createInstallationToken(configuration, async (url, options) => {
+    calls++; assert.equal(options.redirect, "manual"); assert.match(url, /^https:\/\/api.github.com\//);
+    return new Response("PRIVATE_REDIRECT_BODY", { status: 302, headers: { location: "https://private.invalid/credential" } });
+  }), error => !/PRIVATE_REDIRECT|private.invalid/.test(String(error)));
+  assert.equal(calls, 1);
 });

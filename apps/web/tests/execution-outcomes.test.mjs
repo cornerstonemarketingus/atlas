@@ -26,9 +26,18 @@ test("exact attempt API uses bounded requests without credential redirects", asy
   let calls = 0;
   const result = await verifyExecutionOutcome(identity, task, run, "fake-private-token", async (url, options) => {
     calls++; assert.equal(url, "https://api.github.com/repos/cornerstonemarketingus/atlas/actions/runs/123/attempts/1/jobs?per_page=100");
-    assert.equal(options.redirect, "error"); assert.equal(options.headers.authorization, "Bearer fake-private-token"); assert.ok(options.signal);
+    assert.equal(options.redirect, "manual"); assert.equal(options.headers.authorization, "Bearer fake-private-token"); assert.ok(options.signal);
     return Response.json(page([job]));
   });
   assert.equal(result.jobId, 456); assert.equal(calls, 1);
   await assert.rejects(verifyExecutionOutcome(identity, task, run, "fake-private-token", async () => new Response("private upstream error", { status: 429 })), error => !/private/.test(error.message));
+});
+
+test("job evidence cannot follow a credential redirect", async () => {
+  let calls = 0;
+  await assert.rejects(verifyExecutionOutcome(identity, task, run, "fake-private-token", async (_url, options) => {
+    calls++; assert.equal(options.redirect, "manual");
+    return new Response("PRIVATE_REDIRECT_BODY", { status: 307, headers: { location: "https://private.invalid/credential" } });
+  }), error => !/PRIVATE_REDIRECT|private.invalid/.test(String(error)));
+  assert.equal(calls, 1);
 });
