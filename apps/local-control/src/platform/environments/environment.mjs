@@ -20,10 +20,15 @@
  * - `local` — LocalEnvironment (local.mjs): a git workspace on this machine;
  *   a snapshot is a git commit kept in a per-environment snapshot repository
  *   plus a sha256 digest of the tree and a manifest.
- * - `cloudflare-sandbox` — the seam for the cloud implementation (persistent
- *   Cloudflare Sandboxes addressed by a stable id). Not implemented: asking
- *   for it returns `UNAVAILABLE` rather than pretending. See CLOUD_SEAM.
+ * - `cloudflare-sandbox` — CloudflareSandboxEnvironment (cloudflare.mjs): a
+ *   Cloudflare Sandbox behind the hosted Worker's broker, addressed by a
+ *   stable id. It resolves only when configured (ATLAS_CLOUD_SANDBOX_URL and
+ *   the ATLAS_CLOUD_SANDBOX_TOKEN credential); otherwise asking for it returns
+ *   `UNAVAILABLE` rather than pretending. See CLOUD_SEAM.
  */
+import { CloudflareSandboxEnvironment, cloudSandboxConfigured } from "./cloudflare.mjs";
+// cloudflare.mjs imports this module too. Neither uses the other's bindings at
+// load time (only inside functions), so the cycle is safe in either load order.
 
 export const ENVIRONMENT_OPERATIONS = Object.freeze(["describe", "exec", "snapshot", "restore", "destroy"]);
 
@@ -51,25 +56,33 @@ export function assertEnvironment(environment) {
 }
 
 /**
- * The seam for the cloud implementation. A future `CloudflareSandboxEnvironment`
- * maps the contract onto Cloudflare Sandboxes:
- *   create   → a sandbox addressed by a stable id (sleeps when idle, wakes on request)
- *   exec     → a command in the sandbox (argv, bounded by time and output)
- *   files    → the sandbox filesystem API
- *   snapshot → a sandbox snapshot plus the same treeDigest/manifestDigest as local,
- *              so a local snapshot can be restored in the cloud and the reverse
- *   restore  → restore the sandbox snapshot, recompute the digest, fail closed on mismatch
- *   destroy  → delete the sandbox
- * Credentials are injected by the hosted side, never passed through prompts.
- * Until it exists, `resolveEnvironmentKind("cloudflare-sandbox")` refuses.
+ * The cloud implementation (cloudflare.mjs) maps the contract onto Cloudflare
+ * Sandboxes through the hosted Worker's broker (apps/web/app/api/sandbox):
+ *   create   → a sandbox addressed by a stable, tenant-scoped id (sleeps when idle)
+ *   exec     → a command in the sandbox (argv, bounded by time and output, network off by default)
+ *   files    → the sandbox filesystem, confined to the workspace
+ *   snapshot → a Sandbox SDK directory backup in R2 plus the same treeDigest/manifestDigest
+ *              as local, so a local snapshot can be restored in the cloud and the reverse
+ *   restore  → into a fresh sandbox, digest recomputed, fail closed on mismatch
+ *   destroy  → delete the sandbox (snapshots are kept)
+ * Credentials stay in the vault or the environment, never in prompts or logs.
+ * It is live only when the owner has deployed the Worker with the sandbox
+ * build (Workers Paid plan); until then the broker answers UNAVAILABLE.
  */
-export const CLOUD_SEAM = Object.freeze({ kind: "cloudflare-sandbox", status: "interface-only" });
+export const CLOUD_SEAM = Object.freeze({ kind: "cloudflare-sandbox", status: "implemented-needs-deploy" });
 
-/** The provider registry: only kinds with a real implementation resolve. */
-export function resolveEnvironmentKind(kind, providers) {
+/**
+ * The provider registry: only kinds with a real implementation resolve.
+ * `cloudflare-sandbox` resolves to CloudflareSandboxEnvironment when it is
+ * configured in `env` (or a vault can supply the token), and is UNAVAILABLE otherwise.
+ */
+export function resolveEnvironmentKind(kind, providers, { env = process.env, vault = null } = {}) {
   const provider = providers?.[kind];
   if (provider) return provider;
-  if (kind === CLOUD_SEAM.kind) throw new EnvironmentError("UNAVAILABLE", "Cloud environments (Cloudflare Sandboxes) are not available yet; use a local environment.");
+  if (kind === CLOUD_SEAM.kind) {
+    if (cloudSandboxConfigured(env, { vault })) return CloudflareSandboxEnvironment;
+    throw new EnvironmentError("UNAVAILABLE", "Cloud environments (Cloudflare Sandboxes) are not configured: set ATLAS_CLOUD_SANDBOX_URL and the ATLAS_CLOUD_SANDBOX_TOKEN credential, and deploy the Worker with the sandbox build (needs the Workers Paid plan). Use a local environment until then.");
+  }
   throw new EnvironmentError("UNKNOWN_KIND", `There is no environment of kind ${kind}.`);
 }
 

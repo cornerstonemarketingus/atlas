@@ -45,6 +45,43 @@ export function manifestDigest(manifest) {
   return `sha256:${sha256(canonicalJson(manifest))}`;
 }
 
+const TREE_MODES = new Set(["100644", "100755", "120000", "160000"]);
+const byPath = (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+
+/**
+ * The tree-digest scheme, shared by every environment kind so a snapshot can
+ * be verified wherever it is restored (a local folder or a Cloudflare
+ * Sandbox, see cloudflare.mjs): entries sorted by path, each
+ * `<git mode> <path>\0<sha256 of the content>\n`, hashed with sha256.
+ * The content is the file's bytes, the text `symlink <target>` for a
+ * symlink, or `submodule <oid>` for a gitlink (see contentSha256).
+ * A malformed or duplicate entry throws BAD_TREE instead of producing a digest.
+ *
+ * @param {{ mode: string, path: string, sha256: string }[]} entries
+ */
+export function digestTreeEntries(entries) {
+  if (!Array.isArray(entries)) throw new EnvironmentError("BAD_TREE", "A tree is a list of entries.");
+  const seen = new Set();
+  for (const entry of entries) {
+    const path = entry?.path;
+    if (!TREE_MODES.has(entry?.mode) || typeof path !== "string" || !path || path.includes("\0") || path.startsWith("/")
+      || path.split("/").some((part) => part === "" || part === "." || part === "..")
+      || !/^[0-9a-f]{64}$/u.test(String(entry.sha256)) || seen.has(path)) {
+      throw new EnvironmentError("BAD_TREE", "The tree has a malformed or duplicate entry.", { path: typeof path === "string" ? path.slice(0, 200) : null });
+    }
+    seen.add(path);
+  }
+  const hash = createHash("sha256");
+  const sorted = [...entries].sort(byPath);
+  for (const entry of sorted) hash.update(`${entry.mode} ${entry.path}\0${entry.sha256}\n`);
+  return { digest: `sha256:${hash.digest("hex")}`, files: sorted.length };
+}
+
+/** sha256 (hex) of one entry's digest content: a file's bytes, `symlink <target>` or `submodule <oid>`. */
+export function contentSha256(content) {
+  return sha256(content);
+}
+
 /**
  * The digest of `commit`'s tree as it is on disk in `folder`: for every
  * tracked path (from the commit, not from the working copy's index) its git
@@ -53,25 +90,22 @@ export function manifestDigest(manifest) {
  */
 export async function treeDigest(folder, commit) {
   const listing = (await git(folder, ["ls-tree", "-r", "-z", "--full-tree", commit])).stdout.split("\0").filter(Boolean);
-  const hash = createHash("sha256");
   const entries = listing.map((line) => {
     const tab = line.indexOf("\t");
     const [mode, type, oid] = line.slice(0, tab).split(" ");
-    return { mode, type, oid, path: line.slice(tab + 1) };
-  }).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  for (const entry of entries) {
+    const path = line.slice(tab + 1);
     let content;
-    if (entry.type === "commit") content = `submodule ${entry.oid}`;
+    if (type === "commit") content = `submodule ${oid}`;
     else {
-      const path = join(folder, entry.path);
+      const absolute = join(folder, path);
       try {
-        const stat = lstatSync(path);
-        content = stat.isSymbolicLink() ? `symlink ${readlinkSync(path)}` : readFileSync(path);
+        const stat = lstatSync(absolute);
+        content = stat.isSymbolicLink() ? `symlink ${readlinkSync(absolute)}` : readFileSync(absolute);
       } catch { content = "\0missing"; }
     }
-    hash.update(`${entry.mode} ${entry.path}\0${sha256(content)}\n`);
-  }
-  return { digest: `sha256:${hash.digest("hex")}`, files: entries.length };
+    return { mode, path, sha256: sha256(content) };
+  });
+  return digestTreeEntries(entries);
 }
 
 export class LocalEnvironment {

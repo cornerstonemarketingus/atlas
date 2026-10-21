@@ -20,6 +20,7 @@
  * the interface can show. Atlas says it has no model rather than inventing a
  * reply, for the same reason it never invents a preview URL.
  */
+import { VENDORS } from "../../../../../packages/atlas-inference/src/catalog.mjs";
 
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1", "[::1]"];
 /** Hosted providers answer within a minute; anything else is a model the owner runs, which may take longer. */
@@ -64,7 +65,11 @@ function modelPoolFor(environment, model, fallback) {
 export function providerKind(baseUrl) {
   let origin;
   try { origin = new URL(baseUrl).origin; } catch { return "unknown"; }
-  return origin === "https://api.groq.com" ? "groq" : origin === "https://api.openai.com" ? "openai" : origin === "https://api.cloudflare.com" || origin === "https://workers-ai.binding" ? "workers-ai" : "self-hosted";
+  if (origin === "https://api.groq.com") return "groq";
+  if (origin === "https://api.openai.com") return "openai";
+  if (origin === "https://api.cloudflare.com" || origin === "https://workers-ai.binding") return "workers-ai";
+  const vendor = Object.values(VENDORS).find((entry) => new URL(entry.baseUrl).origin === origin);
+  return vendor ? vendor.id : "self-hosted";
 }
 
 /** @returns {{ configured: boolean, reason?: string, baseUrl?: string, model?: string, apiKey?: string|null, fallbackModel?: string|null, models?: string[] }} */

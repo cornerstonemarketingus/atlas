@@ -47,3 +47,22 @@ caps before rollout. User-owned local inference has hardware/electricity costs;
 hosted free allocations are finite; GPU serving adds rental and storage costs.
 Vendor pricing comparison remains a deployment-planning task once candidates are
 selected. Do not rent compute or increase API budgets automatically.
+
+## 2026-10-17 — result ownership integration checkpoint (#282)
+
+Integrated main 482948b through #270/#274/#276/#278 into the existing result
+ownership implementation. Added a built-Worker callback regression that changes
+the saved objective during GitHub verification and requires 409, no result writes,
+and no run linkage. Existing transaction ownership checks remain authoritative.
+Reports are executor-authored summaries, not verified successful outcomes.
+
+All ten workflow checks pass. Runner/local suite: 86 pass, one failure, one
+Linux-only skip (88 total); isolated process suite: five pass, two fail, one
+Linux-only skip. Windows inherited-pipe deadline and observer timing remain
+unresolved. Do not relabel these failures as a passing acceptance run.
+Fresh web validation is pending: npm ci stalled without an error, then was stopped;
+matching-lockfile dependencies are being copied from the verified parent checkout.
+Initial build/lint attempts before dependency completion failed to find binaries.
+No production migration/deployment, live OIDC, paid infrastructure or secret
+transfer occurred. Migration 0019 and protected owner review remain required.
+Next: finish #282 web validation and fresh CI; then #289 trusted outcome receipts.
