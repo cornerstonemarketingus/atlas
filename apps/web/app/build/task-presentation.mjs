@@ -1,4 +1,5 @@
 export function statusLine(task) {
+  if (task.status === "completed") return "The run ended. Its outcome is unconfirmed; check the reported results and run log.";
   if (task.status === "succeeded") {
     if (task.mode === "coder") return task.pullRequest?.url
       ? "The run finished and a pull request is available. Review its changes and validation evidence."

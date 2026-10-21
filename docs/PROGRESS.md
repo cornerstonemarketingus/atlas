@@ -898,6 +898,11 @@ PR415 integration: retained both independent progress entries; current main incl
 
 PR415 integration with #416: retained all concurrent progress entries; no diagnostic source conflict. Next: require all fresh exact-head CI before ordinary merge, then obtain authorized medium-task evidence under the existing review gates.
 
+## 2026-10-21 — truthful coder activity completion (#386)
+
+Chat TaskActivity now reuses the existing build status presentation: a successful runner with no pull request does not claim a change is ready, and a pull request prompts review of changes and validation evidence. Generic completed state remains explicitly unconfirmed. Coder run is a neutral title; terminal empty steps no longer claim GitHub has yet to start. No execution, approval, polling, result-storage or verification policy changed.
+
+Validation: production web build and lint passed; full web suite 620 tests, 615 passed, five optional browser skips, zero failures. Actual React-rendered completion tests cover no-PR success, reviewable PR, unknown completion, failure, timeout, cancellation, skipped, and dispatch states. Existing elapsed-clock/poll recovery coverage is preserved. Restoring main's TaskActivity makes the new tests fail; restoring the fix passes all five rendered/clock tests. Hosted UI deployment and authenticated browser acceptance remain pending; this change does not add test execution or establish objective completion.
 ## 2026-10-20 — owner delivery priority queue (#430)
 
 Recorded the latest human P0–P3 order at the top of docs/atlas-os/BACKLOG.md: inference survival and real verified website/coding outcomes first; continuity, safe execution and bounded improvement next; owned/optional GPU compute and artifact experience after that; experimental research last. Each row reuses current services/PR ownership and states required observable acceptance. Historical evidence remains intact. PROGRAM phase gates, review requirements and resource authorization remain unchanged; this records the queue, not completed capabilities or permission to start later phases.

@@ -4,6 +4,7 @@ import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
 import { activityTaskStatus } from "../app/chat/activity-poll.mjs";
+import { statusLine } from "../app/build/task-presentation.mjs";
 
 test("the elapsed clock advances while activity polling is unavailable", () => {
   const slots = [], effects = [], timers = [];
@@ -26,6 +27,7 @@ test("the elapsed clock advances while activity polling is unavailable", () => {
     setInterval: callback => { timers.push(callback); return timers.length; }, clearInterval() {},
     require(name) {
       if (name === "react") return react;
+      if (name.endsWith("task-presentation.mjs")) return { statusLine };
       if (name.includes("activity-poll")) return { activityTaskStatus, pollActivity: options => { polling = options; return () => {}; } };
       if (name === "react/jsx-runtime") return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) };
       return {};
@@ -53,5 +55,5 @@ test("the elapsed clock advances while activity polling is unavailable", () => {
   assert.match(visible, /last received update/);
   polling.onUnavailable(false);
   polling.onActivity({ status: "completed", conclusion: "success", steps: [] });
-  assert.match(text(render()), /Done\. The change is ready/);
+  assert.match(text(render()), /no pull request to show/);
 });
