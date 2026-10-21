@@ -916,3 +916,18 @@ Next: finish eligible P0 inference deployment/chat verification and actual websi
 Integrated current main b989b5a into PR431, retaining both independent progress histories and the eight requested priority rows. Provider397 merged externally as c848c5e and deployment39522378601 succeeded. Hosted runs39522548783 and39522564249 both reported route groq -> workers-ai -> openai, then failed waiting20minutes for runner/delivered findings. These are failed acceptance receipts, not evidence of newly configured providers or a passing chat release. New vendor secret names remain absent; no secrets were read or added. No repeat unchanged smoke was dispatched.
 
 Next: require fresh exact-head CI for the integrated queue PR; investigate the actual saved-task/findings failures with existing owners, obtain provisioned eligible provider keys, and complete fresh medium coder diagnosis through an authorized claim path. Preserve configured workflow review on395 and all native/tenant holds.
+
+## 2026-10-21 — consistent eval category quota accounting (#436)
+
+Follow-up to merged #406: per-target rates already exclude provider quota
+refusals, but category rates used all runs and understated the same result.
+Category JSON now preserves total runs while exposing attempted,
+quotaRefusals and passRate; Markdown divides by non-quota attempts and lists
+refusals separately. All-quota categories report null / 0/0 (n/a), while real
+model/test failures still count. This does not change quota classification,
+agent execution, workflow policy, or the existing Claude #410 handoff.
+
+Three report regressions failed unchanged main; focused report/adapter/quota
+suite passes 13/13. Full affected package validation remains in progress at
+this checkpoint. No live model score or provider acceptance is claimed.
+Next: complete affected package and exact-head CI before ordinary merge.
