@@ -269,7 +269,7 @@ for (const scenario of ["unconfigured", "unrecorded", "private"]) {
 for (const finalState of ["dispatched", "rejected", "immediate-rejection"]) {
   test(`mission adapter reconciles typed durable dispatch state: ${finalState}`, async t => {
     const { d1, sqlite } = fixture(t); let calls = 0; const taskId = randomUUID();
-    sqlite.exec("ALTER TABLE tasks ADD COLUMN dispatch_state TEXT NOT NULL DEFAULT 'legacy'");
+    assert.ok(sqlite.prepare("PRAGMA table_info(tasks)").all().some(column => column.name === "dispatch_state"), "the migrated fixture includes durable dispatch state");
     const handle = await runtime({ getD1: () => d1, missionRoutes,
       authenticatedAccount: async () => ({ userId: "operator" }), resolveTenantContext: async () => scope, tenantScope: value => value,
       githubAppConfiguration: () => ({ configured: false }), platformGitHubToken: () => "server-token",
@@ -297,3 +297,14 @@ for (const finalState of ["dispatched", "rejected", "immediate-rejection"]) {
     assert.equal(calls, 1, "reconciliation never replays a dispatch");
   });
 }
+
+test("mission storage failures expose no backend diagnostic or migration instructions", async () => {
+  const handle = missionRoutes({ authenticate: async () => ({}), resolveScope: async () => scope,
+    database: () => { throw new Error('PRIVATE_STORAGE table missing'); } });
+  const response = await handle(new Request('https://atlas.test/api/missions'));
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const body = await response.json();
+  assert.equal(body.message, 'Cloud missions are temporarily unavailable. Please try again later.');
+  assert.doesNotMatch(JSON.stringify(body), /PRIVATE_STORAGE|migration|0021/);
+});

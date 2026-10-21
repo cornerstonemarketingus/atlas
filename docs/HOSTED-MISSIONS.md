@@ -29,3 +29,7 @@ The adapter is compatible with the pending durable-dispatch contract in #270 wit
 3. Deploy the reviewed application revision. Confirm the deployment run SHA: the latest verified hosted release remains `dee7942d7fb4a3971229be1f2ca9d97e8cef3eaf` (deploy `38834441273`), which predates missions. A green branch preview or main CI is insufficient.
 4. With a configured authenticated account, save a mission, reload it, start one authorized managed task and reconcile its exact run and current-attempt result. Verify pause/stop prevents future dispatch and a second principal cannot read the first mission. Capture task/run/receipt IDs without credentials.
 5. Report unattended advancement as incomplete until a separately reviewed scheduler and scoped execution grants pass closed-page live acceptance. CRM account configuration and real website inquiry delivery also need separate live acceptance; merged local tools alone do not establish those outcomes.
+
+## Maintenance integration — 2026-10-21
+
+Current-main migration fixtures already contain dispatch_state. The durable-dispatch adapter tests now assert that migrated schema instead of applying a duplicate ALTER TABLE; their ownership, no-redispatch and outcome assertions are unchanged. Internal storage failures use fixed customer copy without migration instructions. All 20 cloud-mission tests pass locally, including real runtime adapter boundaries. Fresh complete CI remains required; no migration or production execution was performed by this integration.

@@ -37,7 +37,7 @@ export function missionRoutes({ authenticate, resolveScope, database, dispatch, 
       const mission = body.action === "advance" ? await service.advance(scope, id) : await service.control(scope, id, body.action);
       return Response.json({ mission }, { headers });
     } catch (error) {
-      return Response.json({ message: error instanceof MissionError ? error.message : "Cloud mission storage or execution is unavailable. Check migration 0021 and task setup." }, { status: error instanceof MissionError ? error.status : 503, headers });
+      return Response.json({ message: error instanceof MissionError ? error.message : "Cloud missions are temporarily unavailable. Please try again later." }, { status: error instanceof MissionError ? error.status : 503, headers });
     }
   };
 }

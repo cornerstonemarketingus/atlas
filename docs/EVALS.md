@@ -47,6 +47,11 @@ without dropping tasks:
   rate, because it measures the provider, not the model. The target's
   remaining tasks are listed under "Not run" instead of being run into the
   same refusal.
+  Target and category reports both use non-quota attempts as the pass-rate
+  denominator. Category JSON preserves total `runs` and adds `attempted`,
+  `quotaRefusals` and `passRate`; an all-quota category has `passRate: null`.
+  Markdown shows `0/0 (n/a)` when no attempt could be scored and lists quota
+  refusals separately. Genuine model/test failures remain in the denominator.
 - `--shard k/n` runs slice k of n, and `--shard day/n` picks the slice from
   the UTC date. A daily schedule with `day/7` covers every task once a week,
   each day's slice within the free allowance. Slices are dealt round-robin by
