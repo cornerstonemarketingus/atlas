@@ -36,6 +36,11 @@ have the evidence stated here, not a claim of Claude Code feature parity.
   choice and reopening an existing daemon. A concurrent expanded run hit two
   20-second PowerShell subprocess timeouts; isolated tests passed without
   raising those deadlines. No full-suite or reliable under-load success is claimed.
+- [x] Integrate main `6551234` and run all 18 affected tests sequentially:
+  18 pass, zero failures, unchanged subprocess deadlines. Installer failures
+  above remain separate. The background daemon is still the earlier tested
+  snapshot: policy review blocked a restart attempt, so integrated-head
+  live startup has not been claimed.
 - [x] Triage all 37 currently open PRs by descriptions and file inventories;
   inspect the five most relevant patches. See OPEN-PR-LAUNCH-TRIAGE-2026-10-21.md.
 
