@@ -97,6 +97,23 @@ jobs:
           # Optional: Cloudflare Workers AI on this account (token with Workers AI permission only).
           ATLAS_WORKERS_AI_TOKEN: ${{ secrets.ATLAS_WORKERS_AI_TOKEN }}
           ATLAS_WORKERS_AI_MODEL: ${{ secrets.ATLAS_WORKERS_AI_MODEL }}
+          # More free vendors chat bounces to when one refuses (packages/atlas-inference/src/catalog.mjs).
+          # Gemini, OpenRouter and Mistral free tiers may train on prompts: they are used only when
+          # ATLAS_ALLOW_TRAINING_PROVIDERS=1, and then only for requests made of Atlas's own system prompt
+          # and what the person typed (anything typed, pasted code included, may reach them).
+          # ATLAS_<VENDOR>_TIER=paid marks a paid plan as no-training; ATLAS_<VENDOR>_MODEL overrides its model.
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          ATLAS_CEREBRAS_MODEL: ${{ secrets.ATLAS_CEREBRAS_MODEL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ATLAS_GEMINI_MODEL: ${{ secrets.ATLAS_GEMINI_MODEL }}
+          ATLAS_GEMINI_TIER: ${{ secrets.ATLAS_GEMINI_TIER }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ATLAS_OPENROUTER_MODEL: ${{ secrets.ATLAS_OPENROUTER_MODEL }}
+          ATLAS_OPENROUTER_TIER: ${{ secrets.ATLAS_OPENROUTER_TIER }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          ATLAS_MISTRAL_MODEL: ${{ secrets.ATLAS_MISTRAL_MODEL }}
+          ATLAS_MISTRAL_TIER: ${{ secrets.ATLAS_MISTRAL_TIER }}
+          ATLAS_ALLOW_TRAINING_PROVIDERS: ${{ secrets.ATLAS_ALLOW_TRAINING_PROVIDERS }}
           # A second model on the same endpoint, tried when the first is
           # rate-limited ("none" turns it off). The runtime has read this since
           # the fallback was added, but it was never uploaded, so production
@@ -153,6 +170,18 @@ jobs:
             OPENAI_API_KEY \
             ATLAS_WORKERS_AI_TOKEN \
             ATLAS_WORKERS_AI_MODEL \
+            CEREBRAS_API_KEY \
+            ATLAS_CEREBRAS_MODEL \
+            GEMINI_API_KEY \
+            ATLAS_GEMINI_MODEL \
+            ATLAS_GEMINI_TIER \
+            OPENROUTER_API_KEY \
+            ATLAS_OPENROUTER_MODEL \
+            ATLAS_OPENROUTER_TIER \
+            MISTRAL_API_KEY \
+            ATLAS_MISTRAL_MODEL \
+            ATLAS_MISTRAL_TIER \
+            ATLAS_ALLOW_TRAINING_PROVIDERS \
             CLOUDFLARE_ACCOUNT_ID \
             ATLAS_CHAT_MODELS \
             ATLAS_TAVILY_API_KEY \

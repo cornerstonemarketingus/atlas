@@ -27,6 +27,20 @@ function fakeFetch(handler: (input: string | URL | Request, init?: RequestInit) 
   return (async (input: string | URL | Request, init?: RequestInit) => handler(input, init)) as typeof fetch;
 }
 
+test("successful non-JSON provider responses never expose even short private bodies", async () => {
+  for (const body of ["p4ss", "private-note", "PRIVATE_BODY_123456789"]) {
+    const provider = new GroqModelProvider({ apiKey: "test-key", models: [model],
+      fetchImplementation: fakeFetch(() => new Response(body, { status: 200, headers: { "content-type": "text/plain" } })),
+    });
+    await assert.rejects(provider.complete(request), (error: unknown) => {
+      assert.ok(error instanceof ModelProviderError);
+      assert.ok(!error.message.includes(body));
+      assert.match(error.message, /HTTP 200, text\/plain, \d+ bytes/);
+      return true;
+    });
+  }
+});
+
 test("sends a bearer token and parses a successful response", async () => {
   let observedAuth: string | undefined;
   let observedBody: unknown;

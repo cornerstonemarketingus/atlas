@@ -19,27 +19,33 @@ export function summarize(results, tasks = []) {
     c.runs++; c.passed += result.passed ? 1 : 0;
   }
   return Object.fromEntries(Object.entries(byTarget).map(([target, t]) => [target, {
-    runs: t.runs, passed: t.passed, verifiedRuns: t.verified, passRate: t.runs === 0 ? null : t.passed / t.runs,
+    // Quota refusals measure the provider, not the model: out of the rate.
+    runs: t.runs, attempted: t.runs - (t.failures.quota ?? 0), passed: t.passed, verifiedRuns: t.verified,
+    passRate: t.runs - (t.failures.quota ?? 0) === 0 ? null : t.passed / (t.runs - (t.failures.quota ?? 0)),
     toolCalls: t.toolCalls, toolErrors: t.toolErrors, toolAccuracy: t.toolCalls === 0 ? null : 1 - t.toolErrors / t.toolCalls,
     repairs: t.repairs, inputTokens: t.inputTokens, outputTokens: t.outputTokens,
     medianLatencyMs: median(t.latencies), medianTtftMs: median(t.ttfts), failures: t.failures, categories: t.categories,
   }]));
 }
 
-export function toJson({ results, tasks, generatedAt }) {
-  return JSON.stringify({ schemaVersion: 1, generatedAt, summary: summarize(results, tasks), results }, null, 2);
+export function toJson({ results, tasks, generatedAt, notRun = [] }) {
+  return JSON.stringify({ schemaVersion: 1, generatedAt, summary: summarize(results, tasks), results, notRun }, null, 2);
 }
 
-export function toMarkdown({ results, tasks, generatedAt }) {
+export function toMarkdown({ results, tasks, generatedAt, notRun = [] }) {
   const summary = summarize(results, tasks);
   const lines = [`# Atlas eval report`, "", `Generated ${generatedAt}. A pass means the task's own verify command exited 0; the agent's claims are not counted.`, ""];
   lines.push("| Target | Verified pass | Tool accuracy | Repairs | Median latency | Median TTFT | Tokens in/out | Failures |", "|---|---|---|---|---|---|---|---|");
   for (const [target, s] of Object.entries(summary)) {
-    lines.push(`| ${target} | ${s.passed}/${s.runs} (${pct(s.passed, s.runs)}) | ${s.toolAccuracy === null ? "n/a" : pct(s.toolCalls - s.toolErrors, s.toolCalls)} | ${s.repairs} | ${s.medianLatencyMs ?? "n/a"} ms | ${s.medianTtftMs ?? "n/a"} ms | ${s.inputTokens}/${s.outputTokens} | ${Object.entries(s.failures).map(([k, v]) => `${k}:${v}`).join(", ") || "none"} |`);
+    lines.push(`| ${target} | ${s.passed}/${s.attempted} (${pct(s.passed, s.attempted)})${s.attempted === s.runs ? "" : `, ${s.runs - s.attempted} refused for quota`} | ${s.toolAccuracy === null ? "n/a" : pct(s.toolCalls - s.toolErrors, s.toolCalls)} | ${s.repairs} | ${s.medianLatencyMs ?? "n/a"} ms | ${s.medianTtftMs ?? "n/a"} ms | ${s.inputTokens}/${s.outputTokens} | ${Object.entries(s.failures).map(([k, v]) => `${k}:${v}`).join(", ") || "none"} |`);
   }
   lines.push("", "## By category", "", "| Target | Category | Passed |", "|---|---|---|");
   for (const [target, s] of Object.entries(summary)) for (const [name, c] of Object.entries(s.categories)) lines.push(`| ${target} | ${name} | ${c.passed}/${c.runs} |`);
   lines.push("", "## Runs", "", "| Task | Target | Result | Failure | Latency |", "|---|---|---|---|---|");
   for (const r of results) lines.push(`| ${r.taskId} | ${r.target} | ${r.passed ? "pass" : "fail"} | ${r.failureClass ?? ""} | ${r.latencyMs} ms |`);
+  if (notRun.length > 0) {
+    lines.push("", "## Not run", "", "The provider's quota ran out, so these were not attempted. They are not failures.", "", "| Task | Target |", "|---|---|");
+    for (const r of notRun) lines.push(`| ${r.taskId} | ${r.target} |`);
+  }
   return lines.join("\n") + "\n";
 }
