@@ -142,10 +142,12 @@ const unavailable = (reason, nextStep) => ({ status: "unavailable", reason, next
  * @param {{ insert: Function, get: Function, countSince: Function }} store
  * @param {{ tenantId: number, principal: string }} scope
  */
-export async function createHostedSite({ store, scope, requestId, userMessage, input = {}, now = () => new Date() }) {
+export async function createHostedSite({ store, scope, requestId, userMessage, input = {}, now = () => new Date(), reserve = async () => {} }) {
   const plan = planHostedSite({ userMessage, description: input.description, template: input.template });
   if (!plan.ok) return failure(plan.code, plan.message);
   const id = `gen_${/^[0-9a-f-]{36}$/u.test(String(requestId)) ? requestId : crypto.randomUUID()}`;
+  try { await reserve(id); }
+  catch { return unavailable("history_required", "Project creation requires saved conversation history. Reopen a saved chat and try again. No creation request was sent."); }
   try {
     const existing = await store.get(scope, id);
     if (existing) return resultFromRow(existing);

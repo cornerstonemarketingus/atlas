@@ -269,9 +269,13 @@ export async function verifyStep({ client, meta, report, toolLog, toolOutcomes =
     ].filter(Boolean).join("; ");
     return { passed: false, reason: `${reason}. Recover the action and verify it on a new attempt.`, checker: "deterministic-tool-outcomes" };
   }
+  // The report is the agent's own words, but the tool log's `code` fields
+  // originate at the tool (and, through it, dependency/web/repository
+  // content) — the same provenance as the report, so it is wrapped the same
+  // way rather than spliced into the prompt raw.
   const messages = [
     { role: "system", content: "You verify whether a step's report meets its completion check. Be strict: judge only what the report and tool log show. Respond with JSON only." },
-    { role: "user", content: `Check: ${meta.doneWhen}\n\n${wrapUntrusted("report", report.slice(0, 6000)).text}\n\nTool log: ${JSON.stringify(toolLog.slice(-20))}\n\nReturn {"passed": true|false, "reason": "one sentence"}.` },
+    { role: "user", content: `Check: ${meta.doneWhen}\n\n${wrapUntrusted("report", report.slice(0, 6000)).text}\n\n${wrapUntrusted("tool log", JSON.stringify(toolLog.slice(-20))).text}\n\nReturn {"passed": true|false, "reason": "one sentence"}.` },
   ];
   try {
     const turn = await completeTurn(client, { model: meta.model, messages, tools: [], maxOutputTokens: 300, signal });

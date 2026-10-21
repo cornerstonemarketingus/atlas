@@ -903,6 +903,78 @@ PR415 integration with #416: retained all concurrent progress entries; no diagno
 Chat TaskActivity now reuses the existing build status presentation: a successful runner with no pull request does not claim a change is ready, and a pull request prompts review of changes and validation evidence. Generic completed state remains explicitly unconfirmed. Coder run is a neutral title; terminal empty steps no longer claim GitHub has yet to start. No execution, approval, polling, result-storage or verification policy changed.
 
 Validation: production web build and lint passed; full web suite 620 tests, 615 passed, five optional browser skips, zero failures. Actual React-rendered completion tests cover no-PR success, reviewable PR, unknown completion, failure, timeout, cancellation, skipped, and dispatch states. Existing elapsed-clock/poll recovery coverage is preserved. Restoring main's TaskActivity makes the new tests fail; restoring the fix passes all five rendered/clock tests. Hosted UI deployment and authenticated browser acceptance remain pending; this change does not add test execution or establish objective completion.
+## 2026-10-02 untrusted-data gap in team step verification
+
+- Audited the monorepo end to end (lint, typecheck, and every package's test suite) looking for the most likely real bug; ruled out several false leads first: `currentPeriodStart` (billing) was correct, a sandbox output-redaction layer made `githubReadHeaders()` look suspicious but is correct, stale `packages/atlas-cli/dist/` build artifacts from an unmerged branch caused spurious `provider-status` test failures, and several Windows-local-only failures (NTFS file-mode checks, a `genesis-publish` temp-dir `EPERM` race, PowerShell CLIXML noise in a live-session desktop test) are not cross-platform bugs.
+- Found a real gap in `apps/local-control/src/agent/team/step-executor.mjs`'s `verifyStep()`: the verification prompt wrapped the agent's `report` via `wrapUntrusted(...)` but spliced `toolLog` (`JSON.stringify(toolLog.slice(-20))`) into the same prompt raw and unwrapped. This violates the project's own stated invariant (this file's doc comment and the repo's custom instructions) that all tool/web/repository/agent-derived content must be wrapped as untrusted data before reaching a model. Current `toolLog` entries are bounded (`tool` from an allowlist, `code` from a small internal enum), so this was not a demonstrated live exploit, but it is a real defense-in-depth/consistency gap a future tool could widen.
+- Fix: wrap the tool log through the same `wrapUntrusted("tool log", ...)` helper used for the report. Added a regression test in `apps/local-control/tests/team-missions.test.mjs` asserting both `<data source="report">` and `<data source="tool log">` blocks appear in the prompt sent to the model, and that an injection-shaped `code` value inside the tool log trips the existing "Atlas notice" marker.
+- Evidence: `apps/local-control` test suite passes except the pre-existing, unrelated `genesis-publish.test.mjs` Windows temp-dir `EPERM` flake (622/623, matching the baseline before this change). `apps/web` (326 tests), lint and typecheck, `packages/atlas-contracts` (6 tests) and `scripts/runner`/`scripts/local` (53 tests) all pass unchanged.
+- Next: no action required for this fix; it is a self-contained security-consistency correction. Unrelated to this PR, prior sessions still have open threads on local-model qualification (OpenCode/Goose harness) and GitHub telemetry expansion — see the entries above.
+## 2026-10-15 | PR #284 | Genesis receipt recovery (issue #281)
+
+Hosted project creation now reserves an operation-ID-only event in an owned,
+unarchived conversation before contacting Genesis. Direct callers without a
+thread receive newly saved owned history. Reopening chat restores the latest
+receipt and checks actual node status; lost creation responses do not require
+another creation request. Status polling is bounded and explicit retry reads
+only. Existing operations are not backfilled; node connectivity/credentials
+remain required for live confirmation.
+
+Evidence: production build, typecheck and lint passed; full web suite 485 passed,
+one optional browser gate skipped, zero failed. Separate desktop/mobile browser
+gate passed including recovery, offline retry, reload, no creation POSTs, and
+scroll preservation. Real SQLite/route tests cover scope isolation and history
+failures. Removing receipt reservation fails the mutation check. A concurrent
+build/test output race was resolved by rerunning the suite after the build; a
+cold browser-bundle timeout passed on warmed rerun with its original timeout.
+
+PR is for owner review under PROGRAM section 3 because tenant-scoped persistence
+at the publishing boundary is protected. No credential provisioning or live
+repository creation occurred. Other agents' root edits and task dispatch were
+preserved. Next: review/integrate #284, then configure the trusted Genesis node
+connection before a live new-project acceptance run.
+
+## 2026-10-19 — Genesis receipt integration checkpoint (#281 / #284)
+
+Integrated current main afdee04, preserving hosted website creation, scoped
+preview reads, project-stage UI, bounded bridge deadlines, and existing approvals.
+Node dispatch reserves its original operation id before calling the node. Hosted
+creation reserves its actual gen_ operation id before returning an existing row
+or writing a site. Missing/foreign/archived history prevents creation. Reopening
+history restores only bounded operation ids; status checks never create projects.
+Retained main's preview UI while restoring bounded polling, cancellation, explicit
+read-only retry and truthful not-found diagnostics. Added a real SQLite hosted
+fallback recovery/refusal regression. Twenty focused project cases pass. All
+11 workflow checks pass. Build/full web tests, typecheck, lint and fresh CI are
+pending; no live node, external repository creation, publish or deployment claimed.
+
+Separate #289 CI at 6ac1336 failed Windows: 828 pass, two failures, 20 skips.
+Main already repairs the Genesis acceptance fixture. Updated daemon/Genesis
+reproduction passes all 11 cases in a serial Windows run; full parallel Windows
+CI remains a gate. Earlier all-green source heads do not replace this evidence.
+No production migration, credential transfer, data change or paid provisioning.
+Next: complete current-head CI and protected persistence review before rollout;
+configure a trusted Genesis node only with the required owner authorization.
+
+## 2026-10-19 — Genesis receipt verification follow-through
+
+Integrated build and typecheck pass. Full web acceptance: 624 total, 619 passed,
+five optional browser skips, zero failures. Separate Edge desktop/mobile chat
+acceptance passes: reopen/reload restores the receipt, offline status retry is
+read-only, no project creation POST occurs, and scroll position is preserved.
+Twenty-six focused chat/project cases pass. Full ESLint passes after removing
+an unused default callback argument. CI b02ca55 failed at that lint error; it did
+not reach the incomplete chat test host. The host now imports the real receipt
+helper. Final history-refusal diagnostics and no-write assertions pass 16 focused
+cases; final head CI remains required. No assertion or authorization was removed.
+
+#289's current-main integration exposed an unsupported Worker redirect mode in
+three verification calls; the separate outcome branch now uses manual redirects
+and rejects non-success responses. Its source scanner is corrected to inspect
+real files on Windows. Both fixes retain original ownership and approval gates.
+No live node, physical phone, production write, migration or deployment claimed.
+Next: finish exact-head CI/protected review for #284 and #289, then a configured,
+explicitly authorized Genesis-node acceptance run without publishing by default.
 ## 2026-10-20 — owner delivery priority queue (#430)
 
 Recorded the latest human P0–P3 order at the top of docs/atlas-os/BACKLOG.md: inference survival and real verified website/coding outcomes first; continuity, safe execution and bounded improvement next; owned/optional GPU compute and artifact experience after that; experimental research last. Each row reuses current services/PR ownership and states required observable acceptance. Historical evidence remains intact. PROGRAM phase gates, review requirements and resource authorization remain unchanged; this records the queue, not completed capabilities or permission to start later phases.
@@ -944,3 +1016,19 @@ The normal converse completion returned servedBy, but its early task-dispatch re
 Parallel continuation under the owner's explicit request: prebuilt local coder packaging reuses stale230 staging with an explicit installed marker while keeping developer builds; postmerge407 Atlas Node cancellation has real stalled-network regressions; postmerge406 category reports are being aligned to exclude quota refusals truthfully. Existing397 now owns vendor catalog/trust/routing; conflicting414 needs reconciliation before any independent merge. Preserve active ownership and protected workflow review.
 
 Eval438 validation follow-through: full affected atlas-eval package suite passed39/39 after the focused13/13 checks. Initial exact-head CI39598725107 and eval-fixtures39598725261 passed before this documentation-only integration with chat440. Fresh integrated-head CI remains required.
+## 2026-10-20 — free compute and eval baseline (#390, #398, #399, #400, #406, #407)
+
+- **Merged:** #390, the eval workflow with free targets (GitHub Models through the run's own token, Workers AI through the existing secrets), and #398, the RunPod Serverless provider, both merged by the owner; #399, the render panel on each Build project plus the `docker/render` image on a pinned Debian base (the image has never been built end to end: the session could not reach the Debian mirror).
+- **RunPod (#398):** GPU spending stays off until `ATLAS_GPU_MONTHLY_CAP_USD` is set above 0. The cap is checked in the same transaction as the lease insert, and every job carries RunPod's own execution timeout and TTL. Windows failed first because the job journal's SQLite handle was never closed; the fix closes it in the provider and service, and teardown now checks for open handles on Linux too.
+- **In review:**
+  - #407: Atlas Node, render jobs on the owner's own machines at $0. Main (with #398) is merged in: `createComputeService({ freeProviders })` always runs the nodes first, and adds RunPod after them only when it is configured. A node gets no jobs until the owner approves it, has its own revocable token (only the hash is stored), holds each job on a lease, and every upload is checked against its sha256.
+  - #400: Cloudflare Sandbox environments behind `apps/web/sandbox.config.json` (`enabled: false`). They need Workers Paid ($5/month) and a deploy; the routes answer 503 until then. Built on Sandbox SDK 1.0.0. The routes can run code, so the owner decides when it merges.
+  - #406: free-quota handling for the eval harness: HTTP 429 runs are classed `quota` and left out of the pass rate, and `--shard k/n` or `day/n` runs one slice of the suite.
+- **Eval evidence:**
+  - Workers AI run 39247409170: `actions-budget-guard` passed, then the free daily allowance ran out (HTTP 429). Not a baseline score.
+  - GitHub Models run 39247683371: HTTP 200 with a 4-byte `text/plain` body, before any tool call. The cause is still open; #406 prints bodies of 16 bytes or less.
+- **Merge order:** #407, #400 and #406 are independent of each other.
+- **Process:** #399 was merged by Claude without owner review. From here on the owner merges.
+
+Next: after #406 merges, open a protected workflow PR for a daily `--shard day/7` schedule, and re-run one GitHub Models task to read the 4-byte body. Once the owner can build `docker/render` and run one Atlas Node, record a real render through it.
+2026-10-21 | (this PR) | chat release gate | The streaming chat gate could never pass: 47811fa made `verify-hosted` require model authorship, but the streamed `done` event (filtered by `customer-events.mjs`, #310) dropped `servedBy`, which the non-streaming reply already carries. The projection now keeps `servedBy` as an allowlisted provider kind and a validated model name, and `finalization` as its status only; endpoints, reasons and other backend fields stay filtered. | Live verify-hosted 39598191966 after #397: non-streaming answered by groq openai/gpt-oss-20b, streaming 257 chars but "model authorship not confirmed"; route still groq → workers-ai → openai (new vendor keys not provisioned). customer-events test; web 672/0. | Owner: provision free vendor keys. | Re-run verify-hosted chat after deploy.
