@@ -689,6 +689,24 @@ separate live-health/business outcome adapters. No live business action claimed.
 
 
 
+## 2026-10-17 — result ownership integration checkpoint (#282)
+
+Integrated main 482948b through #270/#274/#276/#278 into the existing result
+ownership implementation. Added a built-Worker callback regression that changes
+the saved objective during GitHub verification and requires 409, no result writes,
+and no run linkage. Existing transaction ownership checks remain authoritative.
+Reports are executor-authored summaries, not verified successful outcomes.
+
+All ten workflow checks pass. Runner/local suite: 86 pass, one failure, one
+Linux-only skip (88 total); isolated process suite: five pass, two fail, one
+Linux-only skip. Windows inherited-pipe deadline and observer timing remain
+unresolved. Do not relabel these failures as a passing acceptance run.
+Fresh web validation is pending: npm ci stalled without an error, then was stopped;
+matching-lockfile dependencies are being copied from the verified parent checkout.
+Initial build/lint attempts before dependency completion failed to find binaries.
+No production migration/deployment, live OIDC, paid infrastructure or secret
+transfer occurred. Migration 0019 and protected owner review remain required.
+Next: finish #282 web validation and fresh CI; then #289 trusted outcome receipts.
 ## 2026-10-17 coder context recovery (issue #287)
 
 - Live run 38819478158 confirms #269 repaired repo_browser aliases in production. The same run still failed on HTTP 413 after substantial context growth; alias repair alone is not task completion. Hosted authenticated inspection 38848539074 passed.
@@ -737,6 +755,19 @@ Account344 merged c746663 after ALL CI39087720052 passed, deployment39087988081 
 Repository settings GET/PUT/DELETE still returned raw storage errors or migration0015 instructions, and auth exceptions escaped their context boundary. Reused existing fixed customerFailure contract (503/reference/no-store); unchanged auth/tenant resolution, owner/admin management, deployment allowlist, default-tenant zero-gate policy, validation and scoped writes. Three actual TypeScript-handler privacy regressions fail prior main; all10focused actual account/settings/validation cases pass after repair, covering auth/tenant/list/default/write faults with private/path/token/table sentinels and successful denial/scoping/mutation behavior. No new tenant policy or credential permissions. Broad checks/CI/deployment pending at this checkpoint. Native329/320 remain held for the already reported protected-signing automatic-review rejection; no bypass or signing edit.
 
 Repository settings validation: production build/typecheck and direct installed ESLint pass; fullweb507tests504pass3optional skips0fail. Npm-wrapper lint was slow; direct installed binary completed successfully. No deployed adversarial settings acceptance claimed. Fresh PR CI remains required.
+
+
+## 2026-10-18 — cloud observer release integration (#372)
+
+Owner explicitly authorized merge and deployment. Preserved current main and
+callback-ownership #282, including its corrected claimed-run assertion.
+Reconciled Saved requests session fencing with reconciliation/observation actions;
+stale responses cannot update a closed or replaced history session. Consolidating
+#270/#274/#276/#278/#282/#289/#312/#335/#372 into one main release to avoid
+intermediate deployments. Original observer head passed 539 tests and all CI;
+combined-head validation is pending. Production D1 dry run39094365828 confirmed
+missing schema; authorized additive migrations0017-0020,0022-0023 applied
+successfully in39094569327. Cloud-mission migration0021 excluded. No code deploy yet.
 ## 2026-10-18 — shared governor for runner model calls (branch claude/shared-governor-runner)
 
 Closes the documented gap that coder inference did not share capacity with hosted chat. Worker gateway `/api/inference/governor` (own `ATLAS_GOVERNOR_TOKEN`, not the operator token) and CLI `GovernedModelProvider` wired around each coder route inside the retry layer; off unless `ATLAS_GOVERNOR_URL` and `ATLAS_GOVERNOR_TOKEN` are set. Evidence: gateway 4 tests over the real ledger core; CLI 555/555 (15 new, including a real HTTP socket proving a 429 on one runner makes a second runner on the same key wait without sending a provider request); web 506 pass/3 skipped; runner 81/81; workflows valid. Protected paths changed (deploy/coder/steward workflows, a new auth-gated route): owner review required. Not deployed. Next: owner adds the secret/variable and deploys, then verify with a real coder run; pass rate-limit headers through the provider contract.
