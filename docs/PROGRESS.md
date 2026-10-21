@@ -866,3 +866,11 @@ Cloud response #403 integration: preserved concurrent progress entries and curre
 PR415 integration: retained both independent progress entries; current main includes #403 cloud deadlines and #404 business review. All prior exact-head CI39379249241 passed before this docs-only conflict resolution. Next: inspect fresh integrated-head CI; medium coder diagnosis and provider release remain subject to their documented review/evidence gates.
 
 PR415 integration with #416: retained all concurrent progress entries; no diagnostic source conflict. Next: require all fresh exact-head CI before ordinary merge, then obtain authorized medium-task evidence under the existing review gates.
+
+## 2026-10-20 — owner delivery priority queue (#430)
+
+Recorded the latest human P0–P3 order at the top of docs/atlas-os/BACKLOG.md: inference survival and real verified website/coding outcomes first; continuity, safe execution and bounded improvement next; owned/optional GPU compute and artifact experience after that; experimental research last. Each row reuses current services/PR ownership and states required observable acceptance. Historical evidence remains intact. PROGRAM phase gates, review requirements and resource authorization remain unchanged; this records the queue, not completed capabilities or permission to start later phases.
+
+Coder diagnostic PR415 merged cdfcc836e18d2db4e608b2292e915fde3b9cc88e after every exact-head check at0f6355a passed; merged-main CI39387977894 passed. Its private argument fingerprints enable diagnosis, not a Mode B completion claim. Provider397 correction was independently checked, but configured review/new credentials and fresh medium-task evidence remain outstanding. Documentation checked for complete priorities, existing-work references and diff hygiene; no runtime tests warranted for this queue-only update.
+
+Next: finish eligible P0 inference deployment/chat verification and actual website/medium coder acceptance, preserving configured reviews, claim gates and active ownership; diagnose repeated calls from the new trace before selecting a B repair. P1–P3 remain queued according to PROGRAM exit gates.
