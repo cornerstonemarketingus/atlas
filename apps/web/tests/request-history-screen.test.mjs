@@ -3,11 +3,11 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
-import { readTaskRequests, requestExplanation } from "../app/build/request-inspection-client.mjs";
+import { readTaskRequests, requestExplanation, reconcileTaskRequest, configureTaskObservation } from "../app/build/request-inspection-client.mjs";
 
 const key = "11111111-1111-4111-8111-111111111111";
 const saved = (objective) => ({ requestKey: key, createdAt: "2026-10-17 00:00:00", state: "task-saved", receiptState: "reserved", outcomeStatus: null,
-  task: { taskId: key, conversationId: key, repository: "owner/repo", branch: "main", objective, dispatchState: "unknown" } });
+  task: { taskId: key, conversationId: key, repository: "owner/repo", branch: "main", objective, dispatchState: "unknown", execution: { runId: 123, runAttempt: 1, expiresAt: "2026-10-19T00:00:00Z", outcome: null, observation: null } } });
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Run the actual component and real GET client. Deferred responses deliberately
@@ -42,7 +42,7 @@ function history() {
     require(name) {
       if (name === "react") return react;
       if (name === "react/jsx-runtime") return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) };
-      if (name.endsWith("request-inspection-client.mjs")) return { requestExplanation, readTaskRequests: options => readTaskRequests({ ...options, fetcher }) };
+      if (name.endsWith("request-inspection-client.mjs")) return { requestExplanation, readTaskRequests: options => readTaskRequests({ ...options, fetcher }), reconcileTaskRequest: options => reconcileTaskRequest({ ...options, fetcher }), configureTaskObservation: options => configureTaskObservation({ ...options, fetcher }) };
       if (name.endsWith(".css")) return {};
       throw new Error(`Unexpected component import: ${name}`);
     },
@@ -152,3 +152,20 @@ test("batched close and reopen starts a fresh history session", async () => {
   assert.match(panel.text(), /Reopened/); assert.doesNotMatch(panel.text(), /STALE_DETAIL/);
   panel.unmount();
 });
+
+for (const action of ["Reconcile execution", "Enable automatic checks"]) {
+  test(`${action} is single-flight and fenced after close/reopen`, async () => {
+    const panel = history(); panel.toggle(true);
+    panel.page(0, "Initial"); await settle();
+    panel.click(action);
+    assert.equal(panel.requests[1].options.method, "POST");
+    panel.poll(); assert.equal(panel.requests.length, 2);
+    panel.toggle(false); panel.toggle(true);
+    assert.equal(panel.requests[1].options.signal.aborted, true);
+    panel.page(2, "Current session"); await settle();
+    panel.detail(1, "STALE_MUTATION"); await settle();
+    assert.match(panel.text(), /Current session/);
+    assert.doesNotMatch(panel.text(), /STALE_MUTATION|Status updated/);
+    panel.unmount(); assert.equal(panel.writesAfterUnmount(), 0);
+  });
+}

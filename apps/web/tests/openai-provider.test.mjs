@@ -38,11 +38,11 @@ test("both Groq models can rate-limit and OpenAI continues the same context with
   assert.equal(calls[2].body.reasoning_effort, "none");
 });
 
-test("temporary errors recover but authentication failures do not silently switch providers", async () => {
+test("temporary errors and rejected keys move to the next provider; a malformed request does not", async () => {
   for (const status of [401, 403, 400, 503]) {
     const urls = [];
     await callModel(resolveChatProvider(env), turns, { stream: false, fetcher: async (url) => { urls.push(url); return new Response("", { status: urls.length === 1 ? status : 200 }); } });
-    assert.equal(urls.length, status === 503 ? 2 : 1);
+    assert.equal(urls.length, status === 400 ? 1 : 2);
   }
   let attempts = 0;
   const recovered = await callModel(resolveChatProvider(env), turns, { stream: false, fetcher: async () => { if (++attempts === 1) throw new TypeError("offline"); return new Response("ok"); } });
@@ -77,7 +77,7 @@ test("selected OpenAI recovers through configured models with the same context a
   assert.ok(calls.slice(1).every(c => c.url.startsWith("https://api.groq.com/") && c.body.max_tokens === 2048 && c.body.max_completion_tokens === undefined));
 });
 
-test("selected provider recovery respects opt-out, endpoint validation and authentication failures", async () => {
+test("selected provider recovery respects opt-out and endpoint validation; a rejected key moves on, a malformed request does not", async () => {
   for (const overrides of [{ ATLAS_CHAT_FALLBACK_MODEL: "none" }, { ATLAS_CHAT_BASE_URL: "http://remote.test/v1" }, { ATLAS_CHAT_BASE_URL: "https://user:password@remote.test/v1" }, { ATLAS_CHAT_BASE_URL: "https://api.openai.com/v1" }]) {
     assert.equal(resolveChatProvider({ ...env, ...overrides }, "openai").providerFallback, undefined);
   }
@@ -85,7 +85,7 @@ test("selected provider recovery respects opt-out, endpoint validation and authe
     let calls = 0;
     const response = await callModel(resolveChatProvider(env, "openai"), turns, { stream: false, fetcher: async () => { calls++; return new Response("", { status }); } });
     assert.equal(response.status, status);
-    assert.equal(calls, 1);
+    assert.equal(calls, status === 400 ? 1 : 2);
   }
 });
 
