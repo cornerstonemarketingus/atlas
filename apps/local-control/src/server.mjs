@@ -32,7 +32,7 @@ import { createNodeRoutes } from "./platform/nodes/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, nodes = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, nodes = null, accountRoutes = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -128,6 +128,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (!businessService && (request.url ?? "").startsWith("/v1/businesses")) return send(response, 503, { message: "The business service is not running in this process." });
     if (commandCenterRoutes(request, response)) return;
     if (worldRoutes && await worldRoutes(request, response, identity)) return;
+    if (accountRoutes && await accountRoutes(request, response, identity)) return;
     if (goalRoutes && (request.url ?? "").startsWith("/v1/goals")) { if (await goalRoutes(request, response, identity)) return; }
     if (automationRoutes && (request.url ?? "").startsWith("/v1/automations")) { if (await automationRoutes(request, response, identity)) return; }
     if ((request.url ?? "").startsWith("/v1/genesis")) {
