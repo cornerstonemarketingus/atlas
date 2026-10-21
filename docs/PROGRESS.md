@@ -898,6 +898,11 @@ PR415 integration: retained both independent progress entries; current main incl
 
 PR415 integration with #416: retained all concurrent progress entries; no diagnostic source conflict. Next: require all fresh exact-head CI before ordinary merge, then obtain authorized medium-task evidence under the existing review gates.
 
+## 2026-10-21 — truthful coder activity completion (#386)
+
+Chat TaskActivity now reuses the existing build status presentation: a successful runner with no pull request does not claim a change is ready, and a pull request prompts review of changes and validation evidence. Generic completed state remains explicitly unconfirmed. Coder run is a neutral title; terminal empty steps no longer claim GitHub has yet to start. No execution, approval, polling, result-storage or verification policy changed.
+
+Validation: production web build and lint passed; full web suite 620 tests, 615 passed, five optional browser skips, zero failures. Actual React-rendered completion tests cover no-PR success, reviewable PR, unknown completion, failure, timeout, cancellation, skipped, and dispatch states. Existing elapsed-clock/poll recovery coverage is preserved. Restoring main's TaskActivity makes the new tests fail; restoring the fix passes all five rendered/clock tests. Hosted UI deployment and authenticated browser acceptance remain pending; this change does not add test execution or establish objective completion.
 ## 2026-10-20 — owner delivery priority queue (#430)
 
 Recorded the latest human P0–P3 order at the top of docs/atlas-os/BACKLOG.md: inference survival and real verified website/coding outcomes first; continuity, safe execution and bounded improvement next; owned/optional GPU compute and artifact experience after that; experimental research last. Each row reuses current services/PR ownership and states required observable acceptance. Historical evidence remains intact. PROGRAM phase gates, review requirements and resource authorization remain unchanged; this records the queue, not completed capabilities or permission to start later phases.
@@ -925,8 +930,25 @@ Seven real-loopback shutdown tests failed against unchanged main and now pass, i
 
 Next: complete exact-head CI/review for this ordinary follow-up; investigate the pre-existing Node24 upload/refusal failure separately without weakening revocation assertions. Active-render cancellation and remote kill remain outside this network-shutdown fix.
 
+## 2026-10-21 — consistent eval category quota accounting (#436)
+
+Follow-up to merged #406: per-target rates already exclude provider quota
+refusals, but category rates used all runs and understated the same result.
+Category JSON now preserves total runs while exposing attempted,
+quotaRefusals and passRate; Markdown divides by non-quota attempts and lists
+refusals separately. All-quota categories report null / 0/0 (n/a), while real
+model/test failures still count. This does not change quota classification,
+agent execution, workflow policy, or the existing Claude #410 handoff.
+
+Three report regressions failed unchanged main; focused report/adapter/quota
+suite passes 13/13. Full affected package validation remains in progress at
+this checkpoint. No live model score or provider acceptance is claimed.
+Next: complete affected package and exact-head CI before ordinary merge.
+
 ## 2026-10-21 — model authorship on task-dispatch completion (#435)
 
 The normal converse completion returned servedBy, but its early task-dispatch return dropped that receipt even when the model supplied introductory text. Preserve the same bounded actual provider/model metadata on that branch. Tool-only runtime acknowledgements still have no authorship field. Both JSON and streaming branch regressions fail before the change; affected agent-loop/free-vendor suites pass23/23. This is a metadata correction, not a semantic business verification or proof of the sole live streaming root cause. Latest live gate39553786887 returned/stored streaming text without confirmed authorship while non-streaming had a Groq receipt; no repeated live test claimed passing. Broad web/build/lint and exact-head CI remain release checks.
 
 Parallel continuation under the owner's explicit request: prebuilt local coder packaging reuses stale230 staging with an explicit installed marker while keeping developer builds; postmerge407 Atlas Node cancellation has real stalled-network regressions; postmerge406 category reports are being aligned to exclude quota refusals truthfully. Existing397 now owns vendor catalog/trust/routing; conflicting414 needs reconciliation before any independent merge. Preserve active ownership and protected workflow review.
+
+Eval438 validation follow-through: full affected atlas-eval package suite passed39/39 after the focused13/13 checks. Initial exact-head CI39598725107 and eval-fixtures39598725261 passed before this documentation-only integration with chat440. Fresh integrated-head CI remains required.

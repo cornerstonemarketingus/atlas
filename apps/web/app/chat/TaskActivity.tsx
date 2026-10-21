@@ -4,6 +4,7 @@ import { AtlasMark } from "../AtlasMark.js";
 import { DiffLines } from "./MessageBody.js";
 import type { LogLine, WorkItem } from "./Workspace.js";
 import { activityTaskStatus, pollActivity } from "./activity-poll.mjs";
+import { statusLine } from "../build/task-presentation.mjs";
 
 type Task = { taskId: string; objective: string; mode: string; status?: string; executionProvider?: string; run?: { id?: number; url: string | null } | null; pullRequest?: { url: string | null; number: number; merged: boolean } | null };
 type Step = { label: string; state: "done" | "running" | "pending" | "failed"; startedAt: string | null; completedAt: string | null };
@@ -12,7 +13,7 @@ type ChangedFile = { path: string; previousPath: string | null; status: string; 
 type Changes = { pullRequest: { number: number; url: string | null; title: string } | null; files: ChangedFile[]; additions: number; deletions: number };
 
 const TERMINAL = new Set(["succeeded", "completed", "failed", "timed_out", "cancelled", "skipped"]);
-const MODE_TITLE: Record<string, string> = { coder: "Changing code", inspect: "Reviewing the code", debug: "Debugging" };
+const MODE_TITLE: Record<string, string> = { coder: "Coder run", inspect: "Reviewing the code", debug: "Debugging" };
 const MARK: Record<Step["state"], string> = { done: "✓", running: "●", pending: "○", failed: "✕" };
 
 function seconds(step: Step, now: number) {
@@ -27,11 +28,7 @@ function headline(task: Task) {
   const status = task.status ?? "dispatched";
   if (status === "dispatch-unknown") return "Request saved. Checking whether the run started…";
   if (status === "dispatch-pending") return "Request saved. Dispatch has not started.";
-  if (["succeeded", "completed"].includes(status)) return task.mode === "coder" ? "Done. The change is ready." : "Done.";
-  if (["failed", "timed_out"].includes(status)) return "This run did not finish successfully.";
-  if (status === "cancelled") return "Cancelled.";
-  if (status === "running") return "Working…";
-  return "Starting…";
+  return statusLine({ ...task, status });
 }
 
 /**
@@ -144,7 +141,7 @@ export function TaskActivity({ task, onLog, onChanges, onOpenFile }: {
       {unavailable && <p role="status" className="activity-objective">Live progress is unavailable. Retrying… The steps below show the last received update.</p>}
       {live && current && !unavailable && <p className="activity-objective">This step is still running. Reading, editing and tests can take several minutes.</p>}
       {open && <ol className="activity-steps">
-        {steps.length === 0 && <li className="pending"><span aria-hidden="true">○</span>Waiting for GitHub to start the run…</li>}
+        {steps.length === 0 && <li className="pending"><span aria-hidden="true">○</span>{live ? "Waiting for run details…" : "Step details are unavailable. Check the reported results and run log."}</li>}
         {steps.map((step, index) => <li key={`${step.label}-${index}`} className={step.state}>
           <span aria-hidden="true">{MARK[step.state]}</span>{step.label}<small>{seconds(step, now)}</small>
         </li>)}

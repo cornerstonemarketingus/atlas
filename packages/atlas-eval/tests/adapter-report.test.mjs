@@ -46,7 +46,10 @@ test("reports count verified passes per target and category", () => {
   const summary = summarize(results, tasks).t1;
   assert.equal(summary.passRate, 0.5);
   assert.equal(summary.toolAccuracy, 0.75);
-  assert.deepEqual(summary.categories, { navigation: { runs: 1, passed: 1 }, feature: { runs: 1, passed: 0 } });
+  assert.deepEqual(summary.categories, {
+    navigation: { runs: 1, passed: 1, attempted: 1, quotaRefusals: 0, passRate: 1 },
+    feature: { runs: 1, passed: 0, attempted: 1, quotaRefusals: 0, passRate: 0 },
+  });
   assert.match(toMarkdown({ results, tasks, generatedAt: "now" }), /\| t1 \| 1\/2 \(50%\)/u);
 });
 
