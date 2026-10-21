@@ -5,8 +5,14 @@ export const CATEGORIES = Object.freeze([
 ]);
 
 export const FAILURE_CLASSES = Object.freeze([
-  "tests_failed", "agent_error", "timeout", "no_change", "infra",
+  "tests_failed", "agent_error", "timeout", "no_change", "infra", "quota",
 ]);
+
+/**
+ * A provider refusing for quota (HTTP 429) says nothing about the model, so
+ * such a run is classed `quota` and left out of the pass rate.
+ */
+export const isQuotaRefusal = (text) => /\bHTTP 429\b/u.test(String(text ?? ""));
 
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const isRelativePath = (value) =>

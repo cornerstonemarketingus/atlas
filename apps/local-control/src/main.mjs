@@ -71,6 +71,7 @@ import { createGenesisCoder } from "./platform/genesis/coder.mjs";
 import { ArtifactStore, recordGenesisArtifact } from "./platform/artifacts/index.mjs";
 import { RenderRunner } from "./platform/render/index.mjs";
 import { createComputeService } from "./platform/compute/service.mjs";
+import { LOCAL_OWNER_ID, NodeProvider, NodeService } from "./platform/nodes/index.mjs";
 import { runCheck } from "./platform/self-improve/runtime.mjs";
 import { createCloudflareAdapter } from "./agent/infrastructure/cloudflare.mjs";
 import { createVercelAdapter } from "./agent/infrastructure/vercel.mjs";
@@ -231,7 +232,14 @@ const renderRunner = new RenderRunner({
   },
   artifactStore: artifacts,
 });
-// Rented GPU compute (issue #353): RunPod Serverless behind a monthly cap. Off unless
+// Atlas Nodes: machines the owner brings dial out to this daemon and render jobs in their own container sandbox.
+// They cost $0 and are always the first provider.
+const nodeService = new NodeService({
+  db: join(dataDirectory, "nodes.sqlite"), artifacts, root: join(dataDirectory, "nodes"),
+  isOwner: ({ userId }) => userId === LOCAL_OWNER_ID,
+});
+const nodeProvider = new NodeProvider({ service: nodeService });
+// Rented GPU compute (issue #353): RunPod Serverless behind a monthly cap, after the nodes. Off unless
 // ATLAS_RUNPOD_ENDPOINT_ID, ATLAS_RUNPOD_API_KEY (vault or env) are set; provisions also need
 // ATLAS_GPU_MONTHLY_CAP_USD > 0. Render jobs do not route here yet (docs/atlas-os/COMPUTE.md).
 const compute = await createComputeService({
@@ -239,15 +247,14 @@ const compute = await createComputeService({
   credentials: async (name) => (await vault.get(name).catch(() => null)) ?? process.env[name] ?? null,
   store: platformStore,
   leaseDb: join(dataDirectory, "compute.sqlite"),
+  freeProviders: [nodeProvider],
 }).catch((error) => ({ enabled: false, reason: `Compute configuration rejected: ${error.code ?? error.message}` }));
+console.log(`Compute: ${compute.reason}`);
 if (compute.enabled) {
-  console.log(`Compute: ${compute.reason}`);
   compute.manager.startReconciler({
     onReport: (report) => { if (report.errors.length || report.orphansTerminated.length) store.audit("compute.reconcile", JSON.stringify({ ended: report.ended.length, orphans: report.orphansTerminated.length, errors: report.errors.map(e => e.error) })); },
     onError: (error) => store.audit("compute.reconcile.error", String(error?.code ?? "RECONCILE_FAILED")),
   }).catch((error) => store.audit("compute.reconcile.error", String(error?.code ?? "RECONCILE_FAILED")));
-} else if (process.env.ATLAS_RUNPOD_ENDPOINT_ID?.trim()) {
-  console.log(`Compute: ${compute.reason}`);
 }
 // Project Genesis: idea → requirements → plan → build → verify → preview → ready, durable across restarts.
 const genesisStore = new GenesisStore(join(dataDirectory, "genesis.sqlite"));
@@ -335,6 +342,7 @@ const server = createLocalControlServer({
   goals,
   artifacts,
   render: renderRunner,
+  nodes: nodeService,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },
@@ -402,6 +410,8 @@ function shutdown() {
     world.close();
     workforceRuntime.close();
     businessService.close();
+    compute.close?.();
+    nodeService.close();
     platformStore.close();
     store.close();
     process.exit(0);
