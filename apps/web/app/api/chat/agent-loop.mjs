@@ -863,7 +863,7 @@ export async function converse({ endpoint, turns, toolContext, defaultRepository
       const addition = `${text.trim() ? "\n\n" : ""}${lines.join("\n\n")}`;
       text += addition;
       emit("delta", { text: addition });
-      return { reply: text.trim(), steps };
+      return { reply: text.trim(), steps, ...(servedBy ? { servedBy } : {}) };
     }
     const instant = calls.filter((call) => runnable(call.function.name));
     if (instant.length === 0 || round === maxRounds) break;
