@@ -689,6 +689,24 @@ separate live-health/business outcome adapters. No live business action claimed.
 
 
 
+## 2026-10-17 — result ownership integration checkpoint (#282)
+
+Integrated main 482948b through #270/#274/#276/#278 into the existing result
+ownership implementation. Added a built-Worker callback regression that changes
+the saved objective during GitHub verification and requires 409, no result writes,
+and no run linkage. Existing transaction ownership checks remain authoritative.
+Reports are executor-authored summaries, not verified successful outcomes.
+
+All ten workflow checks pass. Runner/local suite: 86 pass, one failure, one
+Linux-only skip (88 total); isolated process suite: five pass, two fail, one
+Linux-only skip. Windows inherited-pipe deadline and observer timing remain
+unresolved. Do not relabel these failures as a passing acceptance run.
+Fresh web validation is pending: npm ci stalled without an error, then was stopped;
+matching-lockfile dependencies are being copied from the verified parent checkout.
+Initial build/lint attempts before dependency completion failed to find binaries.
+No production migration/deployment, live OIDC, paid infrastructure or secret
+transfer occurred. Migration 0019 and protected owner review remain required.
+Next: finish #282 web validation and fresh CI; then #289 trusted outcome receipts.
 ## 2026-10-17 coder context recovery (issue #287)
 
 - Live run 38819478158 confirms #269 repaired repo_browser aliases in production. The same run still failed on HTTP 413 after substantial context growth; alias repair alone is not task completion. Hosted authenticated inspection 38848539074 passed.
@@ -737,6 +755,19 @@ Account344 merged c746663 after ALL CI39087720052 passed, deployment39087988081 
 Repository settings GET/PUT/DELETE still returned raw storage errors or migration0015 instructions, and auth exceptions escaped their context boundary. Reused existing fixed customerFailure contract (503/reference/no-store); unchanged auth/tenant resolution, owner/admin management, deployment allowlist, default-tenant zero-gate policy, validation and scoped writes. Three actual TypeScript-handler privacy regressions fail prior main; all10focused actual account/settings/validation cases pass after repair, covering auth/tenant/list/default/write faults with private/path/token/table sentinels and successful denial/scoping/mutation behavior. No new tenant policy or credential permissions. Broad checks/CI/deployment pending at this checkpoint. Native329/320 remain held for the already reported protected-signing automatic-review rejection; no bypass or signing edit.
 
 Repository settings validation: production build/typecheck and direct installed ESLint pass; fullweb507tests504pass3optional skips0fail. Npm-wrapper lint was slow; direct installed binary completed successfully. No deployed adversarial settings acceptance claimed. Fresh PR CI remains required.
+
+
+## 2026-10-18 — cloud observer release integration (#372)
+
+Owner explicitly authorized merge and deployment. Preserved current main and
+callback-ownership #282, including its corrected claimed-run assertion.
+Reconciled Saved requests session fencing with reconciliation/observation actions;
+stale responses cannot update a closed or replaced history session. Consolidating
+#270/#274/#276/#278/#282/#289/#312/#335/#372 into one main release to avoid
+intermediate deployments. Original observer head passed 539 tests and all CI;
+combined-head validation is pending. Production D1 dry run39094365828 confirmed
+missing schema; authorized additive migrations0017-0020,0022-0023 applied
+successfully in39094569327. Cloud-mission migration0021 excluded. No code deploy yet.
 ## 2026-10-18 — shared governor for runner model calls (branch claude/shared-governor-runner)
 
 Closes the documented gap that coder inference did not share capacity with hosted chat. Worker gateway `/api/inference/governor` (own `ATLAS_GOVERNOR_TOKEN`, not the operator token) and CLI `GovernedModelProvider` wired around each coder route inside the retry layer; off unless `ATLAS_GOVERNOR_URL` and `ATLAS_GOVERNOR_TOKEN` are set. Evidence: gateway 4 tests over the real ledger core; CLI 555/555 (15 new, including a real HTTP socket proving a 429 on one runner makes a second runner on the same key wait without sending a provider request); web 506 pass/3 skipped; runner 81/81; workflows valid. Protected paths changed (deploy/coder/steward workflows, a new auth-gated route): owner review required. Not deployed. Next: owner adds the secret/variable and deploys, then verify with a real coder run; pass rate-limit headers through the provider contract.
@@ -872,3 +903,27 @@ PR415 integration with #416: retained all concurrent progress entries; no diagno
 Chat TaskActivity now reuses the existing build status presentation: a successful runner with no pull request does not claim a change is ready, and a pull request prompts review of changes and validation evidence. Generic completed state remains explicitly unconfirmed. Coder run is a neutral title; terminal empty steps no longer claim GitHub has yet to start. No execution, approval, polling, result-storage or verification policy changed.
 
 Validation: production web build and lint passed; full web suite 620 tests, 615 passed, five optional browser skips, zero failures. Actual React-rendered completion tests cover no-PR success, reviewable PR, unknown completion, failure, timeout, cancellation, skipped, and dispatch states. Existing elapsed-clock/poll recovery coverage is preserved. Restoring main's TaskActivity makes the new tests fail; restoring the fix passes all five rendered/clock tests. Hosted UI deployment and authenticated browser acceptance remain pending; this change does not add test execution or establish objective completion.
+## 2026-10-20 — owner delivery priority queue (#430)
+
+Recorded the latest human P0–P3 order at the top of docs/atlas-os/BACKLOG.md: inference survival and real verified website/coding outcomes first; continuity, safe execution and bounded improvement next; owned/optional GPU compute and artifact experience after that; experimental research last. Each row reuses current services/PR ownership and states required observable acceptance. Historical evidence remains intact. PROGRAM phase gates, review requirements and resource authorization remain unchanged; this records the queue, not completed capabilities or permission to start later phases.
+
+Coder diagnostic PR415 merged cdfcc836e18d2db4e608b2292e915fde3b9cc88e after every exact-head check at0f6355a passed; merged-main CI39387977894 passed. Its private argument fingerprints enable diagnosis, not a Mode B completion claim. Provider397 correction was independently checked, but configured review/new credentials and fresh medium-task evidence remain outstanding. Documentation checked for complete priorities, existing-work references and diff hygiene; no runtime tests warranted for this queue-only update.
+
+Next: finish eligible P0 inference deployment/chat verification and actual website/medium coder acceptance, preserving configured reviews, claim gates and active ownership; diagnose repeated calls from the new trace before selecting a B repair. P1–P3 remain queued according to PROGRAM exit gates.
+2026-10-19 | (this PR) | inference fabric A1 | Design `docs/atlas-os/INFERENCE-FABRIC.md`. Shared vendor catalog (`packages/atlas-inference/src/catalog.mjs`) with trust tiers. Chat and coder now bounce across Groq, Workers AI, Cerebras, Gemini, OpenRouter, Mistral and OpenAI; any refusal routes on, rejected keys included (logged); only a malformed request stops. Training tiers (Gemini/OpenRouter/Mistral free) need the owner's opt-in (`ATLAS_ALLOW_TRAINING_PROVIDERS=1` chat, `all` coder) and in chat receive only requests with no tool output, memory or code. Route specs accept model names with colons. | New tests: chat-free-vendors (5), catalog upload check, coder-routes (3), CLI vendors and route parsing; full suites: web 593/0, atlas-cli 571/0, inference 64/0, runner 85/0. | Owner: add free keys as secrets and redeploy. | A2: waiting-for-capacity and scheduled resume.
+
+2026-10-19 | (same PR) | inference fabric A2 | Coder waits for capacity instead of failing: when every route is rate-limited or over capacity, `FallbackModelProvider` sleeps until the soonest stated reset within a per-run budget (`--capacity-wait-ms`, `ATLAS_CODER_CAPACITY_WAIT_MS`, default 5 min) and continues with the agent's work intact; a longer reset fails at once and says when it ends. Coder fallback also routes past a rejected key, like chat; only a malformed request or cancellation stops. | fallback-model-provider tests (4 new, 1 updated), cloud-model-provider auth test updated; atlas-cli 575/0, runner 85/0. | Hosted re-dispatch after a long reset needs a new claim generation per task. | Owner: add free keys; then verify-hosted chat and coder.
+
+2026-10-20 | (same PR, owner review) | inference fabric trust | Owner review (P1): training-tier eligibility was a formatting heuristic (unfenced code and arbitrary system context passed). Now fail-closed by recorded provenance: Atlas's own system prompt is registered where it is built (`atlasAuthored` in `chatTurns`); a request qualifies only if every message is that prompt or something the person typed. Unregistered system messages, tool output, memory and any assistant turn disqualify. Docs and consent now say plainly that anything typed, pasted code included, may reach a training tier. | chat-free-vendors: reviewer's sentinel case, unregistered system context, content-independent provenance, earlier replies. | Needs independent owner review; keys not provisioned. | Merge after review, then provision keys and verify-hosted chat.
+
+## 2026-10-21 — priority queue integration and live release evidence
+
+Integrated current main b989b5a into PR431, retaining both independent progress histories and the eight requested priority rows. Provider397 merged externally as c848c5e and deployment39522378601 succeeded. Hosted runs39522548783 and39522564249 both reported route groq -> workers-ai -> openai, then failed waiting20minutes for runner/delivered findings. These are failed acceptance receipts, not evidence of newly configured providers or a passing chat release. New vendor secret names remain absent; no secrets were read or added. No repeat unchanged smoke was dispatched.
+
+Next: require fresh exact-head CI for the integrated queue PR; investigate the actual saved-task/findings failures with existing owners, obtain provisioned eligible provider keys, and complete fresh medium coder diagnosis through an authorized claim path. Preserve configured workflow review on395 and all native/tenant holds.
+
+## 2026-10-21 — model authorship on task-dispatch completion (#435)
+
+The normal converse completion returned servedBy, but its early task-dispatch return dropped that receipt even when the model supplied introductory text. Preserve the same bounded actual provider/model metadata on that branch. Tool-only runtime acknowledgements still have no authorship field. Both JSON and streaming branch regressions fail before the change; affected agent-loop/free-vendor suites pass23/23. This is a metadata correction, not a semantic business verification or proof of the sole live streaming root cause. Latest live gate39553786887 returned/stored streaming text without confirmed authorship while non-streaming had a Groq receipt; no repeated live test claimed passing. Broad web/build/lint and exact-head CI remain release checks.
+
+Parallel continuation under the owner's explicit request: prebuilt local coder packaging reuses stale230 staging with an explicit installed marker while keeping developer builds; postmerge407 Atlas Node cancellation has real stalled-network regressions; postmerge406 category reports are being aligned to exclude quota refusals truthfully. Existing397 now owns vendor catalog/trust/routing; conflicting414 needs reconciliation before any independent merge. Preserve active ownership and protected workflow review.

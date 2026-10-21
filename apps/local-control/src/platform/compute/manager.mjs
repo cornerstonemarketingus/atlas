@@ -116,14 +116,15 @@ export class ComputeManager {
   }
 
   /** Picks the cheapest provider/GPU that meets the job's requirements; `null` plan when it should run locally. */
-  async plan(job) {
+  async plan(job, { tenantId = undefined } = {}) {
     const requirements = detectRequirements(job, { localHardware: this.#localHardware });
     if (requirements.runLocally) return { requirements, choice: null };
     let best = null;
     for (const provider of this.#providers.values()) {
-      const estimate = await provider.estimate({ ...job, minVramGb: requirements.minVramGb, estMinutes: requirements.estMinutes });
+      const estimate = await provider.estimate({ ...job, tenantId, minVramGb: requirements.minVramGb, estMinutes: requirements.estMinutes });
       if (!estimate) continue;
-      const rate = microUsdPerSecond(estimate.estHourlyUsd);
+      // A $0 provider (the owner's own Atlas Nodes) is free by construction; any other price is per second, rounded up.
+      const rate = estimate.estHourlyUsd === 0 ? 0 : microUsdPerSecond(estimate.estHourlyUsd);
       const estMicroUsd = rate * Math.ceil(estimate.estMinutes * 60);
       if (!best || estMicroUsd < best.estMicroUsd) best = { provider: provider.name, ...estimate, rateMicroUsdPerSec: rate, estMicroUsd };
     }
@@ -140,16 +141,10 @@ export class ComputeManager {
   async start({ tenantId, taskId, job }) {
     if (!ID_PATTERN.test(String(tenantId))) throw new ComputeError("INVALID_ARGUMENT", "tenantId must be a short identifier.");
     if (!ID_PATTERN.test(String(job?.id))) throw new ComputeError("INVALID_ARGUMENT", "job.id must be a short identifier.");
-    const { requirements, choice } = await this.plan(job);
+    const { requirements, choice } = await this.plan(job, { tenantId });
     if (!choice) return { runLocally: true, requirements };
 
-    // Stop 1: reserve the worst case before anything is provisioned.
-    const budget = new TaskBudget({ store: this.#store, tenantId, taskId });
-    const remaining = budget.snapshot().remaining.costMicroUsd;
-    if (remaining === undefined) throw new ComputeError("NO_APPROVED_BUDGET", "The task has no approved costMicroUsd budget; GPU time is never rented without one.");
-    if (choice.estMicroUsd > remaining) {
-      throw new ComputeError("ESTIMATE_EXCEEDS_BUDGET", `Estimated GPU cost ${choice.estMicroUsd} micro-USD exceeds the remaining ${remaining}.`, { estimate: choice.estMicroUsd, remaining });
-    }
+    const wantedSec = requirements.maxMinutes ? Math.ceil(requirements.maxMinutes * 60) : Math.ceil(choice.estMinutes * 60 * this.#lifetimeSafety);
     // Monthly cap: the tenant's settled + reserved GPU spend this UTC month
     // may never pass monthlyCapMicroUsd (0 = GPU spending off).
     const window = monthWindow(this.#now());
@@ -160,30 +155,46 @@ export class ComputeManager {
         ? new ComputeError("GPU_SPENDING_OFF", "GPU spending is off: the monthly GPU cap is 0 (set ATLAS_GPU_MONTHLY_CAP_USD).")
         : new ComputeError("MONTHLY_CAP_EXCEEDED", `This GPU job would take the month's GPU spend past the cap of ${capMicroUsd} micro-USD.`, { capMicroUsd, spentMicroUsd: spent, estimate: choice.estMicroUsd });
     };
-    const spentThisMonth = this.#leases.spend(tenantId, window.fromMs, window.toMs).totalMicroUsd;
-    const capLeft = capMicroUsd - spentThisMonth;
-    if (choice.estMicroUsd > capLeft || capLeft <= 0) throw refuseCap(spentThisMonth);
-
-    const wantedSec = requirements.maxMinutes ? Math.ceil(requirements.maxMinutes * 60) : Math.ceil(choice.estMinutes * 60 * this.#lifetimeSafety);
-    const maxLifetimeSec = Math.min(this.#maxLifetimeCapSec, wantedSec, Math.floor(remaining / choice.rateMicroUsdPerSec), Math.floor(capLeft / choice.rateMicroUsdPerSec));
-    if (maxLifetimeSec <= 0) throw new ComputeError("ESTIMATE_EXCEEDS_BUDGET", "The remaining budget does not cover one second of GPU time.");
-    const reservedMicroUsd = choice.rateMicroUsdPerSec * maxLifetimeSec;
-    try {
-      budget.reserve({ costMicroUsd: reservedMicroUsd });
-    } catch (error) {
-      if (error instanceof TaskBudgetExceededError) throw new ComputeError("BUDGET_EXCEEDED", error.message, { remaining });
-      throw error;
+    let maxLifetimeSec; let reservedMicroUsd; let budget = null;
+    if (choice.rateMicroUsdPerSec === 0) {
+      // A free provider spends nothing, so nothing is reserved and the
+      // monthly cap does not apply. The lease, max lifetime, idle timeout and
+      // reconciler still do, and a bill it reports anyway is charged
+      // truthfully at settlement.
+      maxLifetimeSec = Math.min(this.#maxLifetimeCapSec, wantedSec);
+      reservedMicroUsd = 0;
+    } else {
+      // Stop 1: reserve the worst case before anything is provisioned.
+      budget = new TaskBudget({ store: this.#store, tenantId, taskId });
+      const remaining = budget.snapshot().remaining.costMicroUsd;
+      if (remaining === undefined) throw new ComputeError("NO_APPROVED_BUDGET", "The task has no approved costMicroUsd budget; GPU time is never rented without one.");
+      if (choice.estMicroUsd > remaining) {
+        throw new ComputeError("ESTIMATE_EXCEEDS_BUDGET", `Estimated GPU cost ${choice.estMicroUsd} micro-USD exceeds the remaining ${remaining}.`, { estimate: choice.estMicroUsd, remaining });
+      }
+      const spentThisMonth = this.#leases.spend(tenantId, window.fromMs, window.toMs).totalMicroUsd;
+      const capLeft = capMicroUsd - spentThisMonth;
+      if (choice.estMicroUsd > capLeft || capLeft <= 0) throw refuseCap(spentThisMonth);
+      maxLifetimeSec = Math.min(this.#maxLifetimeCapSec, wantedSec, Math.floor(remaining / choice.rateMicroUsdPerSec), Math.floor(capLeft / choice.rateMicroUsdPerSec));
+      if (maxLifetimeSec <= 0) throw new ComputeError("ESTIMATE_EXCEEDS_BUDGET", "The remaining budget does not cover one second of GPU time.");
+      reservedMicroUsd = choice.rateMicroUsdPerSec * maxLifetimeSec;
+      try {
+        budget.reserve({ costMicroUsd: reservedMicroUsd });
+      } catch (error) {
+        if (error instanceof TaskBudgetExceededError) throw new ComputeError("BUDGET_EXCEEDED", error.message, { remaining });
+        throw error;
+      }
     }
 
     const now = this.#now();
     const leaseId = randomUUID();
     // The cap is re-checked atomically with the insert, so another process
     // sharing the lease database cannot slip a lease in between.
-    const lease = this.#leases.insertWithinCap({
+    const leaseRow = {
       tenantId, id: leaseId, jobId: job.id, taskId, provider: choice.provider, gpuType: choice.gpuType, holder: this.managerId,
       reservedMicroUsd, rateMicroUsdPerSec: choice.rateMicroUsdPerSec, maxLifetimeSec, idleTimeoutSec: this.#idleTimeoutSec,
       createdAt: now, leaseExpiresAt: now + this.#idleTimeoutSec * 1000, deadlineAt: now + maxLifetimeSec * 1000,
-    }, { capMicroUsd, fromMs: window.fromMs, toMs: window.toMs });
+    };
+    const lease = budget === null ? this.#leases.insert(leaseRow) : this.#leases.insertWithinCap(leaseRow, { capMicroUsd, fromMs: window.fromMs, toMs: window.toMs });
     if (!lease) {
       budget.release({ costMicroUsd: reservedMicroUsd }, { ref: `compute-cap-refused:${leaseId}` });
       throw refuseCap(this.#leases.spend(tenantId, window.fromMs, window.toMs).totalMicroUsd);
@@ -198,9 +209,10 @@ export class ComputeManager {
     let instance;
     try {
       // `input` is the job's work for providers that take it at submission
-      // (serverless queues such as RunPod); instance providers ignore it.
+      // (serverless queues such as RunPod); `tenantId` and `job` are for
+      // providers that run the job themselves (Atlas Nodes). Others ignore them.
       instance = await provider.provision({ gpuType: choice.gpuType, maxLifetimeSec,
-        tags: [ATLAS_TAG, `atlas-tenant:${tenantId}`, leaseTag(lease.id), `atlas-job:${job.id}`],
+        tags: [ATLAS_TAG, `atlas-tenant:${tenantId}`, leaseTag(lease.id), `atlas-job:${job.id}`], tenantId, job,
         ...(job.input !== undefined ? { input: job.input } : {}) });
     } catch (error) {
       this.#leases.audit(tenantId, lease.id, "provision.failed", this.#now(), { jobId: job.id, provider: choice.provider, error: String(error?.code ?? "PROVISION_FAILED") });

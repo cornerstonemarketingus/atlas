@@ -34,3 +34,30 @@ test("coder and automatic repair workflows provide matching cloud execution rout
     assert.ok(step.includes("ATLAS_CODER_FALLBACKS:"));
   }
 });
+
+test("free vendors join the coder's fallbacks; training tiers only with ATLAS_ALLOW_TRAINING_PROVIDERS=all", () => {
+  const free = { GROQ_API_KEY: "g", CEREBRAS_API_KEY: "c", GEMINI_API_KEY: "ge", OPENROUTER_API_KEY: "o", MISTRAL_API_KEY: "m" };
+  assert.deepEqual(resolveCoderRoutes(free).fallbacks, ["cerebras:gpt-oss-120b:CEREBRAS_API_KEY"]);
+  assert.deepEqual(resolveCoderRoutes({ ...free, ATLAS_ALLOW_TRAINING_PROVIDERS: "1" }).fallbacks, ["cerebras:gpt-oss-120b:CEREBRAS_API_KEY"], "chat's opt-in does not extend to code");
+  assert.deepEqual(resolveCoderRoutes({ ...free, ATLAS_ALLOW_TRAINING_PROVIDERS: "all" }).fallbacks, [
+    "cerebras:gpt-oss-120b:CEREBRAS_API_KEY", "gemini:gemini-2.5-flash:GEMINI_API_KEY", "openrouter:openai/gpt-oss-20b:free:OPENROUTER_API_KEY", "mistral:devstral-small-latest:MISTRAL_API_KEY",
+  ]);
+  assert.deepEqual(resolveCoderRoutes({ ...free, ATLAS_GEMINI_TIER: "paid" }).fallbacks.map((route) => route.split(":")[0]), ["cerebras", "gemini"]);
+  assert.equal(resolveCoderRoutes({ GEMINI_API_KEY: "ge", ATLAS_ALLOW_TRAINING_PROVIDERS: "all" }).provider, "gemini");
+});
+
+test("route specifications accept models containing colons and still pin each key to its vendor", async () => {
+  const { isValidRoute } = await import("./coder-routes.mjs");
+  assert.equal(isValidRoute("openrouter:openai/gpt-oss-20b:free:OPENROUTER_API_KEY"), true);
+  assert.equal(isValidRoute("openrouter:openai/gpt-oss-20b:free:GROQ_API_KEY"), false);
+  assert.equal(isValidRoute("gemini::GEMINI_API_KEY"), false);
+});
+
+test("the coder workflows pass every free vendor's key", async () => {
+  const { readFile } = await import("node:fs/promises");
+  for (const workflow of ["atlas-coder.yml", "atlas-pr-steward.yml"]) {
+    const text = await readFile(new URL("../../.github/workflows/" + workflow, import.meta.url), "utf8");
+    for (const key of ["CEREBRAS_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY"]) assert.ok(text.includes(key + ": ${{ secrets." + key + " }}"), workflow + " lacks " + key);
+    assert.ok(text.includes("ATLAS_ALLOW_TRAINING_PROVIDERS: ${{ vars.ATLAS_ALLOW_TRAINING_PROVIDERS }}"));
+  }
+});
