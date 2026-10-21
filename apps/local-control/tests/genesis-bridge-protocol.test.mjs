@@ -25,10 +25,12 @@ const ACCOUNT_SECRET = "account-token-never-leaves-node";
 const input = { requestId: "operation_bridge_proto_1", name: "bridge-proto", description: "Build a simple customer lead tracker with: add customer, name/email/phone, status, notes, dashboard, search", template: "web-app", host: "github", visibility: "private" };
 
 function githubHost() {
+  let repo;
   return async (url, init = {}) => {
     const path = new URL(url).pathname;
     if (path === "/user") return Response.json({ login: "owner" }, { headers: { "x-oauth-scopes": "repo" } });
-    if (path === "/user/repos") { const body = JSON.parse(init.body); return Response.json({ full_name: `owner/${body.name}`, private: body.private, clone_url: `https://github.com/owner/${body.name}.git`, html_url: `https://github.com/owner/${body.name}` }, { status: 201 }); }
+    if (path === "/user/repos") { const body = JSON.parse(init.body); repo = { full_name: `owner/${body.name}`, private: body.private, clone_url: `https://github.com/owner/${body.name}.git`, html_url: `https://github.com/owner/${body.name}` }; return Response.json(repo, { status: 201 }); }
+    if (repo) return Response.json(repo);
     return Response.json({ message: "Not found" }, { status: 404 });
   };
 }

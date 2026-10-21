@@ -31,9 +31,12 @@ import { createRenderRoutes } from "./platform/render/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null }) {
+export function createLocalControlServer({ store, token, genesisToken = null, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
+  // A narrow credential for the hosted Worker: it can reach the Genesis operations routes and nothing else.
+  if (genesisToken !== null && (typeof genesisToken !== "string" || genesisToken.length < 32 || genesisToken === token)) throw new Error("ATLAS_GENESIS_TOKEN must contain at least 32 characters and differ from the owner token.");
+  const expectedGenesis = genesisToken ? createHash("sha256").update(genesisToken).digest() : null;
   const limiter = createRateLimiter();
   const workforceRoutes = workforceRuntime ? createWorkforceRoutes(workforceRuntime) : null;
   const businessRoutes = businessService ? createBusinessRoutes({ businessService }) : null;
@@ -108,8 +111,10 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     }
     // Webhook triggers authenticate with the secret in their own path, not a bearer token.
     if (webhookRoute && (request.url ?? "").startsWith("/v1/hooks/")) { if (await webhookRoute(request, response)) return; }
-    const identity = authenticate(request.headers.authorization, expected, store);
+    const identity = authenticate(request.headers.authorization, expected, store, expectedGenesis);
     if (!identity) return send(response, 401, { message: "A valid local Atlas or paired-device token is required." });
+    // The Genesis credential is least-privilege by construction: anything outside the operations routes is refused before routing.
+    if (identity.role === "genesis" && !GENESIS_ONLY_ROUTE.test((request.url ?? "").split("?")[0])) return send(response, 403, { message: "This credential only reaches /v1/genesis/capabilities and /v1/genesis/operations." });
     // Off this machine, phones and laptops use their own paired, revocable token, not the owner's.
     if (identity.role === "admin" && isRemoteRequest(request) && !remoteAccess?.ownerAllowedRemotely()) {
       return send(response, 403, { message: "The owner token only works on this computer.", unblock: "Pair this device from Settings on the computer running Atlas, or allow owner access remotely there." });
@@ -261,10 +266,13 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   });
 }
 
-function authenticate(header, expected, store) {
+const GENESIS_ONLY_ROUTE = /^\/v1\/genesis\/(capabilities|operations(\/[a-zA-Z0-9_-]{16,100})?)$/u;
+
+function authenticate(header, expected, store, expectedGenesis = null) {
   if (typeof header !== "string" || !header.startsWith("Bearer ")) return null;
   const token = header.slice(7), actual = createHash("sha256").update(token).digest();
   if (actual.length === expected.length && timingSafeEqual(actual, expected)) return { role: "admin" };
+  if (expectedGenesis && timingSafeEqual(actual, expectedGenesis)) return { role: "genesis" };
   const device = store.deviceByTokenHash(digest(token)); return device ? { role: "device", device } : null;
 }
 

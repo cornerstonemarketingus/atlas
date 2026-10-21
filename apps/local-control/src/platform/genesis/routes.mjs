@@ -35,7 +35,7 @@ export function createGenesisRoutes({ genesis, executor = null, previews = null,
     if (!url.pathname.startsWith("/v1/genesis")) return false;
     try {
       if (url.pathname.startsWith("/v1/genesis/operations") || url.pathname === "/v1/genesis/capabilities") {
-        if (identity.role !== "admin") return send(response, 403, { message: "Owner access required." });
+        if (!["admin", "genesis"].includes(identity.role)) return send(response, 403, { message: "Owner access required." });
         if (!creation || !publisher) return send(response, 503, { message: "Project creation is not configured." });
         if (request.method === "GET" && url.pathname === "/v1/genesis/capabilities") return send(response, 200, await publisher.repositoryCapabilities({ visibility: url.searchParams.get("visibility") === "public" ? "public" : "private" }));
         const operation = /^\/v1\/genesis\/operations\/([a-zA-Z0-9_-]{16,100})$/u.exec(url.pathname);
@@ -46,6 +46,7 @@ export function createGenesisRoutes({ genesis, executor = null, previews = null,
         }
         return send(response, 404, { message: "Route not found." });
       }
+      if (identity.role === "genesis") return send(response, 403, { message: "This credential only reaches /v1/genesis/capabilities and /v1/genesis/operations." });
       if (request.method === "GET" && url.pathname === "/v1/genesis") return send(response, 200, { projects: genesis.list() });
       if (request.method === "GET" && url.pathname === "/v1/genesis/templates") {
         return send(response, 200, { templates: Object.values(TEMPLATES).map(({ id, version, title, description, archetypes, commands, preview, structure }) => ({ id, version, title, description, archetypes, commands, preview, structure })) });

@@ -283,6 +283,7 @@ const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, 
 const server = createLocalControlServer({
   store,
   token,
+  genesisToken: process.env.ATLAS_GENESIS_TOKEN || null,
   runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
   license,
   runtime,
