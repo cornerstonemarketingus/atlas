@@ -60,14 +60,19 @@ export class ArtifactError extends Error {
   }
 }
 
-/** True when the leading bytes are what the declared binary media type starts with. */
-function signatureMatches(mediaType, head) {
+/**
+ * True when the leading bytes are what the declared binary media type starts
+ * with. A GLB must also carry glTF 2.0's 12-byte header (version 2) with a
+ * total length equal to the bytes actually stored, so a truncated, padded or
+ * merely "glTF"-prefixed file is refused.
+ */
+function signatureMatches(mediaType, head, size) {
   const ascii = (offset, text) => head.length >= offset + text.length && head.subarray(offset, offset + text.length).toString("latin1") === text;
   const bytes = (...values) => head.length >= values.length && values.every((value, index) => head[index] === value);
   switch (mediaType) {
     case "video/mp4": return ascii(4, "ftyp");
     case "video/webm": return bytes(0x1a, 0x45, 0xdf, 0xa3);
-    case "model/gltf-binary": return ascii(0, "glTF");
+    case "model/gltf-binary": return ascii(0, "glTF") && head.length >= 12 && head.readUInt32LE(4) === 2 && head.readUInt32LE(8) === size;
     case "application/pdf": return ascii(0, "%PDF-");
     case "application/zip": return ascii(0, "PK\u0003\u0004") || ascii(0, "PK\u0005\u0006");
     case "image/png": return bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
@@ -77,15 +82,20 @@ function signatureMatches(mediaType, head) {
   }
 }
 
-function checkContent(mediaType, head, whole) {
+function checkContent(mediaType, head, whole, size) {
   if (TEXT_TYPES.has(mediaType) || JSON_TYPES.has(mediaType)) {
     let text;
     try { text = new TextDecoder("utf-8", { fatal: true }).decode(whole); } catch { return "is not valid UTF-8 text"; }
     if (text.includes("\u0000")) return "contains NUL bytes, so it is not text";
-    if (JSON_TYPES.has(mediaType)) { try { JSON.parse(text); } catch { return "is not valid JSON"; } }
+    let value;
+    if (JSON_TYPES.has(mediaType)) { try { value = JSON.parse(text); } catch { return "is not valid JSON"; } }
+    // glTF 2.0 requires a top-level object with asset.version; any other JSON is not a model.
+    if (mediaType === "model/gltf+json" && !(value && typeof value === "object" && !Array.isArray(value) && typeof value.asset?.version === "string")) {
+      return "is not a glTF document (it has no asset.version)";
+    }
     return null;
   }
-  return signatureMatches(mediaType, head) ? null : `does not look like ${mediaType}`;
+  return signatureMatches(mediaType, head, size) ? null : `does not look like ${mediaType}`;
 }
 
 export class ArtifactStore {
@@ -162,7 +172,7 @@ export class ArtifactStore {
         size = buffer.length;
         head = buffer.subarray(0, 16);
         whole = buffer;
-        const problem = checkContent(mediaType, head, whole);
+        const problem = checkContent(mediaType, head, whole, size);
         if (problem) throw new ArtifactError("CONTENT_MISMATCH", `The content ${problem}.`);
         await writeFile(tmp, buffer, { mode: 0o600 });
       } else {
@@ -188,7 +198,7 @@ export class ArtifactStore {
         size = seen;
         head = Buffer.concat(firstBytes).subarray(0, 16);
         if (isText) whole = Buffer.concat(chunks);
-        const problem = checkContent(mediaType, head, whole);
+        const problem = checkContent(mediaType, head, whole, size);
         if (problem) throw new ArtifactError("CONTENT_MISMATCH", `The content ${problem}.`);
       }
 

@@ -334,6 +334,8 @@ const server = createLocalControlServer({
   goals,
   artifacts,
   render: renderRunner,
+  // GET /v1/compute: owner-only status, cap and month-to-date GPU spend (never keys).
+  compute,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
   platformServices: { family: innovation.registry, memory },

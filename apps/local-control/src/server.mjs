@@ -28,10 +28,11 @@ import { AUTONOMY_LEVELS, assessAction, suggestRelaxations } from "./agent/kerne
 import { createAutomationRoutes, createWebhookRoute } from "./platform/automations/routes.mjs";
 import { createArtifactRoutes } from "./platform/artifacts/routes.mjs";
 import { createRenderRoutes } from "./platform/render/routes.mjs";
+import { createComputeRoutes } from "./platform/compute/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null }) {
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, compute = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -62,6 +63,8 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
   const worldRoutes = world ? createWorldRoutes({ world, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const artifactRoutes = artifacts ? createArtifactRoutes({ artifacts, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const renderRoutes = render ? createRenderRoutes({ render, genesis, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  // Always mounted: with no compute service the route still answers "off" with the reason.
+  const computeRoutes = createComputeRoutes({ compute, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } });
   const goalRoutes = goals ? createGoalRoutes({ goals, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const commandCenterRoutes = createCommandCenterRoutes({ missionService, genesis, store, selfImprove, automations, goals, send: (response, status, value) => { send(response, status, value); return true; } });
   const platformApi = platformStore ? createPlatformApiRoutes({ store: platformStore, ...platformServices, audit: (category, summary) => store.audit(category, summary) }) : null;
@@ -134,6 +137,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
       if (!renderRoutes) return send(response, 503, { message: "Rendering is not configured in this process." });
       if (await renderRoutes(request, response, identity)) return;
     }
+    if (/^\/v1\/compute(\?|$)/u.test(request.url ?? "")) { if (await computeRoutes(request, response, identity)) return; }
     if (remoteRoutes && (request.url ?? "").startsWith("/v1/remote")) { if (await remoteRoutes(request, response, identity)) return; }
 
     if (platformApi && await platformApi.handle(request, response, identity)) return;
