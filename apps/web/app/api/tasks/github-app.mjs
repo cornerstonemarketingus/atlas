@@ -38,14 +38,15 @@ export async function createGitHubAppJwt(configuration, now = Date.now()) {
   return `${unsigned}.${base64Url(new Uint8Array(signature))}`;
 }
 
-export async function createInstallationToken(configuration, fetcher = fetch) {
+export async function createInstallationToken(configuration, fetcher = fetch, { actions = "write" } = {}) {
+  if (actions !== "read" && actions !== "write") throw new Error("Invalid Actions permission");
   const jwt = await createGitHubAppJwt(configuration);
   const response = await fetcher(`${githubApi}/app/installations/${configuration.installationId}/access_tokens`, {
-    method: "POST",
+    method: "POST", redirect: "manual", signal: AbortSignal.timeout(10000),
     headers: { accept: "application/vnd.github+json", authorization: `Bearer ${jwt}`, "content-type": "application/json", "user-agent": "atlas-control-plane", "x-github-api-version": "2022-11-28" },
     // Keep each token limited to the one currently supported repository and
     // the sole permission needed to dispatch and read Actions runs.
-    body: JSON.stringify({ repositories: ["atlas"], permissions: { actions: "write" } }),
+    body: JSON.stringify({ repositories: ["atlas"], permissions: { actions } }),
   });
   if (!response.ok) {
     // Which step failed decides the fix. The body is read only to recognise

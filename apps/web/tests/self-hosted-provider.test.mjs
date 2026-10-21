@@ -73,14 +73,17 @@ test("with the machine off and Groq out of room, OpenAI answers", async () => {
   assert.deepEqual(calls, ["qwen3:14b", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "gpt-5.4-mini"]);
 });
 
-test("a wrong gateway token is a configuration error, not something to route around", async () => {
+test("a wrong gateway token routes to the next provider, and is recorded; each key is tried once", async () => {
   const calls = [];
-  const response = await callModel(resolveChatProvider(env), turns, { stream: false, tools: null, sleep: async () => {}, fetcher: async (url) => {
-    calls.push(url);
+  const trail = [];
+  const response = await callModel(resolveChatProvider(env), turns, { stream: false, tools: null, sleep: async () => {}, trail, fetcher: async (url) => {
+    calls.push(new URL(url).origin);
     return new Response(JSON.stringify({ error: { message: "Authentication required" } }), { status: 401 });
   } });
-  assert.equal(response.status, 401);
-  assert.equal(calls.length, 1);
+  assert.equal(response.status, 401, "with every key rejected, the reply reports the rejection");
+  assert.equal(new Set(calls).size, calls.length, "no provider is asked twice with a rejected key");
+  assert.ok(calls.length > 1, "the next provider was tried");
+  assert.ok(trail.every((entry) => entry.category === "credential"));
 });
 
 test("an empty final answer walks the whole route: self-hosted, Groq, OpenAI", async () => {

@@ -2,6 +2,8 @@ import { sites } from "@openai/sites-vite-plugin";
 import vinext from "vinext";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json" with { type: "json" };
+import sandboxSettings from "./sandbox.config.json" with { type: "json" };
+import { sandboxEnabled, withSandboxBindings } from "./sandbox/wrangler-sandbox.mjs";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
@@ -40,6 +42,7 @@ export default defineConfig(async ({ command }) => {
 
   const localBindingConfig = {
     main: "./worker/index.ts",
+    triggers: { crons: ["*/15 * * * *"] },
     compatibility_flags: ["nodejs_compat"],
     d1_databases: d1 && d1DatabaseId
       ? [
@@ -81,7 +84,9 @@ export default defineConfig(async ({ command }) => {
       sites(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
-        config: localBindingConfig,
+        // Cloud environments (Cloudflare Sandboxes) need the Workers Paid
+        // plan, so they are off unless sandbox.config.json turns them on.
+        config: sandboxEnabled(sandboxSettings) ? withSandboxBindings(localBindingConfig, sandboxSettings) : localBindingConfig,
       }),
     ],
   };
