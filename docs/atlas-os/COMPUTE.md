@@ -6,15 +6,17 @@ Tests: `apps/local-control/tests/compute-manager.test.mjs`, `tests/compute-runpo
 and `tests/budget-release.test.mjs`.
 
 **Status:** the interface, the fake provider, every safety stop, the monthly
-cap and a RunPod Serverless adapter (decision D4) are built and tested. The
-tests run against a fake per-second-billing provider and a local HTTP fake of
-the RunPod API with a fake clock. **No test makes a network call or spends
-money.** The daemon (`main.mjs`) constructs the compute service, but it is
-**off by default**. With no endpoint it builds nothing and sends no request.
-With an endpoint and key but a cap of 0 (the default), it refuses every
-provision. **Not live:** nothing has run against a real RunPod account. That
-needs the owner's account, endpoint and a cap above 0 (see "RunPod setup"
-below). Render jobs do not route to RunPod yet (see "Follow-ups").
+cap, a RunPod Serverless adapter (decision D4) and [Atlas Nodes](#atlas-node-bring-your-own-machine)
+are built and tested. The tests run against a fake per-second-billing
+provider and a local HTTP fake of the RunPod API with a fake clock. **No test
+makes a network call or spends money.** The daemon (`main.mjs`) always runs a
+`ComputeManager` with the owner's own Atlas Nodes as the first provider, at
+$0, and starts the reconciler at boot. RunPod is added after the nodes only
+when an endpoint and key are configured, and even then every RunPod
+provision is refused while the cap is 0 (the default). **Not live:** nothing
+has run against a real RunPod account. That needs the owner's account,
+endpoint and a cap above 0 (see "RunPod setup" below). Render jobs do not
+route to RunPod yet (see "Follow-ups").
 
 ## Provider interface (`provider.mjs`)
 
@@ -226,6 +228,157 @@ allowlist of fields; provider error messages are reduced to their codes.
 - A small window between reserving and writing the lease can leave a
   reservation held after a crash. This is conservative: the budget is held
   and no spend happens.
+
+## Atlas Node (bring your own machine)
+
+PROGRAM.md Phase 4 / §4.9 (remote nodes). Code: `apps/local-control/src/node/`
+(the node program) and `apps/local-control/src/platform/nodes/` (the daemon
+side). Tests: `apps/local-control/tests/atlas-node.test.mjs`.
+
+An Atlas Node is a small program you run on a machine you own: a laptop, a
+desktop, or a friend's GPU box. It dials **out** to your Atlas daemon,
+declares what it can do, pulls render jobs, runs them in **its own container
+sandbox**, and uploads the outputs. It is "your own RunPod" at $0. A GPU is a
+bonus: CPU rendering (ffmpeg, Blender Cycles on CPU) is the normal case.
+
+### What runs where
+
+| Where | What |
+|---|---|
+| Your Atlas daemon | Mints and revokes node tokens, keeps nodes in the worker registry (`platform/workers/registry.mjs`), queues jobs, hands each job to one node, verifies uploads, stores outputs in the artifact store. `NodeProvider` puts the nodes behind the `ComputeManager` provider interface. |
+| The node machine | `node src/node/main.mjs`: hardware detection (`agent/models/hardware.mjs`), `RenderRunner` (ffmpeg / Blender, container only), outbound HTTPS to the daemon. It never listens on a port. |
+
+Scheduling reuses the compute plane: `ComputeManager` asks every provider
+for an estimate and takes the cheapest. `NodeProvider` offers $0 when an
+approved, live node of the job's tenant has the needed capabilities
+(container sandbox, the render tool, a GPU with enough memory only if the
+job asks for one, optional CPU cores / memory). With no paid provider
+configured, nodes are the only provider (`createComputeService({ freeProviders })`); with one, a
+node still wins whenever one can run the job and the paid provider takes the
+rest. A $0 lease reserves nothing, but keeps the max lifetime, idle timeout,
+reconciler and audit trail of a rented GPU. A job is submitted with
+`nodeRenderJob({ id, render, workspace, gpu?, cpu? })` and run with
+`runNodeRender({ manager, provider, tenantId, taskId, job })`.
+
+### Setup
+
+1. **On the daemon (owner):** mint a node token. It is shown once.
+
+   ```sh
+   curl -s -X POST http://127.0.0.1:4317/v1/nodes \
+     -H "authorization: Bearer $ATLAS_LOCAL_TOKEN" -H "content-type: application/json" \
+     -d '{"name":"Living-room PC"}'
+   # -> { "node": { "id": "node_…", "status": "waiting_for_node" }, "nodeToken": "…" }
+   ```
+
+2. **Make the daemon reachable over HTTPS from the node.** The daemon listens
+   on loopback; use the same customer-managed remote access as for phones (a
+   VPN such as Tailscale/WireGuard, or an HTTPS reverse proxy/tunnel). The
+   node refuses plain `http://` except to `127.0.0.1`/`localhost` on the same
+   machine.
+
+3. **On the node machine:** install Node.js 22.13 or newer and a container
+   runtime, check out this repository, and build the render image
+   (`docker build -t atlas/render:local docker/render`, see
+   `docker/render/README.md`; it has ffmpeg and headless Blender). Then start
+   the node with the token in an environment variable (never on the command
+   line):
+
+   - **Linux** (Docker or Podman):
+     ```sh
+     export ATLAS_NODE_TOKEN='…'
+     export ATLAS_TERMINAL_CONTAINER_RUNTIME=/usr/bin/docker   # or /usr/bin/podman
+     export ATLAS_RENDER_FFMPEG_IMAGE=atlas/render:local
+     export ATLAS_RENDER_BLENDER_IMAGE=atlas/render:local   # Cycles on CPU works without a GPU
+     cd apps/local-control && node src/node/main.mjs --daemon https://atlas.your-tailnet.ts.net --token-env ATLAS_NODE_TOKEN
+     ```
+   - **macOS** (Docker Desktop, or Podman machine): the same, with
+     `ATLAS_TERMINAL_CONTAINER_RUNTIME=/usr/local/bin/docker` (or the path
+     `which docker` prints). Apple GPUs are not passed into Linux containers,
+     so a Mac node renders on CPU.
+   - **Windows** (Docker Desktop, PowerShell):
+     ```powershell
+     $env:ATLAS_NODE_TOKEN = '…'
+     $env:ATLAS_TERMINAL_CONTAINER_RUNTIME = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
+     $env:ATLAS_RENDER_FFMPEG_IMAGE = 'atlas/render:local'
+     cd apps\local-control; node src\node\main.mjs --daemon https://atlas.your-tailnet.ts.net --token-env ATLAS_NODE_TOKEN
+     ```
+
+   `--work-dir <dir>` chooses where job inputs and the sandbox staging copy
+   live (default: the OS temp directory). Without a working container
+   runtime the node declares no render capability and is never sent work.
+
+4. **Approve it (owner).** The node registers as `untrusted` with what it
+   detected (cores, memory, GPU, render tools). Check `GET /v1/nodes`, then
+   `POST /v1/nodes/<id>/approve`. Until then it receives nothing.
+
+Revoke with `POST /v1/nodes/<id>/revoke {"reason":"…"}`: the token stops
+working at once, and any job it held goes back to the queue for another node.
+
+### Job lifecycle
+
+`provision` queues a node job (inputs are copied out of the workspace at
+submit time, regular files inside it only). A node long-polls
+`POST /v1/node/claim`; one guarded update hands the job to exactly one node
+with a claim id and an expiry (60 s by default). Heartbeats and status
+reports extend the claim. The node downloads each input and checks its
+sha256, renders in its container sandbox (network off, staging copy only),
+uploads each declared output with its sha256 (`PUT …/outputs`), then
+`POST …/complete` names every output's digest. The job succeeds only if all
+of them were uploaded under that claim with those digests.
+
+- A claim that is not extended (the node died, lost its network, or stopped
+  heartbeating) expires: the job is re-queued for a **different** node, at
+  most once (two attempts by default), then fails.
+- A job whose outputs were confirmed is never re-queued or claimed again; a
+  node whose claim was lost gets `409 CLAIM_LOST` on every later call, so two
+  nodes can never both complete the same job.
+- A node handed a job it cannot run declines it and the job goes to another
+  node; the daemon does not offer it such jobs in the first place.
+- The compute lease is kept alive by the daemon while it waits; if the daemon
+  stops, the lease goes idle, the reconciler cancels the node job, and the
+  node's next call is refused.
+
+### Security model
+
+- **Outbound only.** Nodes never listen; they call the daemon over HTTPS
+  (loopback http only on the same machine). The daemon itself stays on
+  loopback behind your own VPN or proxy. Nothing is publicly exposed.
+- **Identity and revocation.** A node token is 32 random bytes; the daemon
+  stores only its sha256 (the paired-device mechanism). It authenticates only
+  the `/v1/node/*` routes: it cannot read tasks, approvals, artifacts or
+  anything else. Failed node tokens are rate limited per client. Revoking a
+  node kills its token and its registry worker together.
+- **Owner approval before any work.** Trust is the worker registry's:
+  untrusted → enrolled only by the owner, and an untrusted, revoked or stale
+  node is never given a job. A heartbeat can shrink but never grow declared
+  capabilities.
+- **Container or nothing.** Every job runs through `RenderRunner`, which
+  starts only the container runtime (network none, read-only root, all
+  capabilities dropped, one mount: a staging copy of the declared inputs).
+  There is no host fallback on the node either.
+- **Verified outputs.** Uploads are size-limited (job `maxOutputBytes`, and
+  2 GiB per file), hashed while streaming, refused on any digest mismatch,
+  restricted to declared output paths, and stored through the artifact store,
+  which checks that the bytes really are the media type (mp4, webm, png,
+  jpeg, webp).
+- **Tenant isolation.** A node belongs to the tenant whose owner minted it and
+  only sees that tenant's jobs.
+- **What a node owner can see.** The job's inputs and outputs, as with any
+  machine you render on. Only add machines whose owners you trust with that
+  content.
+
+### Known limits
+
+- Jobs are render jobs (ffmpeg, Blender). Inference on nodes (PROGRAM 4.9
+  PROOF 4) will reuse the same enrollment, claim and lease path.
+- A revoked or expired node's in-flight container is not killed remotely; its
+  result is refused and discarded, and the container stops at the job's own
+  timeout.
+- Transport is the owner's HTTPS (VPN/proxy); there is no node-specific
+  certificate pinning or mutual TLS yet: the node token is the node's identity.
+- Apple Silicon GPUs are not usable from Linux containers, so Mac nodes are
+  CPU nodes.
 
 ## Follow-ups
 

@@ -1,11 +1,33 @@
-# Atlas implementation backlog — evidence refresh 2026-10-15
+# Atlas implementation backlog — owner priorities 2026-10-20
 
-The owner's current order is: audit first, reliability, Genesis, persistent
-cloud execution, browser control, collaboration, business workflows, customer
-release. [ARCHITECTURE.md](ARCHITECTURE.md) separates source, runtime wiring,
-automated coverage, real sessions and deployed evidence. Historical rows below
-are retained for traceability and are superseded by this queue. No duplicate
-TODO is introduced. Check current ownership before each implementation.
+## Active delivery queue (#430)
+
+The owner's requested order below supersedes priority labels in the historical
+rows. It schedules existing work rather than creating parallel implementations.
+[PROGRAM.md](../PROGRAM.md) remains governing: observe phase exit gates before
+starting a later phase. Queuing P2/P3 does not qualify those gates or authorize
+paid provisioning, new privileges or changes to protected policy.
+[ARCHITECTURE.md](ARCHITECTURE.md) distinguishes source, runtime wiring, tests
+and deployed evidence. Check fresh main and active ownership before each slice;
+an open PR or green unit test is not a completed live acceptance journey.
+
+| Priority | Outcome | Reuse and current work | Completion evidence still required |
+|---|---|---|---|
+| P0 | **Inference reliability:** prove real requests survive quota exhaustion and provider failures. | Existing inference governor, provider routing, deadlines and retries; #397/#414 provider work, #406 quota-aware eval, #240 transport repair. | Real streaming and non-streaming requests encounter controlled quota/provider failures and reach an eligible fallback or durable scheduled continuation; bounded retries/cancellation, no empty success, no overspend or private-data routing violation. Deploy eligible reviewed changes, then run Verify hosted Atlas in chat mode and retain actual route/outcome receipts. Credentials and configured workflow review remain prerequisites. |
+| P0 | **Verified delivery:** complete real website and coding tasks with verified outputs. | Existing Genesis, coder, validator and saved-task execution claims; #395 medium-task dispatch, #253 isolation, #178 provider smoke; merged #415 argument diagnostics. | An unmet website objective produces a reachable responsive site checked in a real browser; an unmet medium coding objective produces independently checked edits, tests and a reviewable PR. Replay the real coder trace with tool IDs and run-local argument fingerprints before choosing a loop repair. A previously satisfied objective, model claim, trivial smoke or preview alone does not close this goal. |
+| P1 | **Project continuity:** resume interrupted projects without losing work. | Existing durable task/project stores, snapshots and receipts; #377 merged environment snapshots, #291/#372 cloud continuation, #284 receipt recovery, #282 result ownership. | Kill/restart and disconnect/reconnect a real project; recover files, approvals and progress from durable evidence, fence stale attempts, and complete without repeating external side effects. Preserve tenant migration/review holds. |
+| P1 | **Execution infrastructure:** connect safe terminal, browser, container and rendering operations. | Existing bounded command runner (#408 merged), browser worker, Genesis executor and render service; #105 browser integration, #237 takeover, #400 sandbox, #253 runner isolation. | Exercise each operation through the normal authenticated runtime with confinement, exact approvals where required, deadlines, cancellation and process cleanup. Verify a real browser outcome, container execution and playable render artifact; sandbox failure must never fall back to unrestricted host execution. |
+| P1 | **Autonomous improvement:** detect failures, repair them and retest within strict limits. | Existing failure classification, repair engine, eval harness and replay; #368 merged bounded repair, #381 eval fixtures, #236 replay/evals, existing self-improvement services. | A planted failure is detected, repaired and independently retested; an unfixable case stops with preserved findings within tool/token/time/spend limits. Confirm cancellation, no-progress and approval fences. No self-granted permissions or unreviewed policy changes; no larger budget to conceal a loop. |
+| P2 | **Distributed compute:** connect owned machines and optional cloud GPUs. | Existing compute manager and provider contracts; #407 Atlas Node, #369 merged GPU lifecycle controls, #423 federated compute audit; existing native-inference phase. | Qualify an owned machine with authenticated identity, revocation, durable leases, resource caps and cleanup. Qualify an optional GPU only after configured account/budget authorization; crash tests leave no orphan resources. No paid provisioning merely to complete this queue. |
+| P2 | **Product experience:** show live websites, playable games, videos and project progress. | Existing hosted preview/site delivery, artifact store (#370), render service (#376/#389), activity/receipt UI and #181 visual edits. | Real projects expose working website links, browser-playable game artifacts, playable videos and accurate live/reconnected progress. Check phone/desktop interaction, artifact authorization, failure states and receipt-backed completion. Do not substitute static mockups for generated outputs. |
+| P3 | **Advanced research:** benchmark quantum and other experimental compute approaches. | Reconcile #423 compute plan and #429 experimental execution work with the existing eval/compute interfaces after preceding gates. | Publish reproducible classical baselines, actual backend or explicitly labeled simulator results, correctness, latency and cost/resource measurements. Report negative results and unavailable hardware honestly; no quantum advantage or production-readiness claim without comparative evidence. |
+
+**Next:** finish the P0 inference release prerequisites and real website/medium
+coder acceptance using existing owners and services. Keep later items queued
+while earlier gates or required review remain unresolved; progress independent
+eligible work without duplicating active claims.
+
+Historical evidence and implementation slices follow for traceability.
 
 ## Reliability slice — shared CLI output-budget admission (#330, 2026-10-17)
 
