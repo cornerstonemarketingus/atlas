@@ -39,14 +39,25 @@ const intSetting = (env, name, fallback) => {
   return value;
 };
 
-export async function createComputeService({ env = process.env, credentials, store, leaseDb, clock = undefined, fetchImpl = globalThis.fetch }) {
+export async function createComputeService({ env = process.env, credentials, store, leaseDb, clock = undefined, fetchImpl = globalThis.fetch, freeProviders = [] }) {
   const endpointId = env.ATLAS_RUNPOD_ENDPOINT_ID?.trim();
   const cap = parseMonthlyCapUsd(env.ATLAS_GPU_MONTHLY_CAP_USD);
-  if (!endpointId) return { enabled: false, reason: "ATLAS_RUNPOD_ENDPOINT_ID is not set; rented GPU compute is off." };
+  // $0 providers (Atlas Nodes) need no key and no cap, so they run whether
+  // or not rented GPU compute is configured.
+  const freeOnly = (why) => {
+    if (freeProviders.length === 0) return { enabled: false, reason: why };
+    const manager = new ComputeManager({ store, leaseDb, providers: freeProviders, monthlyCapMicroUsd: cap.capMicroUsd, ...(clock ? { clock } : {}) });
+    return {
+      enabled: true, provisioning: true, manager, provider: null, capMicroUsd: cap.capMicroUsd,
+      close() { manager.stopReconciler(); manager.leases.close(); },
+      reason: `Atlas Nodes only ($0); ${why}`,
+    };
+  };
+  if (!endpointId) return freeOnly("ATLAS_RUNPOD_ENDPOINT_ID is not set; rented GPU compute is off.");
   if (typeof credentials !== "function") throw new Error("createComputeService needs a credentials resolver.");
   let cached = null;
   const apiKey = async () => (cached ??= (await credentials(RUNPOD_API_KEY_NAME)) || null);
-  if (!(await apiKey())) return { enabled: false, reason: `${RUNPOD_API_KEY_NAME} is not in the vault or environment; rented GPU compute is off.` };
+  if (!(await apiKey())) return freeOnly(`${RUNPOD_API_KEY_NAME} is not in the vault or environment; rented GPU compute is off.`);
   let pricing;
   if (env.ATLAS_RUNPOD_PRICING?.trim()) {
     try { pricing = JSON.parse(env.ATLAS_RUNPOD_PRICING); } catch { throw new Error("ATLAS_RUNPOD_PRICING must be JSON."); }
@@ -60,8 +71,8 @@ export async function createComputeService({ env = process.env, credentials, sto
     queueTtlSec: intSetting(env, "ATLAS_RUNPOD_QUEUE_TTL_SEC", 900) || 900,
     ...(clock ? { clock } : {}),
   });
-  const manager = new ComputeManager({ store, leaseDb, providers: [provider], monthlyCapMicroUsd: cap.capMicroUsd, ...(clock ? { clock } : {}) });
-  const provisioning = cap.capMicroUsd > 0;
+  const manager = new ComputeManager({ store, leaseDb, providers: [...freeProviders, provider], monthlyCapMicroUsd: cap.capMicroUsd, ...(clock ? { clock } : {}) });
+  const provisioning = cap.capMicroUsd > 0 || freeProviders.length > 0;
   return {
     enabled: true, provisioning, manager, provider, capMicroUsd: cap.capMicroUsd,
     /** Stops the reconciler and releases both database handles. */
