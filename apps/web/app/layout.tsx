@@ -4,6 +4,7 @@ import "./globals.css";
 import "./workspace.css";
 import "./atlas-shell.css";
 import "./marketing.css";
+import "./atlas-brand.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,19 +18,19 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Atlas — Build it. Run it. Grow it.",
-  description: "Atlas is an autonomous AI workspace that builds software, operates computers and turns successful work into persistent automations.",
+  description: "Atlas is an autonomous software platform that builds repositories, websites and apps with child agents, computer control and persistent automation.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
   },
   manifest: "/manifest.webmanifest",
   applicationName: "Atlas",
-  themeColor: "#171a17",
+  themeColor: "#080f1e",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Atlas" },
   formatDetection: { telephone: false },
   openGraph: {
     title: "Atlas — Build it. Run it. Grow it.",
-    description: "An autonomous AI workspace that builds software, operates computers and turns successful work into persistent automations — with you approving every consequential action.",
+    description: "From idea to operation: autonomous software creation with child agents, verified execution, computer control and persistent automation.",
     type: "website",
   },
 };

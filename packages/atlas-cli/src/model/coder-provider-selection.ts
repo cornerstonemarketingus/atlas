@@ -7,7 +7,7 @@
  * observable in production.
  */
 
-export type CoderProviderId = "anthropic" | "groq";
+export type CoderProviderId = "anthropic" | "groq" | "openai" | "workers-ai" | "cerebras" | "gemini" | "openrouter" | "mistral";
 
 export interface CoderProviderProfile {
   readonly providerId: CoderProviderId;
@@ -23,6 +23,13 @@ export interface CoderProviderProfile {
 }
 
 const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
+  openai: { providerId: "openai", displayName: "OpenAI", defaultApiKeyEnvironmentVariable: "OPENAI_API_KEY", contextWindowTokens: 128_000, maxOutputTokensPerTurn: 8_192 },
+  "workers-ai": { providerId: "workers-ai", displayName: "Cloudflare Workers AI", defaultApiKeyEnvironmentVariable: "ATLAS_WORKERS_AI_TOKEN", contextWindowTokens: 131_072, maxOutputTokensPerTurn: 8_192 },
+  // OpenAI-compatible vendors at fixed origins (packages/atlas-inference/src/catalog.mjs).
+  cerebras: { providerId: "cerebras", displayName: "Cerebras", defaultApiKeyEnvironmentVariable: "CEREBRAS_API_KEY", contextWindowTokens: 65_536, maxOutputTokensPerTurn: 8_192 },
+  gemini: { providerId: "gemini", displayName: "Google Gemini", defaultApiKeyEnvironmentVariable: "GEMINI_API_KEY", contextWindowTokens: 1_048_576, maxOutputTokensPerTurn: 8_192 },
+  openrouter: { providerId: "openrouter", displayName: "OpenRouter", defaultApiKeyEnvironmentVariable: "OPENROUTER_API_KEY", contextWindowTokens: 131_072, maxOutputTokensPerTurn: 8_192 },
+  mistral: { providerId: "mistral", displayName: "Mistral", defaultApiKeyEnvironmentVariable: "MISTRAL_API_KEY", contextWindowTokens: 131_072, maxOutputTokensPerTurn: 8_192 },
   groq: {
     providerId: "groq",
     displayName: "Groq",
@@ -49,10 +56,10 @@ const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
   },
 };
 
-export const CODER_PROVIDER_IDS: readonly CoderProviderId[] = ["anthropic", "groq"];
+export const CODER_PROVIDER_IDS: readonly CoderProviderId[] = ["anthropic", "groq", "openai", "workers-ai", "cerebras", "gemini", "openrouter", "mistral"];
 
 export function isCoderProviderId(value: string): value is CoderProviderId {
-  return value === "anthropic" || value === "groq";
+  return (CODER_PROVIDER_IDS as readonly string[]).includes(value);
 }
 
 /**
@@ -65,7 +72,13 @@ export function isCoderProviderId(value: string): value is CoderProviderId {
  * existing caller (including the workflow) already means.
  */
 export function inferCoderProviderId(model: string): CoderProviderId {
-  return /^(anthropic\/)?claude[-.]/iu.test(model.trim()) ? "anthropic" : "groq";
+  const name = model.trim();
+  if (name.startsWith("@cf/")) return "workers-ai";
+  if (name.endsWith(":free")) return "openrouter";
+  if (/^gemini-/iu.test(name)) return "gemini";
+  if (/^(?:mistral|devstral|codestral|magistral)-/iu.test(name)) return "mistral";
+  if (/^(?:gpt-|o[134](?:-|$))/iu.test(name)) return "openai";
+  return /^(anthropic\/)?claude[-.]/iu.test(name) ? "anthropic" : "groq";
 }
 
 export interface CoderProviderSelectionInput {

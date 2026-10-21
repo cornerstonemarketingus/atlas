@@ -106,8 +106,10 @@ export class GenesisPublisher {
   }
 
   async #token(provider) {
-    const token = await this.credentials(TOKENS[provider]);
-    if (!token) throw new PublishError("NO_CREDENTIAL", `Add a ${provider} token as ${TOKENS[provider]} (Settings → Credentials, or the environment) so Atlas can do this for you.`);
+    const token = provider === "github"
+      ? (await this.credentials("ATLAS_GITHUB_ACCOUNT_TOKEN")) ?? await this.credentials(TOKENS[provider])
+      : await this.credentials(TOKENS[provider]);
+    if (!token) throw new PublishError("NO_CREDENTIAL", provider === "github" ? "Connect an account-level GitHub credential as ATLAS_GITHUB_ACCOUNT_TOKEN in Settings → Credentials (or the execution node environment). ATLAS_GITHUB_TOKEN is reused when it has account-level creation permission; a repository Actions token alone is insufficient." : `Add a ${provider} token as ${TOKENS[provider]} (Settings → Credentials, or the environment) so Atlas can do this for you.`);
     return token;
   }
 
@@ -119,12 +121,31 @@ export class GenesisPublisher {
     return this.adapters.vercel({ token: await this.#token("vercel"), teamId: this.environment.ATLAS_VERCEL_TEAM_ID || null });
   }
 
+  async repositoryCapabilities({ visibility = "private" } = {}) {
+    const policy = this.approvals.policy("publish.remote").decision;
+    if (policy === "deny") return { github: { connected: false, canCreateRepositories: false, canPush: false, reason: "policy_denied" }, publish: { policy } };
+    try {
+      const creator = await this.#creator("github", null);
+      const github = creator.capabilities ? await creator.capabilities({ visibility }) : { connected: true, canCreateRepositories: null, canPush: null, reason: "permission_unverified" };
+      return { github, publish: { policy, approvalRequired: policy !== "allow" } };
+    } catch (error) {
+      return { github: { connected: false, canReadRepositories: false, canCreateRepositories: false, canPush: false,
+        reason: error.code === "NO_CREDENTIAL" ? "missing_credential" : "host_unavailable" }, publish: { policy, approvalRequired: policy !== "allow" } };
+    }
+  }
+
   /** Create a repository on a git host (plan now, create after approval), then push the project to it. */
   async requestRepository(projectId, { host = "github", name = null, visibility = "private", baseUrl = null } = {}) {
     const project = this.#readyProject(projectId);
     if (!["github", "gitlab", "forgejo"].includes(host)) throw new PublishError("BAD_HOST", "Choose github, gitlab or forgejo.");
     const decision = this.#policy("publish.remote", "publishing");
     const creator = await this.#creator(host, baseUrl);
+    if (host === "github" && creator.capabilities) {
+      const capability = await creator.capabilities({ visibility });
+      if (!capability.connected || capability.canCreateRepositories === false) throw new PublishError(
+        capability.reason === "insufficient_permission" ? "INSUFFICIENT_PERMISSION" : "NO_CREDENTIAL",
+        `GitHub repository creation is unavailable: ${capability.reason}. Connect an account-level credential with repository creation permission; the Actions dispatch credential may be repository-scoped.`);
+    }
     const plan = await creator.planRepository({ name: name ?? deploymentName(project.name), visibility, description: project.spec.objective.slice(0, 200) }).catch((error) => { throw new PublishError(error.code ?? "PLAN_FAILED", error.message); });
     const commit = (await git(project.workspace, ["rev-parse", "HEAD"])).stdout.trim();
     const stored = { ...plan, host, baseUrl };
@@ -141,13 +162,18 @@ export class GenesisPublisher {
       created = await (await this.#creator(plan.host, plan.baseUrl)).applyRepository({ plan });
     } catch (error) {
       this.genesis.advance(project.id, "ready", { reason: `Creating the repository failed: ${error.message}`.slice(0, 900), evidence: { kind: "publish-failed", step: "create", message: String(error.message).slice(0, 2000) } });
-      return { status: "failed", message: error.message };
+      return { status: "failed", code: error.code ?? "CREATE_FAILED", message: error.message };
     }
     if (!created.verified || !created.observed?.cloneUrl) {
       this.genesis.advance(project.id, "ready", { reason: "The host did not confirm the new repository.", evidence: { kind: "publish-failed", step: "verify", observed: created.observed } });
       return { status: "failed", message: "The host did not confirm the new repository." };
     }
-    const pushed = await this.push(project.workspace, created.observed.cloneUrl);
+    const expectedRemote = plan.host === "github" ? `https://github.com/${plan.after.owner}/${plan.after.name}.git` : created.observed.cloneUrl;
+    if (plan.host === "github" && created.observed.cloneUrl !== expectedRemote) {
+      this.genesis.advance(project.id, "ready", { reason: "GitHub returned an unexpected repository destination.", evidence: { kind: "publish-failed", step: "verify" } });
+      return { status: "failed", code: "BAD_DESTINATION", message: "GitHub returned an unexpected repository destination." };
+    }
+    const pushed = await this.push(project.workspace, expectedRemote, { expectedCommit: commit, token: plan.host === "github" ? await this.#token("github") : null });
     if (!pushed.ok) {
       this.genesis.advance(project.id, "ready", { reason: `Created ${created.observed.webUrl ?? created.observed.fullName}, but pushing failed: ${pushed.message}`.slice(0, 900), evidence: { kind: "publish-failed", step: "push", repository: created.observed, message: pushed.message.slice(0, 2000) } });
       return { status: "failed", repository: created.observed, message: pushed.message };
@@ -243,11 +269,24 @@ export class GenesisPublisher {
 }
 
 /** Pushes the project's main branch using the owner's own git credentials; never prompts (no terminal is attached). */
-export async function pushMain(folder, remote) {
+export async function pushMain(folder, remote, { token = null, expectedCommit = null } = {}) {
   try {
-    await git(folder, ["push", remote, "HEAD:refs/heads/main"], { env: { GIT_TERMINAL_PROMPT: "0" }, timeoutMs: 120_000 });
+    const env = { GIT_TERMINAL_PROMPT: "0" };
+    if (token) {
+      if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\.git$/u.test(remote)) throw new Error("Refused an untrusted GitHub push destination.");
+      Object.assign(env, { GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_0: `http.${remote}.extraheader`,
+        GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+        GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "", GIT_CONFIG_KEY_2: "http.followRedirects", GIT_CONFIG_VALUE_2: "false" });
+    }
+    const options = { env, timeoutMs: 120_000 };
+    if (expectedCommit && !/^[a-f0-9]{40}$/u.test(expectedCommit)) throw new Error("Invalid approved commit.");
+    await git(folder, ["-c", "core.hooksPath=/dev/null", "push", remote, `${expectedCommit ?? "HEAD"}:refs/heads/main`], options);
+    if (expectedCommit) {
+      const observed = await git(folder, ["ls-remote", remote, "refs/heads/main"], options);
+      if (observed.stdout.split(/\s+/u)[0] !== expectedCommit) return { ok: false, message: "The remote main commit could not be verified." };
+    }
     return { ok: true, message: "pushed" };
   } catch (error) {
-    return { ok: false, message: String(error?.stderr || error?.message || "git push failed").trim().slice(-1500) };
+    return { ok: false, message: token ? "GitHub push failed. Check the account credential's Contents permission and remote availability." : String(error?.stderr || error?.message || "git push failed").trim().slice(-1500) };
   }
 }

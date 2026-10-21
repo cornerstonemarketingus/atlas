@@ -16,6 +16,7 @@ import { PublishError } from "./publish.mjs";
  * POST /v1/genesis/:id/approve
  * POST /v1/genesis/:id/changes         { request }
  * POST /v1/genesis/:id/pause | resume | cancel | retry
+ * POST /v1/genesis/:id/restore         recreate the workspace from the latest verified snapshot and continue
  * GET  /v1/genesis/:id/preview         preview state and recent logs
  * POST /v1/genesis/:id/preview         { action: "start" | "stop" } (a ready project only)
  * POST /v1/genesis/:id/publish         { remote } — goes through the publish.remote policy and approvals
@@ -23,20 +24,33 @@ import { PublishError } from "./publish.mjs";
  * POST /v1/genesis/:id/deploy          { target: "preview" | "production" } — static sites to Vercel (deploy.remote)
  */
 const STATUS = {
+  INVALID_PROJECT: 400, REQUEST_CONFLICT: 409,
   PROMPT_REQUIRED: 400, PROMPT_TOO_LONG: 400, NOT_WAITING: 409, ANSWERS_MISSING: 400, NOT_PLANNED: 409, BUSY: 409, NOT_PAUSED: 409, NOT_FAILED: 409,
   NOT_FOUND: 404, STALE_VERSION: 409, ILLEGAL_TRANSITION: 409, REASON_REQUIRED: 400,
 };
 
-export function createGenesisRoutes({ genesis, previews = null, publisher = null, parseBody, send }) {
+export function createGenesisRoutes({ genesis, executor = null, previews = null, publisher = null, creation = null, parseBody, send }) {
   return async function handle(request, response, identity) {
     const url = new URL(request.url ?? "/", "http://local.atlas");
     if (!url.pathname.startsWith("/v1/genesis")) return false;
     try {
+      if (url.pathname.startsWith("/v1/genesis/operations") || url.pathname === "/v1/genesis/capabilities") {
+        if (identity.role !== "admin") return send(response, 403, { message: "Owner access required." });
+        if (!creation || !publisher) return send(response, 503, { message: "Project creation is not configured." });
+        if (request.method === "GET" && url.pathname === "/v1/genesis/capabilities") return send(response, 200, await publisher.repositoryCapabilities({ visibility: url.searchParams.get("visibility") === "public" ? "public" : "private" }));
+        const operation = /^\/v1\/genesis\/operations\/([a-zA-Z0-9_-]{16,100})$/u.exec(url.pathname);
+        if (request.method === "GET" && operation) return send(response, 200, creation.status(operation[1]));
+        if (request.method === "POST" && url.pathname === "/v1/genesis/operations") {
+          const body = await parseBody(request, response); if (!body) return true;
+          return send(response, 202, await creation.create(body));
+        }
+        return send(response, 404, { message: "Route not found." });
+      }
       if (request.method === "GET" && url.pathname === "/v1/genesis") return send(response, 200, { projects: genesis.list() });
       if (request.method === "GET" && url.pathname === "/v1/genesis/templates") {
         return send(response, 200, { templates: Object.values(TEMPLATES).map(({ id, version, title, description, archetypes, commands, preview, structure }) => ({ id, version, title, description, archetypes, commands, preview, structure })) });
       }
-      const match = /^\/v1\/genesis\/(gen_[0-9a-f-]{36})(?:\/(answers|approve|changes|pause|resume|cancel|retry|preview|publish|repository|deploy))?$/u.exec(url.pathname);
+      const match = /^\/v1\/genesis\/(gen_[0-9a-f-]{36})(?:\/(answers|approve|changes|pause|resume|cancel|retry|restore|preview|publish|repository|deploy))?$/u.exec(url.pathname);
       if (match?.[2] === "preview") {
         if (!previews) return send(response, 503, { message: "Previews are not available in this Atlas." });
         const project = genesis.store.get(genesis.tenantId, match[1]);
@@ -63,6 +77,11 @@ export function createGenesisRoutes({ genesis, previews = null, publisher = null
         return send(response, result.status === "awaiting-approval" ? 202 : ["published", "deployed"].includes(result.status) ? 200 : 502, { publish: result, project: genesis.view(match[1]) });
       }
       const [, id, action] = match;
+      if (action === "restore") {
+        if (!executor) return send(response, 503, { message: "Restoring projects is not available in this Atlas." });
+        const receipt = await executor.resumeFromSnapshot(id, { actor: "owner" });
+        return send(response, receipt.restored ? 200 : 409, { restore: receipt, project: genesis.view(id) });
+      }
       const result = action === "answers" ? await genesis.answer(id, body.answers)
         : action === "approve" ? genesis.approve(id)
           : action === "changes" ? await genesis.change(id, body.request)

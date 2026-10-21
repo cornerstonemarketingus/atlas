@@ -120,6 +120,48 @@
       "when": 1790300000005,
       "tag": "0016_project_genesis",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1791676800000,
+      "tag": "0017_task_dispatch_intent",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1791763200000,
+      "tag": "0018_task_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1791849600000,
+      "tag": "0019_task_execution_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1792108800000,
+      "tag": "0020_task_execution_outcomes",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1792195200000,
+      "tag": "0022_task_outcome_observation",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1792281600000,
+      "tag": "0023_observer_health",
+      "breakpoints": true
     }
   ]
 }

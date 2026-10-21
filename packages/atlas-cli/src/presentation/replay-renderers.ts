@@ -41,6 +41,7 @@ function renderTurn(turn: ReplayTurn): string[] {
     if (!call.unfinished && call.durationMs !== undefined) parts.push(`(${duration(call.durationMs)})`);
     if (denied) parts.push(`[policy: ${call.decision}${call.policyReason ? ` — ${call.policyReason}` : ""}]`);
     if (call.errorCode) parts.push(`[${call.errorCode}]`);
+    if (call.argumentsDigest) parts.push(`[run-local arguments ${call.argumentsDigest}]`);
     lines.push(parts.join(" "));
   }
   return lines;

@@ -1,0 +1,29 @@
+{
+  "id": "report-result-git-history",
+  "category": "tool-args",
+  "repo": "cornerstonemarketingus/atlas",
+  "baseCommit": "e00a49050841f932b970bc1f710d38054b1e870a",
+  "objective": "Without changing any source file: use git to find the five most recent commits that changed scripts/runner/report-result.mjs (newest first, following only that path, as `git log -5 -- <path>` lists them). Write ANSWER.json as {\"latest\": \"<full 40-character hash of the newest one>\", \"subjects\": [\"<subject line>\", ...]} with the five subject lines newest first.",
+  "setup": {
+    "files": {}
+  },
+  "verify": {
+    "argv": [
+      "node",
+      "{repo}/evals/verifiers/answer-check.mjs",
+      "{workspace}",
+      "report-result-history"
+    ]
+  },
+  "solution": {
+    "files": {
+      "ANSWER.json": "{\n  \"latest\": \"4f89f197888d1b5e5e3241aad78f21d9982c54d4\",\n  \"subjects\": [\n    \"Recover cloud task results after callback connection failures (#246)\",\n    \"fix(runner): block unknown Actions budgets by default (#157)\",\n    \"Prevent untracked tasks when history schema is incomplete (#192)\",\n    \"Propagate a correlation id through coder dispatch\",\n    \"Make Atlas return real results and verify hosted usability (#49)\"\n  ]\n}\n"
+    }
+  },
+  "timeoutMs": 180000,
+  "tags": [
+    "read-only",
+    "answer-file",
+    "git"
+  ]
+}

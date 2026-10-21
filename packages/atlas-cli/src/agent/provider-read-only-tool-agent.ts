@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from "node:crypto";
 import type {
   ReadOnlyToolAgentOptions,
   ReadOnlyToolAgentRequest,
@@ -7,9 +8,19 @@ import type {
 import { ReadOnlyToolRegistryError } from "../domain/read-only-tool-registry.js";
 import { ModelProviderError, type ModelMessage, type ModelUsage } from "../model/model-provider.js";
 import { validateModelResponse } from "../model/model-contract-validation.js";
+import { resolveOfferedToolName } from "./tool-name-resolution.js";
 import { boundCoderContext } from "../model/bounded-coder-context.js";
 
 const EMPTY_USAGE: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+
+function digestArguments(input: Record<string, unknown>, key: Buffer): string {
+  const canonical = JSON.stringify(input, (_name, value: unknown) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+    const object = value as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(object).sort().map(name => [name, object[name]]));
+  });
+  return "hmac-sha256:" + createHmac("sha256", key).update(canonical).digest("hex");
+}
 
 export class ProviderReadOnlyToolAgent {
   readonly #maximumTurns: number;
@@ -37,6 +48,8 @@ export class ProviderReadOnlyToolAgent {
   }
 
   public async run(request: ReadOnlyToolAgentRequest): Promise<ReadOnlyToolAgentResult> {
+    // Equality is useful within this run only. Never persist the random key or raw arguments.
+    const argumentsDigestKey = randomBytes(32);
     if (request.sessionId.trim().length === 0 || request.objective.trim().length === 0 || request.objective.length > 10_000) {
       throw new Error("Read-only tool agent requires a session ID and an objective of at most 10,000 characters.");
     }
@@ -131,16 +144,24 @@ export class ProviderReadOnlyToolAgent {
           if (toolCalls > this.#maximumToolCalls) {
             return this.block(request.sessionId, "Tool-call limit reached.", trace());
           }
+          const canonicalName = resolveOfferedToolName(
+            call.name,
+            this.options.tools.map(tool => tool.name),
+            this.options.registry.list().map(tool => tool.name),
+          );
           this.options.audit.append("tool.requested", {
             requestId,
             toolCallId: call.id,
-            toolId: call.name,
+            toolId: canonicalName ?? call.name,
+            ...(canonicalName !== undefined && canonicalName !== call.name ? { requestedToolId: call.name, repair: "automatic" as const } : {}),
             argumentCount: Object.keys(call.arguments).length,
+            argumentsDigest: digestArguments(call.arguments, argumentsDigestKey),
           });
           let result: Awaited<ReturnType<typeof this.options.registry.execute>>;
           try {
+            if (canonicalName === undefined) throw new ReadOnlyToolRegistryError("TOOL_NOT_FOUND", "Tool is not available for this run.");
             result = await this.options.registry.execute({
-              name: call.name,
+              name: canonicalName,
               input: call.arguments,
               scope: request.scope,
               context: { ...request.context, ...(request.signal === undefined ? {} : { signal: request.signal }) },
@@ -157,7 +178,7 @@ export class ProviderReadOnlyToolAgent {
             // decisions, and "try again with something else" is exactly the
             // wrong thing to invite after one.
             if (!(error instanceof ReadOnlyToolRegistryError) || error.code !== "TOOL_NOT_FOUND") throw error;
-            const availableTools = this.options.registry.list().map((tool) => tool.name);
+            const availableTools = this.options.tools.map((tool) => tool.name);
             this.options.audit.append("tool.completed", {
               toolCallId: call.id,
               outcome: "failed",
@@ -188,10 +209,10 @@ export class ProviderReadOnlyToolAgent {
           });
           if (result.status === "approval-required") {
             this.options.audit.append("session.blocked", { sessionId: request.sessionId, summary: "approval required" });
-            return { status: "approval-required", toolCallId: call.id, toolName: call.name, trace: trace() };
+            return { status: "approval-required", toolCallId: call.id, toolName: canonicalName ?? call.name, trace: trace() };
           }
           if (result.status === "failed") {
-            const properties = this.options.tools.find((tool) => tool.name === call.name)?.inputSchema["properties"];
+            const properties = this.options.tools.find((tool) => tool.name === canonicalName)?.inputSchema["properties"];
             const correction = result.errorCode === "INVALID_TOOL_INPUT"
               ? { validFields: properties && typeof properties === "object" && !Array.isArray(properties) ? Object.keys(properties) : [] }
               : {};

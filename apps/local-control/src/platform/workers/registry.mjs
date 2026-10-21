@@ -29,6 +29,8 @@ export const DEFAULT_MIN_TRUST_BY_RISK = Object.freeze({
   read: "enrolled", low: "enrolled", moderate: "enrolled", high: "verified", critical: "verified",
 });
 export const DEFAULT_HEARTBEAT_TTL_MS = 60_000;
+/** Render tools a worker may declare (`capabilities.render`); see platform/render/. */
+export const RENDER_TOOLS = Object.freeze(["ffmpeg", "blender"]);
 
 export class WorkerRegistryError extends Error {
   constructor(code, message, details = undefined) {
@@ -62,12 +64,28 @@ export function normalizeCapabilities(value = {}) {
   }
   const models = value.models ?? [];
   if (!Array.isArray(models) || models.some((m) => typeof m !== "string" || !m)) throw new WorkerRegistryError("INVALID_CAPABILITIES", "models must be strings.");
+  const render = (value.render ?? []).map((tool) => (typeof tool === "string" && tool.startsWith("render.") ? tool.slice("render.".length) : tool));
+  if (!Array.isArray(value.render ?? []) || render.some((tool) => !RENDER_TOOLS.includes(tool))) {
+    throw new WorkerRegistryError("INVALID_CAPABILITIES", `render must list tools from ${RENDER_TOOLS.join(", ")} (or render.<tool>).`);
+  }
+  // Render tools run only inside a container (or stronger) sandbox, never on the host.
+  if (render.length && !terminalLevels.some((level) => TERMINAL_SANDBOX_LEVELS.indexOf(level) >= TERMINAL_SANDBOX_LEVELS.indexOf("container"))) {
+    throw new WorkerRegistryError("INVALID_CAPABILITIES", "render capabilities require a terminal sandbox at 'container' or stronger.");
+  }
+  // CPU and memory are optional (Atlas Nodes declare them, so CPU rendering can be sized); absent means unknown.
+  const cpu = value.cpu ?? null;
+  if (cpu !== null && !(cpu && typeof cpu === "object" && Number.isInteger(cpu.cores) && cpu.cores >= 1
+    && Number.isFinite(cpu.memoryGiB) && cpu.memoryGiB >= 0)) {
+    throw new WorkerRegistryError("INVALID_CAPABILITIES", "cpu must be { cores, memoryGiB } or null.");
+  }
   return {
     browser: value.browser === true,
     desktop: value.desktop === true,
     terminal: [...new Set(terminalLevels)].sort((a, b) => TERMINAL_SANDBOX_LEVELS.indexOf(a) - TERMINAL_SANDBOX_LEVELS.indexOf(b)),
     gpu: gpu ? { vramGb: gpu.vramGb } : null,
     models: [...new Set(models)].sort(),
+    render: [...new Set(render)].sort(),
+    ...(cpu ? { cpu: { cores: cpu.cores, memoryGiB: cpu.memoryGiB } } : {}),
   };
 }
 
@@ -90,6 +108,17 @@ export function capabilityGaps(capabilities, requirements = {}) {
   }
   for (const model of requirements.models ?? []) {
     if (!capabilities.models.includes(model)) gaps.push(`model '${model}' not available`);
+  }
+  for (const tool of requirements.render ?? []) {
+    if (!(capabilities.render ?? []).includes(tool)) gaps.push(`no render.${tool}`);
+  }
+  if (requirements.cpu) {
+    const { minCores = 0, minMemoryGiB = 0 } = requirements.cpu;
+    if (!capabilities.cpu) { if (minCores > 0 || minMemoryGiB > 0) gaps.push("cpu and memory not declared"); }
+    else {
+      if (capabilities.cpu.cores < minCores) gaps.push(`${capabilities.cpu.cores} cpu cores < ${minCores}`);
+      if (capabilities.cpu.memoryGiB < minMemoryGiB) gaps.push(`${capabilities.cpu.memoryGiB} GiB memory < ${minMemoryGiB} GiB`);
+    }
   }
   return gaps;
 }
@@ -304,5 +333,7 @@ function requirementsFrom(caps) {
     terminal: caps.terminal.at(-1),
     gpu: caps.gpu ? { minVramGb: caps.gpu.vramGb } : undefined,
     models: caps.models,
+    render: caps.render,
+    cpu: caps.cpu ? { minCores: caps.cpu.cores, minMemoryGiB: caps.cpu.memoryGiB } : undefined,
   };
 }

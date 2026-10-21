@@ -94,6 +94,71 @@ function explicitName(prompt) {
   return match ? match[1].trim() : null;
 }
 
+const BUSINESS_NOUNS = "company|business|shop|studio|agency|firm|practice|restaurant|salon|clinic|team|store|gym|bakery|cafe|church|school|nonprofit";
+
+/** "…for Team Hahn Construction, a construction business based in…": the owner named the business and described it. */
+function introducedBusiness(prompt) {
+  const match = new RegExp(`\\bfor\\s+((?:[A-Z][\\w&'.-]*)(?:\\s+[A-Z][\\w&'.-]*){1,5}),\\s+an?\\s+((?:[a-z-]+\\s){0,3}?)(${BUSINESS_NOUNS})\\b`, "u").exec(prompt);
+  if (!match) return null;
+  const kind = match[2].trim();
+  return { name: match[1].trim(), business: { kind: kind || null, noun: match[3].toLowerCase(), phrase: `${kind ? `${kind} ` : ""}${match[3]}`.toLowerCase() } };
+}
+
+const TRADE_WORDS = "construction|roofing|plumbing|landscaping|electric|electrical|painting|remodeling|renovation|framing|builders|contractors|contracting|masonry|concrete|excavating|siding|flooring|hvac|heating|cooling|cleaning|carpentry|restoration";
+
+/**
+ * "…for Team Hahn Construction in Eagan, Minnesota, specializing in…": the
+ * owner named the business without describing it as "a … business". Only a
+ * capitalised multi-word name directly after "for" counts, and only when what
+ * follows looks like a description (a place, a comma, "specializing in"), so
+ * "for Inventory Items" or "for my shop" never become a business name.
+ */
+function namedBusiness(prompt) {
+  const match = new RegExp(`\\bfor\\s+((?:[A-Z][\\w&'.-]*)(?:\\s+[A-Z][\\w&'.-]*){1,5})(?=\\s+(?:in|near|of|at)\\s+[A-Z]|\\s*,|\\s+(?:specializ|offering|providing|that|which|who|with)|\\s*[.!]|\\s*$)`, "u").exec(prompt);
+  if (!match) return null;
+  const words = match[1].trim().split(/\s+/u);
+  const last = words.at(-1).replace(/[.!]+$/u, "").toLowerCase();
+  const name = words.join(" ").replace(/[.!]+$/u, "");
+  // The name must end in a business or trade word; a bare person or product name is not assumed to be a company.
+  if (new RegExp(`^(?:${BUSINESS_NOUNS})$`, "u").test(last)) return { name, business: { kind: null, noun: last, phrase: last } };
+  if (!new RegExp(`^(?:${TRADE_WORDS})$`, "u").test(last)) return null;
+  const kind = /^(?:builders|contractors|contracting)$/u.test(last) ? "construction" : last;
+  return { name, business: { kind, noun: "company", phrase: `${kind} company` } };
+}
+
+const US_REGIONS = "Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming";
+
+/** "based in Eagan, Minnesota" or "… Construction in Eagan, Minnesota": where the business is, for local SEO. Never guessed when absent. */
+function businessLocation(prompt) {
+  const stated = /\b(?:based|located|serving|headquartered)\s+(?:in|near|around)\s+([A-Z][A-Za-z'-]+(?:\s[A-Z][A-Za-z'-]+){0,2})(?:,\s*([A-Z][A-Za-z'-]+(?:\s[A-Z][A-Za-z'-]+)?))?/u.exec(prompt);
+  if (stated) return { city: stated[1], region: stated[2] ?? null };
+  // A bare "in <City>, <State>" counts only when the region really is a US state, so "in Excel, Word" is never a place.
+  const bare = new RegExp(`\\bin\\s+([A-Z][A-Za-z'-]+(?:\\s[A-Z][A-Za-z'-]+){0,2}),\\s*(${US_REGIONS})\\b`, "u").exec(prompt);
+  return bare ? { city: bare[1], region: bare[2] } : null;
+}
+
+/** "specializes in A, B, C, and D": the services the owner actually offers. */
+function statedServices(prompt) {
+  const match = /\bspecializ(?:es|ing)\s+in\s+([^.\n]+)/iu.exec(prompt);
+  if (!match) return [];
+  const items = match[1].split(/\s*,\s*(?:and\s+)?|\s+and\s+/u).map((item) => item.trim().replace(/^and\s+/iu, "")).filter((item) => item.length > 2 && item.length <= 60);
+  return [...new Set(items.map((item) => item.replace(/^./u, (c) => c.toUpperCase())))].slice(0, 8);
+}
+
+/** Pages the owner listed ("Framing page", "Windows and doors page", "Homepage"), in their order. */
+function requestedPages(prompt) {
+  const found = [];
+  for (const raw of String(prompt).split(/[,;:\n•*]|\.(?:\s|$)/u)) {
+    const segment = raw.trim().replace(/^(?:and|plus|with)\s+/iu, "").replace(/^(?:a|an|the)\s+/iu, "");
+    const match = /^([A-Za-z][A-Za-z&' -]{1,40}?)\s+page$/iu.exec(segment) ?? (/^home\s?page$/iu.test(segment) ? ["", "Home"] : null);
+    if (!match) continue;
+    const pageTitle = title(match[1]).replace(/\b(And|Or|Of|The|For)\b(?!^)/gu, (word, _w, offset) => (offset === 0 ? word : word.toLowerCase()));
+    const id = pageTitle.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "");
+    if (id && !found.some((page) => page.id === id)) found.push({ id, title: pageTitle });
+  }
+  return found;
+}
+
 function classify(prompt) {
   const reasons = [];
   let archetype = "webapp";
@@ -195,13 +260,20 @@ function detectDesign(prompt) {
   };
 }
 
-function websitePages(business) {
-  const pages = [
-    { id: "home", title: "Home", purpose: "Who the business is and a clear call to action" },
-    { id: "services", title: "Services", purpose: "What the business offers" },
-    { id: "about", title: "About", purpose: "Story, experience and trust signals" },
-    { id: "contact", title: "Contact", purpose: "Lead form, phone, email and service area" },
-  ];
+function websitePages(business, requested = []) {
+  const standard = {
+    home: { id: "home", title: "Home", purpose: "Who the business is and a clear call to action" },
+    services: { id: "services", title: "Services", purpose: "What the business offers" },
+    about: { id: "about", title: "About", purpose: "Story, experience and trust signals" },
+    contact: { id: "contact", title: "Contact", purpose: "Lead form, phone, email and service area" },
+  };
+  if (requested.length) {
+    // The owner's list wins and keeps its order; Home and Contact are always present, never a page nobody asked for.
+    const listed = requested.filter((page) => !["home", "contact"].includes(page.id)).map((page) => standard[page.id] ?? { ...page, purpose: `Details about ${page.title.toLowerCase()}` });
+    const withDefaults = [...listed, ...["services", "about"].filter((id) => !listed.some((page) => page.id === id)).map((id) => standard[id])];
+    return [standard.home, ...withDefaults, standard.contact];
+  }
+  const pages = [standard.home, standard.services, standard.about, standard.contact];
   if (business && /landscap|garden|roof|construct|paint|clean|renovat|remodel|plumb|electric|photograph|design|bak|salon/iu.test(business.phrase)) {
     pages.splice(3, 0, { id: "gallery", title: "Gallery", purpose: "Photos of past work" });
   }
@@ -279,14 +351,15 @@ function questionsFor({ prompt, integrations }) {
 export function inferSpecification(prompt, { answers = {} } = {}) {
   const text = String(prompt ?? "").trim();
   if (!text) throw new Error("Describe what to build.");
-  const business = businessType(text);
   const { archetype, reasons } = classify(text);
+  const introduced = introducedBusiness(text) ?? (archetype === "website" ? namedBusiness(text) : null);
+  const business = businessType(text) ?? introduced?.business ?? null;
   const booking = has(text, /\b(booking|bookings|book|appointments?|reservations?|schedul\w*)\b/u);
   const entityDefs = detectEntities(text, archetype);
   const entities = entityDefs.map((entity) => ({ name: entity.name, fields: entity.fields.map((key) => field(key, entity.name)) }));
   const auth = detectAuth(text, archetype);
   const integrations = detectIntegrations(text);
-  const pages = archetype === "website" ? websitePages(business) : archetype === "api" ? [] : appPages(entities, archetype, booking);
+  const pages = archetype === "website" ? websitePages(business, requestedPages(text)) : archetype === "api" ? [] : appPages(entities, archetype, booking);
   const workflows = workflowsFor({ archetype, entities, booking, auth, pages });
   const kindLabel = {
     // A site is named like the business it presents ("Roofing Company"), not "Website".
@@ -296,7 +369,7 @@ export function inferSpecification(prompt, { answers = {} } = {}) {
     api: `${entities[0] ? `${entities[0].name} ` : ""}API`,
   }[archetype];
   const qualifier = business?.kind ?? (business && !["company", "business", "team", "firm", "store", "shop"].includes(business.noun) ? business.noun : null);
-  const name = explicitName(text) ?? (archetype === "website" && business ? title(business.phrase) : title(`${qualifier ? `${qualifier} ` : ""}${kindLabel}`));
+  const name = explicitName(text) ?? introduced?.name ?? (archetype === "website" && business ? title(business.phrase) : title(`${qualifier ? `${qualifier} ` : ""}${kindLabel}`));
   const questions = questionsFor({ prompt: text, integrations }).filter((q) => !(q.id in answers));
 
   const assumptions = [
@@ -304,7 +377,7 @@ export function inferSpecification(prompt, { answers = {} } = {}) {
     "Runs on this computer with a local preview. Publishing is a separate step that asks you first.",
     auth.required ? `Sign-in with ${auth.method === "password" ? "email and password" : auth.method}.` : `No sign-in: ${auth.reason}.`,
   ];
-  if (archetype === "website") assumptions.push("Pages: Home, Services, About, Contact (plus Gallery for trades that show their work). Contact has a lead form.", "Includes SEO basics: page titles, descriptions and a sitemap.");
+  if (archetype === "website") assumptions.push(requestedPages(text).length ? `Pages: ${pages.map((page) => page.title).join(", ")}. Contact has a lead form.` : "Pages: Home, Services, About, Contact (plus Gallery for trades that show their work). Contact has a lead form.", "Includes SEO basics: page titles, descriptions, structured business data and a sitemap.", "Business details, testimonials, credentials and project photos are placeholders until you supply real ones; none are invented.");
   if (entities.length) assumptions.push(`Stores ${entities.map((e) => `${e.name.toLowerCase()}s (${e.fields.map((f) => f.key).join(", ")})`).join(" and ")} in a local database file.`);
   for (const integration of integrations) assumptions.push(`${integration.label} needs ${integration.needs}; Atlas builds it switched off until you connect one.`);
   for (const [id, answer] of Object.entries(answers)) assumptions.push(`You answered ${id}: ${String(answer).slice(0, 200)}.`);
@@ -315,6 +388,7 @@ export function inferSpecification(prompt, { answers = {} } = {}) {
     objective: text,
     archetype,
     business: business ? { kind: business.kind, noun: business.noun, phrase: business.phrase } : null,
+    ...(archetype === "website" ? { location: businessLocation(text), services: statedServices(text) } : {}),
     targetUsers: archetype === "website"
       ? `Prospective customers of ${business ? `your ${business.phrase}` : "the business"}`
       : `${business ? `Your ${business.phrase}` : "You and your team"}${booking ? ", and customers who book" : ""}`,

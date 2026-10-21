@@ -1,4 +1,5 @@
 import { githubContentObservation, githubRequestObservation, logGitHubObservation } from "../tasks/github-observability.mjs";
+import { githubToolError } from "./github-tool-error.mjs";
 
 // The route creates one context per authenticated request and shares it with
 // child agents. A WeakMap never shares bytes between requests/principals and
@@ -109,8 +110,12 @@ export async function readRepositoryContent({ context, repository, path, ref, fi
           retryAfterMs = rateLimit.retryAfterMs === null && reset === null ? 60_000 : Math.max(rateLimit.retryAfterMs ?? 0, reset ?? 0);
           scope.cooldown = { status: response.status, until: Date.now() + retryAfterMs };
         }
-        await response.body?.cancel().catch(() => {});
-        return { ok: false, status: response.status, retryAfterMs };
+        const toolError = await githubToolError(response, "read_repository_file");
+        if (toolError.error.category === "quota" && !retryAfterMs) {
+          retryAfterMs = toolError.error.retryAfterMs;
+          scope.cooldown = { status: response.status, until: Date.now() + retryAfterMs };
+        }
+        return { ok: false, status: response.status, retryAfterMs, toolError };
       }
       outcome = "network_failure";
       const raw = await boundedBody(response, bytes => { responseBodyBytes = bytes; });

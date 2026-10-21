@@ -1,6 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { scheduledOutcomeObservation } from "./outcome-observer.mjs";
 import { withSecurityHeaders } from "./security-headers.mjs";
 
 // Durable Object classes must be exported from the Worker's entry point.
@@ -30,6 +31,9 @@ interface ExecutionContext {
 // const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
 
 const worker = {
+  async scheduled(_controller: { scheduledTime: number; cron: string }, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(scheduledOutcomeObservation(env));
+  },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
