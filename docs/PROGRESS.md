@@ -866,3 +866,9 @@ Cloud response #403 integration: preserved concurrent progress entries and curre
 PR415 integration: retained both independent progress entries; current main includes #403 cloud deadlines and #404 business review. All prior exact-head CI39379249241 passed before this docs-only conflict resolution. Next: inspect fresh integrated-head CI; medium coder diagnosis and provider release remain subject to their documented review/evidence gates.
 
 PR415 integration with #416: retained all concurrent progress entries; no diagnostic source conflict. Next: require all fresh exact-head CI before ordinary merge, then obtain authorized medium-task evidence under the existing review gates.
+
+## 2026-10-21 — truthful coder activity completion (#386)
+
+Chat TaskActivity now reuses the existing build status presentation: a successful runner with no pull request does not claim a change is ready, and a pull request prompts review of changes and validation evidence. Generic completed state remains explicitly unconfirmed. Coder run is a neutral title; terminal empty steps no longer claim GitHub has yet to start. No execution, approval, polling, result-storage or verification policy changed.
+
+Validation: production web build and lint passed; full web suite 620 tests, 615 passed, five optional browser skips, zero failures. Actual React-rendered completion tests cover no-PR success, reviewable PR, unknown completion, failure, timeout, cancellation, skipped, and dispatch states. Existing elapsed-clock/poll recovery coverage is preserved. Restoring main's TaskActivity makes the new tests fail; restoring the fix passes all five rendered/clock tests. Hosted UI deployment and authenticated browser acceptance remain pending; this change does not add test execution or establish objective completion.
