@@ -588,5 +588,3 @@ Snapshot: 37 open PRs returned by GitHub, newest first. Reviewed descriptions an
 - `mobile/src/bridge.mjs`
 - `mobile/src/remote-companion.mjs`
 - `mobile/tests/shell.test.mjs`
-
-
