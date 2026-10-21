@@ -110,6 +110,16 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ATLAS_WORKERS_AI_TOKEN: ${{ secrets.ATLAS_WORKERS_AI_TOKEN }}
+          # Free vendors the coder bounces to (scripts/runner/coder-routes.mjs). Training tiers
+          # (Gemini, OpenRouter, Mistral free) join only with ATLAS_ALLOW_TRAINING_PROVIDERS=all.
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          ATLAS_ALLOW_TRAINING_PROVIDERS: ${{ vars.ATLAS_ALLOW_TRAINING_PROVIDERS }}
+          ATLAS_GEMINI_TIER: ${{ vars.ATLAS_GEMINI_TIER }}
+          ATLAS_OPENROUTER_TIER: ${{ vars.ATLAS_OPENROUTER_TIER }}
+          ATLAS_MISTRAL_TIER: ${{ vars.ATLAS_MISTRAL_TIER }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ATLAS_WORKERS_AI_MODEL: ${{ vars.ATLAS_WORKERS_AI_MODEL }}
           # Shared capacity: model calls reserve on the Worker's inference governor when both are set (unset = unchanged).
