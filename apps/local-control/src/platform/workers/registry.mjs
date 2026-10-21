@@ -72,6 +72,12 @@ export function normalizeCapabilities(value = {}) {
   if (render.length && !terminalLevels.some((level) => TERMINAL_SANDBOX_LEVELS.indexOf(level) >= TERMINAL_SANDBOX_LEVELS.indexOf("container"))) {
     throw new WorkerRegistryError("INVALID_CAPABILITIES", "render capabilities require a terminal sandbox at 'container' or stronger.");
   }
+  // CPU and memory are optional (Atlas Nodes declare them, so CPU rendering can be sized); absent means unknown.
+  const cpu = value.cpu ?? null;
+  if (cpu !== null && !(cpu && typeof cpu === "object" && Number.isInteger(cpu.cores) && cpu.cores >= 1
+    && Number.isFinite(cpu.memoryGiB) && cpu.memoryGiB >= 0)) {
+    throw new WorkerRegistryError("INVALID_CAPABILITIES", "cpu must be { cores, memoryGiB } or null.");
+  }
   return {
     browser: value.browser === true,
     desktop: value.desktop === true,
@@ -79,6 +85,7 @@ export function normalizeCapabilities(value = {}) {
     gpu: gpu ? { vramGb: gpu.vramGb } : null,
     models: [...new Set(models)].sort(),
     render: [...new Set(render)].sort(),
+    ...(cpu ? { cpu: { cores: cpu.cores, memoryGiB: cpu.memoryGiB } } : {}),
   };
 }
 
@@ -104,6 +111,14 @@ export function capabilityGaps(capabilities, requirements = {}) {
   }
   for (const tool of requirements.render ?? []) {
     if (!(capabilities.render ?? []).includes(tool)) gaps.push(`no render.${tool}`);
+  }
+  if (requirements.cpu) {
+    const { minCores = 0, minMemoryGiB = 0 } = requirements.cpu;
+    if (!capabilities.cpu) { if (minCores > 0 || minMemoryGiB > 0) gaps.push("cpu and memory not declared"); }
+    else {
+      if (capabilities.cpu.cores < minCores) gaps.push(`${capabilities.cpu.cores} cpu cores < ${minCores}`);
+      if (capabilities.cpu.memoryGiB < minMemoryGiB) gaps.push(`${capabilities.cpu.memoryGiB} GiB memory < ${minMemoryGiB} GiB`);
+    }
   }
   return gaps;
 }
@@ -319,5 +334,6 @@ function requirementsFrom(caps) {
     gpu: caps.gpu ? { minVramGb: caps.gpu.vramGb } : undefined,
     models: caps.models,
     render: caps.render,
+    cpu: caps.cpu ? { minCores: caps.cpu.cores, minMemoryGiB: caps.cpu.memoryGiB } : undefined,
   };
 }
