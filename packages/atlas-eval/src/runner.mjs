@@ -1,5 +1,5 @@
 import { git } from "./git.mjs";
-import { validateResult, validateTask } from "./task.mjs";
+import { isQuotaRefusal, validateResult, validateTask } from "./task.mjs";
 import { createWorkspace } from "./workspace.mjs";
 import { runVerify } from "./verify.mjs";
 
@@ -64,6 +64,7 @@ export async function runTask({ task, target, agent, repoRoot }) {
       else if (verify.exitCode === 0 && changed.length > 0) { passed = true; failureClass = null; }
       else if (verify.exitCode === 0) failureClass = failureClass ?? "no_change";
       else failureClass = failureClass ?? "tests_failed";
+      if (!passed && isQuotaRefusal(evidence.agentError ?? (outcome.status === "failed" ? evidence.agentMessage : undefined))) failureClass = "quota";
     }
   } catch (error) {
     failureClass = "infra";
