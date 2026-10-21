@@ -20,6 +20,18 @@ export function hostedSiteStore(d1) {
       requireScope(scope);
       return await d1.prepare(`SELECT ${COLUMNS} FROM genesis_projects WHERE id = ? AND tenant_id = ? AND requested_by = ?`).bind(id, scope.tenantId, scope.principal).first();
     },
+    /**
+     * Replace the site, evidence and timestamp of a project the caller owns, only if
+     * it is still at `expectedUpdatedAt` (optimistic concurrency). Returns false when
+     * nothing was written: missing, someone else's, not ready, or changed since read.
+     */
+    update: async (scope, { id, expectedUpdatedAt, name, requirementsJson, evidenceJson, updatedAt }) => {
+      requireScope(scope);
+      if (typeof expectedUpdatedAt !== "string" || expectedUpdatedAt === "") throw new TypeError("expectedUpdatedAt is required.");
+      const result = await d1.prepare("UPDATE genesis_projects SET name = ?, requirements_json = ?, evidence_json = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND requested_by = ? AND updated_at = ? AND status = 'ready'")
+        .bind(name, requirementsJson, evidenceJson, updatedAt, id, scope.tenantId, scope.principal, expectedUpdatedAt).run();
+      return Number(result?.meta?.changes ?? 0) === 1;
+    },
     countSince: async (tenantId, sinceIso) => {
       const count = await d1.prepare("SELECT COUNT(*) AS count FROM genesis_projects WHERE tenant_id = ? AND created_at >= ? AND requirements_json LIKE '%\"kind\":\"hosted-static-site\"%'").bind(tenantId, sinceIso).first("count");
       return Number(count ?? 0);

@@ -21,7 +21,7 @@ export const HOSTED_KIND = "hosted-static-site";
 export const HOSTED_SITE_DAILY_LIMIT = 20;
 export const PREVIEW_ID = /^gen_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MAX_TEXT = 4_000;
-const MAX_SITE_BYTES = 200_000;
+export const MAX_SITE_BYTES = 200_000;
 const FILE_NAME = /^[a-z0-9-]+\.(?:html|css|js)$/u;
 
 export const previewBase = (id) => `/preview/${id}`;
@@ -169,7 +169,7 @@ export async function createHostedSite({ store, scope, requestId, userMessage, i
 /** Rebuild the result from a stored row (status checks and repeated tool calls). */
 export function resultFromRow(row) {
   const parsed = JSON.parse(row.requirementsJson);
-  const evidence = JSON.parse(row.evidenceJson).find((item) => item.kind === "hosted-verification");
+  const evidence = JSON.parse(row.evidenceJson).findLast((item) => item.kind === "hosted-verification");
   return hostedResult(row, parsed.site, evidence ?? { ok: false, pages: parsed.site.pages.length, checks: [], ownerContentNeeded: 0, browserChecks: "not-run", enquiryDelivery: "preview-only" });
 }
 
