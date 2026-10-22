@@ -39,6 +39,7 @@ export function describeProject(result) {
   if (text(result?.operationId)) facts.push({ label: "Operation", value: result.operationId });
   if (text(result?.deploymentState)) facts.push({ label: "Deployment", value: result.deploymentState.replaceAll("-", " ") });
   const base = { facts, detail: message, nextStep, polling: false, previewUrl: null };
+  if (status === "recovering") return { ...base, stage: "unknown", title: "Recovering saved project status", detail: "Creation is unconfirmed until its saved operation is checked.", polling: true };
 
   if (status === "unavailable") return { ...base, stage: "unavailable", title: "Project creation is unavailable", detail: message ?? "Atlas could not start this project." };
   if (status === "denied") return { ...base, stage: "failed", title: "Project creation was not allowed" };

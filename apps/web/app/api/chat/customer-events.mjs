@@ -1,3 +1,8 @@
+import { VENDORS } from "../../../../../packages/atlas-inference/src/catalog.mjs";
+
+const PROVIDER_KINDS = new Set(["groq", "openai", "workers-ai", "self-hosted", ...Object.keys(VENDORS)]);
+const MODEL_NAME = /^[A-Za-z0-9@._:/-]{1,120}$/u;
+
 /** Public activity is an explicit projection; internal reasoning is never a UI event. */
 export function customerEvent(type, data) {
   if (!data || typeof data !== "object") return null;
@@ -13,7 +18,14 @@ export function customerEvent(type, data) {
     const state = ["planning", "running", "verifying", "done", "unverified", "failed", "skipped"].includes(data.state) ? data.state : "running";
     return { id: data.id, parentId: data.parentId ?? null, name: "Atlas", title: "Working on your request", state, depth: Number.isInteger(data.depth) ? data.depth : 0 };
   }
-  if (type === "done") return { conversationId: data.conversationId, stored: data.stored, ...(data.reply ? { reply: { id: data.reply.id, role: "assistant", content: data.reply.content, createdAt: data.reply.createdAt } } : {}) };
+  if (type === "done") {
+    // Who wrote the reply, as a provider kind and a model name only (the same
+    // facts the non-streaming reply carries), and whether it is unfinished.
+    const servedBy = PROVIDER_KINDS.has(data.servedBy?.provider) && typeof data.servedBy?.model === "string" && MODEL_NAME.test(data.servedBy.model)
+      ? { servedBy: { provider: data.servedBy.provider, model: data.servedBy.model } } : {};
+    const finalization = data.finalization ? { finalization: { status: data.finalization.status === "incomplete" ? "incomplete" : "unknown" } } : {};
+    return { conversationId: data.conversationId, stored: data.stored, ...servedBy, ...finalization, ...(data.reply ? { reply: { id: data.reply.id, role: "assistant", content: data.reply.content, createdAt: data.reply.createdAt } } : {}) };
+  }
   if (type === "project") {
     const status = ["building", "publishing", "awaiting-approval", "published", "ready", "failed", "unavailable", "not-found", "denied", "interrupted", "blocked"].includes(data.status) ? data.status : "building";
     const repository = data.repository;
