@@ -1,4 +1,6 @@
 import { getD1 } from "../../../../db";
+import { randomUUID } from "node:crypto";
+import { createProjectConversation, reserveProjectReceipt } from "../receipts.mjs";
 import { hostedSiteStore } from "../../../../db/hosted-sites.mjs";
 import { resolveTenantContext, tenantScope } from "../../auth/tenant-context.mjs";
 import { authenticatedAccount } from "../../tasks/operator-auth.mjs";
@@ -22,10 +24,20 @@ export async function POST(request: Request) {
   let input;
   try { input = await request.json(); } catch { return Response.json({ message: "Invalid JSON." }, { status: 400 }); }
   const bridge = genesisBridge(process.env, { owner: isDeploymentOwner(account) });
-  const backend = projectBackend({ bridge, hosted: await hostedFor(request, account), userMessage: typeof input?.description === "string" ? input.description : "" });
-  const result = await backend.create(input);
+  const conversationId = input?.conversationId ?? randomUUID();
+  let createdConversation = false;
+  const backend = projectBackend({ bridge, hosted: await hostedFor(request, account), userMessage: typeof input?.description === "string" ? input.description : "",
+    reserve: async (id: string) => {
+      const d1 = getD1();
+      const tenant = await resolveTenantContext(request, account, d1);
+      const scope = tenant ? tenantScope(tenant) : null;
+      if (!input?.conversationId && !createdConversation) { await createProjectConversation(d1, scope, conversationId); createdConversation = true; }
+      return reserveProjectReceipt(d1, scope, conversationId, id);
+    } });
+  const projectInput = { ...input }; delete projectInput.conversationId;
+  const result = await backend.create(projectInput);
   const status = result.status === "unavailable" ? 503 : result.status === "failed" ? 400 : result.status === "ready" ? 201 : 202;
-  return Response.json(result, { status, headers: { "cache-control": "no-store" } });
+  return Response.json({ ...result, conversationId }, { status, headers: { "cache-control": "no-store" } });
 }
 
 export async function GET(request: Request) {
