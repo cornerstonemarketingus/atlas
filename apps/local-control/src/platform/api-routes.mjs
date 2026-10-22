@@ -1,5 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   APPROVAL_STATES,
@@ -11,6 +13,7 @@ import {
   validateSchema,
 } from "../../../../packages/atlas-contracts/src/index.mjs";
 import { FamilyError, TaskDelegation } from "./family/index.mjs";
+import { buildRunManifest, replayManifest, runSuite } from "./evals/index.mjs";
 import { redactSecrets } from "./memory/redaction.mjs";
 
 /**
@@ -64,7 +67,10 @@ const agentIdSchema = { type: "string", pattern: `^${AGENT_ID}$` };
 const permissionsSchema = { type: "array", maxItems: 256, items: { type: "string", minLength: 1, maxLength: 128, pattern: "^(\\*|[a-z][a-z0-9_]*(\\.([a-z][a-z0-9_]*|\\*))*)$" } };
 const scopeSchema = { type: "object" };
 
+const BENCHMARKS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "benchmarks");
+
 export const API_SCHEMAS = Object.freeze({
+  evalRun: { type: "object", additionalProperties: false, properties: { candidate: { type: "string", pattern: "^[a-z][a-z0-9-]{0,40}$" } } },
   createTask: {
     type: "object", additionalProperties: false, required: ["objective", "successCriteria", "budget"],
     properties: {
@@ -180,6 +186,10 @@ export function createPlatformApiRoutes({
   tenantFor = () => LOCAL_TENANT_ID,
   browserProbe = probeBrowserWorker,
   onEmergencyStop = null,
+  // Replay and evaluation: `tools()` lists the live executor's tool definitions (so a manifest describes them
+  // exactly), `policy` is the engine replay asks "would today's policy still allow this?", `runtime` is
+  // recorded in each manifest, `benchmarks` is the suite directory.
+  evals = {},
 }) {
   if (!store) throw new TypeError("store is required.");
   const tasks = delegation ?? (family ? new TaskDelegation(family) : null);
@@ -192,6 +202,10 @@ export function createPlatformApiRoutes({
     ["GET", `/tasks/(${TASK_ID})/artifacts`, listArtifacts],
     ["GET", `/tasks/(${TASK_ID})/timeline`, timeline],
     ["GET", `/tasks/(${TASK_ID})/blockers`, blockers],
+    ["GET", `/tasks/(${TASK_ID})/manifest`, manifest],
+    ["POST", `/tasks/(${TASK_ID})/replay`, replay],
+    ["GET", "/evals/suite", evalSuite],
+    ["POST", "/evals/run", evalRun],
     ["POST", `/tasks/(${TASK_ID})/delegate`, delegate],
     ["POST", `/tasks/(${TASK_ID})/cross-family-help`, crossFamilyHelp],
     ["GET", "/approvals", listApprovals],
@@ -402,6 +416,47 @@ export function createPlatformApiRoutes({
     const assignments = cancelDelegation(tenantId, root.id, actor, reason);
     auditSafe("platform.task.cancelled", `${root.id} and ${result.cancelled.length - 1} descendant task(s): ${reason}`);
     return send(response, 200, { task: store.getTask(tenantId, root.id), ...result, cancelledAssignments: assignments });
+  }
+
+  /** The mission as a versioned, redacted manifest: what a replay or an evaluation consumes. */
+  function manifest(context) {
+    const task = requireTask(context);
+    return send(context.response, 200, { manifest: buildRunManifest({ store, tenantId: context.tenantId, taskId: task.id, tools: evals.tools ? evals.tools() : null, runtime: evals.runtime ?? {} }) });
+  }
+
+  /**
+   * Replays a mission without side effects (owner only: it costs compute, not
+   * safety). The environment contains stub tools that serve recorded results
+   * and nothing else, so no recorded action can be repeated.
+   */
+  async function replay(context) {
+    const task = requireTask(context);
+    const recorded = buildRunManifest({ store, tenantId: context.tenantId, taskId: task.id, tools: evals.tools ? evals.tools() : null, runtime: evals.runtime ?? {} });
+    const outcome = await replayManifest({ manifest: recorded, policy: evals.policy ?? null });
+    auditSafe("platform.task.replayed", `${task.id}: ${outcome.comparison.regressions.join(", ") || "identical"}`);
+    return send(context.response, 200, { baselineDigest: recorded.manifestDigest, replayDigest: outcome.replay.manifestDigest, comparison: outcome.comparison, safety: outcome.safety, loop: outcome.loop });
+  }
+
+  function benchmarkFile(name) {
+    try { return JSON.parse(readFileSync(join(evals.benchmarks ?? BENCHMARKS, name), "utf8")); } catch { throw new ApiError(503, "The benchmark suite is not installed in this build."); }
+  }
+
+  function evalSuite(context) {
+    const suite = benchmarkFile("core.v1.json");
+    const gate = benchmarkFile("release-gate.v1.json");
+    return send(context.response, 200, {
+      suite: { id: suite.id, version: suite.version, scenarios: suite.scenarios.map((scenario) => ({ id: scenario.id, category: scenario.category, title: scenario.title, candidates: Object.keys(scenario.candidates) })) },
+      gate: { version: gate.version, rules: gate.rules },
+    });
+  }
+
+  /** Runs the versioned suite against a named scripted candidate and says whether the release gate would accept it. */
+  async function evalRun(context) {
+    const input = await body(context, API_SCHEMAS.evalRun);
+    const outcome = await runSuite({ suite: benchmarkFile("core.v1.json"), candidate: input.candidate ?? "reference", thresholds: benchmarkFile("release-gate.v1.json"), baseline: benchmarkFile("baseline.core.v1.json").summary });
+    auditSafe("platform.evals.run", `${outcome.candidate}: ${outcome.gate.pass ? "gate passed" : `gate rejected (${outcome.gate.violations.map((v) => v.rule).join(", ")})`}`);
+    const { perScenario, ...summary } = outcome.summary;
+    return send(context.response, 200, { suite: outcome.suite, candidate: outcome.candidate, summary, scenarios: outcome.results.map((result) => ({ id: result.scenarioId, status: result.manifest.outcome.status, met: result.expectations.met, failures: result.expectations.failures, replayIdentical: result.replay?.identical ?? null })), gate: outcome.gate });
   }
 
   function listArtifacts(context) {

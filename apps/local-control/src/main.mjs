@@ -344,7 +344,7 @@ const server = createLocalControlServer({
   nodes: nodeService,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
-  platformServices: { family: innovation.registry, memory },
+  platformServices: { family: innovation.registry, memory, evals: { tools: () => authorizedToolExecutor.list(), runtime: { product: "atlas-local-control" } } },
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
