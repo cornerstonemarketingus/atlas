@@ -283,11 +283,12 @@ test("invalid tool input is corrected on the next turn and remains audited", asy
   assert.match(payload.error, /repository.search/u);
   assert.match(payload.error, /path/u);
   assert.deepEqual(payload.validFields, ["query", "scope", "maxResults"]);
+  assert.deepEqual(payload.inputSchema, search.inputSchema);
   assert.equal(payload.code, "INVALID_TOOL_INPUT");
   assert.ok(audit.snapshot().some(event => event.type === "tool.completed" && (event.payload as { errorCode?: string }).errorCode === "INVALID_TOOL_INPUT"));
 });
 
-for (const alias of ["repo.search", "repo_browser.search", "repository_search", "repositorySearch", "repository-search", "Repository.Search", "repo_browser.read_file", "repositoryReadSource"]) {
+for (const alias of ["repo.search", "repo_browser.search", "repository_search", "repositorySearch", "repository-search", "Repository.Search", "repo_browser.read_file", "repositoryReadSource", "repositroy.search", "repos.search", "REPOSITORYReadSource"]) {
   test(`repairs ${alias} at dispatch without a corrective model turn`, async () => {
     const canonical = /read/iu.test(alias) ? "repository.read_source" : "repository.search";
     let executions = 0;

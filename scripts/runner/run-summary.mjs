@@ -85,10 +85,11 @@ export function renderRunSummary({ task = null, status = null, code = null, budg
   }
 
   const verification = code?.verification ?? status?.verification ?? null;
+  const testExecution = code?.execution?.kind === "tests" ? code.execution : null;
   if (verification) {
-    lines.push("### Verification", "");
+    lines.push(testExecution ? "### Test execution" : "### Verification", "");
     lines.push(`**${cell(verification.status)}** — ${truncate(verification.message, 400)}`, "");
-    if (typeof verification.attempts === "number") {
+    if (!testExecution && typeof verification.attempts === "number") {
       lines.push(`Repair attempts: ${count(verification.attempts)}`, "");
     }
     const checks = Array.isArray(verification.checks) ? verification.checks : [];
@@ -99,12 +100,21 @@ export function renderRunSummary({ task = null, status = null, code = null, budg
     if (newFailures.length > 0) {
       // The whole product claim is this distinction: failures the change
       // introduced, separated from failures that were already there.
-      lines.push(`**New failures introduced by this change:** ${newFailures.length}`, "");
+      lines.push(`**${testExecution ? "Reported test failures" : "New failures introduced by this change"}:** ${newFailures.length}`, "");
       for (const failure of newFailures.slice(0, MAX_LISTED_EDITS)) {
         lines.push(`- ${truncate(typeof failure === "string" ? failure : JSON.stringify(failure), 200)}`);
       }
       lines.push("");
     }
+  }
+  if (testExecution) {
+    const checks = Array.isArray(testExecution.checks) ? testExecution.checks : [];
+    for (const check of checks.slice(0, MAX_LISTED_EDITS)) {
+      lines.push(`- \`${cell(check.caseId)}\`: ${cell(check.outcome)}; exit ${cell(check.command?.exitCode ?? "unavailable")}`);
+    }
+    if (checks.length > MAX_LISTED_EDITS) lines.push(`- …and ${checks.length - MAX_LISTED_EDITS} more suite results in code.json`);
+    for (const limitation of (testExecution.limitations ?? []).slice(0, 10)) lines.push(truncate(limitation, 400));
+    lines.push("");
   }
 
   const edits = Array.isArray(code?.edits) ? code.edits : [];

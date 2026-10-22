@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { runCoderProcess } from "./run-coder-process.mjs";
+import { coderExecutionPolicy } from "./coder-execution-policy.mjs";
+import { captureCoderRecovery, readCoderProgress } from "./coder-recovery.mjs";
 import { PROVIDER_KEY_VARIABLES, isValidRoute, resolveCoderRoutes } from "./coder-routes.mjs";
 import path from "node:path";
 import { correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
@@ -187,25 +189,27 @@ if (metadata.mode === "inspect") {
   // is validated here rather than passed through blindly so a typo fails with a
   // clear status instead of a CLI usage error buried in a log, and so this
   // never becomes a way to name an arbitrary environment variable to read.
+  const { isOperationalTestObjective } = await import("../../packages/atlas-cli/dist/src/agent/operational-test-session.js");
+  const operationalTests = isOperationalTestObjective(metadata.objective ?? "");
   const providerInput = (process.env.ATLAS_CODER_PROVIDER || "").trim().toLowerCase();
-  if (providerInput && !Object.hasOwn(PROVIDER_KEY_VARIABLES, providerInput)) {
+  if (!operationalTests && providerInput && !Object.hasOwn(PROVIDER_KEY_VARIABLES, providerInput)) {
     const known = Object.keys(PROVIDER_KEY_VARIABLES).join(", ");
     writeStatus("failed", `ATLAS_CODER_PROVIDER '${providerInput}' is not recognised; expected one of: ${known}.`);
     console.error(`Atlas coder mode: unknown provider '${providerInput}'.`);
     process.exit(2);
   }
   let routePlan;
-  try { routePlan = resolveCoderRoutes(process.env); }
+  try { routePlan = operationalTests ? { provider: "groq", model: "operational-tests", apiKeyVariable: "GROQ_API_KEY", fallbacks: [] } : resolveCoderRoutes(process.env); }
   catch (error) { writeStatus("failed", error.message); console.error(error.message); process.exit(2); }
   const { provider, model, apiKeyVariable } = routePlan;
-  console.log("Coder route: " + provider + "/" + model + "; configured fallbacks: " + routePlan.fallbacks.map((route) => route.split(":").slice(0, -1).join("/")).join(", "));
+  if (!operationalTests) console.log("Coder route: " + provider + "/" + model + "; configured fallbacks: " + routePlan.fallbacks.map((route) => route.split(":").slice(0, -1).join("/")).join(", "));
   // A self-hosted OpenAI-compatible server (vLLM, Ollama, llama.cpp) usually
   // has no API key at all, so requiring one would make it impossible to run
   // your own model. The placeholder is applied ONLY when a custom endpoint is
   // set: against a real vendor a missing key must still fail loudly rather
   // than turn into a confusing 401 later.
   const baseUrl = (process.env.ATLAS_CODER_BASE_URL || "").trim();
-  if (!process.env[apiKeyVariable]) {
+  if (!operationalTests && !process.env[apiKeyVariable]) {
     if (baseUrl && provider === "groq") {
       process.env[apiKeyVariable] = "self-hosted-no-key";
       console.log(`No ${apiKeyVariable} set; using a placeholder because ATLAS_CODER_BASE_URL names a self-hosted endpoint.`);
@@ -219,7 +223,19 @@ if (metadata.mode === "inspect") {
   // Verification runs the target repository's own build/test scripts, before
   // and after the edit, plus any repair passes — so this needs far more than
   // the flat 3 minutes a single model round trip needed.
-  const coderTimeoutMs = Number(process.env.ATLAS_CODER_TIMEOUT_MS) || 900_000;
+  let executionPolicy;
+  try { executionPolicy = coderExecutionPolicy(); }
+  catch (error) { writeStatus("failed", error.message); console.error(error.message); process.exit(2); }
+  const coderTimeoutMs = executionPolicy.timeoutMs;
+  const progressPath = path.join(outputDirectory, "progress.json");
+  const preserveProgress = (edits) => {
+    const checkpoint = readCoderProgress(progressPath);
+    // The intent checkpoint is persisted before mutation, covering a kill
+    // between the write and its post-edit progress flush.
+    const candidates = [...(edits ?? checkpoint?.edits ?? []), ...(Array.isArray(checkpoint?.pendingPaths) ? checkpoint.pendingPaths.slice(0, 256).map(path => ({ path, operation: "create" })) : [])];
+    const captured = writeRedactedJson("recovery.json", captureCoderRecovery(repositoryRoot, metadata.commit, candidates));
+    return { checkpoint, captured };
+  };
   const verifyDir = (process.env.ATLAS_VERIFY_DIR || "").trim();
   const repairAttempts = (process.env.ATLAS_MAX_REPAIR_ATTEMPTS || "").trim();
   const codeArgs = [
@@ -230,12 +246,14 @@ if (metadata.mode === "inspect") {
     "--format", "json",
   ];
   codeArgs.push(...validationArguments);
+  codeArgs.push("--execution-timeout-ms", String(executionPolicy.executionTimeoutMs), "--progress-file", progressPath,
+    "--checkpoint-interval-ms", String(executionPolicy.checkpointIntervalMs));
   // A durable, redacted record of what the agent did, uploaded with the run's
   // other artifacts. Written by the CLI, so it goes through the same redactor
   // as everything else the agent emits.
   codeArgs.push("--audit-log", path.join(outputDirectory, "audit.jsonl"));
-  if (baseUrl) codeArgs.push("--base-url", baseUrl);
-  if (verifyDir) codeArgs.push("--verify-dir", verifyDir);
+  if (baseUrl && !operationalTests) codeArgs.push("--base-url", baseUrl);
+  if (verifyDir && !operationalTests) codeArgs.push("--verify-dir", verifyDir);
   if (/^[0-5]$/.test(repairAttempts)) codeArgs.push("--max-repair-attempts", repairAttempts);
   const fallbacks = routePlan.fallbacks;
   for (const fallback of fallbacks) {
@@ -249,7 +267,7 @@ if (metadata.mode === "inspect") {
   // A stronger model for repairs the configured one could not finish
   // (docs/PROGRAM.md 2.4). Same shape and allowlist as a fallback route.
   const escalation = (process.env.ATLAS_CODER_ESCALATION || "").trim();
-  if (escalation) {
+  if (escalation && !operationalTests) {
     try { resolveCoderRoutes({ ...process.env, ATLAS_CODER_FALLBACKS: escalation }); }
     catch (error) { writeStatus("failed", error.message); console.error(error.message); process.exit(2); }
     if (!isValidRoute(escalation)) {
@@ -283,8 +301,10 @@ if (metadata.mode === "inspect") {
 
   if (result.timedOut || result.outputExceeded) {
     const message = result.timedOut ? "Coder run reached its execution deadline; no completion is confirmed." : "Coder output exceeded its capture bound; no completion is confirmed.";
-    writeJson("code.json", { status: "failed", edits: [], message });
-    writeStatus("failed", message);
+    const recovery = preserveProgress();
+    const edits = recovery.checkpoint?.edits ?? [];
+    writeJson("code.json", { status: "failed", edits, message, recoverable: recovery.captured, ...(recovery.checkpoint ? { progress: recovery.checkpoint } : {}) });
+    writeStatus("failed", message + (recovery.captured ? " Partial changes and checkpoint evidence are available in recovery.json and progress.json." : " Recovery capture failed; inspect the retained working tree."));
     console.error(message);
     process.exit(1);
   }
@@ -303,20 +323,24 @@ if (metadata.mode === "inspect") {
   }
 
   if (parsed === null) {
-    writeJson("code.json", { schema_version: 1, task_id: metadata.task_id, status: "failed", edits: [], stderr: result.stderr.slice(0, 8192) });
+    const recovery = preserveProgress();
+    writeRedactedJson("code.json", { schema_version: 1, task_id: metadata.task_id, status: "failed", edits: recovery.checkpoint?.edits ?? [], stderr: result.stderr.slice(0, 8192), recoverable: recovery.captured });
     writeStatus("failed", `Coder run produced no parseable output: ${result.timedOut ? "timed out" : `exit code ${result.exitCode ?? "unknown"}`}.`);
-    console.error(result.stderr || result.stdout.slice(0, 8192) || "(no output captured)");
+    console.error("Coder returned no parseable result; redacted process diagnostics are available in code.json when capture succeeded.");
     process.exit(1);
   }
   writeJson("code.json", parsed);
 
   if (parsed.status !== "completed") {
+    preserveProgress(parsed.edits);
     writeStatus(parsed.status === "approval-required" ? "blocked" : parsed.status, parsed.message ?? `Coder agent stopped with status '${parsed.status}'.`);
     console.error(`Atlas coder run stopped with status '${parsed.status}': ${parsed.message ?? "(no message)"}`);
     process.exit(1);
   } else if (parsed.edits.length === 0) {
-    writeStatus("completed", "Coder agent finished without proposing any file changes.");
-    console.log("Atlas coder run completed with no file changes.");
+    const operational = parsed.execution?.kind === "tests";
+    const message = operational ? parsed.summary ?? parsed.verification?.message ?? "Repository test execution finished." : "Coder agent finished without proposing any file changes.";
+    writeStatus("completed", message, operational ? { verification: parsed.verification, execution: parsed.execution } : {});
+    console.log(message);
   } else {
     const verification = parsed.verification ?? null;
     const verdict = verification ? ` Verification: ${verification.status} — ${verification.message}` : "";

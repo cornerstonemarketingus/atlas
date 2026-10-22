@@ -47,7 +47,9 @@ export class SafeValidationProfileRunner implements ValidationProfileRunner {
     for (const profile of request.profiles) {
       const attempts = profile.attempts ?? 1;
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
-        observations.push(await this.runAttempt(profile, attempt, request.signal));
+        const observation = await this.runAttempt(profile, attempt, request.signal);
+        observations.push(observation);
+        await request.onObservation?.(observation);
         if (request.signal?.aborted === true) break;
       }
       if (request.signal?.aborted === true) break;

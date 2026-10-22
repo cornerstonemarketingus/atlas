@@ -338,3 +338,32 @@ test("without an escalation route the behaviour is unchanged", async () => {
 test("rejects an out-of-range escalation budget", () => {
   assert.throws(() => new VerifiedCoderSession({ plan, runAgent: async () => pass([]), runValidation: async (label) => snapshot(label), escalation: { attempts: 0, runAgent: async () => pass([]) } }), RangeError);
 });
+
+test("deadline during baseline prevents any model request", async () => {
+  const controller = new AbortController();
+  let agentCalls = 0;
+  const session = new VerifiedCoderSession({
+    plan, signal: controller.signal,
+    runAgent: async () => { agentCalls++; return pass([]); },
+    runValidation: async label => { controller.abort(); return snapshot(label); },
+  });
+  const result = await session.run();
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.verification.status, "unverified");
+  assert.equal(agentCalls, 0);
+});
+
+test("deadline after an edit preserves changes and does not start validation or repairs", async () => {
+  const controller = new AbortController();
+  const validationLabels: string[] = [];
+  const session = new VerifiedCoderSession({
+    plan, signal: controller.signal,
+    runAgent: async () => { controller.abort(); return pass([{ path: "source.ts", operation: "update" }]); },
+    runValidation: async label => { validationLabels.push(label); return snapshot(label); },
+  });
+  const result = await session.run();
+  assert.equal(result.status, "cancelled");
+  assert.deepEqual(result.edits, [{ path: "source.ts", operation: "update" }]);
+  assert.deepEqual(validationLabels, ["baseline"]);
+  assert.equal(result.verification.status, "unverified");
+});

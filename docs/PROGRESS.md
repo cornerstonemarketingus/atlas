@@ -1064,3 +1064,21 @@ Eval438 validation follow-through: full affected atlas-eval package suite passed
 
 Next: after #406 merges, open a protected workflow PR for a daily `--shard day/7` schedule, and re-run one GitHub Models task to read the 4-byte body. Once the owner can build `docker/render` and run one Atlas Node, record a real render through it.
 2026-10-21 | (this PR) | chat release gate | The streaming chat gate could never pass: 47811fa made `verify-hosted` require model authorship, but the streamed `done` event (filtered by `customer-events.mjs`, #310) dropped `servedBy`, which the non-streaming reply already carries. The projection now keeps `servedBy` as an allowlisted provider kind and a validated model name, and `finalization` as its status only; endpoints, reasons and other backend fields stay filtered. | Live verify-hosted 39598191966 after #397: non-streaming answered by groq openai/gpt-oss-20b, streaming 257 chars but "model authorship not confirmed"; route still groq → workers-ai → openai (new vendor keys not provisioned). customer-events test; web 672/0. | Owner: provision free vendor keys. | Re-run verify-hosted chat after deploy.
+
+## 2026-10-21 — coder reliability repair (owner review required)
+
+Extended existing tool resolution and schema feedback, added zero-model execution
+for conservative test-report objectives, cooperative deadlines and incremental
+redacted checkpoints, bounded failed-run recovery, actionable OIDC callback
+receipts, truthful status summaries, and CI/exact-head gates for all automatic
+merges. No TODO file added. Full evidence and exact changed files are recorded
+in docs/CLOUD-CODER-RECOVERY.md (October 21 repair section).
+
+Validation: CLI 637 pass / five optional skips, web 709 pass / six optional skips,
+runner/local 123 pass, all 12 workflows valid; builds/typecheck/lint pass. Real
+local CLI and Docker fixtures cover alias repair, edit/test/repair, interrupted
+work preservation, and zero-model operational execution. GitHub APIs/production
+credentials are unavailable here: no original artifact diagnosis, live PR,
+deployment or frontend end-to-end acceptance is claimed. Next: enable the saved
+network draft, inspect the original authenticated evidence, submit the protected
+change for owner review and run the existing authenticated hosted coder smoke.

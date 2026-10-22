@@ -6,6 +6,80 @@ import { renderRunSummary } from "./run-summary.mjs";
 import { correlationIdFromEnv, correlationLogSuffix, withCorrelationId } from "./correlation.mjs";
 
 const limit = 16000;
+const DEFAULT_RESULT_ENDPOINT = "https://atlas-web.cornerstonemarketingus.workers.dev/api/tasks/result";
+
+// Only fixed diagnostics cross this boundary: upstream bodies, URLs and thrown
+// messages can contain credentials. The Worker advertises a bounded error code.
+const RESULT_ERRORS = {
+  RUNNER_AUTHENTICATION_REQUIRED: "GitHub OIDC authentication was rejected; verify the report job has id-token: write and uses the atlas-runner-results audience.",
+  INVALID_RESULT_PAYLOAD: "The Worker rejected the callback payload; verify runner and Worker versions are compatible.",
+  DISPATCH_NOT_FOUND: "No hosted conversation exists for this task.",
+  EXECUTOR_IDENTITY_MISMATCH: "The signed executor repository does not match the saved dispatch.",
+  RESULT_CORRELATION_MISMATCH: "The result correlation id does not match the saved dispatch.",
+  GITHUB_VERIFICATION_CREDENTIAL_MISSING: "The Worker has no GitHub run-verification credential; deploy ATLAS_GITHUB_TOKEN or the configured GitHub App to the Worker.",
+  GITHUB_RUN_VERIFICATION_UNAVAILABLE: "The Worker could not verify this GitHub run; check its GitHub credential permissions and GitHub API availability.",
+  RESULT_DISPATCH_MISMATCH: "The signed run does not match the saved task and trusted workflow.",
+  RESULT_OWNERSHIP_MISMATCH: "The saved execution claim does not authorize this result; inspect the exact task, run and attempt.",
+  RESULT_STORAGE_UNAVAILABLE: "The Worker could not persist the report; check D1 availability and applied task migrations.",
+};
+
+export class ResultDeliveryError extends Error {
+  constructor(message, { stage = "callback", code = "DELIVERY_FAILED", status = null } = {}) {
+    super(message);
+    this.name = "ResultDeliveryError";
+    this.stage = stage;
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export function deliveryFailure(error) {
+  if (error instanceof ResultDeliveryError) return {
+    delivered: false, stage: error.stage, code: error.code,
+    ...(error.status === null ? {} : { httpStatus: error.status }), message: error.message,
+  };
+  return { delivered: false, stage: "report", code: "REPORT_FAILED", message: "Atlas result reporting failed before delivery. Inspect the report job's setup and retained task artifacts." };
+}
+
+export function resultEndpoint(value) {
+  try {
+    const endpoint = new URL(value || DEFAULT_RESULT_ENDPOINT);
+    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.hash) throw new Error();
+    return endpoint.href;
+  } catch {
+    throw new ResultDeliveryError("Result endpoint is invalid; set ATLAS_RESULT_URL to the HTTPS Worker /api/tasks/result endpoint without embedded credentials.", { stage: "configuration", code: "INVALID_RESULT_ENDPOINT" });
+  }
+}
+
+export async function requestRunnerIdentity(env, fetcher = fetch) {
+  let identityUrl;
+  try {
+    identityUrl = new URL(env.ACTIONS_ID_TOKEN_REQUEST_URL);
+    if (identityUrl.protocol !== "https:" || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) throw new Error();
+  } catch {
+    throw new ResultDeliveryError("GitHub OIDC is unavailable; the report job must have id-token: write permission.", { stage: "identity", code: "OIDC_UNAVAILABLE" });
+  }
+  identityUrl.searchParams.set("audience", "atlas-runner-results");
+  let identity;
+  try {
+    identity = await fetcher(identityUrl, {
+      headers: { authorization: `Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+      redirect: "error", signal: AbortSignal.timeout(10000),
+    });
+  } catch {
+    throw new ResultDeliveryError("GitHub OIDC token request failed; check GitHub Actions identity service availability.", { stage: "identity", code: "OIDC_REQUEST_FAILED" });
+  }
+  if (!identity.ok) {
+    try { await identity.body?.cancel(); } catch { /* ignore upstream response body */ }
+    throw new ResultDeliveryError(`GitHub OIDC token request failed: HTTP ${identity.status}. Check report job identity permissions.`, { stage: "identity", code: "OIDC_REJECTED", status: identity.status });
+  }
+  let token;
+  try { ({ value: token } = await identity.json()); } catch { /* fixed diagnostic below */ }
+  if (typeof token !== "string" || !token || token.length > 16000) {
+    throw new ResultDeliveryError("GitHub OIDC returned no usable identity token.", { stage: "identity", code: "OIDC_INVALID_RESPONSE" });
+  }
+  return token;
+}
 function read(directory, name) {
   try {
     const filename = path.join(directory, name);
@@ -14,8 +88,14 @@ function read(directory, name) {
   } catch { return null; }
 }
 
-export function renderResult({ task, status, code, inspection, debug, conclusion, budget }) {
-  const lines = [`Runner job: ${conclusion || "unknown"}.`, renderRunSummary({ task, status, code, budget })];
+export function renderResult({ task, status, code, inspection, debug, conclusion, budget, progress, recovery }) {
+  const lines = [`Runner job: ${conclusion || "unknown"}.`, renderRunSummary({ task, status, code: code ?? progress, budget })];
+  if (progress && !code) {
+    lines.push(`Progress checkpoint saved at phase '${String(progress.phase ?? "unknown").slice(0, 80)}'. This checkpoint does not confirm task completion.`);
+  }
+  if (recovery) {
+    lines.push("Repository recovery data is retained in recovery.json. Review it against the recorded base commit before restoring work; no continuation or completion is inferred.");
+  }
   if (inspection) {
     lines.push("Repository inspection (no implementation plan or edits were generated):",
       `Files scanned: ${inspection.fileCount ?? "unknown"}.`,
@@ -72,10 +152,10 @@ export async function deliverResult({ endpoint, token, payload }, fetcher = fetc
       });
     } catch (error) {
       if (!transientTransportFailure(error)) {
-        throw new Error("Result delivery failed: request could not be sent.");
+        throw new ResultDeliveryError("Result delivery failed: request could not be sent.", { code: "CALLBACK_REQUEST_FAILED" });
       }
       if (attempt === 2) {
-        throw new Error("Result delivery failed: transport unavailable after 3 attempts.");
+        throw new ResultDeliveryError("Result delivery failed: transport unavailable after 3 attempts.", { code: "CALLBACK_TRANSPORT_UNAVAILABLE" });
       }
     }
     if (response) {
@@ -84,7 +164,18 @@ export async function deliverResult({ endpoint, token, payload }, fetcher = fetc
       if (response.ok) return { delivered: true };
       // Manually dispatched maintenance jobs have no hosted conversation.
       if (response.status === 404) return { delivered: false, reason: 'task-not-found' };
-      if (response.status < 500 || attempt === 2) throw new Error(`Result delivery failed: HTTP ${response.status}`);
+      if (response.status < 500 || attempt === 2) {
+        const advertised = response.headers?.get("x-atlas-result-error");
+        const code = Object.hasOwn(RESULT_ERRORS, advertised) ? advertised : `CALLBACK_HTTP_${response.status}`;
+        const hint = RESULT_ERRORS[code] ?? ({
+          401: RESULT_ERRORS.RUNNER_AUTHENTICATION_REQUIRED,
+          403: "The Worker refused this signed run; check the saved task, workflow identity and repository.",
+          409: "The callback conflicts with the saved task or execution claim; inspect the task/run/attempt without replaying execution.",
+          429: "The callback endpoint is rate limited; retry the reporting job after capacity is restored.",
+          503: "The Worker could not verify or persist this result; check its GitHub credential, D1 migrations and service availability.",
+        })[response.status] ?? "Check ATLAS_RESULT_URL and the Worker's result endpoint.";
+        throw new ResultDeliveryError(`Result delivery failed: HTTP ${response.status}. ${hint}`, { code, status: response.status });
+      }
     }
     // Two bounded waits (250ms, 500ms) prevent a tight outage retry loop.
     await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
@@ -101,7 +192,7 @@ async function main() {
   const directory = process.env.ATLAS_OUTPUT_DIR;
   let text;
   try {
-    text = renderResult({ task: read(directory, "task.json"), status: read(directory, "status.json"), code: read(directory, "code.json"), inspection: read(directory, "inspect.json"), debug: read(directory, "debug.json"), conclusion: process.env.ATLAS_JOB_RESULT, budget: read(directory, "budget.json") });
+    text = renderResult({ task: read(directory, "task.json"), status: read(directory, "status.json"), code: read(directory, "code.json"), inspection: read(directory, "inspect.json"), debug: read(directory, "debug.json"), conclusion: process.env.ATLAS_JOB_RESULT, budget: read(directory, "budget.json"), progress: read(directory, "progress.json"), recovery: read(directory, "recovery.json") });
   } catch { text = "The runner returned malformed result data. Open the run log; no successful outcome is inferred."; }
   const redacted = spawnSync(process.execPath, [path.resolve("packages/atlas-cli/dist/src/cli.js"), "redact"], {
     input: text, encoding: "utf8", timeout: 60000, maxBuffer: 128000, windowsHide: true,
@@ -110,18 +201,34 @@ async function main() {
   const summary = !redacted.error && redacted.status === 0 && redacted.stdout.trim()
     ? redacted.stdout.slice(0, limit)
     : "Runner finished. Result details were withheld because credential scanning failed. Open the run log.";
-  const identityUrl = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
-  identityUrl.searchParams.set("audience", "atlas-runner-results");
-  const identity = await fetch(identityUrl, { headers: { authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` }, signal: AbortSignal.timeout(10000) });
-  if (!identity.ok) throw new Error("Runner identity unavailable");
-  const { value: token } = await identity.json();
-  const endpoint = process.env.ATLAS_RESULT_URL || "https://atlas-web.cornerstonemarketingus.workers.dev/api/tasks/result";
-  if (new URL(endpoint).protocol !== "https:") throw new Error("Result endpoint must use HTTPS");
+  const endpoint = resultEndpoint(process.env.ATLAS_RESULT_URL);
+  const token = await requestRunnerIdentity(process.env);
   const correlationId = correlationIdFromEnv();
   const delivery = await deliverResult({ endpoint, token, payload: buildResultPayload({ taskId, summary, correlationId }) });
+  writeDeliveryReceipt({ ...delivery, stage: "callback", ...(delivery.delivered ? { code: "DELIVERED" } : { code: "DISPATCH_NOT_FOUND" }), message: deliveryMessage(delivery, taskId, correlationId) });
   console.log(deliveryMessage(delivery, taskId, correlationId));
+  // Manual maintenance callbacks remain compatible, but a granted hosted task
+  // cannot turn a missing dispatch into a green reporting job.
+  if (!delivery.delivered && process.env.ATLAS_CLAIM_GRANTED === "true") process.exitCode = 1;
+}
+
+function writeDeliveryReceipt(receipt) {
+  // Receipts contain only fixed diagnostics and validated task ids, never tokens,
+  // response bodies, endpoint URLs, or the model's unscanned summary.
+  try {
+    if (process.env.ATLAS_OUTPUT_DIR) {
+      fs.mkdirSync(process.env.ATLAS_OUTPUT_DIR, { recursive: true });
+      fs.writeFileSync(path.join(process.env.ATLAS_OUTPUT_DIR, "delivery.json"), `${JSON.stringify({ schema_version: 1, ...receipt }, null, 2)}\n`, { mode: 0o600 });
+    }
+    if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### Atlas result delivery\n\n${receipt.message}\n`, "utf8");
+  } catch { console.error("Result delivery receipt could not be retained; inspect this reporting job's logs."); }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(() => { console.error("Atlas result delivery failed. Check the reporting job and retry it."); process.exitCode = 1; });
+  main().catch((error) => {
+    const failure = deliveryFailure(error);
+    writeDeliveryReceipt(failure);
+    console.error(failure.message);
+    process.exitCode = 1;
+  });
 }

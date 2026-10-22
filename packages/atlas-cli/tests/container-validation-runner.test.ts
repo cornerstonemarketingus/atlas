@@ -125,6 +125,7 @@ test("cleanup failure cannot yield a passing validation receipt", async (t) => {
 
 test("dependency installation is sandboxed and enables networking only for fixed script-free npm ci", async (t) => {
   const { source } = await fixture(t);
+  await writeFile(join(source, "package-lock.json"), "{}");
   const { runner, calls } = await fakeRunner(source, async () => success, true, true);
   await runner.run({ label: "baseline", profiles: [profile] });
   assert.equal(calls.length, 2);
@@ -137,10 +138,38 @@ test("dependency installation is sandboxed and enables networking only for fixed
 
 test("dependency provisioning failure stops before repository tests and removes scratch state", async (t) => {
   const { source } = await fixture(t);
+  await writeFile(join(source, "package-lock.json"), "{}");
   const { runner, calls, workspaces } = await fakeRunner(source, async () => ({ ...success, exitCode: 1 }), true, true);
-  await assert.rejects(runner.run({ label: "baseline", profiles: [profile] }), /dependency provisioning failed/);
+  const report = await runner.run({ label: "baseline", profiles: [profile] });
+  assert.equal(report.observations[0]?.outcome, "execution-failed");
   assert.equal(calls.length, 1);
   await assert.rejects(access(workspaces[0]!));
+});
+
+test("dependency-free package suites run offline without npm ci or a lockfile", async (t) => {
+  const { source } = await fixture(t);
+  await writeFile(join(source, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+  const { runner, calls } = await fakeRunner(source, async () => success, true, true);
+  const report = await runner.run({ label: "baseline", profiles: [profile] });
+  assert.equal(report.observations[0]?.outcome, "passed");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.args![calls[0]!.args!.indexOf("--network") + 1], "none");
+});
+
+test("a package provisioning failure does not prevent another suite or its checkpoint", async (t) => {
+  const { source } = await fixture(t);
+  await mkdir(join(source, "dependent"));
+  await mkdir(join(source, "independent"));
+  await writeFile(join(source, "dependent", "package-lock.json"), "{}");
+  await writeFile(join(source, "independent", "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+  const { runner, calls } = await fakeRunner(source, async (request) => request.args?.includes("ci") ? { ...success, exitCode: 1 } : success, true, true);
+  const checkpoints: string[] = [];
+  const report = await runner.run({ label: "baseline", profiles: [
+    { ...profile, id: "dependent", cwd: "dependent" }, { ...profile, id: "independent", cwd: "independent" },
+  ], onObservation: async (observation) => { checkpoints.push(observation.caseId); } });
+  assert.deepEqual(report.observations.map((item) => item.outcome), ["execution-failed", "passed"]);
+  assert.deepEqual(checkpoints, ["dependent", "independent"]);
+  assert.equal(calls.length, 2);
 });
 
 test("missing runtime fails closed before commands can run", async (t) => {

@@ -1,4 +1,4 @@
-import type { ValidationKind, ValidationSnapshot } from "./validation-result.js";
+import type { ValidationKind, ValidationObservation, ValidationSnapshot } from "./validation-result.js";
 import type { SafeCommandRunner } from "./safe-command-runner.js";
 
 /**
@@ -19,6 +19,8 @@ export interface ValidationProfileRunRequest {
   readonly label: ValidationSnapshot["label"];
   readonly profiles: readonly ValidationCommandProfile[];
   readonly signal?: AbortSignal;
+  /** Called after a check finishes, before starting the next one. */
+  readonly onObservation?: (observation: ValidationObservation) => Promise<void>;
 }
 
 export interface ValidationProfileRunner {

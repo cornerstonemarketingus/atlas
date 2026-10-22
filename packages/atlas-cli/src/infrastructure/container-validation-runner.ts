@@ -1,4 +1,4 @@
-import { cp, lstat, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -61,20 +61,27 @@ export class ContainerValidationProfileRunner implements ValidationProfileRunner
     try {
       await snapshotRepository(source, workspace, request.signal);
       await mkdir(join(workspace, ".tmp"), { recursive: true });
-      if (this.options.installDependencies) {
-        if (this.options.packageManager !== "npm") throw new Error("Container dependency provisioning currently supports npm only.");
-        for (const directory of new Set(request.profiles.map((profile) => profile.cwd ?? "."))) {
-          const cwd = await confinedCwd(workspace, directory);
-          const installation = await this.runContainer(workspace, cwd, { executable: "npm", args: ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], ...(request.signal ? { signal: request.signal } : {}) }, true);
-          if (installation.exitCode !== 0 || installation.timedOut || installation.cancelled) throw new Error("Container validation dependency provisioning failed.");
-        }
-      }
+      if (this.options.installDependencies && this.options.packageManager !== "npm") throw new Error("Container dependency provisioning currently supports npm only.");
+      const provisioned = new Map<string, boolean>();
       const commandRunner: SafeCommandRunner = {
         run: async (command) => {
           if (this.cleanupBlocked) throw new Error("Validation stopped because container cleanup could not be confirmed.");
           const cwd = await confinedCwd(workspace, command.cwd);
           if (command.executable !== this.options.packageManager) throw new SafeCommandError("executable-not-allowed", "Validation executable is not allowlisted.");
           if (Object.keys(command.environment ?? {}).length !== 0) throw new SafeCommandError("environment-not-allowed", "Container validation does not accept caller environment variables.");
+          // Provision per suite so one missing dependency cannot erase the other
+          // suites' results. Dependency-free packages need no npm ci or network.
+          if (this.options.installDependencies) {
+            if (!provisioned.has(cwd)) {
+              provisioned.set(cwd, false);
+              if (await requiresDependencyInstall(cwd)) {
+                const installation = await this.runContainer(workspace, cwd, { executable: "npm", args: ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], ...(command.signal ? { signal: command.signal } : {}) }, true);
+                if (installation.exitCode !== 0 || installation.timedOut || installation.cancelled) throw new Error("Container validation dependency provisioning failed.");
+              }
+              provisioned.set(cwd, true);
+            }
+            if (!provisioned.get(cwd)) throw new Error("Container validation dependency provisioning failed.");
+          }
           return this.runContainer(workspace, cwd, command);
         },
       };
@@ -128,6 +135,17 @@ export class ContainerValidationProfileRunner implements ValidationProfileRunner
       }
     }
   }
+}
+
+async function requiresDependencyInstall(directory: string): Promise<boolean> {
+  for (const name of ["package-lock.json", "npm-shrinkwrap.json"]) {
+    try { if ((await lstat(join(directory, name))).isFile()) return true; } catch { /* absent */ }
+  }
+  const manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8")) as Record<string, unknown>;
+  return ["dependencies", "devDependencies", "optionalDependencies"].some((field) => {
+    const dependencies = manifest[field];
+    return dependencies !== null && typeof dependencies === "object" && Object.keys(dependencies).length > 0;
+  });
 }
 
 export async function snapshotRepository(source: string, destination: string, signal?: AbortSignal): Promise<void> {

@@ -3,7 +3,7 @@ export function statusLine(task) {
   if (task.status === "succeeded") {
     if (task.mode === "coder") return task.pullRequest?.url
       ? "The run finished and a pull request is available. Review its changes and validation evidence."
-      : "The run finished, but Atlas has no pull request to show. Check the reported results and run log.";
+      : "The run finished. Check the reported results for completed work, test coverage and failures. No pull request was created.";
     return "The run finished. Reported findings appear in this conversation when delivery completes.";
   }
   if (task.status === "failed") return "The run failed. Check the reported results and run log for the failing step.";

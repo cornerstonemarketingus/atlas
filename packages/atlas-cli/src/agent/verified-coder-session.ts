@@ -36,6 +36,7 @@ export interface AgentPassResult {
 
 export type VerificationStatus =
   | "verified"
+  | "failed"
   | "regressed"
   | "inconclusive"
   | "unverified"
@@ -121,6 +122,8 @@ export interface VerifiedCoderSessionOptions {
   /** Model output tokens the session has spent so far (the shared budget ledger), or null when unmetered. */
   readonly tokensSpent?: () => number | null;
   readonly now?: () => number;
+  /** Shared cooperative deadline; prevents starting a new phase after cancellation. */
+  readonly signal?: AbortSignal;
 }
 
 const DEFAULT_MAX_REPAIR_ATTEMPTS = 2;
@@ -151,6 +154,7 @@ export class VerifiedCoderSession {
   readonly #maxSameFailure: number;
   readonly #tokensSpent: () => number | null;
   readonly #now: () => number;
+  readonly #signal: AbortSignal | undefined;
 
   public constructor(options: VerifiedCoderSessionOptions) {
     this.#plan = options.plan;
@@ -165,6 +169,7 @@ export class VerifiedCoderSession {
     this.#maxSameFailure = options.loopLimits?.maxSameFailure ?? DEFAULT_REPAIR_LOOP_POLICY.maxSameFailure;
     this.#tokensSpent = options.tokensSpent ?? (() => null);
     this.#now = options.now ?? Date.now;
+    this.#signal = options.signal;
     if (this.#maxWallMs !== null && (!Number.isSafeInteger(this.#maxWallMs) || this.#maxWallMs < 1)) {
       throw new RangeError("loopLimits.maxWallMs must be a positive integer or null.");
     }
@@ -183,6 +188,15 @@ export class VerifiedCoderSession {
   }
 
   public async run(): Promise<VerifiedCoderResult> {
+    const accumulated = new Map<string, ProposedEditOperation>();
+    let pass = 0;
+    const interrupted = (): VerifiedCoderResult | null => this.#signal?.aborted ? {
+      status: "cancelled", response: "", message: "Execution was interrupted; changes are preserved and completion is unconfirmed.",
+      edits: [...accumulated].map(([path, operation]) => ({ path, operation })),
+      verification: { status: "unverified", attempts: pass, profileIds: this.#plan.profiles.map(profile => profile.id), summary: null, newFailures: [], stopReason: null, message: "Execution was interrupted before verification completed." },
+    } : null;
+    const beforeBaseline = interrupted();
+    if (beforeBaseline !== null) return beforeBaseline;
     // The baseline has to be captured before the agent touches anything;
     // afterwards there is no clean state left to compare against.
     let baseline: ValidationSnapshot | null = null;
@@ -201,8 +215,8 @@ export class VerifiedCoderSession {
       }
     }
 
-    const accumulated = new Map<string, ProposedEditOperation>();
-    let pass = 0;
+    const afterBaseline = interrupted();
+    if (afterBaseline !== null) return afterBaseline;
     let last: AgentPassResult | null = null;
     let evidence: readonly AgentEvidence[] = this.#baseEvidence;
     let comparison: ValidationComparison | null = null;
@@ -217,9 +231,13 @@ export class VerifiedCoderSession {
     const startedAt = this.#now();
 
     for (;;) {
+      const beforePass = interrupted();
+      if (beforePass !== null) return beforePass;
       pass += 1;
       last = await (escalatedAtPass !== undefined && this.#escalation ? this.#escalation.runAgent(evidence) : this.#runAgent(evidence));
       mergeEdits(accumulated, last.edits);
+      const afterPass = interrupted();
+      if (afterPass !== null) return afterPass;
 
       if (last.status !== "completed") {
         return this.#result(last, accumulated, {
@@ -258,6 +276,8 @@ export class VerifiedCoderSession {
       }
 
       const postChange = await this.#runValidation("post-change");
+      const afterValidation = interrupted();
+      if (afterValidation !== null) return afterValidation;
       comparison = this.#compare(baseline, postChange);
       // The loop policy, not the attempt counter, decides whether to repair.
       const action = decideVerificationAction(comparison, pass, Number.POSITIVE_INFINITY);

@@ -19,11 +19,11 @@ import { RepositorySchemaMap } from "./infrastructure/repository-schema-map.js";
 import { RepositoryConfigReferences } from "./infrastructure/repository-config-references.js";
 import { BoundedRepositorySourceReader } from "./infrastructure/bounded-repository-source-reader.js";
 import { SessionCheckpointError, SessionCheckpointRecorder, undoSession } from "./infrastructure/session-checkpoint.js";
+import { ExecutionDeadline } from "./infrastructure/execution-deadline.js";
+import { CoderProgressRecorder } from "./infrastructure/coder-progress-recorder.js";
 import { RepositorySymbolReferenceFinder } from "./infrastructure/repository-symbol-reference-finder.js";
 import { BudgetedModelProvider } from "./infrastructure/budgeted-model-provider.js";
 import { InMemorySessionAuditLog } from "./infrastructure/in-memory-session-audit-log.js";
-import { JsonLinesSessionAuditStore } from "./infrastructure/json-lines-session-audit-store.js";
-import { persistSessionAudit } from "./infrastructure/persist-session-audit.js";
 import { InMemoryUsageBudgetLedger } from "./infrastructure/in-memory-usage-budget-ledger.js";
 import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-openai-compatible-model-provider.js";
 import { CloudModelProvider } from "./infrastructure/cloud-model-provider.js";
@@ -60,6 +60,7 @@ import { GhCliRepositoryHost } from "./infrastructure/gh-cli-repository-host.js"
 import { executeGitHubCommand } from "./cli-github.js";
 import { executeRedactCommand, readStandardInput } from "./cli-redact.js";
 import { executeReplayCommand } from "./cli-replay.js";
+import { executeOperationalTestCommand } from "./cli-operational-tests.js";
 import { renderGitHubJson, renderGitHubText } from "./presentation/github-renderers.js";
 
 const USAGE = `Usage:
@@ -84,7 +85,8 @@ const USAGE = `Usage:
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
   atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|openai|workers-ai|cerebras|gemini|openrouter|mistral] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
-       [--retry-attempts N] [--retry-max-delay-ms N] [--capacity-wait-ms N]
+       [--retry-attempts N] [--retry-max-delay-ms N] [--capacity-wait-ms N] [--execution-timeout-ms N]
+       [--progress-file <path>] [--checkpoint-interval-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N] [--max-repair-ms N] [--max-same-failure N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--verify-container <absolute-runtime-path>] [--audit-log <path>] [--format text|json]
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
@@ -345,7 +347,8 @@ export async function main(args: readonly string[]): Promise<number> {
       return await runChat(args, format);
     }
     if (args[0] === "code") {
-      return await runCode(args, format);
+      const operational = await executeOperationalTestCommand(args, format);
+      return operational ?? await runCode(args, format);
     }
     if (args[0] === "undo") {
       return await runUndo(args, format);
@@ -548,6 +551,10 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   }
   const tokenBudgetOption = readOptionalInteger(args, "--token-budget", 1, 1_000_000);
   const maximumTurnsOption = readOptionalInteger(args, "--max-turns", 1, 32);
+  const executionTimeoutOption = readOptionalInteger(args, "--execution-timeout-ms", 1_000, 2_700_000);
+  const checkpointIntervalOption = readOptionalInteger(args, "--checkpoint-interval-ms", 1_000, 60_000);
+  const progressFile = args.includes("--progress-file") ? readRequiredOption(args, "--progress-file") : undefined;
+  if (executionTimeoutOption === null || checkpointIntervalOption === null || progressFile === null) return 2;
   const repairAttemptsOption = readOptionalInteger(args, "--max-repair-attempts", 0, 5);
   // Repair-loop limits checked before every repair (docs/PROGRAM.md 2.4):
   // wall time since the session started, and how many repairs the same
@@ -645,6 +652,9 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const edits: CodeEditSummary[] = [];
   // What each touched file held before the session, so `atlas undo` can put it back.
   const checkpoint = new SessionCheckpointRecorder(summary.root);
+  // Initialized before any edit executes, once audit and session identity exist.
+  let saveProgress: () => Promise<void> = async () => {};
+  let pendingPaths: string[] = [];
   const writeTools = createRepositoryWriteTools(
     { repositoryId, repositoryRoot: summary.root },
     { editor: new SafeRepositoryFileEditor() },
@@ -660,8 +670,13 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       ...writeTools.proposeFileEdit,
       execute: async (input, context) => {
         await checkpoint.recordBefore(editedPaths(input));
+        pendingPaths = editedPaths(input);
+        await saveProgress();
+        context.signal?.throwIfAborted();
         const result = await writeTools.proposeFileEdit.execute(input, context);
         edits.push({ path: result.path, operation: result.operation });
+        pendingPaths = [];
+        await saveProgress();
         return result;
       },
     },
@@ -669,6 +684,9 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       ...writeTools.proposeChangeSet,
       execute: async (input, context) => {
         await checkpoint.recordBefore(editedPaths(input));
+        pendingPaths = editedPaths(input);
+        await saveProgress();
+        context.signal?.throwIfAborted();
         const result = await writeTools.proposeChangeSet.execute(input, context);
         // A rename moves a file, so the destination is what the pull request
         // has to describe; recording only the source would leave the new path
@@ -676,6 +694,8 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
         for (const edit of result.applied) {
           edits.push({ path: edit.toPath ?? edit.path, operation: edit.operation });
         }
+        pendingPaths = [];
+        await saveProgress();
         return result;
       },
     },
@@ -808,7 +828,26 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   );
 
   const sessionId = randomUUID();
+  const deadline = new ExecutionDeadline(executionTimeoutOption);
   const audit = new InMemorySessionAuditLog();
+  const progress = new CoderProgressRecorder({
+    ...(progressFile === undefined ? {} : { filePath: progressFile }),
+    ...(auditLogPath === undefined ? {} : { auditLogPath }),
+    audit,
+    checkpoint: () => checkpoint.save(sessionId),
+  });
+  let phase = "starting";
+  let progressStatus = "running";
+  saveProgress = () => {
+    const events = audit.snapshot();
+    return progress.save({ schemaVersion: 1, sessionId, status: progressStatus, phase, edits, pendingPaths, expiresAt: deadline.expiresAt,
+      modelRequests: events.filter(event => event.type === "model.requested").length,
+      toolCalls: events.filter(event => event.type === "tool.requested").length,
+      failedTools: events.filter(event => event.type === "tool.completed" && "outcome" in event.payload && event.payload.outcome === "failed").length,
+    }).catch(() => {
+      console.error("Coder progress checkpoint could not be saved; existing work has been retained in the working tree.");
+    });
+  };
   const makeAgent = (agentProvider: typeof provider, agentModel: string) => new ProviderReadOnlyToolAgent({
     provider: agentProvider,
     model: agentModel,
@@ -836,12 +875,15 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     // pass changed. The token ledger is deliberately shared across passes,
     // so a repair loop spends from the same budget rather than a fresh one.
     const before = edits.length;
+    phase = "agent";
+    await saveProgress();
     const pass = await passAgent.run({
       sessionId,
       objective,
       evidence: evidence.map((item) => ({ label: item.label, content: item.content })),
       scope: { kind: "repository", repositoryId },
       context: { repositoryId },
+      signal: deadline.signal,
     });
     usage = {
       turns: usage.turns + pass.trace.turns,
@@ -849,6 +891,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       inputTokens: usage.inputTokens + pass.trace.usage.inputTokens,
       outputTokens: usage.outputTokens + pass.trace.usage.outputTokens,
     };
+    await saveProgress();
     return {
       status: pass.status,
       response: pass.status === "completed" ? pass.response : "",
@@ -860,6 +903,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   };
   const session = new VerifiedCoderSession({
     plan,
+    signal: deadline.signal,
     maxRepairAttempts,
     // Full repository detail remains available through bounded read tools. The
     // first request carries only a compact map so entry-level hosted-model TPM
@@ -867,7 +911,11 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     baseEvidence: [{ label: "Deterministic repository summary", content: renderJson(compactRepositorySummary(summary)) }],
     runAgent: runAgentWith(agent),
     ...(escalationRoute ? { escalation: { attempts: escalationAttemptsOption ?? 2, runAgent: runAgentWith(makeAgent(escalationRoute.provider, escalationRoute.model)) } } : {}),
-    runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),
+    runValidation: async (label) => {
+      phase = label;
+      await saveProgress();
+      return validationRunner.run({ label, profiles: plan.profiles, signal: deadline.signal });
+    },
     loopLimits: {
       ...(repairWallOption === undefined ? {} : { maxWallMs: repairWallOption }),
       maxTokens: tokenBudget,
@@ -878,18 +926,32 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   let result: Awaited<ReturnType<typeof session.run>>;
   // Only counters reach CI progress; never tool arguments, paths, prompts or provider bodies.
   const progressTimer = setInterval(() => {
+    void saveProgress();
     const events = audit.snapshot();
     console.error("Atlas progress: " + JSON.stringify({
       modelRequests: events.filter((event) => event.type === "model.requested").length,
       toolCalls: events.filter((event) => event.type === "tool.requested").length,
       failedTools: events.filter((event) => event.type === "tool.completed" && "outcome" in event.payload && event.payload.outcome === "failed").length,
     }));
-  }, 15_000);
+  }, checkpointIntervalOption ?? 15_000);
   progressTimer.unref();
   try {
+    await saveProgress();
     result = await session.run();
+    if (deadline.expired) {
+      result = { ...result, status: "failed", message: "Coder execution deadline exceeded; progress and edits were preserved, but completion is unconfirmed." };
+    }
+  } catch (error) {
+    if (!deadline.expired) throw error;
+    result = {
+      status: "failed", response: "", message: "Coder execution deadline exceeded; progress and edits were preserved, but completion is unconfirmed.", edits,
+      verification: { status: "unverified", attempts: 0, profileIds: plan.profiles.map(profile => profile.id), summary: null, newFailures: [], stopReason: null, message: "Execution ended before verification completed." },
+    };
   } finally {
     clearInterval(progressTimer);
+    deadline.dispose();
+    progressStatus = "stopped";
+    await saveProgress();
     // Saved however the session ended, so its edits can be taken back.
     // stderr, never stdout: stdout is the result the runner parses.
     const saved = await checkpoint.save(sessionId).catch((error: unknown) => {
@@ -899,22 +961,10 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     if (saved !== null) console.error(`To take back this session's edits: atlas undo ${JSON.stringify(summary.root)} --session ${saved}`);
   }
 
-  // Flushed after the run, not during it: the agent records events
-  // synchronously mid-turn, and putting a disk write on that path to persist a
-  // record nobody reads until the run ends would be the wrong trade.
-  if (auditLogPath !== undefined) {
-    const persistence = await persistSessionAudit(
-      new JsonLinesSessionAuditStore({ filePath: auditLogPath, redactor: new PatternSecretRedactor() }),
-      audit,
-    );
-    // Reported on stderr, never stdout: stdout is the machine-readable result
-    // the runner parses into a pull request.
-    if (persistence.error !== undefined) {
-      console.error(`Audit log incomplete: wrote ${persistence.persisted} event(s) to ${auditLogPath} (${persistence.error}).`);
-    }
-  }
-
   const output = toVerifiedCodeOutput(sessionId, result, usage);
+  await progress.save({ schemaVersion: 1, ...output, phase: "finished", expiresAt: deadline.expiresAt }).catch(() => {
+    console.error("Final progress checkpoint could not be saved.");
+  });
   // What this prints becomes result.json, then the pull request body and
   // the Actions log — both readable by people with no access to the
   // repository the agent worked in. Validation diagnostics carry real

@@ -102,14 +102,9 @@ jobs:
     needs: claim
     if: ${{ needs.claim.outputs.granted == 'true' && needs.claim.outputs.run_attempt == github.run_attempt }}
     runs-on: ubuntu-latest
-    # 15 minutes for the model run itself, plus headroom for ci-gated's own
-    # bounded poll loop (create-coder-pull-request.mjs times out that loop
-    # well before this does, so it always exits cleanly instead of being
-    # force-killed mid-merge-attempt).
-    # A self-hosted model runs on the runner's CPU and is far slower than any
-    # hosted API, so the ceiling moves when one is configured. 330 leaves a
-    # margin under the 360-minute hard limit for a job.
-    timeout-minutes: ${{ vars.ATLAS_SELF_HOSTED_MODEL != '' && 330 || 25 }}
+    # The coder has its own configurable bounded deadline (default 15 minutes,
+    # maximum 45). Leave time for setup, checkpoint upload and CI-gated PR work.
+    timeout-minutes: ${{ vars.ATLAS_CODER_JOB_TIMEOUT_MINUTES || 25 }}
     # Every checkout uses persist-credentials: false, and the push + pull
     # request step authenticates with ATLAS_GITHUB_TOKEN (see below), not
     # the default GITHUB_TOKEN — so the built-in token needs no write scope
@@ -122,7 +117,7 @@ jobs:
       ATLAS_CLAIM_EXPIRES_AT: ${{ needs.claim.outputs.expires_at }}
       ATLAS_CLAIM_RUN_ID: ${{ needs.claim.outputs.run_id }}
       ATLAS_CLAIM_RUN_ATTEMPT: ${{ needs.claim.outputs.run_attempt }}
-      ATLAS_JOB_TIMEOUT_MINUTES: ${{ vars.ATLAS_SELF_HOSTED_MODEL != '' && 330 || 25 }}
+      ATLAS_JOB_TIMEOUT_MINUTES: ${{ vars.ATLAS_CODER_JOB_TIMEOUT_MINUTES || 25 }}
       ATLAS_TASK_ID: ${{ github.event.inputs.task_id }}
       ATLAS_REPOSITORY: ${{ github.event.inputs.repository }}
       ATLAS_BRANCH: ${{ github.event.inputs.branch }}
@@ -288,6 +283,8 @@ jobs:
           ATLAS_CODER_PROVIDER: ${{ vars.ATLAS_CODER_PROVIDER }}
           ATLAS_CODER_MODEL: ${{ vars.ATLAS_CODER_MODEL }}
           ATLAS_CODER_FALLBACKS: ${{ vars.ATLAS_CODER_FALLBACKS }}
+          ATLAS_CODER_TIMEOUT_MS: ${{ vars.ATLAS_CODER_TIMEOUT_MS }}
+          ATLAS_CODER_CHECKPOINT_INTERVAL_MS: ${{ vars.ATLAS_CODER_CHECKPOINT_INTERVAL_MS }}
           ATLAS_CODER_RETRY_ATTEMPTS: ${{ vars.ATLAS_CODER_RETRY_ATTEMPTS }}
           ATLAS_CODER_RETRY_MAX_DELAY_MS: ${{ vars.ATLAS_CODER_RETRY_MAX_DELAY_MS }}
           # How long a run may wait in total for capacity when every provider is out (default 5 min).
@@ -323,9 +320,6 @@ jobs:
           export ATLAS_CODER_MODEL="${ATLAS_CODER_MODEL:-${SELF_HOSTED_MODEL:-}}"
           if [ -n "$ATLAS_CODER_BASE_URL" ]; then
             echo "Model endpoint: $ATLAS_CODER_BASE_URL (model: $ATLAS_CODER_MODEL)"
-            # CPU generation is an order of magnitude slower than a hosted API,
-            # so the per-run ceiling has to move with it.
-            export ATLAS_CODER_TIMEOUT_MS="${ATLAS_CODER_TIMEOUT_MS:-18000000}"
           fi
           node scripts/runner/run-task.mjs
 
@@ -380,16 +374,30 @@ jobs:
         working-directory: packages/atlas-cli
         run: npm ci --ignore-scripts && npm run build
       - name: Download result data
+        if: always()
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: atlas-${{ github.run_id }}-${{ github.run_attempt }}
           path: atlas-output
+      # A missing scanner uses the reporter's fixed safe fallback. A failed
+      # build must not suppress the callback for the failure it should explain.
       - name: Deliver redacted findings
+        if: always()
         env:
+          ATLAS_CLAIM_GRANTED: ${{ needs.claim.outputs.granted }}
           ATLAS_TASK_ID: ${{ inputs.task_id }}
           ATLAS_CORRELATION_ID: ${{ inputs.correlation_id }}
           ATLAS_OUTPUT_DIR: atlas-output
           ATLAS_JOB_RESULT: ${{ needs.run.result }}
           ATLAS_RESULT_URL: ${{ vars.ATLAS_RESULT_URL }}
         run: node scripts/runner/report-result.mjs
+
+      - name: Retain result delivery receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atlas-delivery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: atlas-output/delivery.json
+          if-no-files-found: warn
+          retention-days: 7

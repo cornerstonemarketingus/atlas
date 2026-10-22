@@ -91,7 +91,10 @@ test("built Worker result callback enforces claim ownership after signed run ver
   t.after(() => { globalThis.fetch = originalFetch; delete globalThis.__resultEnv; if (previousToken === undefined) delete process.env.ATLAS_GITHUB_TOKEN; else process.env.ATLAS_GITHUB_TOKEN = previousToken; });
   const { default: worker } = await import(new URL("../dist/server/index.js", import.meta.url));
   const invoke = token => worker.fetch(new Request("https://atlas.test/api/tasks/result", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ taskId, summary: "Reported tests failed", outcome: { conclusion: "success", jobId: 999 }, correlationId: f.task.correlationId }) }), globalThis.__resultEnv, { waitUntil() {}, passThroughOnException() {} });
-  assert.equal((await invoke("forged")).status, 401);
+  const unauthenticated = await invoke("forged");
+  assert.equal(unauthenticated.status, 401);
+  assert.equal(unauthenticated.headers.get("x-atlas-result-error"), "RUNNER_AUTHENTICATION_REQUIRED");
+  assert.equal((await unauthenticated.json()).code, "RUNNER_AUTHENTICATION_REQUIRED");
   assert.equal((await invoke(await sign())).status, 409);
   assert.deepEqual(counts(f), [0, 0]);
   await grantTaskExecution(f.d1, f.task, identity);
@@ -100,7 +103,10 @@ test("built Worker result callback enforces claim ownership after signed run ver
   assert.equal((await invoke(await sign())).status, 503);
   assert.deepEqual(counts(f), [0, 0]);
   jobStatus = "completed"; jobsStatus = 429;
-  assert.equal((await invoke(await sign())).status, 503);
+  const verificationUnavailable = await invoke(await sign());
+  assert.equal(verificationUnavailable.status, 503);
+  assert.equal(verificationUnavailable.headers.get("x-atlas-result-error"), "GITHUB_RUN_VERIFICATION_UNAVAILABLE");
+  assert.equal((await verificationUnavailable.json()).code, "GITHUB_RUN_VERIFICATION_UNAVAILABLE");
   jobsStatus = 200;
   // The initial task read is no longer authoritative after the remote run check.
   const linkedRunBefore = f.sqlite.prepare("SELECT github_run_id FROM tasks").get().github_run_id;
@@ -122,7 +128,9 @@ test("built Worker result callback enforces claim ownership after signed run ver
   assert.deepEqual(counts(f), [1, 1]);
   f.sqlite.exec("DROP TABLE task_execution_outcomes"); attempt = 1;
   const unavailable = await invoke(await sign());
-  assert.equal(unavailable.status, 503); assert.doesNotMatch(await unavailable.text(), /SQL|no such table|fake-result-token/);
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.headers.get("x-atlas-result-error"), "RESULT_STORAGE_UNAVAILABLE");
+  assert.doesNotMatch(await unavailable.text(), /SQL|no such table|fake-result-token/);
 });
 
 const outcome = { runId: 123, runAttempt: 1, jobId: 456, headSha: "a".repeat(40), conclusion: "failure", completedAt: "2026-10-15T00:00:00.000Z" };

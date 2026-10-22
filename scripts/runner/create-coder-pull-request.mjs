@@ -35,11 +35,14 @@ function readJson(filename) {
 }
 
 function writeStatus(status, message, extra = {}) {
+  const statusPath = path.join(outputDirectory, "status.json");
+  const temporaryPath = `${statusPath}.${process.pid}.tmp`;
   fs.writeFileSync(
-    path.join(outputDirectory, "status.json"),
+    temporaryPath,
     `${JSON.stringify({ schema_version: 1, status, message, task_id: taskId, ...(correlationId ? { correlation_id: correlationId } : {}), ...extra }, null, 2)}\n`,
     { mode: 0o600 },
   );
+  fs.renameSync(temporaryPath, statusPath);
 }
 
 const status = readJson("status.json");
@@ -54,11 +57,15 @@ if (!code || !Array.isArray(code.edits) || code.edits.length === 0) {
   process.exit(0);
 }
 
+writeStatus("running", "Preparing the coder change for a pull request.");
+
 function run(label, command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: repositoryRoot, encoding: "utf8", timeout: 60_000, windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
-    const detail = result.stderr || result.stdout || result.error?.message || "unknown error";
-    throw new Error(`${label} failed: ${detail}`);
+    // Git may echo a credential-bearing remote URL. Report only metadata.
+    const message = `${label} failed (exit ${result.status ?? "unknown"}).`;
+    writeStatus("failed", message);
+    throw new Error(message);
   }
   return result.stdout ?? "";
 }
@@ -79,6 +86,7 @@ const editList = code.edits.map((edit) => `- ${edit.operation} \`${edit.path}\``
 const verification = code.verification ?? null;
 const VERDICT_HEADLINE = {
   verified: "✅ Verified — the repository's own checks pass, and this change introduced no new failures.",
+  passed: "✅ Verified — the repository's own checks pass, and this change introduced no new failures.",
   regressed: "❌ Regressed — this change introduced validation failures that Atlas could not repair.",
   inconclusive: "⚠️ Inconclusive — the checks could not be compared reliably.",
   unverified: "⚠️ Not verified — Atlas could not run this repository's checks.",
@@ -114,7 +122,11 @@ run("git commit", "git", ["commit", "-m", title, "-m", summary]);
 
 const [owner, repo] = repository.split("/");
 const remoteUrl = `https://x-access-token:${githubToken}@github.com/${owner}/${repo}.git`;
-run("git push", "git", ["push", remoteUrl, `HEAD:${branchName}`]);
+const headSha = run("git rev-parse", "git", ["rev-parse", "HEAD"]).trim();
+const recovery = { local_branch: branchName, head_sha: headSha, ...(verification ? { verification } : {}) };
+let pullRequest;
+let mergeAttempted = false;
+let stage = "pushing the change";
 
 const githubApiHeaders = {
   accept: "application/vnd.github+json",
@@ -122,99 +134,115 @@ const githubApiHeaders = {
   "user-agent": "atlas-control-plane",
   "x-github-api-version": "2022-11-28",
 };
-
-const createResponse = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`, {
-  method: "POST",
-  headers: { ...githubApiHeaders, "content-type": "application/json" },
-  body: JSON.stringify({ title, head: branchName, base: baseBranch, body, draft: draftPullRequest }),
-});
-
-if (!createResponse.ok) {
-  const detail = await createResponse.text().catch(() => "");
-  writeStatus("failed", `Pushed branch ${branchName} but pull request creation failed: HTTP ${createResponse.status}.`);
-  throw new Error(`Pull request creation failed: HTTP ${createResponse.status} ${detail.slice(0, 500)}`);
+const apiRoot = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+async function api(endpoint, options = {}) {
+  const response = await fetch(`${apiRoot}${endpoint}`, {
+    ...options, headers: { ...githubApiHeaders, "content-type": "application/json" },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`GitHub HTTP ${response.status}`);
+  return response.json();
 }
 
-const pullRequest = await createResponse.json();
-console.log(`Opened ${draftPullRequest ? "draft " : ""}pull request: ${pullRequest.html_url ?? "(no URL returned)"}${correlationLogSuffix(correlationId)}`);
-
+// Fetch every page, failing closed rather than treating a partial page as green.
 async function fetchCheckRuns(ref) {
-  const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${ref}/check-runs`, {
-    headers: githubApiHeaders,
-  });
-  if (!response.ok) throw new Error(`Fetching check runs failed: HTTP ${response.status}`);
-  const value = await response.json();
-  return Array.isArray(value.check_runs) ? value.check_runs.map((run_) => ({ status: run_.status, conclusion: run_.conclusion })) : [];
-}
-
-async function mergePullRequest(pullNumber) {
-  const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${pullNumber}/merge`, {
-    method: "PUT",
-    headers: { ...githubApiHeaders, "content-type": "application/json" },
-    body: JSON.stringify({ merge_method: "squash" }),
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    return { merged: false, detail: detail.slice(0, 500) };
+  const checks = [];
+  for (let page = 1; page <= 100; page++) {
+    const value = await api(`/commits/${ref}/check-runs?per_page=100&page=${page}`);
+    if (!Array.isArray(value.check_runs) || !Number.isSafeInteger(value.total_count)) throw new Error("Incomplete GitHub check-runs response");
+    checks.push(...value.check_runs);
+    if (checks.length >= value.total_count) return checks;
+    if (value.check_runs.length === 0) break;
   }
-  const value = await response.json();
-  return { merged: value.merged === true, detail: value.message ?? "" };
+  throw new Error("Incomplete GitHub check-runs response");
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function fetchStatusChecks(ref) {
+  const checks = [];
+  for (let page = 1; page <= 100; page++) {
+    const value = await api(`/commits/${ref}/status?per_page=100&page=${page}`);
+    if (!Array.isArray(value.statuses) || !Number.isSafeInteger(value.total_count)) throw new Error("Incomplete GitHub status response");
+    checks.push(...value.statuses.map(status => ({
+      status: status.state === "pending" ? "in_progress" : "completed",
+      conclusion: status.state === "success" ? "success" : status.state === "pending" ? null : "failure",
+    })));
+    if (checks.length >= value.total_count) return checks;
+    if (value.statuses.length === 0) break;
+  }
+  throw new Error("Incomplete GitHub status response");
 }
 
-/**
- * Polls the head commit's check-runs until decideMergeAction returns
- * something other than "wait", or the timeout elapses — at which point a
- * repository with slow CI and one with no CI configured at all are treated
- * identically: neither gets an unreviewed merge into main.
- */
-async function waitForCiOutcome(headSha) {
+async function waitForCiOutcome(ref) {
   const deadline = Date.now() + CI_POLL_TIMEOUT_MS;
   for (;;) {
-    const checkRuns = await fetchCheckRuns(headSha);
-    const action = decideMergeAction("ci-gated", checkRuns);
+    const [checkRuns, statusChecks] = await Promise.all([fetchCheckRuns(ref), fetchStatusChecks(ref)]);
+    const action = decideMergeAction(mergePolicy, [...checkRuns, ...statusChecks]);
     if (action !== "wait") return action;
     if (Date.now() >= deadline) return "hold";
-    await sleep(CI_POLL_INTERVAL_MS);
+    await new Promise(resolve => setTimeout(resolve, CI_POLL_INTERVAL_MS));
   }
 }
 
-// Auto-merge needs evidence, not just permission: only a change whose
-// baseline/post-change verification passed may merge without a person,
-// whatever the policy says (SECURITY-REVIEW SEC-7). A regression, or no
-// verification at all, leaves the pull request open for review.
-const mergeGate = autoMergeAllowed(mergePolicy, verification);
-if (mergePolicy !== "manual" && !mergeGate.allowed) {
-  const message = `Opened a pull request but did NOT auto-merge it despite the '${mergePolicy}' policy: ${mergeGate.reason}`;
-  writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: false, ...(verification ? { verification } : {}) });
+function receipt(message, merged = false) {
+  writeStatus("completed", message, {
+    ...recovery, pull_request_url: pullRequest.html_url ?? null, merged, draft: draftPullRequest,
+  });
   console.log(message);
-} else if (mergePolicy === "none") {
-  const result = await mergePullRequest(pullRequest.number);
-  const message = result.merged
-    ? "Opened and auto-merged the pull request (merge policy: none)."
-    : `Opened the pull request, but the immediate auto-merge failed: ${result.detail || "no reason given"}. Left open for review.`;
-  writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: result.merged, ...(verification ? { verification } : {}) });
-  console.log(message);
-} else if (mergePolicy === "ci-gated") {
-  console.log("Merge policy is ci-gated — waiting for checks on the pull request's head commit...");
-  const action = await waitForCiOutcome(pullRequest.head.sha);
-  if (action === "merge-now") {
-    const result = await mergePullRequest(pullRequest.number);
-    const message = result.merged
-      ? "Opened and auto-merged the pull request once CI passed (merge policy: ci-gated)."
-      : `CI passed, but auto-merge failed: ${result.detail || "no reason given"}. Left open for review.`;
-    writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: result.merged });
-    console.log(message);
+}
+
+try {
+  run("git push", "git", ["push", remoteUrl, `HEAD:${branchName}`]);
+  recovery.pushed_branch = branchName;
+  // The pushed commit can be recovered even if PR creation never returns.
+  writeStatus("running", `Pushed branch ${branchName}; opening a pull request.`, recovery);
+  stage = "creating the pull request";
+  pullRequest = await api("/pulls", {
+    method: "POST", body: JSON.stringify({ title, head: branchName, base: baseBranch, body, draft: draftPullRequest }),
+  });
+  if (!Number.isSafeInteger(pullRequest.number) || pullRequest.head?.sha !== headSha) throw new Error("Unexpected pull request head");
+  receipt(`${draftPullRequest ? "Opened a draft pull request" : "Opened a pull request"} for review. Nothing has been merged.${correlationLogSuffix(correlationId)}`);
+
+  const mergeGate = autoMergeAllowed(mergePolicy, verification);
+  if (!mergeGate.allowed) {
+    receipt(`Opened a pull request for review. ${mergeGate.reason} Nothing has been merged.`);
   } else {
-    const message = "Opened a pull request for review. Left it open — CI either failed or didn't finish within the wait window (merge policy: ci-gated); a repository with no CI configured is held the same way, deliberately.";
-    writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: false });
-    console.log(message);
+    console.log("Waiting for CI and repository merge requirements on the pull request's head commit...");
+    stage = "inspecting CI";
+    const action = await waitForCiOutcome(headSha);
+    if (action !== "merge-now") {
+      receipt("Opened a pull request for review. CI failed or did not complete within the wait window; nothing has been merged.");
+    } else {
+      // GitHub evaluates required checks/reviews on the PR. A partial set of
+      // green checks alone is not evidence that repository requirements passed.
+      stage = "inspecting repository merge requirements";
+      const current = await api(`/pulls/${pullRequest.number}`);
+      if (current.head?.sha !== headSha || current.state !== "open" || current.draft !== false
+          || current.mergeable !== true || current.mergeable_state !== "clean") {
+        receipt("Opened a pull request for review. Its head or repository merge requirements are not confirmed; nothing has been merged.");
+      } else {
+        // SHA precondition prevents a changed head from using stale CI evidence.
+        stage = "requesting the merge";
+        mergeAttempted = true;
+        const result = await api(`/pulls/${pullRequest.number}/merge`, {
+          method: "PUT", body: JSON.stringify({ merge_method: "squash", sha: headSha }),
+        });
+        receipt(result.merged === true
+          ? "Opened and auto-merged the pull request after CI and repository merge requirements passed."
+          : "CI passed, but GitHub did not merge the pull request. Left open for review.", result.merged === true);
+      }
+    }
   }
-} else {
-  const message = `${draftPullRequest ? "Opened a draft pull request for review." : "Opened a pull request for review."} Nothing has been merged.`;
-  writeStatus("completed", message, { pull_request_url: pullRequest.html_url ?? null, merged: false, draft: draftPullRequest, ...(verification ? { verification } : {}) });
-  console.log(message);
+} catch (error) {
+  // Never echo response bodies or arbitrary exception text: either may contain
+  // credentials. The stage and HTTP status are sufficient for operator action.
+  const detail = /^GitHub HTTP [0-9]{3}$/u.test(error.message ?? "") ? error.message : `failure while ${stage}`;
+  if (pullRequest?.html_url) {
+    receipt(mergeAttempted
+      ? `Opened a pull request. Merge outcome could not be confirmed: ${detail}; inspect the pull request before retrying.`
+      : `Opened a pull request for review. Automatic merge stopped: ${detail}. Nothing has been merged.`, mergeAttempted ? null : false);
+  } else {
+    writeStatus("failed", `Pull request creation did not finish: ${detail}. Recover the committed work from branch ${branchName}.`, recovery);
+    console.error(`Pull request creation did not finish: ${detail}.`);
+    process.exitCode = 1;
+  }
 }

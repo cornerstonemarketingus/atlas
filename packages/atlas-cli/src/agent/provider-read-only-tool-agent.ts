@@ -212,9 +212,15 @@ export class ProviderReadOnlyToolAgent {
             return { status: "approval-required", toolCallId: call.id, toolName: canonicalName ?? call.name, trace: trace() };
           }
           if (result.status === "failed") {
-            const properties = this.options.tools.find((tool) => tool.name === canonicalName)?.inputSchema["properties"];
+            const inputSchema = this.options.tools.find((tool) => tool.name === canonicalName)?.inputSchema;
+            const properties = inputSchema?.["properties"];
             const correction = result.errorCode === "INVALID_TOOL_INPUT"
-              ? { validFields: properties && typeof properties === "object" && !Array.isArray(properties) ? Object.keys(properties) : [] }
+              ? {
+                validFields: properties && typeof properties === "object" && !Array.isArray(properties) ? Object.keys(properties) : [],
+                // Nested change sets need operation-specific required fields;
+                // a list of top-level keys alone cannot correct that input.
+                ...(inputSchema === undefined ? {} : { inputSchema }),
+              }
               : {};
             this.options.audit.append("tool.completed", {
               toolCallId: call.id,

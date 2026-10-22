@@ -30,13 +30,19 @@ function screen(overrides = {}) {
   } }));
 }
 
-test("successful coder workflow without a PR does not claim changes or tests succeeded", () => {
+test("successful operational workflow points to actual test evidence without requiring a PR", () => {
   const html = screen();
   assert.match(html, /Coder run/);
-  assert.match(html, /no pull request to show/);
-  assert.match(html, /Check the reported results and run log/);
+  assert.match(html, /completed work, test coverage and failures/);
+  assert.match(html, /No pull request was created/);
   assert.match(html, /Step details are unavailable/);
   assert.doesNotMatch(html, /Changing code|change is ready|tests passed|Waiting for GitHub|Cancel run/);
+});
+
+test("a coding request without a PR keeps the unconfirmed change wording", () => {
+  const html = screen({ objective: "Fix the TODO in the about page" });
+  assert.match(html, /No pull request was created/);
+  assert.doesNotMatch(html, /tests passed|change is ready|reported test execution results/);
 });
 
 test("a PR is reviewable evidence, not proof of a verified objective", () => {

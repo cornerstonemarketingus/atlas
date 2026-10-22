@@ -8,8 +8,8 @@ const PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
  * as returned by GitHub's list-check-runs-for-a-ref API.
  *
  * Returns one of:
- * - "merge-now": policy allows it outright ("none"), or every check that
- *   has reported for "ci-gated" completed successfully.
+ * - "merge-now": every reported check passed under an automatic policy.
+ *   The legacy "none" policy also requires CI; it never bypasses checks.
  * - "wait": ci-gated, and either no checks have reported yet or some are
  *   still running — worth polling again. The caller is responsible for
  *   giving up after its own timeout; this function has no notion of
@@ -19,13 +19,13 @@ const PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
  *   ci-gated check actually failed.
  */
 export function decideMergeAction(policy, checkRuns) {
-  if (policy === "none") return "merge-now";
-  if (policy !== "ci-gated") return "hold";
+  if (policy !== "ci-gated" && policy !== "none") return "hold";
 
   if (checkRuns.length === 0) return "wait";
   if (checkRuns.some((run) => run.status !== "completed")) return "wait";
   if (checkRuns.some((run) => FAILURE_CONCLUSIONS.has(run.conclusion))) return "hold";
-  if (checkRuns.every((run) => PASSING_CONCLUSIONS.has(run.conclusion))) return "merge-now";
+  if (checkRuns.every((run) => PASSING_CONCLUSIONS.has(run.conclusion))
+      && checkRuns.some((run) => run.conclusion === "success")) return "merge-now";
   // A completed run with some other conclusion (e.g. "startup_failure") —
   // don't guess; treat anything unrecognized as not-passing.
   return "hold";
@@ -43,7 +43,8 @@ export function decideMergeAction(policy, checkRuns) {
 export function autoMergeAllowed(policy, verification) {
   if (policy !== "none" && policy !== "ci-gated") return { allowed: false, reason: "The merge policy is manual." };
   const status = verification?.status ?? "unverified";
-  if (status === "passed") return { allowed: true, reason: "Verification passed." };
+  // `verified` is the CLI report status; accept older `passed` receipts too.
+  if (status === "verified" || status === "passed") return { allowed: true, reason: "Verification passed." };
   if (status === "regressed") {
     return { allowed: false, reason: `verification found ${verification.newFailures?.length ?? 0} failure(s) this change introduced. ${verification.message ?? ""}`.trim() };
   }

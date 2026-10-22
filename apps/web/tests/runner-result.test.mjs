@@ -34,7 +34,7 @@ test("payload is bounded and caller cannot select tenant", () => {
 
 test("a green workflow without a PR never asserts successful changes or validation", () => {
   const text = statusLine({ mode: "coder", status: "succeeded" });
-  assert.match(text, /no pull request/);
+  assert.match(text, /No pull request was created/);
   assert.doesNotMatch(text, /nothing.*changed|passed validation|change completed/i);
   assert.match(statusLine({ mode: "coder", status: "succeeded", pullRequest: { url: "https://github.com/a/b/pull/1" } }), /validation evidence/);
   assert.match(statusLine({ status: "failed" }), /failing step/);

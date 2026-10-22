@@ -113,3 +113,17 @@ test("falls back to a readable line for an unrecognised status", () => {
   const summary = renderRunSummary({ task, status: { status: "weird-new-state" } });
   assert.match(summary, /❔ weird-new-state/u);
 });
+
+test("test-only execution reports observed failures and scope without inventing an edit or repair", () => {
+  const summary = renderRunSummary({ task, status: { status: "completed", message: "Requested test execution completed." }, code: {
+    edits: [], turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0,
+    verification: { status: "failed", attempts: 1, checks: ["test:apps/web:test"], newFailures: ["assertion failed"], message: "Executed 1/1 declared package test suite(s): 0 passed, 1 failed." },
+    execution: { kind: "tests", checks: [{ caseId: "test:apps/web:test", outcome: "failed", command: { exitCode: 1 } }], limitations: ["Only declared package test scripts were run."] },
+  } });
+  assert.match(summary, /### Test execution/);
+  assert.match(summary, /Reported test failures/);
+  assert.match(summary, /test:apps\/web:test`: failed; exit 1/);
+  assert.match(summary, /Only declared package test scripts/);
+  assert.match(summary, /Model turns \| 0/);
+  assert.doesNotMatch(summary, /Repair attempts|introduced by this change|Files changed/);
+});
