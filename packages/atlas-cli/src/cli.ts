@@ -815,6 +815,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     registry,
     tools: COMPACT_CODER_MODEL_TOOLS,
     audit,
+    recoverTextualToolCalls: true,
     maximumTurns,
     // Several tool calls per turn is normal (read two files, then search);
     // a fixed 16 stopped runs that still had turns left ("Tool-call limit
