@@ -6,6 +6,7 @@ import { InMemorySessionAuditLog } from "../src/infrastructure/in-memory-session
 import { MockModelProvider } from "../src/infrastructure/mock-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "../src/infrastructure/policy-enforced-read-only-tool-registry.js";
 import type { ModelProviderMetadata, ModelResponse, ModelToolDefinition } from "../src/model/model-provider.js";
+import { ModelProviderError } from "../src/model/model-provider.js";
 
 const metadata: ModelProviderMetadata = {
   id: "mock", displayName: "Mock",
@@ -16,6 +17,27 @@ const tool: ModelToolDefinition = {
   description: "Inspect.",
   inputSchema: { type: "object", additionalProperties: false },
 };
+
+for (const scenario of ["valid-call", "unexecuted-final", "repeated", "last-turn", "approval"] as const) {
+  test(`provider tool rejection gets one bounded correction: ${scenario}`, async () => {
+    let requests = 0;
+    const rejected = () => new ModelProviderError({ message: "Provider rejected an invalid tool call.", code: "tool-call-rejected", providerId: "mock", retryable: false });
+    const provider = { metadata, async complete() {
+      requests++;
+      if (requests === 1 || scenario === "repeated") throw rejected();
+      if (requests === 2 && scenario !== "unexecuted-final") return response("call", [{ type: "tool-call", id: "real-call", name: tool.name, arguments: {} }], "tool-calls");
+      return response("done", [{ type: "text", text: "Done" }], "stop");
+    } };
+    const audit = new InMemorySessionAuditLog();
+    const result = await new ProviderReadOnlyToolAgent({ provider, model: "test", registry: registry(scenario === "approval" ? "ask" : "allow"), tools: [tool], audit,
+      maximumTurns: scenario === "last-turn" ? 1 : 8 }).run({ sessionId: "rejected", objective: "Inspect", evidence: [], scope: { kind: "global" }, context: { repositoryId: "atlas" } });
+    assert.equal(result.status, scenario === "valid-call" ? "completed" : scenario === "approval" ? "approval-required" : scenario === "repeated" || scenario === "last-turn" ? "failed" : "blocked");
+    assert.equal(requests, scenario === "last-turn" ? 1 : scenario === "valid-call" ? 3 : 2);
+    assert.equal(result.trace.turns, requests);
+    assert.equal(result.trace.toolCalls, scenario === "valid-call" || scenario === "approval" ? 1 : 0);
+    if (scenario !== "valid-call") assert.ok(!audit.snapshot().some(e => e.type === "session.completed"));
+  });
+}
 
 test("coder corrects textual tool JSON once and executes only a subsequent structured call", async () => {
   const text = '```json\n{"name":"repository.inspect","arguments":{}}\n```';

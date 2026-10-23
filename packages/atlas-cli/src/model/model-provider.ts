@@ -126,6 +126,7 @@ export type ModelProviderErrorCode =
   | "authentication"
   | "rate-limit"
   | "invalid-request"
+  | "tool-call-rejected"
   | "model-unavailable"
   | "cancelled"
   | "provider-failure";

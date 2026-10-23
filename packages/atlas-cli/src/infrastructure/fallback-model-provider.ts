@@ -73,7 +73,7 @@ export class FallbackModelProvider implements ModelProvider {
           if (!(error instanceof ModelProviderError)) throw error;
           failures.push(`${route.provider.metadata.id}/${route.model}: ${error.code}`);
           last = error;
-          if (error.code === "cancelled" || error.code === "invalid-request") throw chained(error, failures);
+          if (error.code === "cancelled" || error.code === "invalid-request" || error.code === "tool-call-rejected") throw chained(error, failures);
           if (isOutOfCapacity(error)) soonestMs = Math.min(soonestMs, error.retryAfterMs ?? UNSTATED_CAPACITY_WAIT_MS);
           else allOutOfCapacity = false;
         }

@@ -127,7 +127,11 @@ export class GroqModelProvider implements ModelProvider {
   }
 
   async #send(validated: ModelRequest, options: { readonly signal?: AbortSignal }): Promise<ModelResponse> {
-    const payload = buildOpenAiChatPayload(validated);
+    // Match the local chat path: small Qwen3 models otherwise spend their
+    // entire bounded generation on private reasoning instead of a tool call.
+    const localSmallQwen = ["127.0.0.1", "localhost", "[::1]"].includes(this.#endpoint.hostname)
+      && /^qwen3:(0\.6b|1\.7b)$/iu.test(validated.model);
+    const payload = { ...buildOpenAiChatPayload(validated), ...(localSmallQwen ? { reasoning_effort: "none" } : {}) };
     const body = JSON.stringify(payload);
     await this.#waitForTokenWindow(body, options.signal);
     const timeoutSignal = AbortSignal.timeout(this.#timeoutMs);
@@ -173,6 +177,14 @@ export class GroqModelProvider implements ModelProvider {
         ? recoverRejectedToolCall(text, validated.model, this.metadata.id)
         : undefined;
       if (recovered !== undefined) return recovered;
+      if (response.status === 400) {
+        let code: unknown;
+        try { code = JSON.parse(text)?.error?.code; } catch { /* not a recognized rejection */ }
+        if (code === "tool_use_failed") throw new ModelProviderError({
+          message: "The provider rejected an invalid tool call; no tool was executed.",
+          code: "tool-call-rejected", providerId: this.metadata.id, retryable: false,
+        });
+      }
 
       const allowance = (response.status === 413 || response.status === 429) ? statedAllowance(text, validated) : undefined;
 

@@ -6,6 +6,23 @@ import { GroqModelProvider } from "../src/infrastructure/groq-model-provider.js"
 const model: ModelCapabilities = { model: "llama-3.3-70b-versatile", contextWindowTokens: 128_000, maxOutputTokens: 8_192, supportsTools: true, supportsJson: true, supportsStreaming: false };
 const request: ModelRequest = { model: "llama-3.3-70b-versatile", messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }] };
 
+test("small loopback Qwen gets the existing chat reasoning setting without changing remote or larger models", async () => {
+  for (const [endpoint, name, expected] of [["http://127.0.0.1:11434/v1/chat/completions", "qwen3:1.7b", "none"],
+    ["http://localhost:11434/v1/chat/completions", "qwen3:0.6b", "none"],
+    ["https://host.example/v1/chat/completions", "qwen3:1.7b", undefined],
+    ["http://127.0.0.1:11434/v1/chat/completions", "qwen3:4b", undefined]] as const) {
+    let body: Record<string, unknown> = {};
+    const provider = new GroqModelProvider({ apiKey: "fixture", endpoint, models: [{ ...model, model: name }],
+      fetchImplementation: fakeFetch((_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return Response.json({ id: "fixture", model: name, choices: [{ message: { content: "ready" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+      }),
+    });
+    await provider.complete({ ...request, model: name });
+    assert.equal(body["reasoning_effort"], expected);
+  }
+});
+
 test("transport timeouts remain distinguishable from generic failures without exposing request text", async () => {
   const keepAlive = setTimeout(() => {}, 1000);
   try {
@@ -353,4 +370,14 @@ test("a refusal that cannot be refitted, or that names no limit, is raised as a 
   await assert.rejects(tiny.complete({ ...request, maxOutputTokens: 4_096 }), (error: unknown) =>
     error instanceof ModelProviderError && error.code === "provider-failure" && !error.retryable && error.retryAfterMs === undefined && /capacity/.test(error.message));
   assert.equal(calls, 1);
+});
+
+test("unparseable rejected tool calls are classified without exposing provider text", async () => {
+  for (const code of ["tool_use_failed", "invalid_request_error"]) {
+    const provider = new GroqModelProvider({ apiKey: "key", models: [model], fetchImplementation: fakeFetch(() =>
+      new Response(JSON.stringify({ error: { code, message: "PRIVATE_SENTINEL", failed_generation: "PRIVATE_SENTINEL" } }), { status: 400 })) });
+    await assert.rejects(provider.complete(request), (error: unknown) => error instanceof ModelProviderError
+      && error.code === (code === "tool_use_failed" ? "tool-call-rejected" : "provider-failure")
+      && !error.retryable && !error.message.includes("PRIVATE_SENTINEL"));
+  }
 });

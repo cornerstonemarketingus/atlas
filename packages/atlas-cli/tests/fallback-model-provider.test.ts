@@ -87,3 +87,12 @@ test("waiting for capacity honours cancellation", async () => {
     controller.abort();
     await assert.rejects(pending, (error: unknown) => error instanceof ModelProviderError && error.code === "cancelled");
 });
+
+test("a rejected tool call stays on its route and never waits for capacity", async () => {
+  const seen: ModelRequest[] = [];
+  const failure = new ModelProviderError({ message: "rejected tool", code: "tool-call-rejected", providerId: "one", retryable: false });
+  const chain = new FallbackModelProvider([{ provider: provider("one", "primary", failure, seen), model: "primary" },
+    { provider: provider("two", "backup", response("two", "backup"), seen), model: "backup" }], { sleep: async () => { assert.fail("must not wait"); } });
+  await assert.rejects(chain.complete(request), (error: unknown) => error instanceof ModelProviderError && error.code === "tool-call-rejected");
+  assert.equal(seen.length, 1);
+});
