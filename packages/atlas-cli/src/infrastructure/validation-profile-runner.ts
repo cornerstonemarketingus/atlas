@@ -108,13 +108,20 @@ function toObservation(
   } as const;
   if (result.cancelled) return { ...base, outcome: "cancelled", diagnostics: [diagnostic("command-cancelled", "Validation command was cancelled.")] };
   if (result.timedOut) return { ...base, outcome: "execution-failed", diagnostics: [diagnostic("command-timed-out", "Validation command timed out.")] };
-  // Long output is not a failure: the runner keeps its start and end (the
-  // omission is marked in the text) and the exit code decides. No extra
-  // diagnostic for it, since the comparator would count one as a new failure.
+  // Successful exit remains authoritative even when verbose output is clipped.
   if (result.exitCode === 0) return { ...base, outcome: "passed", diagnostics: [] };
   const output = boundedSanitizedOutput(result, maxOutputCharacters);
+  // A failed command's omitted middle may contain the actual failing tests.
+  // Comparing only its changing tail can invent regressions (or hide them).
+  // Treat failure-evidence capture as inconclusive, never as permission to
+  // repair code or accept the change. Keep the bounded redacted tail for review.
+  if (result.truncated || output.truncated) {
+    const diagnostics = [diagnostic("command-output-incomplete", "Validation failed, but its failure output was truncated; baseline and post-change failures cannot be compared reliably.")];
+    if (output.text.length > 0) diagnostics.push(diagnostic("command-output", output.text, "warning"));
+    return { ...base, outcome: "execution-failed", diagnostics };
+  }
   const diagnostics: ValidationDiagnostic[] = [diagnostic("command-exit-nonzero", `Validation command exited with code ${result.exitCode ?? "unknown"}.`)];
-  if (output.length > 0) diagnostics.push(diagnostic("command-output", output, "warning"));
+  if (output.text.length > 0) diagnostics.push(diagnostic("command-output", output.text, "warning"));
   return { ...base, outcome: "failed", diagnostics };
 }
 
@@ -122,14 +129,13 @@ function diagnostic(code: string, message: string, severity: DiagnosticSeverity 
   return { severity, code, message };
 }
 
-function boundedSanitizedOutput(result: SafeCommandResult, maxCharacters: number): string {
+function boundedSanitizedOutput(result: SafeCommandResult, maxCharacters: number): { text: string; truncated: boolean } {
   const combined = [result.stderr, result.stdout].filter((value) => value.length > 0).join("\n");
   const redacted = combined
     .replace(/\b(authorization\s*:\s*bearer\s+)[^\s]+/giu, "$1[REDACTED]")
     .replace(/\b(api[_-]?key|token|password|secret)\s*([=:])\s*[^\s]+/giu, "$1$2[REDACTED]");
-  if (redacted.length <= maxCharacters) return redacted;
-  // A failing run explains itself at the end (the summary, the assertion), so keep that end.
-  return `…${redacted.slice(redacted.length - maxCharacters)}`;
+  if (redacted.length <= maxCharacters) return { text: redacted, truncated: false };
+  return { text: `…${redacted.slice(redacted.length - maxCharacters)}`, truncated: true };
 }
 
 function validateRequest(request: ValidationProfileRunRequest, maxProfiles: number, maxAttempts: number): void {
