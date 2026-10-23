@@ -15,3 +15,6 @@
 .hosted-sites .site-status.ready{color:var(--ws-accent)}
 .hosted-sites .site-status.failed{color:#ff8d82}
 .hosted-sites .site-no-preview{opacity:.75}
+.hosted-sites .request-history-actions{margin-top:8px}
+.hosted-sites .request-history-actions a{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}
+.hosted-sites .request-history-body{max-height:420px}
