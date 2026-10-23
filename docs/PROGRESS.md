@@ -1102,6 +1102,12 @@ Next: after #406 merges, open a protected workflow PR for a daily `--shard day/7
 
 PR449 integration: retained the complete project-creation investigation and the concurrent free-compute/eval/chat-release history. The merged customer-event projection keeps PR437's validated model authorship alongside the separate project-preview correction. Current main cb979bd includes externally merged cloud mission work; no migrations were applied in this workstream. Next: validate the integrated creation flow and exact-head CI, obtain configured projection review, then verify deployed customer creation before any production-fixed claim.
 
+## 2026-10-22 — recent implementation reconciliation
+
+Reconciled remote main cb979bd against the older primary checkout without changing its concurrent uncommitted work. See RECONCILIATION-2026-10-22.md for integrated milestones and remaining P0–P3 gates. Cloud mission intake now rejects stalled uploads after 15 seconds and does not wait indefinitely for oversized-body cancellation. Both real-stream regressions fail against baseline; 31 focused mission/request/customer-event tests pass. No deployment or migration claimed. Recent coder run 39874868449 failed execution and result delivery; private trace diagnosis remains required before a loop repair.
+
+Next: finish affected checks and review this intake repair; continue P0 inference/live coding diagnosis using the existing owners and trace fingerprints. Cline-specific attribution awaits a branch or PR identifier.
+
 ## 2026-10-22 — coder evidence survives interrupted execution
 
 A failed hosted coder left no audit artifact because the CLI flushed only after session completion. The existing redacted JSONL store now receives incremental writes during execution, with serialized coalesced flushes, a confirmed offset and latched write errors. Finalization flushes on success and exceptions without duplicating events. A real CLI blocked on loopback model HTTP leaves a readable partial trace after forced termination; the test fails against baseline CLI wiring. Focused tests pass 14/14; full CLI suite passes 617, skips 8, fails 0 (625 total); TypeScript build passes.
@@ -1109,9 +1115,19 @@ A failed hosted coder left no audit artifact because the CLI flushed only after 
 A bounded real Ollama qwen2.5-coder:1.5b fixture run exposed the next usability defect: a textual JSON tool request was returned as completed with zero edits, leaving the requested fix undone. No local coding acceptance claimed. Next: recover or reject textual tool requests within existing turn/token limits, then repeat the disposable local task and retain independent checks. Existing launch and provider work stays with its current PR owners.
 
 
+## 2026-10-22 — recover textual coder tool requests without false completion
+
+Real Ollama qualification showed qwen2.5-coder:1.5b returning a textual JSON tool request as a final answer, previously completed with no edits. Coder mode now recognizes offered textual tool requests, asks once for structured calls under the existing ledger/turn limits, and blocks repeated requests or a final answer without a subsequent tool attempt. Text never executes. Read-only explanations retain existing behavior; actual calls retain registration, scope and approval checks. Both real CLI regressions fail against the original agent; recovery produces independently checked file changes and verified repository checks in the HTTP fixture. Focused tests pass 35/35; full CLI suite passes 625, skips 8, fails 0 (633 total); TypeScript build passes.
+
+The real small-model repeat now blocks honestly after two responses; the independent arithmetic check still fails. The installed Qwen3 1.7B variant exceeded its existing 60-second request deadline with no tool call. No model or hardware qualification, production deployment, or P0 acceptance claimed. This slice stacks on the live-audit PR451. Mission PR450 CI passed; existing rollout and owner merge gates remain.
+
+Next: review/integrate the audit and textual-tool repairs, qualify a tool-capable model on the intended host, and repeat the unmet coding objective with independent checks; continue existing launch PR441 and provider ownership rather than duplicating them.
+
 Receipt repair #447 validation: production build/typecheck/lint passed. Local
 Windows web suite:686 total,680 passed,1 unchanged sandbox executable-bit
 expectation failed,5 optional browser skips. CI39686447928 web and every job
 except Windows local-control passed; that job timed out waiting15s for daemon
 startup. No local-control source changed. Preserved concurrent main/mission
 progress and requesting fresh CI on the integrated head. Live acceptance pending.
+
+2026-10-22 | [PR #453](https://github.com/cornerstonemarketingus/atlas/pull/453) | Live rescue | Run 39874868449 reached the 900-second coder deadline after 24 model requests and 23 tools (6 failed); no audit artifact survived. Its job workflow_name confirms the task-title mismatch fixed by #447, now merged and deployed in 39898073372. #451 integration preserves both handoff entries and passes the CLI build plus four audit tests; queued for CI-gated merge. #452 Windows daemon startup timeout rerun requested. Reporting now logs only locally constructed HTTP/transport failure details and keeps arbitrary exceptions private, without retrying task execution. | Runner/local tests: 98 passed, 1 platform skip; actual reporter-process regression fails when the old generic catch is restored. | Coder completion is not confirmed; audit and textual-tool fixes still require integration and renewed live acceptance. No provider limit or execution deadline was increased.

@@ -17,6 +17,57 @@ const tool: ModelToolDefinition = {
   inputSchema: { type: "object", additionalProperties: false },
 };
 
+test("coder corrects textual tool JSON once and executes only a subsequent structured call", async () => {
+  const text = '```json\n{"name":"repository.inspect","arguments":{}}\n```';
+  const provider = new MockModelProvider({ metadata, responses: [
+    response("text", [{ type: "text", text }], "stop"),
+    response("call", [{ type: "tool-call", id: "real-call", name: tool.name, arguments: {} }], "tool-calls"),
+    response("done", [{ type: "text", text: "Inspected the repository." }], "stop"),
+  ] });
+  const audit = new InMemorySessionAuditLog();
+  const result = await new ProviderReadOnlyToolAgent({ provider, model: "test", registry: registry("allow"), tools: [tool], audit, recoverTextualToolCalls: true }).run({
+    sessionId: "textual", objective: "Inspect", evidence: [], scope: { kind: "global" }, context: { repositoryId: "atlas" },
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(result.trace.turns, 3);
+  assert.equal(result.trace.usage.outputTokens, 9, "correction spends from the same usage ledger");
+  assert.equal(result.trace.toolCalls, 1);
+  assert.match(JSON.stringify(provider.requests[1]?.messages.at(-1)), /structured tool_calls/);
+  const calls = audit.snapshot().filter(e => e.type === "tool.requested");
+  assert.equal(calls.length, 1);
+  assert.ok("toolCallId" in calls[0]!.payload && calls[0]!.payload.toolCallId === "real-call");
+});
+
+for (const scenario of ["repeated", "unexecuted-final", "last-turn", "approval"] as const) {
+  test(`textual tool correction remains bounded and respects policy: ${scenario}`, async () => {
+    const text = JSON.stringify({ tool_calls: [{ function: { name: tool.name, arguments: "{}" } }] });
+    const next = scenario === "approval"
+      ? response("next", [{ type: "tool-call", id: "requires-approval", name: tool.name, arguments: {} }], "tool-calls")
+      : response("next", [{ type: "text", text: scenario === "repeated" ? text : "Done" }], "stop");
+    const provider = new MockModelProvider({ metadata, responses: [response("first", [{ type: "text", text }], "stop"), next] });
+    const audit = new InMemorySessionAuditLog();
+    const result = await new ProviderReadOnlyToolAgent({ provider, model: "test", registry: registry("ask"), tools: [tool], audit,
+      maximumTurns: scenario === "last-turn" ? 1 : 8, recoverTextualToolCalls: true }).run({
+      sessionId: "bounded-text", objective: "Inspect", evidence: [], scope: { kind: "global" }, context: { repositoryId: "atlas" },
+    });
+    assert.equal(result.status, scenario === "approval" ? "approval-required" : "blocked");
+    assert.equal(provider.requests.length, scenario === "last-turn" ? 1 : 2);
+    assert.ok(!audit.snapshot().some(e => e.type === "session.completed"));
+  });
+}
+
+test("read-only explanations and ordinary coder JSON are not textual tool execution", async () => {
+  for (const [enabled, text] of [[false, '{"name":"repository.inspect","arguments":{}}'], [true, '{"name":"report","count":2}']] as const) {
+    const provider = new MockModelProvider({ metadata, responses: [response("explanation", [{ type: "text", text }], "stop")] });
+    const result = await new ProviderReadOnlyToolAgent({ provider, model: "test", registry: registry("allow"), tools: [tool],
+      audit: new InMemorySessionAuditLog(), recoverTextualToolCalls: enabled }).run({
+      sessionId: "explanation", objective: "Explain", evidence: [], scope: { kind: "global" }, context: { repositoryId: "atlas" },
+    });
+    assert.equal(result.status, "completed");
+    assert.equal(result.trace.toolCalls, 0);
+  }
+});
+
 test("bounds outgoing read context but keeps full audit evidence", async () => {
   const provider = new MockModelProvider({ metadata, responses: [
     response("one", [{ type: "tool-call", id: "read", name: tool.name, arguments: {} }], "tool-calls"),
