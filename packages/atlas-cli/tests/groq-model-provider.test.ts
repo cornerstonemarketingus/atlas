@@ -6,6 +6,23 @@ import { GroqModelProvider } from "../src/infrastructure/groq-model-provider.js"
 const model: ModelCapabilities = { model: "llama-3.3-70b-versatile", contextWindowTokens: 128_000, maxOutputTokens: 8_192, supportsTools: true, supportsJson: true, supportsStreaming: false };
 const request: ModelRequest = { model: "llama-3.3-70b-versatile", messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }] };
 
+test("transport timeouts remain distinguishable from generic failures without exposing request text", async () => {
+  const keepAlive = setTimeout(() => {}, 1000);
+  try {
+    const provider = new GroqModelProvider({ apiKey: "fixture", models: [model], timeoutMs: 15,
+      fetchImplementation: (async (_input, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("PRIVATE_TRANSPORT_TEXT")), { once: true });
+      })) as typeof fetch,
+    });
+    await assert.rejects(provider.complete(request), (error: unknown) => {
+      assert.ok(error instanceof ModelProviderError);
+      assert.match(error.message, /timed out after 15 ms/u);
+      assert.doesNotMatch(error.message, /PRIVATE_TRANSPORT_TEXT/u);
+      return true;
+    });
+  } finally { clearTimeout(keepAlive); }
+});
+
 test("provider refusal bodies never enter errors; capacity and retry timing remain actionable", async () => {
   for (const status of [400, 401, 403, 413, 429, 503]) {
     const provider = new GroqModelProvider({ apiKey: "test-key", models: [model],

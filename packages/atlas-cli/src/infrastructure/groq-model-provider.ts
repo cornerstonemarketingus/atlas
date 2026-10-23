@@ -144,7 +144,7 @@ export class GroqModelProvider implements ModelProvider {
     } catch (cause) {
       const cancelled = options.signal?.aborted === true;
       throw new ModelProviderError({
-        message: cancelled ? "Groq request cancelled" : "Groq request failed",
+        message: cancelled ? "Groq request cancelled" : timeoutSignal.aborted ? `Groq request timed out after ${this.#timeoutMs} ms` : "Groq request failed",
         code: cancelled ? "cancelled" : "provider-failure",
         providerId: this.metadata.id,
         retryable: !cancelled,
