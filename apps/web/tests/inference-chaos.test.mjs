@@ -313,7 +313,7 @@ test("one attempt budget spans retry, same-provider fallback and cross-provider 
   assert.ok(more.reduce((sum, p) => sum + p.calls, 0) > 3, "without a budget the same route really does multiply");
 });
 
-test("an account with no credit or a model that is gone routes to the next provider; a rejected key is still shown to the owner", async () => {
+test("an account with no credit, a model that is gone or a rejected key routes to the next provider", async () => {
   for (const [name, status] of [["no credit", 402], ["model gone", 404]]) {
     const w = world();
     const bad = w.provider("https://bad.test", { behavior: () => new Response(JSON.stringify({ error: { message: name } }), { status }) });
@@ -324,7 +324,9 @@ test("an account with no credit or a model that is gone routes to the next provi
   const key = w.provider("https://key.test", { behavior: () => new Response("invalid api key", { status: 401 }) });
   const good = w.provider("https://good.test", {});
   const result = await ask(w, w.chain([{ origin: key.origin, model: "m", ungoverned: true }, { origin: good.origin, model: "g", ungoverned: true }]));
-  assert.ok(result.error && good.calls === 0, "a wrong credential is a setup error, not something to hide behind a fallback");
+  // The owner asked for any refusal to bounce to another provider; the rejected key is still logged.
+  assert.match(result.reply, /good\.test/u, "a wrong credential on one provider does not stop the reply");
+  assert.equal(key.calls, 1, "a rejected key is not retried");
 });
 
 test("concurrent streams on a cold model do not queue behind each other's generation", async () => {

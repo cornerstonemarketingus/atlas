@@ -457,3 +457,38 @@ test("the daemon service is off by default and makes no request until configured
   assert.deepEqual(parseMonthlyCapUsd("-3"), { capMicroUsd: 0, valid: false });
   assert.deepEqual(parseMonthlyCapUsd("lots"), { capMicroUsd: 0, valid: false });
 });
+
+test("free providers (Atlas Nodes) run without RunPod, come first beside it, and ignore the GPU cap", async t => {
+  const f = await fixture(t);
+  let calls = 0;
+  const fetchImpl = async (...args) => { calls += 1; return fetch(...args); };
+  const provisioned = [];
+  // A $0 provider that takes only jobs marked `free`, like a node with the tool.
+  const free = {
+    name: "free-node",
+    async estimate(job) { return job.free ? { gpuType: "node", estHourlyUsd: 0, estMinutes: 1 } : null; },
+    async provision({ tags }) { provisioned.push(tags); return { id: `free-${provisioned.length}`, tags }; },
+    async status() { return { state: "running" }; },
+    async terminate() { return { terminated: true, billedMicroUsd: 0 }; },
+    async listTagged() { return []; },
+  };
+  const base = { credentials: async (name) => (name === "ATLAS_RUNPOD_API_KEY" ? API_KEY : null), store: f.store, leaseDb: f.leaseFile, fetchImpl, clock: f.clock, freeProviders: [free] };
+
+  const nodesOnly = f.track(await createComputeService({ ...base, env: {} }));
+  assert.equal(nodesOnly.enabled, true); assert.equal(nodesOnly.provider, null);
+  assert.match(nodesOnly.reason, /Atlas Nodes only/u);
+  const started = await nodesOnly.manager.start({ tenantId: "owner", taskId: f.task().id, job: { ...renderJob("free-1"), free: true } });
+  assert.equal(started.lease.reservedMicroUsd, 0);
+  assert.equal(started.lease.provider, "free-node");
+  await nodesOnly.manager.finish("owner", started.lease.id);
+  nodesOnly.close();
+
+  // RunPod configured with the default cap of 0: the free job still runs, a job only RunPod can take is refused.
+  const both = f.track(await createComputeService({ ...base, env: { ATLAS_RUNPOD_ENDPOINT_ID: f.server.endpointId, ATLAS_RUNPOD_BASE_URL: f.server.baseUrl } }));
+  const second = await both.manager.start({ tenantId: "owner", taskId: f.task().id, job: { ...renderJob("free-2"), free: true } });
+  assert.equal(second.lease.provider, "free-node");
+  await both.manager.finish("owner", second.lease.id);
+  await assert.rejects(both.manager.start({ tenantId: "owner", taskId: f.task().id, job: renderJob("paid-1") }), { code: "GPU_SPENDING_OFF" });
+  assert.equal(calls, 0, "no request reaches RunPod while its cap is 0");
+  assert.equal(provisioned.length, 2);
+});

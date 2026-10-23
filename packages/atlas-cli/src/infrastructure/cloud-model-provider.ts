@@ -4,16 +4,29 @@ import { validateModelRequest } from "../model/model-contract-validation.js";
 import { buildOpenAiChatPayload, parseOpenAiChatResponse } from "./openai-compatible-chat-format.js";
 import { retryAfterHeaderMs } from "./rate-limit-timing.js";
 
+export type CloudProviderId = "openai" | "workers-ai" | "cerebras" | "gemini" | "openrouter" | "mistral";
+
+/** Chat-completions endpoint and display name per vendor; Workers AI's is per account. */
+const DESTINATIONS: Readonly<Record<Exclude<CloudProviderId, "workers-ai">, { readonly url: string; readonly name: string }>> = {
+  openai: { url: "https://api.openai.com/v1/chat/completions", name: "OpenAI" },
+  cerebras: { url: "https://api.cerebras.ai/v1/chat/completions", name: "Cerebras" },
+  gemini: { url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", name: "Google Gemini" },
+  openrouter: { url: "https://openrouter.ai/api/v1/chat/completions", name: "OpenRouter" },
+  mistral: { url: "https://api.mistral.ai/v1/chat/completions", name: "Mistral" },
+};
+
 /** Fixed vendor destinations: custom endpoints must use the separate compatible-server path. */
 export class CloudModelProvider implements ModelProvider {
   public readonly metadata: ModelProviderMetadata;
   private readonly endpoint: URL;
   private readonly fetcher: typeof fetch;
-  public constructor(private readonly options: { providerId: "openai" | "workers-ai"; apiKey: string; models: readonly ModelCapabilities[]; accountId?: string; fetchImplementation?: typeof fetch; timeoutMs?: number }) {
+  public constructor(private readonly options: { providerId: CloudProviderId; apiKey: string; models: readonly ModelCapabilities[]; accountId?: string; fetchImplementation?: typeof fetch; timeoutMs?: number }) {
     if (!options.apiKey.trim()) throw new TypeError("A cloud model credential is required.");
     if (options.providerId === "workers-ai" && !/^[a-f0-9]{32}$/iu.test(options.accountId ?? "")) throw new TypeError("Workers AI requires CLOUDFLARE_ACCOUNT_ID (32 hex characters).");
-    this.endpoint = new URL(options.providerId === "openai" ? "https://api.openai.com/v1/chat/completions" : "https://api.cloudflare.com/client/v4/accounts/" + options.accountId + "/ai/v1/chat/completions");
-    this.metadata = { id: options.providerId, displayName: options.providerId === "openai" ? "OpenAI" : "Workers AI", models: [...options.models] };
+    const destination = options.providerId === "workers-ai" ? undefined : DESTINATIONS[options.providerId];
+    if (options.providerId !== "workers-ai" && destination === undefined) throw new TypeError("Unknown cloud model provider.");
+    this.endpoint = new URL(destination?.url ?? "https://api.cloudflare.com/client/v4/accounts/" + options.accountId + "/ai/v1/chat/completions");
+    this.metadata = { id: options.providerId, displayName: destination?.name ?? "Workers AI", models: [...options.models] };
     this.fetcher = options.fetchImplementation ?? fetch;
   }
   public async complete(request: ModelRequest, options: ModelCompletionOptions = {}): Promise<ModelResponse> {

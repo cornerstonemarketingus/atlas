@@ -341,6 +341,7 @@ input,textarea,select{font-size:16px}
 .transcript{max-height:46vh}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}.lanes{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:6px}.lane{padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}.lane .actions{margin-top:6px}.lane .actions:empty{display:none}.command-bucket{margin:18px 0 6px;font-size:.85rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.steps-list{list-style:none;padding:0;margin:12px 0}.steps-list .step{padding:4px 0;color:var(--muted)}.steps-list .step.done{color:var(--text)}.steps-list .step.running{color:var(--accent);font-weight:600}.steps-list .step.failed{color:var(--danger,#b42318)}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}button.chip{cursor:pointer;background:none}.row{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.row .grow{flex:1 1 240px}.pair-form{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.check{display:flex;gap:8px;align-items:center;margin:10px 0}.check input{width:auto}.log{max-height:360px;overflow:auto;margin:8px 0 0;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
+.auto-limits{border:1px solid var(--line);border-radius:10px;padding:10px 12px 0;margin:0 0 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0 12px;min-width:0}.auto-limits legend{color:var(--muted);font-size:.85rem;padding:0 4px}#snapshot-receipt code,#build-snapshot details code{overflow-wrap:anywhere}
 
 .artifact-view{margin:12px 0}.artifact-view video,.artifact-view img{display:block;width:100%;max-height:70vh;border-radius:12px;background:#000}.artifact-canvas{display:block;width:100%;height:min(60vh,520px);border-radius:12px;touch-action:none;cursor:grab}
 `;
@@ -632,9 +633,33 @@ $('#improve-form').onsubmit=async e=>{e.preventDefault();const notice=$('#improv
 $('#improve-refresh').onclick=()=>loadImprove();
 
 /* Models: install, run and choose local models without configuring a server by hand. */
+/* Compute card (pure): GET /v1/compute in words. Amounts arrive in integer micro-dollars. */
+const usdText=m=>'$'+((Number(m)||0)/1000000).toFixed(2);
+function computeCardHtml(status,body){
+ if(status===403)return {state:'',html:'<p class="hint" id="compute-owner-only">Only the owner, on this computer, can see GPU compute and spend.</p>'};
+ const c=body&&body.compute;
+ if(status!==200||!c)return {state:'',html:'<div class="error"><strong>'+esc((body&&body.message)||('Compute status could not be read ('+status+').'))+'</strong></div>'};
+ const spent=c.spend?c.spend.totalMicroUsd:0;
+ const headline=c.gpuSpending?usdText(spent)+' of '+usdText(c.capMicroUsd)+' this month':'GPU spending off (cap '+usdText(c.capMicroUsd)+')';
+ let html='<p id="compute-headline"><strong>'+esc(headline)+'</strong></p><p class="hint">'+esc(c.reason||'')+'</p>';
+ if(c.spend&&c.gpuSpending)html+='<p class="hint">Billed '+esc(usdText(c.spend.settledMicroUsd))+', held for running jobs '+esc(usdText(c.spend.reservedMicroUsd))+', left '+esc(usdText(c.spend.remainingMicroUsd))+' ('+esc(c.spend.month)+', UTC).</p>';
+ if(c.nodes)html+='<p id="compute-nodes">Atlas Nodes: '+esc(String(c.nodes.count))+' set up, '+esc(String(c.nodes.approved))+' approved, '+esc(String(c.nodes.online))+' online. They cost $0 and are used first.</p>';
+ if(!c.gpuSpending)html+='<p class="hint">To allow rented GPUs, set ATLAS_RUNPOD_ENDPOINT_ID, store ATLAS_RUNPOD_API_KEY in the vault and set ATLAS_GPU_MONTHLY_CAP_USD above 0, then restart Atlas.</p>';
+ const leases=Array.isArray(c.leases)?c.leases:[];
+ if(leases.length)html+='<table class="table"><thead><tr><th>Started</th><th>Where</th><th>State</th><th>Held</th><th>Billed</th></tr></thead><tbody>'+leases.map(l=>'<tr><td>'+esc(when(l.createdAt))+'</td><td>'+esc(String(l.provider||''))+' '+esc(String(l.gpuType||''))+'</td><td>'+esc(String(l.state||''))+'</td><td>'+esc(usdText(l.reservedMicroUsd))+'</td><td>'+(l.actualMicroUsd==null?'—':esc(usdText(l.actualMicroUsd)))+'</td></tr>').join('')+'</tbody></table>';
+ else if(c.enabled)html+='<p class="empty">No GPU jobs yet.</p>';
+ return {state:c.gpuSpending?'on':'off',html};
+}
+/* Compute card (DOM) */
+async function loadCompute(){
+ const box=$('#compute-status');let status=0,body={};
+ try{const r=await api('/v1/compute');status=r.status;body=await r.json().catch(()=>({}))}catch(error){body={message:error.message}}
+ const {state,html}=computeCardHtml(status,body);box.innerHTML=html;$('#compute-state').innerHTML=state?pill(state==='on'?'spending on':'spending off'):'';
+}
 let modelsOverview=null;
 function gib(n){return n==null?'?':(Math.round(n*10)/10)+' GB'}
 async function loadModels(){
+ loadCompute().catch(()=>{});
  const machine=$('#models-machine'),planBox=$('#models-plan'),catalogBox=$('#models-catalog');
  try{
   const o=modelsOverview=await getJson('/v1/models/hosting');
@@ -801,9 +826,12 @@ function restoreResultHtml(status,body){
 /* Snapshot panel (DOM) */
 function clearSnapshotPanel(){const p=$('#build-snapshot');if(p){p.innerHTML='';p.hidden=true;delete p.dataset.key;delete p.dataset.busy}}
 /* Redrawn only when the project moves, so the 5-second Build refresh never closes the confirm step or wipes a result. */
-async function loadSnapshotPanel(v,{force=false,result=''}={}){
+/* The last restore result stays on the project page across the Build refresh (the project moves on after a restore). */
+let lastRestoreResult={id:'',html:''};
+async function loadSnapshotPanel(v,{force=false,result=lastRestoreResult.id===v.id?lastRestoreResult.html:''}={}){
  const panel=$('#build-snapshot'),key=v.id+'|'+v.state+'|'+(v.transitions||[]).length;
- if(panel.dataset.busy)return;
+ if(panel.dataset.busy&&(panel.dataset.key||'').startsWith(v.id+'|'))return;
+ delete panel.dataset.busy;
  if(!force&&panel.dataset.key===key)return;
  panel.dataset.key=key;panel.hidden=false;
  const [receipt,identity]=await Promise.all([
@@ -812,7 +840,7 @@ async function loadSnapshotPanel(v,{force=false,result=''}={}){
  if(panel.dataset.key!==key)return;
  if(receipt.error){panel.innerHTML='<h3 id="build-snapshot-heading">Saved snapshot</h3>'+problem(receipt.error);return}
  const draw=(confirming)=>{panel.innerHTML=snapshotPanelHtml({receipt,role:identity.role,confirming});if(result)$('#restore-result').innerHTML=result;
-  const start=panel.querySelector('#restore-start');if(start)start.onclick=()=>{result='';panel.dataset.busy='confirm';draw(true);$('#restore-go').focus()};
+  const start=panel.querySelector('#restore-start');if(start)start.onclick=()=>{result='';lastRestoreResult={id:'',html:''};panel.dataset.busy='confirm';draw(true);$('#restore-go').focus()};
   const cancel=panel.querySelector('#restore-cancel');if(cancel)cancel.onclick=()=>{delete panel.dataset.busy;draw(false);const b=$('#restore-start');if(b)b.focus()};
   const go=panel.querySelector('#restore-go');if(go)go.onclick=()=>restoreSnapshot(v,key)};
  draw(false);
@@ -825,10 +853,9 @@ async function restoreSnapshot(v,key){
  catch(error){body={message:error.message}}
  delete panel.dataset.busy;
  if(panel.dataset.key!==key)return;
- const result=restoreResultHtml(status,body);
+ const result=restoreResultHtml(status,body);lastRestoreResult={id:v.id,html:result};
  const fresh=body.project||v;
  await loadSnapshotPanel(fresh,{force:true,result});
- const box=$('#restore-result');if(box)box.focus?.();
  loadBuild().catch(()=>{});
 }
 
