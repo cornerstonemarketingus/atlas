@@ -238,6 +238,8 @@ export class AutomationService {
   #watchers = new Map();
   #setTimer;
   #clearTimer;
+  #scheduler = null;
+  #halted = false;
 
   /**
    * `onEvent(summary)` receives every signed GitHub delivery (after the
@@ -304,7 +306,66 @@ export class AutomationService {
     const automation = this.#require(id);
     const resumed = this.#store.update(id, { enabled: true, pausedReason: null, consecutiveFailures: 0, recoveryRequired: false, nextRunAt: this.#nextFor(automation.trigger) });
     this.#syncWatcher(resumed);
+    // The owner turning an automation back on after an emergency stop re-arms the schedule timer.
+    if (this.#halted && this.#scheduler?.stopped) this.#armScheduler();
+    this.#halted = false;
     return this.#view(resumed);
+  }
+
+  /**
+   * Runs tick() every `intervalMs` until stopScheduler() or halt(). Errors
+   * go to `onError`; the timer never keeps the process alive on its own.
+   */
+  startScheduler({ intervalMs = 30_000, onError = () => {}, setIntervalImpl = setInterval, clearIntervalImpl = clearInterval } = {}) {
+    this.stopScheduler();
+    this.#scheduler = { intervalMs, onError, setIntervalImpl, clearIntervalImpl, timer: null, stopped: true };
+    this.#armScheduler();
+  }
+
+  stopScheduler() {
+    const scheduler = this.#scheduler;
+    if (!scheduler || scheduler.stopped) return false;
+    scheduler.clearIntervalImpl(scheduler.timer);
+    scheduler.timer = null;
+    scheduler.stopped = true;
+    return true;
+  }
+
+  get schedulerRunning() { return Boolean(this.#scheduler && !this.#scheduler.stopped); }
+
+  /**
+   * Emergency stop: pauses every enabled automation with the reason (durable,
+   * so a restart does not re-arm them), closes every folder watcher and stops
+   * the schedule timer. Idempotent: a second call pauses nothing new. Each
+   * automation is re-enabled only by the owner resuming it.
+   */
+  halt(reason = "Paused by an emergency stop.") {
+    const paused = [];
+    const failed = [];
+    // Counted first: pausing an automation closes its watcher.
+    const watchersStopped = this.#watchers.size;
+    for (const automation of this.#store.list()) {
+      if (!automation.enabled) continue;
+      try {
+        this.pause(automation.id, reason);
+        paused.push(automation.id);
+      } catch (error) {
+        failed.push({ id: automation.id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    this.stopWatchers();
+    const schedulerStopped = this.stopScheduler();
+    this.#halted = true;
+    return { paused, failed, watchersStopped, schedulerStopped };
+  }
+
+  #armScheduler() {
+    const scheduler = this.#scheduler;
+    scheduler.timer = scheduler.setIntervalImpl(() => {
+      try { this.tick().catch((error) => scheduler.onError(error)); } catch (error) { scheduler.onError(error); }
+    }, scheduler.intervalMs);
+    scheduler.timer?.unref?.();
+    scheduler.stopped = false;
   }
 
   /** "Run now": always a new key, still subject to the overlap and daily guards. */

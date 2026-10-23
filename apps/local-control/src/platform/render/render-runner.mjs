@@ -145,6 +145,7 @@ export class RenderRunner {
   #options;
   #redact;
   #artifactStore;
+  #active = new Map();
 
   /**
    * @param options.container   the container sandbox option ({ runtime, cpus, memoryBytes, ... }); required to run anything
@@ -211,6 +212,22 @@ export class RenderRunner {
     }
     const capabilities = RENDER_TOOLS.filter((tool) => this.#images[tool]).map((tool) => RENDER_CAPABILITIES[tool]);
     return { available: capabilities.length > 0, reason: capabilities.length ? "container sandbox ready" : "no render image configured", capabilities };
+  }
+
+  /** Jobs whose container is running now. */
+  activeJobs() { return [...this.#active.keys()]; }
+
+  /**
+   * Emergency stop: removes the container of every job in flight; each ends
+   * with status "cancelled" and its outputs discarded. Returns the job ids.
+   */
+  cancelAll(reason = "emergency stop") {
+    const cancelled = [];
+    for (const [jobId, stop] of this.#active) {
+      stop(`cancelled: ${reason}`);
+      cancelled.push(jobId);
+    }
+    return { cancelled };
   }
 
   /** The `render` list for a worker registry capability declaration. */
@@ -292,6 +309,7 @@ export class RenderRunner {
       const finish = (value) => {
         if (settled) return;
         settled = true;
+        this.#active.delete(jobId);
         for (const timer of timers) { clearTimeout(timer); clearInterval(timer); }
         resolve({ ...value, stopReason });
       };
@@ -310,6 +328,7 @@ export class RenderRunner {
         finish({ exitCode: null, signal: null, spawnError: error.message });
         return;
       }
+      this.#active.set(jobId, stop);
       child.stdout?.on("data", (chunk) => stdout.push(chunk));
       child.stderr?.on("data", (chunk) => stderr.push(chunk));
       child.on("error", (error) => finish({ exitCode: null, signal: null, spawnError: error.message }));
@@ -366,7 +385,10 @@ export class RenderRunner {
     result.missing = job.outputs.filter((o) => !present.has(o));
     const outputBytes = [...present.values()].reduce((a, b) => a + b, 0);
 
-    if (outcome.stopReason === "timeout") {
+    if (outcome.stopReason?.startsWith("cancelled")) {
+      result.status = "cancelled";
+      result.error = `render ${outcome.stopReason}; container removed, outputs discarded`;
+    } else if (outcome.stopReason === "timeout") {
       result.status = "timed_out";
       result.error = `render exceeded ${job.timeoutMs} ms; container removed`;
     } else if (outcome.stopReason === "output_limit" || writtenBytes > job.maxOutputBytes || outputBytes > job.maxOutputBytes) {

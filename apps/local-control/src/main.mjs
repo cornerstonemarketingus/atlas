@@ -29,6 +29,7 @@ import { registerBusinessTools } from "./agent/tools/business-tools.mjs";
 import { createMissionEvidenceVerifier } from "./agent/mission-evidence.mjs";
 import { createLaneApplier } from "./agent/lane-apply.mjs";
 import { AutomationService, AutomationStore } from "./platform/automations/service.mjs";
+import { createEmergencyStop } from "./platform/emergency-stop.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
 import { ModelManager } from "./agent/models/manager.mjs";
 import { ModelPlanStore } from "./agent/models/hosting.mjs";
@@ -119,6 +120,12 @@ const modelManager = new ModelManager({ log: (line) => store.audit("model.hostin
 const modelPlan = new ModelPlanStore(join(dataDirectory, "model-plan.json"));
 // "Atlas, improve yourself": only when running from a git checkout of Atlas itself.
 const selfImprove = createDaemonSelfImprovement({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan });
+// One terminal controller per daemon, built on first use: the agent's terminal
+// tools and the command center's worker report see the same instance.
+let terminalControllerPromise = null;
+const terminalController = () => (terminalControllerPromise ??= buildTerminalController());
+// Set by buildToolRegistry: lets an emergency stop kill commands the agents started.
+let terminalTools = null;
 const toolRegistry = buildToolRegistry();
 const authorizedToolExecutor = buildAuthorizedToolExecutor(toolRegistry);
 const toolApprovals = {
@@ -138,20 +145,30 @@ setInterval(() => { try { memory.expire(); } catch { /* retried next hour */ } }
 // MCP servers the owner configured. Their tools join the same registry, so
 // they are denied until the owner allows the server's `mcp.<id>` capability.
 let mcpReport = [];
+// What the command center's worker report says about MCP: the live gateway once
+// it exists, otherwise why there is none.
+let mcpGateway = null;
+let mcpState = { available: false, reason: "No MCP servers are configured (ATLAS_MCP_SERVERS is empty).", servers: [] };
 try {
   const servers = parseMcpServers(process.env.ATLAS_MCP_SERVERS);
   if (servers.length) {
+    mcpState = { available: false, reason: "MCP servers are still connecting.", servers: [] };
     connectMcpServers({
       registry: toolRegistry,
       servers,
       audit: (event) => store.audit(event.type ?? "mcp", `${event.serverId}${event.tool ? `/${event.tool}` : ""} ${event.outcome ?? ""}${event.reason ? ` (${event.reason})` : ""}`.trim()),
-    }).then(({ report }) => {
+    }).then(({ gateway, report }) => {
+      mcpGateway = gateway;
       mcpReport = report;
       for (const entry of report) console.log(`MCP server ${entry.id}: ${entry.status}${entry.tools ? ` (${entry.tools.length} tools)` : entry.message ? ` — ${entry.message}` : ""}`);
-    }, (error) => { mcpReport = [{ id: "*", status: "failed", message: error.message }]; });
+    }, (error) => {
+      mcpReport = [{ id: "*", status: "failed", message: error.message }];
+      mcpState = { available: false, reason: `MCP servers failed to connect: ${error.message}`, servers: [] };
+    });
   }
 } catch (error) {
   mcpReport = [{ id: "*", status: "failed", message: error.message }];
+  mcpState = { available: false, reason: error.message, servers: [] };
   console.error(error.message);
 }
 // Atlas's world state: every kernel run and every tool call updates it.
@@ -209,11 +226,13 @@ const goalStore = new GoalStore(join(dataDirectory, "goals.sqlite"));
 const goals = new GoalService({ store: goalStore, missionService, world });
 const automations = new AutomationService({ store: automationStore, missionService, team, businessService, onEvent: (event) => goals.onEvent(event) });
 automations.startWatchers();
-const automationTimer = setInterval(() => {
-  automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`));
+// The schedule timer belongs to the automation service, so an emergency stop can halt it
+// (and resuming an automation re-arms it); goals keep their own timer.
+automations.startScheduler({ intervalMs: 30_000, onError: (error) => console.error(`Automation tick failed: ${error.message}`) });
+const goalTimer = setInterval(() => {
   try { goals.tick(); } catch (error) { console.error(`Goal tick failed: ${error.message}`); }
 }, 30_000);
-automationTimer.unref();
+goalTimer.unref();
 const recoveredMissions = missionService.recover();
 team.reattach();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
@@ -306,6 +325,26 @@ const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
 genesisCreation = new ProjectCreation({ genesis, executor: genesisExecutor, publisher: genesisPublisher });
 // Remote access stays customer-managed (your VPN or HTTPS proxy); Atlas itself keeps listening on loopback.
 const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, "remote-access.json") });
+const onApprovalDecided = async (approval) => {
+  await laneApplier.onApprovalDecided(approval);
+  const result = await genesisPublisher.onApprovalDecided(approval);
+  genesisCreation.recordApproval(approval, result);
+  return result;
+};
+// The command center's emergency stop reaches everything this daemon runs, not
+// only the platform task store (docs/atlas-os/EMERGENCY-STOP.md).
+const emergencyStop = createEmergencyStop({
+  store,
+  missionService,
+  runtime,
+  genesis,
+  automations,
+  render: renderRunner,
+  compute,
+  nodes: nodeService,
+  terminal: terminalTools,
+  onApprovalDecided,
+});
 const server = createLocalControlServer({
   store,
   token,
@@ -329,12 +368,7 @@ const server = createLocalControlServer({
   genesisPreviews,
   genesisPublisher,
   genesisCreation,
-  onApprovalDecided: async (approval) => {
-    await laneApplier.onApprovalDecided(approval);
-    const result = await genesisPublisher.onApprovalDecided(approval);
-    genesisCreation.recordApproval(approval, result);
-    return result;
-  },
+  onApprovalDecided,
   laneApplier,
   automations,
   world,
@@ -344,7 +378,13 @@ const server = createLocalControlServer({
   nodes: nodeService,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
-  platformServices: { family: innovation.registry, memory },
+  platformServices: {
+    family: innovation.registry,
+    memory,
+    onEmergencyStop: emergencyStop,
+    terminal: terminalController,
+    mcp: () => mcpGateway ?? mcpState,
+  },
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
@@ -402,7 +442,8 @@ function shutdown() {
     sessions.close();
     innovation.close();
     genesisStore.close();
-    clearInterval(automationTimer);
+    automations.stopScheduler();
+    clearInterval(goalTimer);
     automations.stopWatchers();
     automationStore.close();
     goalStore.close();
@@ -497,7 +538,7 @@ function buildToolRegistry() {
   registerDesktopTools(registry, { session: buildDesktopSession });
   // Terminal: the platform controller (no shell, allowlist, per-session
   // workspace). High-risk commands need an approval bound to the command.
-  registerTerminalTools(registry, { controller: buildTerminalController });
+  terminalTools = registerTerminalTools(registry, { controller: terminalController });
   registerInfrastructureTools(registry, { providers: buildInfrastructureProviders(), vault });
   return registry;
 }
