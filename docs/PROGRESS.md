@@ -1095,6 +1095,14 @@ A failed hosted coder left no audit artifact because the CLI flushed only after 
 A bounded real Ollama qwen2.5-coder:1.5b fixture run exposed the next usability defect: a textual JSON tool request was returned as completed with zero edits, leaving the requested fix undone. No local coding acceptance claimed. Next: recover or reject textual tool requests within existing turn/token limits, then repeat the disposable local task and retain independent checks. Existing launch and provider work stays with its current PR owners.
 
 
+## 2026-10-22 — recover textual coder tool requests without false completion
+
+Real Ollama qualification showed qwen2.5-coder:1.5b returning a textual JSON tool request as a final answer, previously completed with no edits. Coder mode now recognizes offered textual tool requests, asks once for structured calls under the existing ledger/turn limits, and blocks repeated requests or a final answer without a subsequent tool attempt. Text never executes. Read-only explanations retain existing behavior; actual calls retain registration, scope and approval checks. Both real CLI regressions fail against the original agent; recovery produces independently checked file changes and verified repository checks in the HTTP fixture. Focused tests pass 35/35; full CLI suite passes 625, skips 8, fails 0 (633 total); TypeScript build passes.
+
+The real small-model repeat now blocks honestly after two responses; the independent arithmetic check still fails. The installed Qwen3 1.7B variant exceeded its existing 60-second request deadline with no tool call. No model or hardware qualification, production deployment, or P0 acceptance claimed. This slice stacks on the live-audit PR451. Mission PR450 CI passed; existing rollout and owner merge gates remain.
+
+Next: review/integrate the audit and textual-tool repairs, qualify a tool-capable model on the intended host, and repeat the unmet coding objective with independent checks; continue existing launch PR441 and provider ownership rather than duplicating them.
+
 Receipt repair #447 validation: production build/typecheck/lint passed. Local
 Windows web suite:686 total,680 passed,1 unchanged sandbox executable-bit
 expectation failed,5 optional browser skips. CI39686447928 web and every job

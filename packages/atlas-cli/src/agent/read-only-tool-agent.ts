@@ -11,6 +11,8 @@ export interface ReadOnlyToolAgentOptions {
   readonly audit: SessionAuditLog;
   readonly maximumTurns?: number;
   readonly maximumToolCalls?: number;
+  /** Coder mode: correct one textual tool request; never execute JSON from text. */
+  readonly recoverTextualToolCalls?: boolean;
   readonly maximumToolResultCharacters?: number;
   /** Optional serialized request byte ceiling, including tool schemas. */
   readonly maximumRequestBytes?: number;
