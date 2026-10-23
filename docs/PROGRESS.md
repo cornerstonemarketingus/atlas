@@ -1048,6 +1048,21 @@ The normal converse completion returned servedBy, but its early task-dispatch re
 Parallel continuation under the owner's explicit request: prebuilt local coder packaging reuses stale230 staging with an explicit installed marker while keeping developer builds; postmerge407 Atlas Node cancellation has real stalled-network regressions; postmerge406 category reports are being aligned to exclude quota refusals truthfully. Existing397 now owns vendor catalog/trust/routing; conflicting414 needs reconciliation before any independent merge. Preserve active ownership and protected workflow review.
 
 Eval438 validation follow-through: full affected atlas-eval package suite passed39/39 after the focused13/13 checks. Initial exact-head CI39598725107 and eval-fixtures39598725261 passed before this documentation-only integration with chat440. Fresh integrated-head CI remains required.
+
+
+## 2026-10-21 — verified receipt run-title repair (issue #432)
+
+#372 merged cb71137; successful Cloudflare39522378601 included it after an
+initial secret-upload deployment race. D1 migrations0017-0020/0022-0023 succeeded
+in39094569327. Hosted inspect39522548783 and coder39522564249 timed out: execution
+jobs succeeded but result reporting failed. Actual GitHub job workflow_name is
+the task-specific run title, not the static Atlas Coder/Runner label.
+Reused native verifier and scoped immutable storage; both run and job title must
+match the exact saved task. Real-metadata regression failed before repair; 11
+focused tests passed after, and two weakened title guards failed assertions.
+Also preserves explicit redirect refusal tests and repairs the Windows source
+scan (guard mutation failed as expected). Full build/CI/live revalidation pending.
+No new permissions, migration, claim release or coding retry introduced.
 ## 2026-10-20 — free compute and eval baseline (#390, #398, #399, #400, #406, #407)
 
 - **Merged:** #390, the eval workflow with free targets (GitHub Models through the run's own token, Workers AI through the existing secrets), and #398, the RunPod Serverless provider, both merged by the owner; #399, the render panel on each Build project plus the `docker/render` image on a pinned Debian base (the image has never been built end to end: the session could not reach the Debian mirror).
@@ -1064,3 +1079,11 @@ Eval438 validation follow-through: full affected atlas-eval package suite passed
 
 Next: after #406 merges, open a protected workflow PR for a daily `--shard day/7` schedule, and re-run one GitHub Models task to read the 4-byte body. Once the owner can build `docker/render` and run one Atlas Node, record a real render through it.
 2026-10-21 | (this PR) | chat release gate | The streaming chat gate could never pass: 47811fa made `verify-hosted` require model authorship, but the streamed `done` event (filtered by `customer-events.mjs`, #310) dropped `servedBy`, which the non-streaming reply already carries. The projection now keeps `servedBy` as an allowlisted provider kind and a validated model name, and `finalization` as its status only; endpoints, reasons and other backend fields stay filtered. | Live verify-hosted 39598191966 after #397: non-streaming answered by groq openai/gpt-oss-20b, streaming 257 chars but "model authorship not confirmed"; route still groq → workers-ai → openai (new vendor keys not provisioned). customer-events test; web 672/0. | Owner: provision free vendor keys. | Re-run verify-hosted chat after deploy.
+
+
+Receipt repair #447 validation: production build/typecheck/lint passed. Local
+Windows web suite:686 total,680 passed,1 unchanged sandbox executable-bit
+expectation failed,5 optional browser skips. CI39686447928 web and every job
+except Windows local-control passed; that job timed out waiting15s for daemon
+startup. No local-control source changed. Preserved concurrent main/mission
+progress and requesting fresh CI on the integrated head. Live acceptance pending.
