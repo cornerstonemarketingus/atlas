@@ -32,4 +32,8 @@ The adapter is compatible with the pending durable-dispatch contract in #270 wit
 
 ## Maintenance integration — 2026-10-21
 
+Mission request bodies have a 15-second server deadline as well as the 64 KB
+size limit. Incomplete uploads return 408; oversized uploads return 413 even
+if stream cancellation stalls. Neither rejection creates or dispatches work.
+
 Current-main migration fixtures already contain dispatch_state. The durable-dispatch adapter tests now assert that migrated schema instead of applying a duplicate ALTER TABLE; their ownership, no-redispatch and outcome assertions are unchanged. Internal storage failures use fixed customer copy without migration instructions. All 20 cloud-mission tests pass locally, including real runtime adapter boundaries. Fresh complete CI remains required; no migration or production execution was performed by this integration.

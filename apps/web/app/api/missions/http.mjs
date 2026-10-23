@@ -1,21 +1,29 @@
 import { CloudMissions, MissionError } from "./service.mjs";
-async function readBody(request) {
+async function readBody(request, timeoutMs) {
   const reader = request.body?.getReader();
   if (!reader) throw new MissionError("A JSON request body is required.");
-  const chunks = []; let bytes = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    bytes += value.byteLength;
-    if (bytes > 64000) { await reader.cancel(); throw new MissionError("Mission request exceeds 64 KB.", 413); }
-    chunks.push(value);
-  }
+  const chunks = []; let bytes = 0; let timer;
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => { reject(new MissionError("Mission request body timed out.", 408)); cancel(); }, timeoutMs);
+  });
+  try {
+    await Promise.race([(async () => {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > 64000) { cancel(); throw new MissionError("Mission request exceeds 64 KB.", 413); }
+        chunks.push(value);
+      }
+    })(), deadline]);
+  } finally { clearTimeout(timer); }
   const content = new Uint8Array(bytes); let offset = 0;
   for (const chunk of chunks) { content.set(chunk, offset); offset += chunk.byteLength; }
   try { const body = JSON.parse(new TextDecoder().decode(content)); if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error(); return body; }
   catch { throw new MissionError("Request body must be a JSON object."); }
 }
-export function missionRoutes({ authenticate, resolveScope, database, dispatch, receipt, outcome }) {
+export function missionRoutes({ authenticate, resolveScope, database, dispatch, receipt, outcome, bodyTimeoutMs = 15000 }) {
   /** @param {Request} request @param {string|null} [id] */
   return async (request, id = null) => {
     const headers = { "cache-control": "no-store" };
@@ -31,7 +39,7 @@ export function missionRoutes({ authenticate, resolveScope, database, dispatch, 
         outcome: (scope, taskId, step) => outcome(request, scope, taskId, step) });
       if (request.method === "GET") return Response.json(id ? { mission: await service.require(scope, id) } : await service.listPage(scope, new URL(request.url).searchParams.get("cursor")), { headers });
       if (request.method !== "POST") throw new MissionError("Method not allowed.", 405);
-      const body = await readBody(request);
+      const body = await readBody(request, bodyTimeoutMs);
       if (!id) return Response.json({ mission: await service.create(scope, body) }, { status: 201, headers });
       if (body.action === "resume") { await service.control(scope, id, "resume"); return Response.json({ mission: await service.advance(scope, id) }, { headers }); }
       const mission = body.action === "advance" ? await service.advance(scope, id) : await service.control(scope, id, body.action);
