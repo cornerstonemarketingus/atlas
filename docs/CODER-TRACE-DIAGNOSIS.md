@@ -2,6 +2,15 @@
 
 Use the actual saved run artifact, not repeated tool names, to diagnose exhausted call budgets:
 
+With `--audit-log`, the coder now writes redacted events incrementally every
+second and drains pending events when the session finishes or throws. A runner
+deadline can therefore leave a partial trace. The latest second or an in-flight
+write can still be lost; a forcibly interrupted final line may need the existing
+truncated-tail reader policy. A missing terminal event means the trace is
+incomplete, not that work succeeded. Disk writes are asynchronous and serialized;
+a storage failure preserves the confirmed prefix, reports at finalization, and
+stops further writes rather than retrying an uncertain append.
+
 ```
 atlas replay atlas-output/audit.jsonl
 atlas replay atlas-output/audit.jsonl --format json
