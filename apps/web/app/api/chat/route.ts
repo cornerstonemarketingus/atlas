@@ -17,7 +17,7 @@ import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, mem
 import { chatTurns } from "./turns.mjs";
 import { threadTitle } from "./model-endpoint.mjs";
 import { resolveChatProvider, chatProviderChoices } from "./providers.mjs";
-import { encodeEvent } from "./stream.mjs";
+import { chatEventStream } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
 import { governChain } from "../inference/governor-client.mjs";
 import { workerEnv } from "../inference/worker-env.mjs";
@@ -257,21 +257,18 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
   startTasks: (calls: TaskRequests) => Promise<string[]>;
   tools: object[]; handlers: Parameters<typeof converse>[0]["handlers"];
 }) {
-  const encoder = new TextEncoder();
-  const body = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const emit = (type: string, data: unknown) => controller.enqueue(encoder.encode(encodeEvent(type, data)));
+  // chatEventStream guarantees a terminal event and closes the stream even if
+  // the turn throws, and keeps a slow turn visibly alive with comments.
+  const body = chatEventStream(async (emit) => {
       emit("meta", { conversationId });
       const outcome = await converse({ ...loop, stream: true, emit });
       if ("error" in outcome) {
         emit("error", { message: outcome.error });
-        controller.close();
         return;
       }
       const reply = outcome.reply;
       if (!reply) {
         emit("error", { message: "The model endpoint returned an empty reply." });
-        controller.close();
         return;
       }
       const replyId = randomUUID();
@@ -284,9 +281,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
         } catch { persisted = false; }
       }
       emit("done", { conversationId, stored: persisted, steps: outcome.steps, ...(outcome.finalization ? { finalization: outcome.finalization } : {}), ...(outcome.servedBy ? { servedBy: outcome.servedBy } : {}), reply: { id: replyId, role: "assistant", content: reply, createdAt: replyAt } });
-      controller.close();
-    },
-  });
+  }, { onError: (error) => console.error(JSON.stringify({ atlas: "chat", event: "chat.stream_failed", error: error instanceof Error ? error.name : "unknown" })) });
   return new Response(body, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", "x-accel-buffering": "no" } });
 }
 

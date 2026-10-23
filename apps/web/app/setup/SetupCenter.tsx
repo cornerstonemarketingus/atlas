@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AtlasShell } from "../AtlasShell.js";
-import { chatRouteSummary, providerChecks, quotaSummary, toneClass } from "./chat-health.mjs";
+import { chatCardSummary, chatRouteSummary, providerChecks, quotaSummary, toneClass } from "./chat-health.mjs";
 
 type SetupStep = { id: string; label: string; state: "complete" | "action-required" | "failed"; detail: string; action?: string };
 type SetupStatus = { audience?: "customer" | "owner"; overall: string; completedSteps: number; totalSteps: number; steps: SetupStep[]; optional: { stripeConfigured?: boolean; chat?: unknown; inferenceGovernor?: unknown } };
@@ -180,6 +180,10 @@ export function SetupCenter() {
   const sectionNumber = (base: number) => String(owner && base > 1 ? base + 1 : base).padStart(2, "0");
   const route = owner && status ? chatRouteSummary(status.optional.chat) : null;
   const quota = owner && status ? quotaSummary(status.optional.inferenceGovernor) : null;
+  const chatCard = chatCardSummary({
+    model, owner, governor: owner && status ? status.optional.inferenceGovernor : undefined,
+    checks: providers.phase === "done" ? providers.checks : null, checkedAt: providers.phase === "done" ? providers.at : null,
+  });
 
   return <AtlasShell section="connections" headerContext={
     <span className="context-chip">{status?.audience === "customer" ? "Account connected" : status ? `${status.completedSteps}/${status.totalSteps} ready` : "Checking…"}</span>
@@ -201,12 +205,10 @@ export function SetupCenter() {
               <p>Atlas needs GitHub access to read your projects and open pull requests.</p>
               {github?.installUrl && !github.connected && <a href={github.installUrl} rel="noreferrer">Install the GitHub App ↗</a>}
             </article>
-            <article className={model?.configured ? "status-card good" : "status-card"}>
+            <article className={toneClass(chatCard.tone)}>
               <small>CHAT MODEL</small>
-              <strong>{model === null ? "Checking…" : model.configured ? "Model endpoint connected" : "No model endpoint"}</strong>
-              <p>{model?.configured
-                ? "Chat is connected. Atlas works with any OpenAI-compatible model server, hosted or your own."
-                : status?.audience === "owner" ? model?.reason ?? "Chat cannot answer until a model endpoint is configured." : "Chat is temporarily unavailable. Refresh or contact support."}</p>
+              <strong>{chatCard.headline}</strong>
+              <p>{chatCard.detail}</p>
             </article>
             <article className="status-card">
               <small>COMPUTER</small>

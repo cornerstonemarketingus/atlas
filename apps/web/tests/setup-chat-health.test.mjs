@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chatRouteSummary, providerChecks, providerName, quotaSummary, toneClass, utcTime, TONE } from '../app/setup/chat-health.mjs';
+import { chatCardSummary, chatRouteSummary, providerChecks, providerName, quotaSummary, toneClass, utcTime, TONE } from '../app/setup/chat-health.mjs';
 import { CREDENTIAL_CATEGORIES } from '../app/api/chat/provider-health.mjs';
 
 test('the chat route reads as plain language, in order', () => {
@@ -40,4 +40,29 @@ test('every provider category the server can report has its own plain-language r
   assert.deepEqual(rows.map(row => [row.id, row.tone]), [['workersAIBinding', 'good'], ['workersAI', 'bad']]);
   assert.equal(toneClass(TONE.GOOD), 'status-card good');
   assert.equal(toneClass(TONE.UNKNOWN), 'status-card');
+});
+
+test('the chat card says configured, never connected, without evidence of a real reply', () => {
+  const model = { configured: true, reason: null };
+  const quiet = { bound: true, reachable: true, models: 1, reservations: 0, waiting: 0, limitedModels: 0, accountPause: null, failingModels: 0, recentFailureKinds: [] };
+  for (const card of [chatCardSummary({ model, owner: true, governor: quiet }), chatCardSummary({ model, owner: true }), chatCardSummary({ model, owner: false })]) {
+    assert.doesNotMatch(`${card.headline} ${card.detail}`, /connected|working/iu);
+    assert.notEqual(card.tone, TONE.GOOD);
+  }
+  // The usability-test case: configured, but the binding answered 502.
+  const failed = chatCardSummary({ model, owner: true, governor: { ...quiet, failingModels: 1, recentFailureKinds: ['SERVER_ERROR'] } });
+  assert.equal(failed.tone, TONE.BAD); assert.equal(failed.headline, 'Configured, but recent calls failed');
+  assert.match(failed.detail, /failed with server errors \(5xx\)\./u);
+  const limited = chatCardSummary({ model, owner: true, governor: { ...quiet, limitedModels: 2 } });
+  assert.match(limited.detail, /2 models failed with rate limits \(429\)/u);
+  assert.match(chatCardSummary({ model, owner: true, governor: { ...quiet, accountPause: { kind: 'BILLING', until: 'x' } } }).headline, /paused/u);
+  // Only a real reply from a provider check the owner ran earns "working".
+  const worked = chatCardSummary({ model, owner: true, governor: quiet, checks: [{ tone: TONE.GOOD }], checkedAt: '10:15' });
+  assert.equal(worked.tone, TONE.GOOD); assert.equal(worked.detail, 'A provider check got a real reply at 10:15 UTC.');
+  assert.equal(chatCardSummary({ model, owner: true, governor: quiet, checks: [{ tone: TONE.WARN }] }).tone, TONE.UNKNOWN);
+  // Customers never see ledger detail, and owners keep the configuration reason.
+  assert.doesNotMatch(chatCardSummary({ model, owner: false, governor: { failingModels: 3, recentFailureKinds: ['BILLING'] } }).detail, /credit|failed/u);
+  assert.equal(chatCardSummary({ model: { configured: false, reason: 'Set the endpoint.' }, owner: true }).detail, 'Set the endpoint.');
+  assert.match(chatCardSummary({ model: { configured: false, reason: 'PRIVATE' }, owner: false }).detail, /temporarily unavailable/u);
+  assert.equal(chatCardSummary({ model: null, owner: true }).headline, 'Checking…');
 });

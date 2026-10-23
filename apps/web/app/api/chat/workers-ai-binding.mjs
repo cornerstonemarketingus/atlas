@@ -67,6 +67,25 @@ function statusOf(error) {
 }
 
 /**
+ * `ai.run` takes no abort signal and has no deadline of its own, so a call
+ * that never answers would hold a chat turn open forever. The request's
+ * signal (chat's per-call timeout) ends the wait; the binding call itself is
+ * abandoned.
+ */
+function abortable(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => { signal.removeEventListener("abort", onAbort); resolve(value); },
+      (error) => { signal.removeEventListener("abort", onAbort); reject(error); },
+    );
+  });
+}
+
+/**
  * A fetch-shaped transport for chat's model calls, backed by the binding.
  * Errors are answered with a status and a fixed message, never the binding's
  * own text (which can echo the request).
@@ -84,8 +103,10 @@ export function workersAIBindingTransport(ai) {
     };
     let result;
     try {
-      result = await ai.run(body.model, inputs);
+      result = await abortable(ai.run(body.model, inputs), init?.signal);
     } catch (error) {
+      // Like fetch: an aborted or timed-out call rejects with the signal's reason.
+      if (init?.signal?.aborted && error === init.signal.reason) throw error;
       const status = statusOf(error);
       // Preserve scheduling facts without returning provider text (which may
       // echo a prompt). Daily refusal is not a two-second capacity reset.

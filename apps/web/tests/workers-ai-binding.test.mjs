@@ -140,3 +140,16 @@ test("the binding's health is a real inference, reported as categories", async (
   assert.equal(limited.category, "PROVIDER_RATE_LIMIT");
   assert.equal(limited.http.inference, 429);
 });
+
+test("a binding call that never answers honours the request's abort signal like fetch does", { timeout: 5000 }, async () => {
+  // ai.run has no timeout of its own: before this, a hung binding call kept a
+  // streaming chat turn open with no further events, indefinitely.
+  const transport = workersAIBindingTransport({ run: () => new Promise(() => {}) });
+  const outcome = await Promise.race([
+    transport(BINDING_BASE_URL, { body: JSON.stringify({ model: "m", messages: [] }), signal: AbortSignal.timeout(30) }).then(() => "answered", (error) => error.name),
+    new Promise((resolve) => setTimeout(() => resolve("hung"), 1500)),
+  ]);
+  assert.equal(outcome, "TimeoutError");
+  const aborted = new AbortController(); aborted.abort();
+  await assert.rejects(transport(BINDING_BASE_URL, { body: "{}", signal: aborted.signal }), { name: "AbortError" });
+});

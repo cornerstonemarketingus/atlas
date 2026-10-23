@@ -59,7 +59,24 @@ language and without any secret, model name or endpoint:
   permission, ...) with the next step. The route is owner-only: the owner's
   session and the operator token both reach it; any other account gets 403.
 
+The **Chat model** card under Live status reports configuration, not
+reachability: a configured endpoint reads "configured". For the owner it shows
+the last real outcome the quota ledger recorded for the provider chat tries
+first (`failingModels` and `recentFailureKinds`, e.g. `SERVER_ERROR` for a 5xx,
+plus `limitedModels` for 429s). It says "working" only after a provider check
+on that page got a real reply. Loading the page makes no model call.
+
 Customers see none of this; their Connections page shows only their account.
+
+### Streaming chat always ends
+
+A streaming turn (`POST /api/chat` with `stream: true`) always ends with a
+`done` or `error` event: a turn that throws emits `error` and closes. While the
+turn works, the Worker sends a `: keep-alive` comment every 10 seconds. The
+browser treats 45 seconds with no bytes at all as a dead stream. It stops
+waiting, says the reply stopped responding, and puts the message back in the
+composer to retry. A Workers AI binding call now honours chat's per-call
+timeout like an HTTP provider does, because `ai.run` has no deadline of its own.
 
 ### Finding hosted websites again
 

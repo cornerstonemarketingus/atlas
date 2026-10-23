@@ -92,6 +92,50 @@ export function createDeltaParser() {
   };
 }
 
+/**
+ * How often a working turn proves it is alive. The browser gives up on a
+ * stream that is silent for STREAM_IDLE_MS (app/chat/stream-idle.mjs), which
+ * must stay well above this.
+ */
+export const KEEP_ALIVE_MS = 10_000;
+
+const FAILED_TURN = "Atlas could not finish this request.";
+
+/**
+ * The body of a streaming chat turn. `run(emit)` does the turn's work and
+ * emits its events. Whatever happens, the stream ends with a terminal event:
+ * a turn that throws emits `error` and closes, instead of leaving the browser
+ * with no terminal event. While the turn works, a comment line is sent every
+ * `keepAliveMs` so a slow-but-alive turn is never mistaken for a dead one.
+ * @param {(emit: (type: string, data: unknown) => void) => Promise<void>} run
+ * @param {{ keepAliveMs?: number, onError?: (error: unknown) => void }} [options]
+ * @returns {ReadableStream<Uint8Array>}
+ */
+export function chatEventStream(run, { keepAliveMs = KEEP_ALIVE_MS, onError = () => {} } = {}) {
+  const encoder = new TextEncoder();
+  let open = true;
+  let timer;
+  const stop = () => { open = false; clearInterval(timer); };
+  return new ReadableStream({
+    async start(controller) {
+      const write = (text) => { if (open && text) { try { controller.enqueue(encoder.encode(text)); } catch { stop(); } } };
+      const emit = (type, data) => write(encodeEvent(type, data));
+      timer = setInterval(() => write(": keep-alive\n\n"), keepAliveMs);
+      try {
+        await run(emit);
+      } catch (error) {
+        try { onError(error); } catch { /* reporting never breaks the stream */ }
+        emit("error", { message: FAILED_TURN });
+      } finally {
+        const wasOpen = open;
+        stop();
+        if (wasOpen) { try { controller.close(); } catch { /* already closed */ } }
+      }
+    },
+    cancel() { stop(); },
+  });
+}
+
 /** One server-sent event from Atlas to the browser. */
 export function encodeEvent(type, data) {
   const visible = customerEvent(type, data);

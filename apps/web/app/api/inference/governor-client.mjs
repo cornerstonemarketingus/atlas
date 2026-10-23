@@ -44,6 +44,8 @@ export async function governorCall(stub, method, argument) {
 }
 
 const ACCOUNT_PAUSE_KINDS = new Set(["BILLING", "AUTHENTICATION", "PERMISSION"]);
+/** Failure categories the readout may name (InferenceErrorKind); anything else is "UNKNOWN". */
+const FAILURE_KINDS = new Set(["RATE_LIMIT", "AUTHENTICATION", "PERMISSION", "BILLING", "MODEL_NOT_FOUND", "CONTEXT_TOO_LARGE", "CAPACITY_EXCEEDED", "TIMEOUT", "SERVER_ERROR", "CAPACITY", "NETWORK", "EMPTY_MODEL_RESPONSE", "INVALID_RESPONSE", "UNKNOWN"]);
 
 /**
  * Setup-status readout: is a governor bound, and does a round trip to the
@@ -52,6 +54,10 @@ const ACCOUNT_PAUSE_KINDS = new Set(["BILLING", "AUTHENTICATION", "PERMISSION"])
  * ledger is currently holding back (a rate or daily limit, or an open
  * circuit); `accountPause` is set while the whole provider account is paused
  * (out of credit, key refused, no permission) and says until when.
+ * `failingModels` counts models whose most recent call failed (a success
+ * resets a model's health), and `recentFailureKinds` names those failures as
+ * categories, e.g. SERVER_ERROR for a 5xx. The ledger keeps no success
+ * timestamp, so the readout never claims a recent success.
  */
 export async function governorReadiness(endpoint, environment) {
   if (!environment?.INFERENCE_GOVERNOR) return { bound: false };
@@ -64,7 +70,9 @@ export async function governorReadiness(endpoint, environment) {
   const accountPause = account && Number.isFinite(account.openUntil)
     ? { kind: ACCOUNT_PAUSE_KINDS.has(account.kind) ? account.kind : "OTHER", until: new Date(account.openUntil).toISOString() }
     : null;
-  return { bound: true, reachable: true, models: models.length, reservations: snapshot.reservations, waiting: snapshot.waiting.length, limitedModels, accountPause };
+  const failing = models.filter((entry) => typeof entry?.health?.lastKind === "string");
+  const recentFailureKinds = [...new Set(failing.map((entry) => (FAILURE_KINDS.has(entry.health.lastKind) ? entry.health.lastKind : "UNKNOWN")))].sort();
+  return { bound: true, reachable: true, models: models.length, reservations: snapshot.reservations, waiting: snapshot.waiting.length, limitedModels, accountPause, failingModels: failing.length, recentFailureKinds };
 }
 
 /**

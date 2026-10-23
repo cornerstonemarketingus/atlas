@@ -166,6 +166,74 @@ export function providerChecks(response) {
   });
 }
 
+const FAILURE_TEXT = Object.freeze({
+  SERVER_ERROR: "server errors (5xx)",
+  TIMEOUT: "timeouts",
+  NETWORK: "network failures",
+  CAPACITY: "the provider being over capacity",
+  EMPTY_MODEL_RESPONSE: "empty replies",
+  INVALID_RESPONSE: "malformed replies",
+  RATE_LIMIT: "rate limits (429)",
+  AUTHENTICATION: "a refused model key",
+  PERMISSION: "missing permission",
+  BILLING: "no credit or quota left",
+  MODEL_NOT_FOUND: "a model that no longer exists",
+  CONTEXT_TOO_LARGE: "requests too large for the model",
+  CAPACITY_EXCEEDED: "requests larger than the provider allows",
+  UNKNOWN: "unclassified errors",
+});
+
+function andList(items) {
+  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
+/**
+ * The Live status chat card. Configuration is not reachability: a configured
+ * endpoint is "configured", and only evidence of a real reply (a provider
+ * check the owner ran on this page) earns "working". Recent failures come
+ * from the quota ledger's last outcome per model; no model call is made to
+ * fill this card.
+ * @param {{ model: { configured: boolean, reason?: string | null } | null, owner: boolean, governor?: unknown, checks?: { tone: string }[] | null, checkedAt?: string | null }} input
+ * @returns {{ tone: string, headline: string, detail: string }}
+ */
+export function chatCardSummary({ model, owner, governor, checks = null, checkedAt = null }) {
+  if (model === null || model === undefined) return { tone: TONE.UNKNOWN, headline: "Checking…", detail: "Reading the chat configuration." };
+  if (model.configured !== true) {
+    return {
+      tone: TONE.BAD,
+      headline: "No model endpoint",
+      detail: owner ? (typeof model.reason === "string" && model.reason ? model.reason : "Chat cannot answer until a model endpoint is configured.") : "Chat is temporarily unavailable. Refresh or contact support.",
+    };
+  }
+  if (!owner) return { tone: TONE.UNKNOWN, headline: "Model endpoint configured", detail: "Chat is set up. If a reply fails, the conversation shows the error and lets you try again." };
+  const ledger = governor && typeof governor === "object" ? governor : {};
+  const kinds = Array.isArray(ledger.recentFailureKinds) ? ledger.recentFailureKinds.filter((kind) => Object.hasOwn(FAILURE_TEXT, kind)) : [];
+  const failing = isCount(ledger.failingModels) ? ledger.failingModels : 0;
+  const limited = isCount(ledger.limitedModels) ? ledger.limitedModels : 0;
+  const worked = Array.isArray(checks) && checks.some((check) => check?.tone === TONE.GOOD);
+  if (ledger.accountPause && typeof ledger.accountPause === "object") {
+    return { tone: TONE.BAD, headline: "Configured, but the provider is paused", detail: "Recent calls were refused at the account level. See Chat providers and quota below." };
+  }
+  if (failing > 0 || limited > 0) {
+    const causes = kinds.map((kind) => FAILURE_TEXT[kind]);
+    if (limited > 0 && !kinds.includes("RATE_LIMIT")) causes.push(FAILURE_TEXT.RATE_LIMIT);
+    const count = Math.max(failing, limited);
+    return {
+      tone: TONE.BAD,
+      headline: "Configured, but recent calls failed",
+      detail: `The last call to ${count} model${count === 1 ? "" : "s"} failed${causes.length ? ` with ${andList(causes)}` : ""}. Run Check providers below for the cause and the fix.`,
+    };
+  }
+  if (worked) return { tone: TONE.GOOD, headline: "Model endpoint working", detail: `A provider check got a real reply${checkedAt ? ` at ${checkedAt} UTC` : ""}.` };
+  return {
+    tone: TONE.UNKNOWN,
+    headline: "Model endpoint configured",
+    detail: ledger.reachable === true
+      ? "No recent failure is recorded, but that does not prove chat answers. Run Check providers below to send a real test message."
+      : "Atlas has no record of recent replies. Run Check providers below to send a real test message.",
+  };
+}
+
 /** Status-card class for a tone, matching the existing Connections styles. */
 export function toneClass(tone) {
   return tone === TONE.GOOD ? "status-card good" : tone === TONE.BAD ? "status-card bad" : tone === TONE.WARN ? "status-card warn" : "status-card";
