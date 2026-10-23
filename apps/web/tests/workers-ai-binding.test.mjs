@@ -9,6 +9,50 @@ import { callModel, converse } from "../app/api/chat/agent-loop.mjs";
 // needs no token and is always this account.
 const account = "0123456789abcdef0123456789abcdef";
 
+test("daily allocation refusal keeps a safe midnight reset without exposing binding errors", async t => {
+  t.mock.method(Date, "now", () => Date.parse("2026-10-23T12:00:00Z"));
+  const transport = workersAIBindingTransport({ run: async () => { throw new Error("4006: You have used up your daily free allocation of neurons PRIVATE_SENTINEL"); } });
+  const response = await transport("unused", { body: JSON.stringify({ model: "fixture", messages: [] }) });
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), "43200");
+  const body = await response.text();
+  assert.match(body, /WORKERS_AI_DAILY_QUOTA/u);
+  assert.doesNotMatch(body, /PRIVATE_SENTINEL|4006/u);
+});
+
+test("an ambiguous 4006 capacity refusal is not classified as daily allocation", async () => {
+  const transport = workersAIBindingTransport({ run: async () => { throw new Error("4006: Service temporarily at capacity PRIVATE_SENTINEL"); } });
+  const response = await transport("unused", { body: JSON.stringify({ model: "fixture", messages: [] }) });
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), null);
+  assert.doesNotMatch(await response.text(), /DAILY_QUOTA|PRIVATE_SENTINEL/u);
+});
+
+for (const stream of [false, true]) test(`a daily binding refusal cannot hide the free provider's recoverable reset (stream=${stream})`, async t => {
+  t.mock.method(Date, "now", () => Date.parse("2026-10-23T12:00:00Z"));
+  let waited = 0, freeCalls = 0, bindingCalls = 0, paidCalls = 0;
+  const waits = [];
+  const binding = workersAIBindingModel({ ai: { run: async () => { bindingCalls++; throw new Error("Daily free allocation of neurons exhausted PRIVATE_SENTINEL"); } } });
+  binding.providerFallback = { baseUrl: "https://api.openai.com/v1/", model: "paid", provider: "openai" };
+  const endpoint = { baseUrl: "https://api.groq.com/openai/v1/", model: "free", provider: "groq", providerFallback: binding };
+  const result = await converse({ endpoint, turns: [{ role: "user", content: "Explain regression testing" }], stream, emit: () => {}, allowTasks: false,
+    sleep: async ms => { waits.push(ms); waited += ms; },
+    fetcher: async url => {
+      if (new URL(url).hostname === "api.openai.com") { paidCalls++; return Response.json({ error: { code: "insufficient_quota" } }, { status: 429 }); }
+      freeCalls++;
+      return waited >= 14000 ? Response.json({ choices: [{ message: { content: "Regression tests check that existing behavior still works." }, finish_reason: "stop" }] })
+        : new Response("Please try again in 14s.", { status: 429, headers: { "retry-after": "14" } });
+    },
+  });
+  assert.match(result.reply ?? "", /Regression tests/u);
+  assert.equal(result.finalization, undefined);
+  assert.equal(result.servedBy?.provider, "groq");
+  assert.deepEqual(waits, [14000]);
+  assert.equal(freeCalls, 2);
+  assert.equal(bindingCalls, 1);
+  assert.equal(paidCalls, 1);
+});
+
 /** A stand-in for env.AI: answers each run() from a script and records the inputs. */
 function fakeAI(replies) {
   const runs = [];

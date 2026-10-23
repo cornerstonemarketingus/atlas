@@ -23,6 +23,7 @@ import { governChain } from "../inference/governor-client.mjs";
 import { workerEnv } from "../inference/worker-env.mjs";
 import { createAgentTeam } from "./agent-team.mjs";
 import { instantToolDefinitions } from "./instant-tools.mjs";
+import { reserveProjectReceipt } from "../genesis/receipts.mjs";
 import { genesisBridge } from "../genesis/bridge.mjs";
 import { projectBackend } from "../genesis/project-backend.mjs";
 import { hostedSiteStore } from "../../../db/hosted-sites.mjs";
@@ -81,6 +82,7 @@ export async function POST(request: Request) {
   let history: { role: string; content: string }[] = [];
   let memory = "";
   let stored = true;
+  let projectScope: { tenantId: number; principal: string } | undefined;
   let allowlist = new Set<string>();
   let workspaceScope: ReturnType<typeof tenantScope> | null = null;
   try {
@@ -97,6 +99,7 @@ export async function POST(request: Request) {
       .where(and(eq(conversationMessages.conversationId, conversationId), eq(conversationMessages.requestedBy, account.userId)))
       .orderBy(asc(conversationMessages.createdAt));
     await db.insert(conversationMessages).values({ id: randomUUID(), conversationId, requestedBy: account.userId, role: "user", content: message, createdAt: now });
+    projectScope = tenantScope(tenant);
     // Repositories the chat tools may read: the workspace's allowlist, bounded by the deployment's.
     try { allowlist = await tenantAllowlist(getD1(), tenant.tenantId, allowedRepositories(process.env.ATLAS_ALLOWED_REPOSITORIES)); } catch { allowlist = new Set(); }
     // Memory across conversations: recall is best-effort and never blocks a reply.
@@ -112,7 +115,8 @@ export async function POST(request: Request) {
   const bridge = genesisBridge(process.env, { owner: isDeploymentOwner(account) });
   const nodeCapabilities = await bridge.capabilities({ visibility: userWantsPublic(message) ? "public" : "private" });
   // Business websites can be built without a node; the model is told which builders actually exist.
-  const backend = projectBackend({ bridge, hosted: workspaceScope ? { store: hostedSiteStore(getD1()), scope: workspaceScope } : null, userMessage: message });
+  const backend = projectBackend({ bridge, hosted: workspaceScope ? { store: hostedSiteStore(getD1()), scope: workspaceScope } : null, userMessage: message,
+    reserve: (id: string) => reserveProjectReceipt(getD1(), projectScope, conversationId, id) });
   const projectCapabilities = { ...nodeCapabilities, hostedWebsites: backend.hostedAvailable };
   const projectTools = createProjectTools({ create: backend.create, status: backend.status, requestId: randomUUID(), userMessage: message });
   const turns = chatTurns({ system: atlasSystemPrompt({ isOwner: isDeploymentOwner(account), repository, projectCapabilities }), history, memory, message, historyTurns: HISTORY_TURNS });

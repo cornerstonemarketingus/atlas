@@ -428,17 +428,39 @@ explicitly and passed on desktop/mobile with no page errors. Focused regressions
 operations. Existing provider repair #240 and durable dispatch #270 remain
 separate workstreams; this patch does not overwrite their files.
 
+## 2026-10-16 — hosted mission recovery (issue #290)
+
+Added `/missions` and scoped D1 mission plans, idempotent creation, atomic revision/audit writes, bounded serial dispatch, reconnect reconciliation, pause/stop and exact current GitHub-attempt result evidence. Existing task intake remains the authority for execution permissions and allowance. Concurrent task/result PR files were preserved; migration 0021 avoids #289's 0020.
+
+Evidence: build/typecheck/lint passed; full web suite 494 passed, two optional skips; explicit real Chromium desktop/mobile mission reconnect gate passed. Eleven mission regression tests include old-attempt rejection, audit rollback and concurrent resumes. Performance rescue #285 deployment run 38834441273 and authenticated chat smokes 38834591463 / 38834676029 succeeded.
+
+Not deployed: new tenant persistence requires configured review and migration application/journal integration. Closed-page unattended advancement, cumulative money budgets and live business integrations remain incomplete. Next: obtain required review and integrated migration/CI evidence, then implement scoped scheduler ownership without storing browser credentials. See docs/HOSTED-MISSIONS.md. Branch codex/cloud-mission-recovery.
+
+Follow-up acceptance: task-intake rejection now returns a failed mission and blocked dependencies immediately. Previously it could return running with no pending work, disabling polling until another manual reconcile. The regression asserts the first response is terminal; all eleven mission tests pass after the fix. PR #291's initial full CI matrix passed, including Windows and Genesis; the follow-up will rerun CI.
+
+Mission request recovery follow-up: bounded both response headers and JSON body to 30 seconds, including cancellation-ignoring transports. The UI unlocks after a stalled response, explicitly warns that work may have started, and never retries mutations automatically. Three deadline regressions pass; real desktop/mobile reconnect gate, production build, typecheck and lint pass. Full suite after build completion: 497 passed, two optional browser skips. An initial suite overlapped build artifact replacement and was rerun after the build completed.
+
+Paid allowance boundary: the existing task API uses HTTP 402 before dispatch when the monthly allowance is exhausted. Missions now classify this as a definitive refusal, preserve its explanation, fail immediately and block dependencies. A production-adapter regression verifies repeated reconciliation does not resubmit or charge again; mission suite 12/12. PR #291's preceding revision passed the entire CI matrix. This remains an owner-reviewed persistence PR, not an unattended cloud/business completion claim.
+
 ## 2026-10-16 — hosting request responsiveness (#292 / PR #293)
 
 From current main, isolated branch codex/infrastructure-deadlines in .worktrees/atlas-infrastructure-deadlines. The existing Cloudflare/Vercel/Git infrastructure client only signalled abort and retained caller listeners. Added a complete response deadline, cancellation before external execution, and listener cleanup. Possibly accepted writes are not automatically retried. Five negative regressions failed before and pass after; existing infrastructure integration tests pass (14/14). The real daemon HTTP end-to-end journey passed every step, including approvals, pause/resume/cancel and crash recovery, using its scripted model.
 
 Full local-control suite is still running locally (session 35506, output .infra-suite.log); required cross-platform CI is pending. Follow through CI and inspect the full local result before ordinary merge of #293. No live hosting changes made. Mission PR #291 latest full CI is green but still needs configured tenant-persistence review and migration application. Broader unattended cloud scheduling, cumulative spending and live business integrations remain incomplete.
 
+Hosting follow-through: PR #293 merged as 8ad577e3f138c0adedd6910cdd22d13f053bed5d after all cross-platform CI passed. Full local suite completed: 677 passed, 20 optional/environment skips, zero failures. Daemon e2e passed. Integrated current main into mission PR #291, preserving both progress entries; new mission persistence still requires configured review.
+
 ## 2026-10-16 — complete DNS outcome verification (issue #294)
 
 Current-main branch codex/dns-verification reuses .worktrees/atlas-infrastructure-deadlines after #293 merged. Cloudflare DNS apply compared only content, so the real infrastructure tool could claim an approved proxy change was verified when the provider retained the old setting. Read-back now checks record name/type, content, TTL and proxy state; DNS name casing and a trailing root dot are normalized. It retains observed state and performs no automatic additional writes.
 
 Four negative regressions failed on the original adapter, including the actual approved ToolRegistry plan/apply boundary. All six DNS tests and existing hosting integration/deadline tests now pass: 20/20. No live DNS changes, credential changes or approval-policy changes. Full cross-platform CI must pass before ordinary merge. Mission #291 integrated-main CI is green and still awaits configured persistence review. Broader cloud scheduler/business work remains incomplete.
+
+DNS follow-through: PR #295 merged as a3b59322b57ec332f96ce28aeb93b568d405ae56 after all CI passed. Initial Windows daemon health timeouts reproduced neither locally (both boot tests passed) nor on one targeted retry; DNS regressions passed throughout. Preserved both progress entries while integrating current main into mission PR #291. No live DNS changes performed.
+
+Mission history follow-up (#291): replaced the fixed first-30 history trap with tenant/principal-scoped cursor pages and Load older missions. History responses remain summaries, and the UI deduplicates appended pages. A 65-record regression covers same-timestamp ordering, three pages, malformed cursors, payload bounds and scoped HTTP access. Real Chromium desktop/mobile now opens a mission beyond the first page, then completes the existing save/start/reconnect journey without duplicate execution. Typecheck, full lint and production build passed; full web suite 499 passed, two optional browser skips. Budget #299 latest CI is green; its rollout review remains pending. Mission persistence has not been deployed or migrated.
+
+Mission execution-boundary follow-up (#291): managed GitHub execution is now checked before task intake, preventing a private dispatcher from accepting work this mission verifier cannot observe. Accepted responses must confirm both the managed runner and a durable receipt; otherwise the known task ID remains visible as uncertain, with no retry. Receipt/outcome lookup excludes private-runner rows, including an actual persisted-private-row regression. Sixteen mission tests plus three request-deadline tests pass; typecheck and changed-file lint pass. Existing task intake files and active PR ownership are preserved. Fresh CI remains required; no production mission was executed.
 
 ## 2026-10-16 — connected CRM contact workflow (issue #296)
 
@@ -462,8 +484,17 @@ Budget rollout follow-up (#299): implemented an explicit dry-run-by-default hist
 
 Budget merge-gate correction (#299): verified actual CODEOWNERS and GitHub review state. The accounting/maintenance changes do not touch protected policy, identity, approval or isolation files; all CI passed and there is no blocking review. The earlier extra spending-review hold was an inference, not a configured requirement. Under the user’s existing full approvals, use the ordinary CI gate after this documentation correction. No production database maintenance is authorized by a code merge alone; the documented rollout remains separate.
 
+Integrated merged budget #299 (ff1dd30ab67dcee34025944cc28b1a7ff71f8748) into mission #291; both progress histories preserved. Mission’s previous complete CI passed, including runner/receipt guards, and fresh integration CI is required. Its D1 migration/journal dependency on active task persistence PRs remains unresolved; do not claim production mission readiness. Next useful integration audit: current durable-dispatch #270 and dependent task-request/outcome PRs, preserving their file/branch ownership and configured review gates.
+
 Budget #299 merged as ff1dd30ab67dcee34025944cc28b1a7ff71f8748 after all cross-platform CI passed. No production database reconciliation was run. Integrated into CRM #297, preserving both handoffs. CRM gate clarification: this adds consumers of the existing declared-secret/approval mechanisms, changes no credential infrastructure or grants, and touches no protected CODEOWNERS path. The earlier extra credential-review hold was inferred; use the actual ordinary CI/no-blocking-review gate under the existing user authorization. Live acceptance remains blocked by selected CRM configuration.
 
+CRM #297 merged as 1c3be5b66160a28c04e9c5b027f314442d3cbb1e after every cross-platform check passed; no live CRM configuration or contact writes performed. Integrated current main into mission #291. Audited exact #270 durable-dispatch response/migration contract without editing its owned files; mission adapter compatibility with typed unknown/rejected responses is the next acceptance gap.
+
+Durable task integration follow-up (#291): audited committed #270 dispatch and #274 request API contracts read-only, preserving active owners. Mission receipt recovery now understands optional persisted dispatch states across current main and migration 0017: a saved unknown intent alone stays uncertain, confirmed dispatch promotes it, and recorded rejection fails dependencies. Typed HTTP 502 dispatch rejection is definitive; HTTP 202 dispatch-unknown is not mislabeled as confirmed acceptance. Three additional HTTP/runtime/SQLite cases verify transitions and no replay. Nineteen mission plus three deadline checks pass; typecheck and changed-file lint pass. #270 still explicitly requires tenant-persistence review and migration; no pending owner branch was modified or merged. CRM #297 is merged; live account setup remains incomplete.
+
+Mission release audit (#291): latest complete cross-platform CI passed on 609f130 (run 38992055213), including all nineteen mission and three deadline checks. Confirmed the deployment workflow does not apply D1 migrations; the existing explicit migration workflow already supports a bounded 0021-only dry run/apply, so no protected workflow change is needed. Updated the mission release checklist and replaced stale test counts. Latest hosted deployment remains performance rescue dee7942 (38834441273), with successful authenticated smoke evidence; missions are not live. Persistence review, shared journal coordination and authenticated mission acceptance remain unresolved. Next: complete those integration gates, preserving active task PR ownership; do not infer production readiness from green branch CI.
+
+Mission incomplete-evidence guard (#291): reproduced a false terminal failure when GitHub returned completed status with null/missing/unknown conclusion. Added an explicit recognized-conclusion guard so incomplete evidence remains pending and never blocks dependent work permanently. Extended the real runtime/SQLite result fixture with four failed-before cases. Validation is in progress. User next priority: suppress internal reasoning/build details and raw backend errors outside admin; expandable chat activity/approvals, cloud execution and app store readiness audit.
 ## 2026-10-16 — local inference stream integrity (#300)
 
 Isolated branch codex/inference-quota-reliability, current main 1c3be5b. Fixed
@@ -510,6 +541,7 @@ Customer prompt privacy follow-up (#310): found the system prompt unconditionall
 
 Prompt integration repair (#310): complete web validation caught an existing Genesis contract requiring publish policy ask in customer context. Restored only explicitly selected availability booleans and the known approval policy enum, preserving required approval semantics while excluding internal reason/credential/build fields. Existing project-tools tests remain unchanged. Fresh focused/full validation and CI required; do not merge the earlier failed web revision.
 
+Customer privacy #310 merged as 94438433eb2016570247e8618f2a6ca28c9b2314 after every cross-platform CI job passed (39006219808), with no blocking review. Final local build/typecheck/lint passed; full web suite 493 passed, two optional skips; real desktop/mobile activity gate passed separately. Deployment 39006513100 is queued; no live privacy acceptance yet. Latest observed prior successful deployment is 38996029310 at 832263e, so the earlier last-deployed dee7942 note is historical. Integrated current main into mission #291, preserving both histories. Next: verify 9443843 deployment and authenticated stream privacy, finish remaining non-streaming/history/project/admin boundaries, and resolve mission persistence integration plus native packaging/association blockers. Continuation automation now includes the user’s latest privacy, chat approval, cloud and app-store priorities.
 ## 2026-10-17 — durable cloud dispatch integration (#267 / #270)
 
 Merged current main 9443843 into the existing codex/durable-dispatch branch,
@@ -898,6 +930,83 @@ PR415 integration: retained both independent progress entries; current main incl
 
 PR415 integration with #416: retained all concurrent progress entries; no diagnostic source conflict. Next: require all fresh exact-head CI before ordinary merge, then obtain authorized medium-task evidence under the existing review gates.
 
+## 2026-10-21 — truthful coder activity completion (#386)
+
+Chat TaskActivity now reuses the existing build status presentation: a successful runner with no pull request does not claim a change is ready, and a pull request prompts review of changes and validation evidence. Generic completed state remains explicitly unconfirmed. Coder run is a neutral title; terminal empty steps no longer claim GitHub has yet to start. No execution, approval, polling, result-storage or verification policy changed.
+
+Validation: production web build and lint passed; full web suite 620 tests, 615 passed, five optional browser skips, zero failures. Actual React-rendered completion tests cover no-PR success, reviewable PR, unknown completion, failure, timeout, cancellation, skipped, and dispatch states. Existing elapsed-clock/poll recovery coverage is preserved. Restoring main's TaskActivity makes the new tests fail; restoring the fix passes all five rendered/clock tests. Hosted UI deployment and authenticated browser acceptance remain pending; this change does not add test execution or establish objective completion.
+## 2026-10-02 untrusted-data gap in team step verification
+
+- Audited the monorepo end to end (lint, typecheck, and every package's test suite) looking for the most likely real bug; ruled out several false leads first: `currentPeriodStart` (billing) was correct, a sandbox output-redaction layer made `githubReadHeaders()` look suspicious but is correct, stale `packages/atlas-cli/dist/` build artifacts from an unmerged branch caused spurious `provider-status` test failures, and several Windows-local-only failures (NTFS file-mode checks, a `genesis-publish` temp-dir `EPERM` race, PowerShell CLIXML noise in a live-session desktop test) are not cross-platform bugs.
+- Found a real gap in `apps/local-control/src/agent/team/step-executor.mjs`'s `verifyStep()`: the verification prompt wrapped the agent's `report` via `wrapUntrusted(...)` but spliced `toolLog` (`JSON.stringify(toolLog.slice(-20))`) into the same prompt raw and unwrapped. This violates the project's own stated invariant (this file's doc comment and the repo's custom instructions) that all tool/web/repository/agent-derived content must be wrapped as untrusted data before reaching a model. Current `toolLog` entries are bounded (`tool` from an allowlist, `code` from a small internal enum), so this was not a demonstrated live exploit, but it is a real defense-in-depth/consistency gap a future tool could widen.
+- Fix: wrap the tool log through the same `wrapUntrusted("tool log", ...)` helper used for the report. Added a regression test in `apps/local-control/tests/team-missions.test.mjs` asserting both `<data source="report">` and `<data source="tool log">` blocks appear in the prompt sent to the model, and that an injection-shaped `code` value inside the tool log trips the existing "Atlas notice" marker.
+- Evidence: `apps/local-control` test suite passes except the pre-existing, unrelated `genesis-publish.test.mjs` Windows temp-dir `EPERM` flake (622/623, matching the baseline before this change). `apps/web` (326 tests), lint and typecheck, `packages/atlas-contracts` (6 tests) and `scripts/runner`/`scripts/local` (53 tests) all pass unchanged.
+- Next: no action required for this fix; it is a self-contained security-consistency correction. Unrelated to this PR, prior sessions still have open threads on local-model qualification (OpenCode/Goose harness) and GitHub telemetry expansion — see the entries above.
+## 2026-10-15 | PR #284 | Genesis receipt recovery (issue #281)
+
+Hosted project creation now reserves an operation-ID-only event in an owned,
+unarchived conversation before contacting Genesis. Direct callers without a
+thread receive newly saved owned history. Reopening chat restores the latest
+receipt and checks actual node status; lost creation responses do not require
+another creation request. Status polling is bounded and explicit retry reads
+only. Existing operations are not backfilled; node connectivity/credentials
+remain required for live confirmation.
+
+Evidence: production build, typecheck and lint passed; full web suite 485 passed,
+one optional browser gate skipped, zero failed. Separate desktop/mobile browser
+gate passed including recovery, offline retry, reload, no creation POSTs, and
+scroll preservation. Real SQLite/route tests cover scope isolation and history
+failures. Removing receipt reservation fails the mutation check. A concurrent
+build/test output race was resolved by rerunning the suite after the build; a
+cold browser-bundle timeout passed on warmed rerun with its original timeout.
+
+PR is for owner review under PROGRAM section 3 because tenant-scoped persistence
+at the publishing boundary is protected. No credential provisioning or live
+repository creation occurred. Other agents' root edits and task dispatch were
+preserved. Next: review/integrate #284, then configure the trusted Genesis node
+connection before a live new-project acceptance run.
+
+## 2026-10-19 — Genesis receipt integration checkpoint (#281 / #284)
+
+Integrated current main afdee04, preserving hosted website creation, scoped
+preview reads, project-stage UI, bounded bridge deadlines, and existing approvals.
+Node dispatch reserves its original operation id before calling the node. Hosted
+creation reserves its actual gen_ operation id before returning an existing row
+or writing a site. Missing/foreign/archived history prevents creation. Reopening
+history restores only bounded operation ids; status checks never create projects.
+Retained main's preview UI while restoring bounded polling, cancellation, explicit
+read-only retry and truthful not-found diagnostics. Added a real SQLite hosted
+fallback recovery/refusal regression. Twenty focused project cases pass. All
+11 workflow checks pass. Build/full web tests, typecheck, lint and fresh CI are
+pending; no live node, external repository creation, publish or deployment claimed.
+
+Separate #289 CI at 6ac1336 failed Windows: 828 pass, two failures, 20 skips.
+Main already repairs the Genesis acceptance fixture. Updated daemon/Genesis
+reproduction passes all 11 cases in a serial Windows run; full parallel Windows
+CI remains a gate. Earlier all-green source heads do not replace this evidence.
+No production migration, credential transfer, data change or paid provisioning.
+Next: complete current-head CI and protected persistence review before rollout;
+configure a trusted Genesis node only with the required owner authorization.
+
+## 2026-10-19 — Genesis receipt verification follow-through
+
+Integrated build and typecheck pass. Full web acceptance: 624 total, 619 passed,
+five optional browser skips, zero failures. Separate Edge desktop/mobile chat
+acceptance passes: reopen/reload restores the receipt, offline status retry is
+read-only, no project creation POST occurs, and scroll position is preserved.
+Twenty-six focused chat/project cases pass. Full ESLint passes after removing
+an unused default callback argument. CI b02ca55 failed at that lint error; it did
+not reach the incomplete chat test host. The host now imports the real receipt
+helper. Final history-refusal diagnostics and no-write assertions pass 16 focused
+cases; final head CI remains required. No assertion or authorization was removed.
+
+#289's current-main integration exposed an unsupported Worker redirect mode in
+three verification calls; the separate outcome branch now uses manual redirects
+and rejects non-success responses. Its source scanner is corrected to inspect
+real files on Windows. Both fixes retain original ownership and approval gates.
+No live node, physical phone, production write, migration or deployment claimed.
+Next: finish exact-head CI/protected review for #284 and #289, then a configured,
+explicitly authorized Genesis-node acceptance run without publishing by default.
 ## 2026-10-20 — owner delivery priority queue (#430)
 
 Recorded the latest human P0–P3 order at the top of docs/atlas-os/BACKLOG.md: inference survival and real verified website/coding outcomes first; continuity, safe execution and bounded improvement next; owned/optional GPU compute and artifact experience after that; experimental research last. Each row reuses current services/PR ownership and states required observable acceptance. Historical evidence remains intact. PROGRAM phase gates, review requirements and resource authorization remain unchanged; this records the queue, not completed capabilities or permission to start later phases.
@@ -916,3 +1025,103 @@ Next: finish eligible P0 inference deployment/chat verification and actual websi
 Integrated current main b989b5a into PR431, retaining both independent progress histories and the eight requested priority rows. Provider397 merged externally as c848c5e and deployment39522378601 succeeded. Hosted runs39522548783 and39522564249 both reported route groq -> workers-ai -> openai, then failed waiting20minutes for runner/delivered findings. These are failed acceptance receipts, not evidence of newly configured providers or a passing chat release. New vendor secret names remain absent; no secrets were read or added. No repeat unchanged smoke was dispatched.
 
 Next: require fresh exact-head CI for the integrated queue PR; investigate the actual saved-task/findings failures with existing owners, obtain provisioned eligible provider keys, and complete fresh medium coder diagnosis through an authorized claim path. Preserve configured workflow review on395 and all native/tenant holds.
+
+## 2026-10-21 — Atlas Node shutdown after #407 (issue #439)
+
+The merged node client checked its stop signal only between operations, so SIGINT/SIGTERM could leave registration, long-polling or an input/output transfer stuck indefinitely. Forward the caller signal through every outbound request, response read and input pipeline; use an abortable retry delay that removes its listener; fence new render/completion starts after shutdown and clean partial workspaces. Existing enrollment, auth, lease and container APIs are unchanged. Already running renders still return under their configured timeout; client shutdown is not an acknowledged server job cancellation, and an earlier accepted request must be inspected through saved job state.
+
+Seven real-loopback shutdown tests failed against unchanged main and now pass, including stalled headers/bodies, observed TCP disconnects, workspace cleanup and no unfinished completion request. Removing only the fetch signal fails the retained stalled-claim guard; restored source passes. Affected node/compute/render/worker checks: 70 total, 68 pass, one optional browser skip, one baseline failure. The existing revoked-node streaming test fails under this host's Node24.14 Undici with "expected non-null body source"; the identical isolated failure reproduces with unchanged main source. Its assertions are preserved. Fresh Node22 Linux/Windows CI remains required; no external node/provider workloads were launched.
+
+Next: complete exact-head CI/review for this ordinary follow-up; investigate the pre-existing Node24 upload/refusal failure separately without weakening revocation assertions. Active-render cancellation and remote kill remain outside this network-shutdown fix.
+
+## 2026-10-21 — consistent eval category quota accounting (#436)
+
+Follow-up to merged #406: per-target rates already exclude provider quota
+refusals, but category rates used all runs and understated the same result.
+Category JSON now preserves total runs while exposing attempted,
+quotaRefusals and passRate; Markdown divides by non-quota attempts and lists
+refusals separately. All-quota categories report null / 0/0 (n/a), while real
+model/test failures still count. This does not change quota classification,
+agent execution, workflow policy, or the existing Claude #410 handoff.
+
+Three report regressions failed unchanged main; focused report/adapter/quota
+suite passes 13/13. Full affected package validation remains in progress at
+this checkpoint. No live model score or provider acceptance is claimed.
+Next: complete affected package and exact-head CI before ordinary merge.
+
+## 2026-10-21 — model authorship on task-dispatch completion (#435)
+
+The normal converse completion returned servedBy, but its early task-dispatch return dropped that receipt even when the model supplied introductory text. Preserve the same bounded actual provider/model metadata on that branch. Tool-only runtime acknowledgements still have no authorship field. Both JSON and streaming branch regressions fail before the change; affected agent-loop/free-vendor suites pass23/23. This is a metadata correction, not a semantic business verification or proof of the sole live streaming root cause. Latest live gate39553786887 returned/stored streaming text without confirmed authorship while non-streaming had a Groq receipt; no repeated live test claimed passing. Broad web/build/lint and exact-head CI remain release checks.
+
+Parallel continuation under the owner's explicit request: prebuilt local coder packaging reuses stale230 staging with an explicit installed marker while keeping developer builds; postmerge407 Atlas Node cancellation has real stalled-network regressions; postmerge406 category reports are being aligned to exclude quota refusals truthfully. Existing397 now owns vendor catalog/trust/routing; conflicting414 needs reconciliation before any independent merge. Preserve active ownership and protected workflow review.
+
+Eval438 validation follow-through: full affected atlas-eval package suite passed39/39 after the focused13/13 checks. Initial exact-head CI39598725107 and eval-fixtures39598725261 passed before this documentation-only integration with chat440. Fresh integrated-head CI remains required.
+
+
+## 2026-10-21 — verified receipt run-title repair (issue #432)
+
+#372 merged cb71137; successful Cloudflare39522378601 included it after an
+initial secret-upload deployment race. D1 migrations0017-0020/0022-0023 succeeded
+in39094569327. Hosted inspect39522548783 and coder39522564249 timed out: execution
+jobs succeeded but result reporting failed. Actual GitHub job workflow_name is
+the task-specific run title, not the static Atlas Coder/Runner label.
+Reused native verifier and scoped immutable storage; both run and job title must
+match the exact saved task. Real-metadata regression failed before repair; 11
+focused tests passed after, and two weakened title guards failed assertions.
+Also preserves explicit redirect refusal tests and repairs the Windows source
+scan (guard mutation failed as expected). Full build/CI/live revalidation pending.
+No new permissions, migration, claim release or coding retry introduced.
+## 2026-10-20 — free compute and eval baseline (#390, #398, #399, #400, #406, #407)
+
+- **Merged:** #390, the eval workflow with free targets (GitHub Models through the run's own token, Workers AI through the existing secrets), and #398, the RunPod Serverless provider, both merged by the owner; #399, the render panel on each Build project plus the `docker/render` image on a pinned Debian base (the image has never been built end to end: the session could not reach the Debian mirror).
+- **RunPod (#398):** GPU spending stays off until `ATLAS_GPU_MONTHLY_CAP_USD` is set above 0. The cap is checked in the same transaction as the lease insert, and every job carries RunPod's own execution timeout and TTL. Windows failed first because the job journal's SQLite handle was never closed; the fix closes it in the provider and service, and teardown now checks for open handles on Linux too.
+- **In review:**
+  - #407: Atlas Node, render jobs on the owner's own machines at $0. Main (with #398) is merged in: `createComputeService({ freeProviders })` always runs the nodes first, and adds RunPod after them only when it is configured. A node gets no jobs until the owner approves it, has its own revocable token (only the hash is stored), holds each job on a lease, and every upload is checked against its sha256.
+  - #400: Cloudflare Sandbox environments behind `apps/web/sandbox.config.json` (`enabled: false`). They need Workers Paid ($5/month) and a deploy; the routes answer 503 until then. Built on Sandbox SDK 1.0.0. The routes can run code, so the owner decides when it merges.
+  - #406: free-quota handling for the eval harness: HTTP 429 runs are classed `quota` and left out of the pass rate, and `--shard k/n` or `day/n` runs one slice of the suite.
+- **Eval evidence:**
+  - Workers AI run 39247409170: `actions-budget-guard` passed, then the free daily allowance ran out (HTTP 429). Not a baseline score.
+  - GitHub Models run 39247683371: HTTP 200 with a 4-byte `text/plain` body, before any tool call. The cause is still open; #406 prints bodies of 16 bytes or less.
+- **Merge order:** #407, #400 and #406 are independent of each other.
+- **Process:** #399 was merged by Claude without owner review. From here on the owner merges.
+
+Next: after #406 merges, open a protected workflow PR for a daily `--shard day/7` schedule, and re-run one GitHub Models task to read the 4-byte body. Once the owner can build `docker/render` and run one Atlas Node, record a real render through it.
+2026-10-21 | (this PR) | chat release gate | The streaming chat gate could never pass: 47811fa made `verify-hosted` require model authorship, but the streamed `done` event (filtered by `customer-events.mjs`, #310) dropped `servedBy`, which the non-streaming reply already carries. The projection now keeps `servedBy` as an allowlisted provider kind and a validated model name, and `finalization` as its status only; endpoints, reasons and other backend fields stay filtered. | Live verify-hosted 39598191966 after #397: non-streaming answered by groq openai/gpt-oss-20b, streaming 257 chars but "model authorship not confirmed"; route still groq → workers-ai → openai (new vendor keys not provisioned). customer-events test; web 672/0. | Owner: provision free vendor keys. | Re-run verify-hosted chat after deploy.
+
+## 2026-10-22 — recent implementation reconciliation
+
+Reconciled remote main cb979bd against the older primary checkout without changing its concurrent uncommitted work. See RECONCILIATION-2026-10-22.md for integrated milestones and remaining P0–P3 gates. Cloud mission intake now rejects stalled uploads after 15 seconds and does not wait indefinitely for oversized-body cancellation. Both real-stream regressions fail against baseline; 31 focused mission/request/customer-event tests pass. No deployment or migration claimed. Recent coder run 39874868449 failed execution and result delivery; private trace diagnosis remains required before a loop repair.
+
+Next: finish affected checks and review this intake repair; continue P0 inference/live coding diagnosis using the existing owners and trace fingerprints. Cline-specific attribution awaits a branch or PR identifier.
+
+## 2026-10-22 — coder evidence survives interrupted execution
+
+A failed hosted coder left no audit artifact because the CLI flushed only after session completion. The existing redacted JSONL store now receives incremental writes during execution, with serialized coalesced flushes, a confirmed offset and latched write errors. Finalization flushes on success and exceptions without duplicating events. A real CLI blocked on loopback model HTTP leaves a readable partial trace after forced termination; the test fails against baseline CLI wiring. Focused tests pass 14/14; full CLI suite passes 617, skips 8, fails 0 (625 total); TypeScript build passes.
+
+A bounded real Ollama qwen2.5-coder:1.5b fixture run exposed the next usability defect: a textual JSON tool request was returned as completed with zero edits, leaving the requested fix undone. No local coding acceptance claimed. Next: recover or reject textual tool requests within existing turn/token limits, then repeat the disposable local task and retain independent checks. Existing launch and provider work stays with its current PR owners.
+
+
+## 2026-10-22 — recover textual coder tool requests without false completion
+
+Real Ollama qualification showed qwen2.5-coder:1.5b returning a textual JSON tool request as a final answer, previously completed with no edits. Coder mode now recognizes offered textual tool requests, asks once for structured calls under the existing ledger/turn limits, and blocks repeated requests or a final answer without a subsequent tool attempt. Text never executes. Read-only explanations retain existing behavior; actual calls retain registration, scope and approval checks. Both real CLI regressions fail against the original agent; recovery produces independently checked file changes and verified repository checks in the HTTP fixture. Focused tests pass 35/35; full CLI suite passes 625, skips 8, fails 0 (633 total); TypeScript build passes.
+
+The real small-model repeat now blocks honestly after two responses; the independent arithmetic check still fails. The installed Qwen3 1.7B variant exceeded its existing 60-second request deadline with no tool call. No model or hardware qualification, production deployment, or P0 acceptance claimed. This slice stacks on the live-audit PR451. Mission PR450 CI passed; existing rollout and owner merge gates remain.
+
+Next: review/integrate the audit and textual-tool repairs, qualify a tool-capable model on the intended host, and repeat the unmet coding objective with independent checks; continue existing launch PR441 and provider ownership rather than duplicating them.
+
+Receipt repair #447 validation: production build/typecheck/lint passed. Local
+Windows web suite:686 total,680 passed,1 unchanged sandbox executable-bit
+expectation failed,5 optional browser skips. CI39686447928 web and every job
+except Windows local-control passed; that job timed out waiting15s for daemon
+startup. No local-control source changed. Preserved concurrent main/mission
+progress and requesting fresh CI on the integrated head. Live acceptance pending.
+
+2026-10-22 | [PR #453](https://github.com/cornerstonemarketingus/atlas/pull/453) | Live rescue | Run 39874868449 reached the 900-second coder deadline after 24 model requests and 23 tools (6 failed); no audit artifact survived. Its job workflow_name confirms the task-title mismatch fixed by #447, now merged and deployed in 39898073372. #451 integration preserves both handoff entries and passes the CLI build plus four audit tests; queued for CI-gated merge. #452 Windows daemon startup timeout rerun requested. Reporting now logs only locally constructed HTTP/transport failure details and keeps arbitrary exceptions private, without retrying task execution. | Runner/local tests: 98 passed, 1 platform skip; actual reporter-process regression fails when the old generic catch is restored. | Coder completion is not confirmed; audit and textual-tool fixes still require integration and renewed live acceptance. No provider limit or execution deadline was increased.
+
+2026-10-23 | [PR #455](https://github.com/cornerstonemarketingus/atlas/pull/455) | Phase 0 | Merged #445, #447, #450, #451, #452 and #453 with required CI. Hosted inspection 39898574903 passed; setup is 8/8. Coder 39899280928 created the requested file, opened #454 and delivered its result. Acceptance 39899264987 failed on regressed validation: 8 test failures, two repair passes, actual failures omitted from a changing TAP tail. Truncated failed command evidence now yields inconclusive comparison, preventing unsupported repair or verification; verbose successful commands still pass. | 31 focused tests; full CLI 626 passed/8 skipped; removing the guard fails the session regression and restoring it passes. | Actual sandbox failures remain unidentified; local Docker daemon unavailable. #454 remains unverified. #449 needs document reconciliation/review; older draft/conflicting PRs remain unfinished. | Retain complete bounded failure identities and repeat coding acceptance. No provider-rate-limit or full Phase 0 success claim.
+
+## 2026-10-23 — deployed release qualification and daily-quota recovery
+
+Verified merged release d9f6621 was deployed successfully in 39900284379. Inspected the configured database with dry run39966751152, then applied only the missing additive mission migration0021 in39967073156. Website flow39966438934 passed; desktop/mobile isolated Edge render checks and cleanup passed, but the software-business preview contains construction defaults, so content qualification remains open. Chat39966305821 failed on mixed capacity/credit refusals. Simple chat39966816365 produced a real stored Groq20B non-streaming answer but failed streaming. Independent correlation-helper evaluations39966432808 (20B) and39967305877 (120B) timed out with no files changed and failed tests. No model/coding qualification claimed.
+
+The binding adapter discarded explicit daily-allocation facts into generic429s, causing two-second retries to consume recovery before a free provider's stated reset. Added a fixed daily error code and UTC reset header only for explicit daily wording; ambiguous4006 capacity stays generic and provider text remains private. Both chat modes recover in a three-provider fixture without increasing budgets. Relevant baseline regressions fail;39 focused tests, lint, typecheck and build pass. Full web:718 pass,6 skip,1 unchanged Windows executable-mode failure. See RELEASE-QUALIFICATION-2026-10-23.md. Next: CI-gated release of the scheduling fix, repeat the live chat gate, finish independent coding qualification and preserve existing launch/workspace PR ownership.

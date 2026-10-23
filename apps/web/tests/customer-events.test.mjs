@@ -50,3 +50,14 @@ test("customer model context excludes Atlas architecture and credential deployme
  }
  const owner=atlasSystemPrompt({isOwner:true});assert.match(owner,/apps\/web/);assert.match(owner,/ATLAS_GITHUB_TOKEN/);
 });
+
+test("completion names who wrote the reply as a provider kind and model only, as the non-streaming reply does", () => {
+  const [result] = event("done", { conversationId: "t", stored: true, servedBy: { provider: "groq", model: "openai/gpt-oss-20b", endpoint: secret }, finalization: { status: "incomplete", reason: secret }, reply: { id: "r", content: "Hi", createdAt: "now" } });
+  assert.deepEqual(result.data.servedBy, { provider: "groq", model: "openai/gpt-oss-20b" });
+  assert.deepEqual(result.data.finalization, { status: "incomplete" });
+  assert.equal(JSON.stringify(result).includes(secret), false);
+  for (const servedBy of [{ provider: secret, model: "m" }, { provider: "groq", model: secret }, { provider: "groq" }]) {
+    const [filtered] = event("done", { conversationId: "t", stored: true, servedBy, reply: { id: "r", content: "Hi" } });
+    assert.equal(filtered.data.servedBy, undefined);
+  }
+});

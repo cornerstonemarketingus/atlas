@@ -58,6 +58,15 @@ function transientTransportFailure(error) {
     && cause.errors.every((failure) => TRANSIENT_TRANSPORT_CODES.has(failure?.code));
 }
 
+// Only locally constructed diagnostics may cross the log boundary. Never print
+// arbitrary exception messages, response bodies, endpoint URLs or credentials.
+class ResultDeliveryError extends Error {}
+
+export function deliveryFailureMessage(error) {
+  const detail = error instanceof ResultDeliveryError ? error.message : "The reporting step failed before delivery could be confirmed.";
+  return `Atlas result delivery failed. ${detail} Task execution was not retried. Check the reporting job; retry reporting only after resolving its cause.`;
+}
+
 export async function deliverResult({ endpoint, token, payload }, fetcher = fetch) {
   // The receiver's task/run/attempt IDs make an acknowledgement lost after
   // commit safe to retry. Snapshot the evidence so every attempt is identical.
@@ -72,10 +81,10 @@ export async function deliverResult({ endpoint, token, payload }, fetcher = fetc
       });
     } catch (error) {
       if (!transientTransportFailure(error)) {
-        throw new Error("Result delivery failed: request could not be sent.");
+        throw new ResultDeliveryError("Result delivery failed: request could not be sent.");
       }
       if (attempt === 2) {
-        throw new Error("Result delivery failed: transport unavailable after 3 attempts.");
+        throw new ResultDeliveryError("Result delivery failed: transport unavailable after 3 attempts.");
       }
     }
     if (response) {
@@ -84,7 +93,7 @@ export async function deliverResult({ endpoint, token, payload }, fetcher = fetc
       if (response.ok) return { delivered: true };
       // Manually dispatched maintenance jobs have no hosted conversation.
       if (response.status === 404) return { delivered: false, reason: 'task-not-found' };
-      if (response.status < 500 || attempt === 2) throw new Error(`Result delivery failed: HTTP ${response.status}`);
+      if (response.status < 500 || attempt === 2) throw new ResultDeliveryError(`Result delivery failed: HTTP ${response.status}`);
     }
     // Two bounded waits (250ms, 500ms) prevent a tight outage retry loop.
     await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
@@ -123,5 +132,5 @@ async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(() => { console.error("Atlas result delivery failed. Check the reporting job and retry it."); process.exitCode = 1; });
+  main().catch(error => { console.error(deliveryFailureMessage(error)); process.exitCode = 1; });
 }
