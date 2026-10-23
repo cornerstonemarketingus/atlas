@@ -505,12 +505,12 @@ test("in a browser: Businesses is in the nav, a business review automation is cr
   await page.locator(`#auto-business option[value="${business.id}"]`).waitFor({ state: "attached" });
   await page.locator("#auto-business").selectOption(business.id);
   await page.locator(`#auto-responsibility option[value="${responsibility.id}"]`).waitFor({ state: "attached" });
-  await page.locator("#auto-responsibility").selectOption(responsibility.id);
   await page.locator("#auto-repository").fill("C:/work/business");
-  await page.locator("#auto-budget-usd").fill("-1");
+  // Missing a choice: the console says which, and nothing is sent.
   await page.locator("#automation-form button", { hasText: "Create" }).click();
-  assert.match(await page.locator("#automations-notice").textContent(), /Spend must be/u, "validated before sending");
-  await page.locator("#auto-budget-usd").fill("0.10");
+  assert.equal(await page.locator("#automations-notice").textContent(), "Choose the responsibility to review.", "validated before sending");
+  assert.equal((await h.call("GET", "/v1/automations")).body.automations.length, 0);
+  await page.locator("#auto-responsibility").selectOption(responsibility.id);
   await page.locator("#automation-form button", { hasText: "Create" }).click();
   await page.waitForFunction(() => document.querySelector("#automations-notice").textContent === "Created.");
   await page.waitForFunction(() => /Business review/.test(document.querySelector("#automations-list").textContent));

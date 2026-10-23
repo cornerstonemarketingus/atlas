@@ -402,5 +402,31 @@ of them were uploaded under that claim with those digests.
     be inlined.
   - **Contract.** The render runner's container-only contract (protected
     review) has to gain a "remote GPU" mode deliberately.
-- **Routes.** No HTTP route exposes the compute service yet. A
-  `GET /api/compute/spend` for the dashboard would be a small addition.
+- **Routes.** Done for reading: see "Status route and console card" below.
+  There is no write route (the cap is configuration, not a console setting).
+
+## Status route and console card
+
+`GET /v1/compute` (`platform/compute/routes.mjs`) is owner only; a paired
+device gets 403, as with the render routes. It answers even when no compute
+service was built, with `enabled: false` and the reason. The body is
+`{ compute: { enabled, provisioning, rented, gpuSpending, reason, capMicroUsd,
+spend, leases, nodes } }`:
+
+- `rented` is true when a RunPod provider is configured; `gpuSpending` is true
+  only when it is and the monthly cap is above 0. `capMicroUsd` is the cap
+  that applies to paid GPUs (0 when there is no paid provider, since nothing
+  can be spent). `provisioning` is true when anything can run, including $0
+  Atlas Nodes.
+- `spend` is `manager.monthlySpend(tenant)`: month, settled, reserved, total
+  and remaining micro-USD for the current UTC month.
+- `leases` are the 20 most recent leases, newest first, from an allowlist of
+  fields (no instance ids).
+- `nodes` is `{ count, approved, online }` for the owner's Atlas Nodes
+  (revoked nodes are not counted; online means approved with a fresh
+  heartbeat), or null when the node service is not running.
+
+The response never contains the API key or anything from the provider
+object. The console's Models page shows it as a **Compute & spend** card:
+"GPU spending off (cap $0.00)" or "$X of $Y this month", the reason, the
+node counts and the recent leases. Tests: `tests/console-wiring.test.mjs`.
