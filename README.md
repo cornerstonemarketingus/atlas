@@ -144,6 +144,22 @@ Set-Location .\apps\local-control
 npm start
 ```
 
+Atlas listens on `http://127.0.0.1:4317` (`ATLAS_LOCAL_HOST`/`ATLAS_LOCAL_PORT`
+change it). Every request needs the owner token. The first start creates one
+and stores it in your OS account's credential vault, or in
+`~/.atlas/local-token` (`$ATLAS_LOCAL_DATA_DIR/local-token`) when no vault is
+usable. Setting `ATLAS_LOCAL_TOKEN` supplies one instead. To open the console
+already signed in, run this from the repository root in a second terminal while
+Atlas is running:
+
+```powershell
+node scripts/local/open-atlas.mjs          # opens the browser signed in as owner
+node scripts/local/open-atlas.mjs --print  # prints the sign-in URL instead
+```
+
+The sign-in URL carries the token, so treat it like a password. If the script
+reports that it created a new token, restart Atlas so the daemon uses it.
+
 Follow [sovereign mode](SOVEREIGN-MODE.md) for setup, local identity, model
 configuration, device pairing and remote access. For direct coding:
 

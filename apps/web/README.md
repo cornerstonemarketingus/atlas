@@ -1,100 +1,88 @@
-# vinext-starter
+# Atlas web
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+The hosted Atlas app: a Cloudflare Worker built with
+[vinext](https://github.com/cloudflare/vinext) (Next.js App Router on Vite).
+It serves the chat, tasks, missions, setup and owner pages under `app/`, and
+the API routes under `app/api/` (chat, tasks, auth, billing, settings, setup,
+inference governor and more). The Worker entry is `worker/index.ts`, which also
+hosts the `InferenceGovernorObject` Durable Object and a 15-minute cron.
+Bindings: D1 (`DB`), Workers AI (`AI`) and the governor Durable Object (see
+`vite.config.ts`).
 
-## Prerequisites
+Node.js 22.13 or newer.
 
-- Node.js `>=22.13.0`
+## Run it locally
 
-## Quick Start
+The local path that works is a production build served by Wrangler in local
+mode. Checked on 2026-10-23:
 
-```bash
-npm install
-npm run dev
-npm run build
+```sh
+cd apps/web
+npm ci
+# A database id at build time makes the build bind D1. Without one the build
+# omits the binding and every D1-backed route reports that DB is unavailable.
+# Locally, any id works.
+ATLAS_D1_DATABASE_ID=00000000-0000-4000-8000-000000000000 ATLAS_D1_DATABASE_NAME=atlas-local npm run build
+
+# Create the local D1 tables. Apply every drizzle/*.sql in filename order,
+# the same way migrate-d1.yml does remotely.
+for f in drizzle/*.sql; do npx wrangler d1 execute DB --local -c dist/server/wrangler.json --file "$f"; done
+
+npx wrangler dev -c dist/server/wrangler.json --local \
+  --var ATLAS_OPERATOR_TOKEN:<any-long-string> \
+  --var ATLAS_SESSION_SECRET:<another-long-string>
 ```
 
-This starter does not use `wrangler.jsonc`.
+Open `http://localhost:8787/owner`, choose "Use an access code instead" and
+enter the `ATLAS_OPERATOR_TOKEN` value. That gives you a signed-in owner
+session. API calls can instead send `Authorization: Bearer <ATLAS_OPERATOR_TOKEN>`.
+With the database migrated, `/api/setup/status` reports the D1, database and
+migration steps as complete, and the tasks, conversations and repository
+settings routes answer from the local database.
 
-## Included Shape
+What does not work locally:
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+- **Chat.** It needs the Workers AI binding, which `wrangler dev --local`
+  cannot provide (Wrangler lists `env.AI` as "not supported"), so
+  `POST /api/chat` answers "The model endpoint answered 502." To exercise chat,
+  deploy it. `app/api/chat/providers.mjs` also reads REST credentials, for
+  example `GROQ_API_KEY`, `OPENAI_API_KEY`, or `ATLAS_WORKERS_AI_TOKEN` with
+  `CLOUDFLARE_ACCOUNT_ID`, which can be passed with `--var`. That local path was
+  not tested for this README.
+- **Dispatching tasks, GitHub sign-in and billing** need their credentials
+  (`ATLAS_GITHUB_TOKEN`, the GitHub OAuth app and Stripe; see below).
+  `/api/setup/status` lists what is missing.
+- `wrangler d1 migrations apply --local` does not work: the generated config's
+  `migrations_dir` points at `apps/web/migrations`, which does not exist. The
+  migrations live in `drizzle/`, hence the `execute` loop above.
+- `npm run dev` needs `CLOUDFLARE_API_TOKEN`. Its Cloudflare plugin opens a
+  remote proxy session for the AI binding, and without a token it exits with
+  "Failed to start the remote proxy session".
+- `npm start` (`vinext start`) runs the build on plain Node. Pages render, but
+  every API route returns 500 (`ERR_UNSUPPORTED_ESM_URL_SCHEME` for
+  `cloudflare:` imports).
 
-## Workspace Auth Headers
+## Tests
 
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
+As CI runs them:
 
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```sh
+npm ci && npm run lint && npm test
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+`npm test` builds the app, then runs `tests/*.test.mjs` with `node --test`.
+`npm run typecheck` runs `tsc --noEmit`. The live deployment is checked by the
+"Verify hosted Atlas" workflow (`verify-hosted.yml`).
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+## Deploying
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+Production deployment status and checkpoints are logged in
+[`docs/ATLAS_DEPLOYMENT.md`](../../docs/ATLAS_DEPLOYMENT.md). The mechanics and
+the configuration the Worker reads are described below. A runtime variable
+reaches the Worker only if `.github/workflows/deploy-cloudflare.yml` uploads
+it.
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Deploying to Cloudflare Workers
+### Deploying to Cloudflare Workers
 
 `npm run build` produces a complete Wrangler config at `dist/server/wrangler.json`
 (worker entry, static asset directory, compatibility settings) — no hand-written
@@ -127,9 +115,10 @@ setting) needs a real D1 database — there is none until you create one:
 3. Re-run **Deploy Atlas web to Cloudflare Workers** so the Worker's D1
    binding picks up the real database instead of a placeholder.
 
-A later schema change needs its own manual `wrangler d1 execute <name>
---remote --file drizzle/<new-migration>.sql` — the provisioning workflow only
-bootstraps the first migration.
+Later migrations are applied with the **Apply Atlas D1 migrations** workflow
+(`migrate-d1.yml`). It runs `wrangler d1 execute --remote` for every
+`drizzle/*.sql` from a chosen prefix (default `0001`) in filename order, and it
+has a dry-run option. The provisioning workflow only bootstraps `0000`.
 
 Two more repository secrets, if present, are pushed to the Worker as secrets
 on every deploy (each step is skipped, not failed, if its secret is unset):
@@ -164,11 +153,15 @@ on every deploy (each step is skipped, not failed, if its secret is unset):
 Real visitors sign in with GitHub (not the operator token above), and each
 GitHub account is a billed customer with its own plan:
 
-| Tier | Price | Modes | Tasks / month |
-| --- | --- | --- | --- |
-| Free | — | `inspect`, `debug` | 20 |
-| Pro | $29/mo | + `coder` (opens PRs) | 200 |
-| Team | $99/mo | + `coder` | 1000 |
+| Tier | Price | Modes | Tasks / month | Chat messages / day | Hosted browser minutes |
+| --- | --- | --- | --- | --- | --- |
+| Free | — | `inspect`, `debug` | 20 | 20 | 0 |
+| Pro | $29/mo | + `coder` (opens PRs) | 200 | 400 | 300 |
+| Team | $99/mo | + `coder` | 1000 | 1500 | 2000 |
+
+(Prices are whatever Stripe Prices you configure. The limits come from
+`TIER_LIMITS`. The hosted browser has no executor yet; see
+`docs/atlas-os/ARCHITECTURE.md` §C.)
 
 `db/schema.ts` defines the exact numbers (`TIER_LIMITS`) if you want to
 change them — they're a starting point, not something the code assumes is
@@ -325,32 +318,31 @@ editor starts destroying things outside its own change set.
 
 #### Choosing a model provider
 
-Two vendors are supported, and you only need a key for the one you use:
+Routes are resolved by `scripts/runner/coder-routes.mjs`. A key is needed only
+for the vendors you use: `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`ATLAS_WORKERS_AI_TOKEN` (with `CLOUDFLARE_ACCOUNT_ID`), `CEREBRAS_API_KEY`,
+`GEMINI_API_KEY`, `OPENROUTER_API_KEY` or `MISTRAL_API_KEY`.
 
-- `GROQ_API_KEY` — an API key from [console.groq.com](https://console.groq.com/keys).
-- `ANTHROPIC_API_KEY` — an API key from
-  [console.anthropic.com](https://console.anthropic.com/settings/keys).
+- `ATLAS_CODER_MODEL` (a repository **variable**) picks the model. The
+  provider is inferred from its name, the same way `atlas code` infers it (see
+  `packages/atlas-cli/README.md`). `ATLAS_CODER_PROVIDER` overrides the
+  inference. An unknown provider fails the task with a message listing the
+  valid ones.
+- With neither set, the first usable vendor wins, in the order workers-ai,
+  openai, groq, cerebras, gemini, openrouter, mistral. Each vendor has a
+  default model.
+- Every other usable vendor is added as an automatic fallback, unless
+  `ATLAS_CODER_FALLBACKS` lists the routes explicitly or is `none`. Gemini,
+  OpenRouter and Mistral free tiers may train on prompts, so they join only
+  with `ATLAS_ALLOW_TRAINING_PROVIDERS=all`, or when that vendor's
+  `ATLAS_<VENDOR>_TIER` is set to `paid`. A self-hosted `ATLAS_CODER_BASE_URL`
+  never gets implicit public fallbacks.
 
-Without the key the selected provider needs, coder tasks fail immediately with
-a message naming the missing variable, rather than silently doing nothing. A
-key for the *other* vendor being unset is not an error.
-
-Set the `ATLAS_CODER_MODEL` repository **variable** (Settings → Secrets and
-variables → Actions → Variables tab, not Secrets) to pick the model; it
-defaults to `openai/gpt-oss-120b` on Groq. The provider is inferred from the
-model name — a `claude-*` model routes to Anthropic, anything else to Groq —
-so `claude-sonnet-5` is all you need to change to switch vendors. Set
-`ATLAS_CODER_PROVIDER` to `anthropic` or `groq` to override that inference;
-an unrecognised value fails the task with a clear message instead of guessing.
-
-Per-turn output is capped independently of the whole session budget: 4,096
-tokens on Groq, 8,192 on Anthropic. The Groq figure is deliberately low
-because Groq rejects a request outright (HTTP 413) once prompt tokens plus
-`max_tokens` exceed its tokens-per-minute limit, which can be as low as
-~10,000 on shared tiers. Either provider automatically retries a transient
-rate limit or server error up to twice, honoring a suggested wait when the
-vendor names one — a free-tier rate limit surfaces as a normal, self-healing
-retry rather than an immediate task failure.
+Per-turn output caps come from `packages/atlas-cli/src/model/coder-provider-selection.ts`:
+1,024 tokens on Groq, because Groq rejects a request (HTTP 413) when prompt
+plus `max_tokens` exceeds its tokens-per-minute limit, and 8,192 elsewhere.
+Transient rate limits and server errors are retried, honoring a vendor's
+suggested wait.
 
 #### Secret redaction
 
