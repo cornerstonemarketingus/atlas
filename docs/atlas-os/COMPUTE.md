@@ -326,6 +326,13 @@ sha256, renders in its container sandbox (network off, staging copy only),
 uploads each declared output with its sha256 (`PUT …/outputs`), then
 `POST …/complete` names every output's digest. The job succeeds only if all
 of them were uploaded under that claim with those digests.
+Outputs may be `.mp4`/`.webm` (stored as `video`), `.glb`/`.gltf`
+(`model3d`) or `.png`/`.jpg`/`.webp` (`file` with the image media type), the
+same mapping as the local render runner (`NODE_OUTPUT_TYPES` equals
+`RENDER_ARTIFACT_TYPES`). Each upload is size-limited and hashed while it
+streams, and the artifact store then sniffs it against its type (a GLB needs
+a glTF 2.0 header whose length matches; a `.gltf` needs `asset.version`); a
+mismatch is refused with `CONTENT_MISMATCH` and nothing is stored.
 
 - A claim that is not extended (the node died, lost its network, or stopped
   heartbeating) expires: the job is re-queued for a **different** node, at
