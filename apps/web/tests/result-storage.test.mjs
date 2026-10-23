@@ -83,7 +83,7 @@ test("built Worker result callback enforces claim ownership after signed run ver
     duringVerification();
     if (String(url).includes("/jobs?")) {
       assert.ok(String(url).includes(`/attempts/${attempt}/jobs?per_page=100`));
-      return Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 123, run_attempt: attempt, status: jobStatus, conclusion: jobConclusion, head_branch: "main", workflow_name: "Atlas Coder", head_sha: "a".repeat(40), completed_at: "2026-10-15T00:00:00Z" }] }, { status: jobsStatus });
+      return Response.json({ total_count: 1, jobs: [{ id: 456, name: "run", run_id: 123, run_attempt: attempt, status: jobStatus, conclusion: jobConclusion, head_branch: "main", workflow_name: `Atlas Coder · task ${taskId}`, head_sha: "a".repeat(40), completed_at: "2026-10-15T00:00:00Z" }] }, { status: jobsStatus });
     }
     return Response.json({ id: 123, head_sha: "a".repeat(40), run_attempt: attempt, event: "workflow_dispatch", head_branch: "main", path: ".github/workflows/atlas-coder.yml", display_title: `Atlas Coder · task ${taskId}` });
 
