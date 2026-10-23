@@ -23,7 +23,7 @@ import { RepositorySymbolReferenceFinder } from "./infrastructure/repository-sym
 import { BudgetedModelProvider } from "./infrastructure/budgeted-model-provider.js";
 import { InMemorySessionAuditLog } from "./infrastructure/in-memory-session-audit-log.js";
 import { JsonLinesSessionAuditStore } from "./infrastructure/json-lines-session-audit-store.js";
-import { persistSessionAudit } from "./infrastructure/persist-session-audit.js";
+import { IncrementalSessionAuditWriter } from "./infrastructure/persist-session-audit.js";
 import { InMemoryUsageBudgetLedger } from "./infrastructure/in-memory-usage-budget-ledger.js";
 import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-openai-compatible-model-provider.js";
 import { CloudModelProvider } from "./infrastructure/cloud-model-provider.js";
@@ -876,6 +876,13 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     tokensSpent: () => budgetLedger.snapshot().used.outputTokens,
   });
   let result: Awaited<ReturnType<typeof session.run>>;
+  // Persist while work is active: a runner deadline may terminate this process
+  // before session.run returns. Writes retain the existing redaction boundary.
+  const auditWriter = auditLogPath === undefined ? undefined : new IncrementalSessionAuditWriter(
+    new JsonLinesSessionAuditStore({ filePath: auditLogPath, redactor: new PatternSecretRedactor() }), audit,
+  );
+  const auditTimer = auditWriter === undefined ? undefined : setInterval(() => { void auditWriter.flush(); }, 1000);
+  auditTimer?.unref();
   // Only counters reach CI progress; never tool arguments, paths, prompts or provider bodies.
   const progressTimer = setInterval(() => {
     const events = audit.snapshot();
@@ -890,6 +897,11 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     result = await session.run();
   } finally {
     clearInterval(progressTimer);
+    clearInterval(auditTimer);
+    const persistence = await auditWriter?.flush();
+    if (persistence?.error !== undefined) {
+      console.error(`Audit log incomplete: wrote ${persistence.persisted} event(s) to ${auditLogPath} (${persistence.error}).`);
+    }
     // Saved however the session ended, so its edits can be taken back.
     // stderr, never stdout: stdout is the result the runner parses.
     const saved = await checkpoint.save(sessionId).catch((error: unknown) => {
@@ -897,21 +909,6 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       return null;
     });
     if (saved !== null) console.error(`To take back this session's edits: atlas undo ${JSON.stringify(summary.root)} --session ${saved}`);
-  }
-
-  // Flushed after the run, not during it: the agent records events
-  // synchronously mid-turn, and putting a disk write on that path to persist a
-  // record nobody reads until the run ends would be the wrong trade.
-  if (auditLogPath !== undefined) {
-    const persistence = await persistSessionAudit(
-      new JsonLinesSessionAuditStore({ filePath: auditLogPath, redactor: new PatternSecretRedactor() }),
-      audit,
-    );
-    // Reported on stderr, never stdout: stdout is the machine-readable result
-    // the runner parses into a pull request.
-    if (persistence.error !== undefined) {
-      console.error(`Audit log incomplete: wrote ${persistence.persisted} event(s) to ${auditLogPath} (${persistence.error}).`);
-    }
   }
 
   const output = toVerifiedCodeOutput(sessionId, result, usage);

@@ -1094,6 +1094,13 @@ Reconciled remote main cb979bd against the older primary checkout without changi
 
 Next: finish affected checks and review this intake repair; continue P0 inference/live coding diagnosis using the existing owners and trace fingerprints. Cline-specific attribution awaits a branch or PR identifier.
 
+## 2026-10-22 — coder evidence survives interrupted execution
+
+A failed hosted coder left no audit artifact because the CLI flushed only after session completion. The existing redacted JSONL store now receives incremental writes during execution, with serialized coalesced flushes, a confirmed offset and latched write errors. Finalization flushes on success and exceptions without duplicating events. A real CLI blocked on loopback model HTTP leaves a readable partial trace after forced termination; the test fails against baseline CLI wiring. Focused tests pass 14/14; full CLI suite passes 617, skips 8, fails 0 (625 total); TypeScript build passes.
+
+A bounded real Ollama qwen2.5-coder:1.5b fixture run exposed the next usability defect: a textual JSON tool request was returned as completed with zero edits, leaving the requested fix undone. No local coding acceptance claimed. Next: recover or reject textual tool requests within existing turn/token limits, then repeat the disposable local task and retain independent checks. Existing launch and provider work stays with its current PR owners.
+
+
 Receipt repair #447 validation: production build/typecheck/lint passed. Local
 Windows web suite:686 total,680 passed,1 unchanged sandbox executable-bit
 expectation failed,5 optional browser skips. CI39686447928 web and every job
