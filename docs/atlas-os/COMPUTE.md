@@ -375,6 +375,13 @@ of them were uploaded under that claim with those digests.
 - A revoked or expired node's in-flight container is not killed remotely; its
   result is refused and discarded, and the container stops at the job's own
   timeout.
+- Stopping the node cancels its outbound requests, response reads, input
+  transfers and retry waits, and removes its partial job workspace. No new
+  render or completion request starts after shutdown. An already running
+  render still returns under its configured timeout before local shutdown
+  completes. Stopping the client does not acknowledge a server-side job
+  cancellation: inspect the saved job, since an earlier request may already
+  have reached the daemon; unfinished claims recover through lease expiry.
 - Transport is the owner's HTTPS (VPN/proxy); there is no node-specific
   certificate pinning or mutual TLS yet: the node token is the node's identity.
 - Apple Silicon GPUs are not usable from Linux containers, so Mac nodes are

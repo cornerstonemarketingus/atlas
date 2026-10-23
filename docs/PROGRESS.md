@@ -1026,6 +1026,14 @@ Integrated current main b989b5a into PR431, retaining both independent progress 
 
 Next: require fresh exact-head CI for the integrated queue PR; investigate the actual saved-task/findings failures with existing owners, obtain provisioned eligible provider keys, and complete fresh medium coder diagnosis through an authorized claim path. Preserve configured workflow review on395 and all native/tenant holds.
 
+## 2026-10-21 — Atlas Node shutdown after #407 (issue #439)
+
+The merged node client checked its stop signal only between operations, so SIGINT/SIGTERM could leave registration, long-polling or an input/output transfer stuck indefinitely. Forward the caller signal through every outbound request, response read and input pipeline; use an abortable retry delay that removes its listener; fence new render/completion starts after shutdown and clean partial workspaces. Existing enrollment, auth, lease and container APIs are unchanged. Already running renders still return under their configured timeout; client shutdown is not an acknowledged server job cancellation, and an earlier accepted request must be inspected through saved job state.
+
+Seven real-loopback shutdown tests failed against unchanged main and now pass, including stalled headers/bodies, observed TCP disconnects, workspace cleanup and no unfinished completion request. Removing only the fetch signal fails the retained stalled-claim guard; restored source passes. Affected node/compute/render/worker checks: 70 total, 68 pass, one optional browser skip, one baseline failure. The existing revoked-node streaming test fails under this host's Node24.14 Undici with "expected non-null body source"; the identical isolated failure reproduces with unchanged main source. Its assertions are preserved. Fresh Node22 Linux/Windows CI remains required; no external node/provider workloads were launched.
+
+Next: complete exact-head CI/review for this ordinary follow-up; investigate the pre-existing Node24 upload/refusal failure separately without weakening revocation assertions. Active-render cancellation and remote kill remain outside this network-shutdown fix.
+
 ## 2026-10-21 — consistent eval category quota accounting (#436)
 
 Follow-up to merged #406: per-target rates already exclude provider quota
