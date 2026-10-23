@@ -264,12 +264,22 @@ printed.
   600,000) and with only a short environment allowlist, so model and GitHub
   keys are not passed. `--verify-dir` points at a sub-package. `--no-verify`
   skips verification.
+- Container verification: `--verify-container <absolute path to docker>` runs
+  each check in a disposable copy of the repository inside a
+  `node:22-bookworm-slim` container instead of on the host. That copy is
+  limited to 100,000 files and 512 MiB. Dependencies are installed there with
+  `npm ci --ignore-scripts`, the only step that gets network access, so this
+  mode supports npm only. If the container runtime cannot be used, the run
+  stops. It never falls back to the host. Container mode needs the complete
+  Atlas checkout, because it reuses the daemon's container policy, and it
+  cannot be combined with `--no-verify`.
 - Repair limits: `--max-repair-attempts` (0–5, default 2), `--max-repair-ms`,
   `--max-same-failure`.
 - `--dry-run` denies every write, so the model can read and propose but
   nothing lands.
 - `--audit-log <path>` writes a redacted JSONL session trace for
-  `atlas replay`.
+  `atlas replay`. It is flushed every second during the run, so a killed run
+  still leaves a trace.
 
 ```sh
 ANTHROPIC_API_KEY=… atlas code . "Make tests-for accept a directory" --model claude-sonnet-5 --verify-dir packages/atlas-cli
@@ -295,14 +305,16 @@ atlas github prs cornerstonemarketingus/atlas --state open --max-results 5
 - `code` writes only inside the repository, through the atomic change-set
   editor. It records an undo checkpoint first. The only program it runs is the
   package manager, with the repository's own scripts, no shell and an
-  environment allowlist.
+  environment allowlist. With `--verify-container`, that runs inside a
+  container on a copy of the repository.
 
 ## Current limitations
 
-- `code` runs whatever the repository's `typecheck`, `lint`, `build` and
-  `test` scripts do. The environment allowlist keeps Atlas's keys out of those
-  scripts, but they are not sandboxed beyond that. Run `code` only on
-  repositories whose scripts you trust, or use `--no-verify`.
+- Without `--verify-container`, `code` runs whatever the repository's
+  `typecheck`, `lint`, `build` and `test` scripts do, directly on the host. The
+  environment allowlist keeps Atlas's keys out of those scripts, but they are
+  not sandboxed beyond that. On a repository whose scripts you do not trust,
+  use `--verify-container` or `--no-verify`.
 - `code` sends repository content (redacted) to the hosted provider you choose.
   Only `chat` is limited to a local model.
 - `code` has no interactive approval step. Writes are either all allowed or,
