@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { SafeCommandRequest, SafeCommandResult, SafeCommandRunner } from "../src/domain/safe-command-runner.js";
 import { InvalidValidationProfileError } from "../src/domain/validation-profile.js";
 import { SafeValidationProfileRunner } from "../src/infrastructure/validation-profile-runner.js";
+import { VerifiedCoderSession } from "../src/agent/verified-coder-session.js";
 
 const result = (overrides: Partial<SafeCommandResult> = {}): SafeCommandResult => ({
   exitCode: 0, signal: null, stdout: "", stderr: "", timedOut: false, cancelled: false, truncated: false, durationMs: 12, ...overrides,
@@ -39,11 +40,37 @@ describe("SafeValidationProfileRunner", () => {
     assert.deepEqual(snapshot.observations.map((item) => item.outcome), ["execution-failed", "cancelled", "execution-failed"]);
   });
 
-  it("judges a run with long output by its exit code", async () => {
+  it("accepts long passing output but refuses to compare incomplete failure evidence", async () => {
     const mock = new MockRunner([result({ truncated: true, exitCode: 0 }), result({ truncated: true, exitCode: 1, stdout: "many lines\n[... 5 bytes of output omitted ...]\n1 failing" })]);
     const snapshot = await new SafeValidationProfileRunner(mock).run({ label: "post-change", profiles: [profile({ id: "a" }), profile({ id: "b" })] });
-    assert.deepEqual(snapshot.observations.map((item) => item.outcome), ["passed", "failed"]);
+    assert.deepEqual(snapshot.observations.map((item) => item.outcome), ["passed", "execution-failed"]);
     assert.deepEqual(snapshot.observations[0]?.diagnostics, [], "a passing run gains no diagnostic the comparator would count as new");
+  });
+
+  it("does not spend repair turns on changing TAP tails whose failing tests were omitted", async () => {
+    const output = (duration: number) => `TAP version 13\nnot ok 1 - existing failure\n${"ok 2 - passing case\n  duration_ms: 1\n".repeat(200)}# fail 1\n# duration_ms ${duration}\n`;
+    for (const capturedTruncated of [false, true]) {
+      const mock = new MockRunner([
+        result(), result({ exitCode: 1, stdout: output(100), truncated: capturedTruncated }),
+        result(), result({ exitCode: 1, stdout: output(200), truncated: capturedTruncated }),
+      ]);
+      const runner = new SafeValidationProfileRunner(mock);
+      const profiles = [profile({ id: "build" }), profile()];
+      let calls = 0;
+      const session = new VerifiedCoderSession({
+        plan: { profiles, skipped: false, skipReason: null },
+        runValidation: label => runner.run({ label, profiles }),
+        runAgent: async () => {
+          calls++;
+          return { status: "completed", response: "created documentation", message: null,
+            edits: [{ path: "docs/smoke.md", operation: "create" }] };
+        },
+      });
+      const verified = await session.run();
+      assert.equal(verified.verification.status, "inconclusive");
+      assert.equal(calls, 1, "incomplete logs cannot justify model repair attempts");
+      assert.deepEqual(verified.verification.newFailures, []);
+    }
   });
 
   it("runs explicit repeated attempts for flaky comparison", async () => {

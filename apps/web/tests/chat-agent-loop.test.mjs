@@ -85,6 +85,23 @@ test("tasks the model selects dispatch once with its introduction", async () => 
   assert.equal(outcome.reply, "Starting it.\n\nStarted coder.");
 });
 
+for (const stream of [false, true]) {
+  test(`task dispatch retains authorship only for model-written text (stream=${stream})`, async () => {
+    for (const introduction of ["Starting it.", ""]) {
+      const calls = [{ id: "task", type: "function", function: { name: "start_atlas_task", arguments: JSON.stringify({ mode: "coder", objective: "Fix the login bug", repository: "cornerstonemarketingus/atlas" }) } }];
+      const fetcher = async () => stream
+        ? sse([say(introduction), callTool("task", "start_atlas_task", JSON.parse(calls[0].function.arguments))])
+        : Response.json({ choices: [{ message: { content: introduction, tool_calls: calls }, finish_reason: "tool_calls" }] });
+      const { promise, started } = run(fetcher, { stream });
+      const outcome = await promise;
+      assert.equal(started.length, 1);
+      assert.equal(outcome.reply, `${introduction ? introduction + "\n\n" : ""}Started coder.`);
+      if (introduction) assert.deepEqual(outcome.servedBy, { provider: "self-hosted", model: "m" });
+      else assert.equal("servedBy" in outcome, false, "runtime acknowledgement alone is not model-written text");
+    }
+  });
+}
+
 test("tool use is bounded: the last round must answer in words", async () => {
   const loopForever = Array.from({ length: MAX_TOOL_STEPS }, (_, index) => [callTool(`r${index}`, "read_web_page", { url: "https://example.com/" })]);
   const { fetcher, requests } = scripted([...loopForever, [say("Done looking.")]]);

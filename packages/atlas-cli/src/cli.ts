@@ -23,7 +23,7 @@ import { RepositorySymbolReferenceFinder } from "./infrastructure/repository-sym
 import { BudgetedModelProvider } from "./infrastructure/budgeted-model-provider.js";
 import { InMemorySessionAuditLog } from "./infrastructure/in-memory-session-audit-log.js";
 import { JsonLinesSessionAuditStore } from "./infrastructure/json-lines-session-audit-store.js";
-import { persistSessionAudit } from "./infrastructure/persist-session-audit.js";
+import { IncrementalSessionAuditWriter } from "./infrastructure/persist-session-audit.js";
 import { InMemoryUsageBudgetLedger } from "./infrastructure/in-memory-usage-budget-ledger.js";
 import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-openai-compatible-model-provider.js";
 import { CloudModelProvider } from "./infrastructure/cloud-model-provider.js";
@@ -55,6 +55,7 @@ import { COMPACT_CODER_MODEL_TOOLS, REPOSITORY_READ_ONLY_MODEL_TOOLS } from "./m
 import { RepositoryTreeBuilder } from "./infrastructure/repository-tree-builder.js";
 import { renderTreeJson, renderTreeText } from "./presentation/tree-renderers.js";
 import { BoundedCommandRunner } from "./infrastructure/bounded-command-runner.js";
+import { ContainerValidationProfileRunner } from "./infrastructure/container-validation-runner.js";
 import { GhCliRepositoryHost } from "./infrastructure/gh-cli-repository-host.js";
 import { executeGitHubCommand } from "./cli-github.js";
 import { executeRedactCommand, readStandardInput } from "./cli-redact.js";
@@ -85,7 +86,7 @@ const USAGE = `Usage:
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N] [--capacity-wait-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N] [--max-repair-ms N] [--max-same-failure N]
-       [--verify-timeout-ms N] [--verify-package-manager <name>] [--audit-log <path>] [--format text|json]
+       [--verify-timeout-ms N] [--verify-package-manager <name>] [--verify-container <absolute-runtime-path>] [--audit-log <path>] [--format text|json]
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
 
 export async function main(args: readonly string[]): Promise<number> {
@@ -787,7 +788,17 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   // handing it GROQ_API_KEY, ATLAS_GITHUB_TOKEN or the operator token would
   // turn "run the tests" into credential exfiltration. Only what a build
   // genuinely needs is passed through.
-  const validationRunner = new SafeValidationProfileRunner(
+  const containerRuntime = args.includes("--verify-container") ? readRequiredOption(args, "--verify-container") : undefined;
+  if (containerRuntime === null) return 2;
+  if (containerRuntime !== undefined && args.includes("--no-verify")) {
+    console.error("--verify-container cannot be combined with --no-verify.");
+    return 2;
+  }
+  // Construction probes Docker before the first model call; isolation failures
+  // never downgrade to host execution or consume the model budget.
+  const validationRunner = containerRuntime !== undefined
+    ? await ContainerValidationProfileRunner.create({ repositoryRoot: summary.root, runtime: containerRuntime, packageManager, timeoutMs: verifyTimeoutMs, installDependencies: true })
+    : new SafeValidationProfileRunner(
     new BoundedCommandRunner({
       repositoryRoot: summary.root,
       allowedExecutables: [packageManager],
@@ -804,6 +815,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     registry,
     tools: COMPACT_CODER_MODEL_TOOLS,
     audit,
+    recoverTextualToolCalls: true,
     maximumTurns,
     // Several tool calls per turn is normal (read two files, then search);
     // a fixed 16 stopped runs that still had turns left ("Tool-call limit
@@ -865,6 +877,13 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     tokensSpent: () => budgetLedger.snapshot().used.outputTokens,
   });
   let result: Awaited<ReturnType<typeof session.run>>;
+  // Persist while work is active: a runner deadline may terminate this process
+  // before session.run returns. Writes retain the existing redaction boundary.
+  const auditWriter = auditLogPath === undefined ? undefined : new IncrementalSessionAuditWriter(
+    new JsonLinesSessionAuditStore({ filePath: auditLogPath, redactor: new PatternSecretRedactor() }), audit,
+  );
+  const auditTimer = auditWriter === undefined ? undefined : setInterval(() => { void auditWriter.flush(); }, 1000);
+  auditTimer?.unref();
   // Only counters reach CI progress; never tool arguments, paths, prompts or provider bodies.
   const progressTimer = setInterval(() => {
     const events = audit.snapshot();
@@ -879,6 +898,11 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     result = await session.run();
   } finally {
     clearInterval(progressTimer);
+    clearInterval(auditTimer);
+    const persistence = await auditWriter?.flush();
+    if (persistence?.error !== undefined) {
+      console.error(`Audit log incomplete: wrote ${persistence.persisted} event(s) to ${auditLogPath} (${persistence.error}).`);
+    }
     // Saved however the session ended, so its edits can be taken back.
     // stderr, never stdout: stdout is the result the runner parses.
     const saved = await checkpoint.save(sessionId).catch((error: unknown) => {
@@ -886,21 +910,6 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       return null;
     });
     if (saved !== null) console.error(`To take back this session's edits: atlas undo ${JSON.stringify(summary.root)} --session ${saved}`);
-  }
-
-  // Flushed after the run, not during it: the agent records events
-  // synchronously mid-turn, and putting a disk write on that path to persist a
-  // record nobody reads until the run ends would be the wrong trade.
-  if (auditLogPath !== undefined) {
-    const persistence = await persistSessionAudit(
-      new JsonLinesSessionAuditStore({ filePath: auditLogPath, redactor: new PatternSecretRedactor() }),
-      audit,
-    );
-    // Reported on stderr, never stdout: stdout is the machine-readable result
-    // the runner parses into a pull request.
-    if (persistence.error !== undefined) {
-      console.error(`Audit log incomplete: wrote ${persistence.persisted} event(s) to ${auditLogPath} (${persistence.error}).`);
-    }
   }
 
   const output = toVerifiedCodeOutput(sessionId, result, usage);

@@ -7,6 +7,39 @@ export interface PersistSessionAuditResult {
   readonly error?: string;
 }
 
+/** Serial, incremental writes; a failed append is never blindly retried. */
+export class IncrementalSessionAuditWriter {
+  #persisted = 0;
+  #error: string | undefined;
+  #pending: Promise<PersistSessionAuditResult> | undefined;
+
+  public constructor(
+    private readonly store: Pick<JsonLinesSessionAuditStore, "append">,
+    private readonly audit: SessionAuditLog,
+  ) {}
+
+  public flush(): Promise<PersistSessionAuditResult> {
+    if (this.#pending !== undefined) return this.#pending;
+    this.#pending = this.#drain().finally(() => { this.#pending = undefined; });
+    return this.#pending;
+  }
+
+  async #drain(): Promise<PersistSessionAuditResult> {
+    try {
+      while (this.#error === undefined && this.#persisted < this.audit.size) {
+        const events = this.audit.snapshot().slice(this.#persisted);
+        for (const event of events) {
+          await this.store.append(event.type, event.payload, event.occurredAt);
+          this.#persisted++;
+        }
+      }
+    } catch (error: unknown) {
+      this.#error = error instanceof Error ? error.message : "Audit persistence failed.";
+    }
+    return { persisted: this.#persisted, ...(this.#error === undefined ? {} : { error: this.#error }) };
+  }
+}
+
 /**
  * Flushes a completed session's in-memory audit log to durable storage.
  *

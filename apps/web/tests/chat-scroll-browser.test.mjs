@@ -24,6 +24,8 @@ test("real chat preserves desktop/mobile reading position through SSE, polling a
   const second = "22222222-2222-4222-8222-222222222222";
   const history = Array.from({ length: 35 }, (_, id) => ({ id: `m${id}`, role: "assistant", content: `Earlier computation ${id}. ${"Evidence and calculations. ".repeat(25)}`, createdAt: "2030-01-01T00:00:00Z" }));
   let activeResponse;
+  let projectReads = 0;
+  let projectWrites = 0;
   const html = `<html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0"><div id="root"></div><script type="module">
     import React from 'react'; import {createRoot} from 'react-dom/client';
     import {ChatSection} from '/app/chat/ChatSection.tsx';
@@ -55,7 +57,12 @@ test("real chat preserves desktop/mobile reading position through SSE, polling a
           if (url.pathname === "/api/chat") body = { configured: true };
           if (url.pathname === "/api/account") body = { signedIn: true };
           if (url.pathname === "/api/conversations") body = { conversations: [{ id: first, title: "First thread" }, { id: second, title: "Second thread" }] };
-          if (url.pathname.startsWith("/api/conversations/")) body = { messages: history, tasks: [] };
+          if (url.pathname.startsWith("/api/conversations/")) body = { messages: history, tasks: [], events: url.pathname.endsWith(second) ? [{ kind: "project", detail: JSON.stringify({ operationId: "recovered_project_123" }) }] : [] };
+          if (url.pathname === "/api/genesis/operations") {
+            if (request.method === "POST") projectWrites++;
+            projectReads++;
+            body = projectReads === 1 ? {status:"unavailable",message:"Node temporarily offline"} : { status:"published",repository:{webUrl:"https://github.com/acme/recovered-project",fullName:"acme/recovered-project"} };
+          }
           response.setHeader("Content-Type", "application/json"); response.end(JSON.stringify(body));
         });
       },
@@ -70,6 +77,7 @@ test("real chat preserves desktop/mobile reading position through SSE, polling a
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   const emit = (event, data) => activeResponse.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   for (const mobile of [false, true]) {
+    projectReads = 0;
     const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1200, height: 800 }, isMobile: mobile, hasTouch: mobile });
     const page = await context.newPage();
     const errors = [];
@@ -145,6 +153,14 @@ test("real chat preserves desktop/mobile reading position through SSE, polling a
     if (mobile) await page.getByRole("button", { name: "Open navigation" }).click();
     await page.getByRole("button", { name: "Second thread", exact: true }).click();
     if (mobile) await page.locator(".rail-close").click();
+    await bottom();
+    await page.getByText("Node temporarily offline", {exact:true}).waitFor();
+    assert.equal(projectReads, 1);
+    await page.getByRole("button", {name:"Check project status",exact:true}).click();
+    await page.getByRole("link", {name:"acme/recovered-project",exact:false}).waitFor();
+    await page.goto(`${origin}/?conversation=${second}`);
+    await page.getByRole("link", {name:"acme/recovered-project",exact:false}).waitFor();
+    assert.equal(projectWrites, 0, "recovery and explicit status retry never submit creation");
     await bottom();
     await scroll.focus();
     await page.keyboard.press("PageUp");
