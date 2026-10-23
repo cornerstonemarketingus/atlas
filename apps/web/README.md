@@ -24,9 +24,8 @@ npm ci
 # Locally, any id works.
 ATLAS_D1_DATABASE_ID=00000000-0000-4000-8000-000000000000 ATLAS_D1_DATABASE_NAME=atlas-local npm run build
 
-# Create the local D1 tables. Apply every drizzle/*.sql in filename order,
-# the same way migrate-d1.yml does remotely.
-for f in drizzle/*.sql; do npx wrangler d1 execute DB --local -c dist/server/wrangler.json --file "$f"; done
+# Create the local D1 tables from drizzle/*.sql (migrations_dir in the generated config).
+npx wrangler d1 migrations apply DB --local -c dist/server/wrangler.json
 
 npx wrangler dev -c dist/server/wrangler.json --local \
   --var ATLAS_OPERATOR_TOKEN:<any-long-string> \
@@ -38,7 +37,9 @@ enter the `ATLAS_OPERATOR_TOKEN` value. That gives you a signed-in owner
 session. API calls can instead send `Authorization: Bearer <ATLAS_OPERATOR_TOKEN>`.
 With the database migrated, `/api/setup/status` reports the D1, database and
 migration steps as complete, and the tasks, conversations and repository
-settings routes answer from the local database.
+settings routes answer from the local database. Run the `migrations apply`
+command again after pulling new migrations; it applies only the ones not yet
+recorded.
 
 What does not work locally:
 
@@ -52,9 +53,6 @@ What does not work locally:
 - **Dispatching tasks, GitHub sign-in and billing** need their credentials
   (`ATLAS_GITHUB_TOKEN`, the GitHub OAuth app and Stripe; see below).
   `/api/setup/status` lists what is missing.
-- `wrangler d1 migrations apply --local` does not work: the generated config's
-  `migrations_dir` points at `apps/web/migrations`, which does not exist. The
-  migrations live in `drizzle/`, hence the `execute` loop above.
 - `npm run dev` needs `CLOUDFLARE_API_TOKEN`. Its Cloudflare plugin opens a
   remote proxy session for the AI binding, and without a token it exits with
   "Failed to start the remote proxy session".

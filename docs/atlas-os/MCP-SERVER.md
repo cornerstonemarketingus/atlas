@@ -10,7 +10,7 @@ This is a separate process from the Atlas daemon (`npm start`). The daemon does
 not start it, and it needs no daemon running. It reads and writes the platform
 task store (a SQLite file) directly.
 
-Everything below was checked against the code on 2026-10-20. Sources:
+Everything below was checked against the code on 2026-10-23. Sources:
 `main-stdio.mjs` (launcher and variables), `server.mjs` (protocol and call
 pipeline), `tools.mjs` (tools), `stdio.mjs` (transport) and
 `../policy.mjs` (authorization).
@@ -37,7 +37,7 @@ prints an `ExperimentalWarning` about SQLite on stderr. That is harmless, and
 
 The server speaks newline-delimited JSON-RPC 2.0 on stdin/stdout. It exits with
 code 0 when stdin closes. It exits with code 2 if a required variable is
-missing.
+missing or the database file does not exist (see `ATLAS_MCP_CREATE_DB`).
 
 ## Environment variables
 
@@ -46,7 +46,8 @@ that identity.
 
 | Variable | Required | What it does |
 |---|---|---|
-| `ATLAS_MCP_DB` | yes | Path of the platform task-store SQLite file, opened with `PlatformTaskStore`. **If the file does not exist, it is created empty** (the parent directory must exist). A mistyped path therefore gives you an empty store, not an error. The daemon's own store is `platform.sqlite` in its data directory: `$ATLAS_LOCAL_DATA_DIR`, or `~/.atlas` when that is unset (`src/main.mjs`). The store uses WAL mode, so the daemon and this server can have the file open at once. |
+| `ATLAS_MCP_DB` | yes | Path of the platform task-store SQLite file, opened with `PlatformTaskStore`. **The file must already exist.** If it does not, the server writes `ATLAS_MCP_DB does not exist: <path>` to stderr and exits with code 2, so a mistyped path fails at startup rather than serving an empty store. The daemon's own store is `platform.sqlite` in its data directory: `$ATLAS_LOCAL_DATA_DIR`, or `~/.atlas` when that is unset (`src/main.mjs`). The daemon creates it on first start. The store uses WAL mode, so the daemon and this server can have the file open at once. |
+| `ATLAS_MCP_CREATE_DB` | no | Set to `1` to create an empty store at `ATLAS_MCP_DB` when the file does not exist (its parent directory must exist). Any other value, or unset, refuses a missing file. |
 | `ATLAS_MCP_TENANT` | yes | Tenant id for every call. All reads and writes are scoped to it. The local daemon's platform API uses tenant `local`. |
 | `ATLAS_MCP_USER` | yes | User id recorded as the owner of tasks this server creates. It also appears in audit events. The daemon's platform API uses `owner`. |
 | `ATLAS_MCP_AGENT` | no | Agent id. It is recorded on created tasks and audit events. Policy rules with an `agents` list match against it. Unset means `null`. The id is not checked against any agent registry. |
@@ -174,7 +175,8 @@ escape backslashes in paths, for example
   the `mcp-server` script's entry as a bare child process. It then completes
   the `initialize` handshake, sends `notifications/initialized`, lists tools and
   checks one granted call and one denied call, all in raw JSON-RPC, the way an
-  external client would.
+  external client would. A second test checks that a database path which does
+  not exist is refused (exit 2, nothing on stdout, no file created).
 - `apps/local-control/tests/platform-mcp-server.test.mjs` covers the server
   core, the in-process and child-process stdio paths (through Atlas's own
   `McpGateway`), and the HTTP transport.

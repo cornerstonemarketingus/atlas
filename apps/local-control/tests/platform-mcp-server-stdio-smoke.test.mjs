@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,7 @@ test("mcp-server npm script: initialize handshake and tools/list over raw stdio"
       // any ATLAS_MCP_* already set in the caller's shell is dropped.
       ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("ATLAS_MCP_"))),
       ATLAS_MCP_DB: join(dir, "platform.sqlite"),
+      ATLAS_MCP_CREATE_DB: "1", // a fresh store; without this a missing file is refused
       ATLAS_MCP_TENANT: "local",
       ATLAS_MCP_USER: "owner",
       ATLAS_MCP_PERMISSIONS: "atlas.status_lookup,atlas.list_tasks",
@@ -104,4 +105,32 @@ test("mcp-server npm script: initialize handshake and tools/list over raw stdio"
   assert.equal(await exited, 0, `server should exit cleanly when stdin closes; stderr: ${stderr}`);
   assert.equal(buffered, "", "no partial line left on stdout");
   assert.equal(lines.length, 0, "no unexpected extra messages on stdout");
+});
+
+test("mcp-server refuses a database path that does not exist unless ATLAS_MCP_CREATE_DB=1", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atlas-mcp-missing-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const entry = join(packageRoot, "src/platform/mcp-server/main-stdio.mjs");
+  const missing = join(dir, "platfrom.sqlite"); // a typo, as a user would make it
+  const child = spawn(process.execPath, ["--no-warnings", entry], {
+    cwd: packageRoot,
+    env: {
+      ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("ATLAS_MCP_"))),
+      ATLAS_MCP_DB: missing,
+      ATLAS_MCP_TENANT: "local",
+      ATLAS_MCP_USER: "owner",
+      ATLAS_MCP_PERMISSIONS: "atlas.*",
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const code = await new Promise((resolve) => child.once("exit", resolve));
+  assert.equal(code, 2);
+  assert.match(stderr, /ATLAS_MCP_DB does not exist: .*platfrom\.sqlite/u);
+  assert.match(stderr, /ATLAS_MCP_CREATE_DB=1/u);
+  assert.equal(stdout, "", "nothing on the protocol channel");
+  assert.equal(existsSync(missing), false, "no empty database was created");
 });
