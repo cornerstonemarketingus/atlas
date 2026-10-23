@@ -1,6 +1,40 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderResult, deliverResult, deliveryMessage, buildResultPayload } from "./report-result.mjs";
+import { renderResult, deliverResult, deliveryMessage, buildResultPayload, deliveryFailureMessage } from "./report-result.mjs";
+
+test("reporting failures retain safe HTTP diagnostics without exposing upstream secrets", async () => {
+  for (const status of [401, 403, 409, 503]) {
+    let failure;
+    try {
+      await deliverResult({ endpoint: "https://example.invalid", token: "PRIVATE_TOKEN", payload: {} },
+        async () => new Response("PRIVATE_BODY", { status }));
+    } catch (error) { failure = error; }
+    const message = deliveryFailureMessage(failure);
+    assert.match(message, new RegExp(`HTTP ${status}`));
+    assert.doesNotMatch(message, /PRIVATE/);
+    assert.match(message, /execution was not retried/i);
+  }
+  assert.doesNotMatch(deliveryFailureMessage(new Error("PRIVATE_TOKEN")), /PRIVATE/);
+  assert.doesNotMatch(deliveryFailureMessage(new Error("Result delivery failed: HTTP 403 PRIVATE")), /PRIVATE/);
+});
+
+test("reporter process logs safe rejection details and exits unsuccessfully", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const mock = `globalThis.fetch = async url => String(url).startsWith('https://identity.invalid/')
+    ? Response.json({value:'PRIVATE_IDENTITY_TOKEN'}) : new Response('PRIVATE_UPSTREAM_BODY',{status:409});`;
+  const result = spawnSync(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(mock)}`,
+    fileURLToPath(new URL("./report-result.mjs", import.meta.url))], {
+    encoding: "utf8", timeout: 15000, windowsHide: true,
+    env: { ...process.env, ATLAS_TASK_ID: "11111111-1111-4111-8111-111111111111",
+      ATLAS_OUTPUT_DIR: "", ACTIONS_ID_TOKEN_REQUEST_URL: "https://identity.invalid/token",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "PRIVATE_REQUEST_TOKEN", ATLAS_RESULT_URL: "https://result.invalid/" },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /HTTP 409/);
+  assert.match(result.stderr, /execution was not retried/i);
+  assert.doesNotMatch(result.stdout + result.stderr, /PRIVATE_|identity\.invalid|result\.invalid/);
+});
 
 test("inspection returns useful bounded findings without claiming a generated plan", () => {
   const text = renderResult({ inspection: { fileCount: 42, languages: [{ name: "TypeScript", fileCount: 30 }], frameworks: [], manifests: [{ path: "package.json" }] }, conclusion: "success" });
