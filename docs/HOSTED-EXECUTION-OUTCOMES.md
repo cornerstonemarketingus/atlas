@@ -78,3 +78,28 @@ are mocked. Four weakened guards (terminal status, commit binding, conflicting
 conclusions and read-side attempt binding) caused assertion failures and were restored
 before the full suite. No live production verification is inferred. Lint and CI
 results are recorded on the PR/claim issue.
+
+## 2026-10-21: restore live run-title receipt verification (issue #432)
+
+Release #372 merged and reached Cloudflare in successful deployment 39522378601.
+Its hosted inspection 39522548783 and coder 39522564249 checks dispatched tasks,
+but timed out waiting for result delivery. Their execution jobs succeeded; report
+jobs failed. Direct GitHub metadata identified the mismatch: job `workflow_name`
+contained `Atlas Coder · task <taskId>` / `Atlas Runner · task <taskId>`, whereas
+the verifier expected only the static workflow name. The former test fixtures
+therefore accepted a shape that did not represent these production responses.
+
+The verifier now derives the exact title from the saved task and requires both
+the verified run's `display_title` and job's `workflow_name` to match it. Exact
+run/attempt, terminal status, commit, execution job and immutable scoped storage
+checks remain. Static names, foreign tasks and mismatched titles are refused.
+No claim is released, execution retried, or permission expanded by this repair.
+
+Sanitized metadata from runs 39522587428 (coder) and 39522571343 (inspection)
+forms a regression that failed before the repair. Built-Worker, reconciliation
+and scheduled-observer fixtures now use the real task-specific title. Explicit
+credential-redirect tests remain, and the source scan uses native file URL
+conversion and fails on inaccessible source directories, including on Windows.
+Two weakened title guards and the redirect scan each caused assertion failures.
+Combined build, full-suite CI and renewed live acceptance are recorded on the PR;
+the prior deployment success is not a successful end-to-end acceptance claim.

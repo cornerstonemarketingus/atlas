@@ -6,6 +6,7 @@ import ts from "typescript";
 import { createEventParser } from "../app/api/chat/stream.mjs";
 import { classifyIntent } from "../app/chat/intent.mjs";
 import { createScrollFollow } from "../app/chat/scroll-follow.mjs";
+import { latestProjectReceipt } from "../app/chat/project-receipts.mjs";
 
 // Execute the real component with a small hook host. Requests remain deferred
 // so navigation and typing can happen before an earlier response completes.
@@ -35,6 +36,7 @@ function screen(repository = "") {
     window: { localStorage: { getItem: () => repository } },
     fetch: (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
     require(name) {
+      if (name.includes("project-receipts.mjs")) return { latestProjectReceipt };
       if (name === "react") return react;
       if (name.includes("scroll-follow.mjs")) return { createScrollFollow };
       if (name.includes("intent.mjs")) return { classifyIntent };

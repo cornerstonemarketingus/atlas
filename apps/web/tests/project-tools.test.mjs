@@ -45,3 +45,10 @@ test("bridge is owner-only, HTTPS-only, server configured and reports real unava
   const unreachable = await genesisBridge(environment, { owner: true, fetchImpl: async () => { throw new Error("server-secret"); } }).create({});
   assert.equal(unreachable.status, "unavailable"); assert.doesNotMatch(JSON.stringify(unreachable), /server-secret/);
 });
+
+test("a missing operation receipt is unconfirmed and reading it never creates a project", async () => {
+  let calls = 0;
+  const bridge = genesisBridge({ATLAS_GENESIS_URL:"https://genesis.test",ATLAS_GENESIS_TOKEN:"server-secret"}, {owner:true, fetchImpl: async (url, init) => {calls++; assert.equal(init.method,"GET"); assert.match(url.pathname,/operations/); return new Response("missing",{status:404});}});
+  assert.equal((await bridge.status("operation_123456789")).status,"not-found");
+  assert.equal(calls,1);
+});

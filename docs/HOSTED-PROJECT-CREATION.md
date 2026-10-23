@@ -92,9 +92,20 @@ receipt is never completion. A created repo with a failed push is a failure
 with the repository retained for inspection; Atlas never deletes it.
 Restarted in-flight operations report interrupted and are never blindly
 replayed across the external-action boundary. Approvals retain their existing
-durable exact-commit semantics. To check a receipt after closing the chat,
-ask `workspace_project_status` with its operation id or inspect Genesis.
-The activity card itself is not saved into conversation history.
+durable exact-commit semantics. Before contacting Genesis, hosted creation now
+reserves the operation ID in an existing, unarchived conversation belonging to
+the caller and tenant. If history is unavailable, no creation request is sent.
+Direct callers without a conversationId receive a new saved conversation.
+Caller-supplied conversation IDs must already belong to them. Only the
+operation ID is retained in the event, not the idea, credentials or tool output.
+
+Reopening a conversation restores its latest project card and reads the actual
+node status. A lost creation response remains recoverable through that receipt.
+Recovery never resubmits creation. A missing node receipt is unconfirmed, not a
+failed build or proof that no action occurred. Automatic polling stops after
+60 checks or a connection/authentication failure; Check project status retries
+only the read. Existing receipts that predate this change are not backfilled.
+The node must still be configured and reachable to confirm progress.
 
 Deployment stays `not-deployed` until a separately authorized deployment
 actually runs. A verified starter or business plan is not proof of an
@@ -115,3 +126,45 @@ owner/HTTPS bridge boundaries, real Genesis workspace/check/build execution,
 mocked GitHub create/readback and push, approval waiting, denied/insufficient
 permissions, unknown scope metadata, visibility mismatch, failed push and
 idempotent receipts. CI creates no real GitHub repositories.
+
+## 2026-10-19 — Genesis receipt integration checkpoint (#281 / #284)
+
+Integrated current main afdee04, preserving hosted website creation, scoped
+preview reads, project-stage UI, bounded bridge deadlines, and existing approvals.
+Node dispatch reserves its original operation id before calling the node. Hosted
+creation reserves its actual gen_ operation id before returning an existing row
+or writing a site. Missing/foreign/archived history prevents creation. Reopening
+history restores only bounded operation ids; status checks never create projects.
+Retained main's preview UI while restoring bounded polling, cancellation, explicit
+read-only retry and truthful not-found diagnostics. Added a real SQLite hosted
+fallback recovery/refusal regression. Twenty focused project cases pass. All
+11 workflow checks pass. Build/full web tests, typecheck, lint and fresh CI are
+pending; no live node, external repository creation, publish or deployment claimed.
+
+Separate #289 CI at 6ac1336 failed Windows: 828 pass, two failures, 20 skips.
+Main already repairs the Genesis acceptance fixture. Updated daemon/Genesis
+reproduction passes all 11 cases in a serial Windows run; full parallel Windows
+CI remains a gate. Earlier all-green source heads do not replace this evidence.
+No production migration, credential transfer, data change or paid provisioning.
+Next: complete current-head CI and protected persistence review before rollout;
+configure a trusted Genesis node only with the required owner authorization.
+
+## 2026-10-19 — Genesis receipt verification follow-through
+
+Integrated build and typecheck pass. Full web acceptance: 624 total, 619 passed,
+five optional browser skips, zero failures. Separate Edge desktop/mobile chat
+acceptance passes: reopen/reload restores the receipt, offline status retry is
+read-only, no project creation POST occurs, and scroll position is preserved.
+Twenty-six focused chat/project cases pass. Full ESLint passes after removing
+an unused default callback argument. CI b02ca55 failed at that lint error; it did
+not reach the incomplete chat test host. The host now imports the real receipt
+helper. Final history-refusal diagnostics and no-write assertions pass 16 focused
+cases; final head CI remains required. No assertion or authorization was removed.
+
+#289's current-main integration exposed an unsupported Worker redirect mode in
+three verification calls; the separate outcome branch now uses manual redirects
+and rejects non-success responses. Its source scanner is corrected to inspect
+real files on Windows. Both fixes retain original ownership and approval gates.
+No live node, physical phone, production write, migration or deployment claimed.
+Next: finish exact-head CI/protected review for #284 and #289, then a configured,
+explicitly authorized Genesis-node acceptance run without publishing by default.
