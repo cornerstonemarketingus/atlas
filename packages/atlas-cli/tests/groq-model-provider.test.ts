@@ -381,3 +381,16 @@ test("unparseable rejected tool calls are classified without exposing provider t
       && !error.retryable && !error.message.includes("PRIVATE_SENTINEL"));
   }
 });
+
+test("Groq returns native tool calls for Atlas name validation; compatible endpoints stay unchanged", async () => {
+  for (const endpoint of [undefined, "http://127.0.0.1:11434/v1/chat/completions", "https://example.invalid/v1/chat/completions"]) {
+    for (const tools of [undefined, [{ name: "repository.inspect", description: "inspect", inputSchema: { type: "object" as const } }]]) {
+      let payload: Record<string, unknown> = {};
+      const provider = new GroqModelProvider({ apiKey: "key", models: [model], ...(endpoint ? { endpoint } : {}), fetchImplementation: fakeFetch((_input, init) => {
+        payload = JSON.parse(String(init?.body)); return ok();
+      }) });
+      await provider.complete({ ...request, ...(tools ? { tools } : {}) });
+      assert.equal(payload['disable_tool_validation'], endpoint === undefined && tools !== undefined ? true : undefined);
+    }
+  }
+});

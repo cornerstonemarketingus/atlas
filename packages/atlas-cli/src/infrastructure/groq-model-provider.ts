@@ -131,7 +131,13 @@ export class GroqModelProvider implements ModelProvider {
     // entire bounded generation on private reasoning instead of a tool call.
     const localSmallQwen = ["127.0.0.1", "localhost", "[::1]"].includes(this.#endpoint.hostname)
       && /^qwen3:(0\.6b|1\.7b)$/iu.test(validated.model);
-    const payload = { ...buildOpenAiChatPayload(validated), ...(localSmallQwen ? { reasoning_effort: "none" } : {}) };
+    // Groq's name-membership check rejects aliases before Atlas can return a
+    // bounded tool error or resolve a unique offered alias. Request native
+    // structured calls instead; Atlas still validates arguments, offered
+    // names, scope and policy before executing anything.
+    const atlasValidatesToolNames = this.#endpoint.origin === "https://api.groq.com" && (validated.tools?.length ?? 0) > 0;
+    const payload = { ...buildOpenAiChatPayload(validated), ...(localSmallQwen ? { reasoning_effort: "none" } : {}),
+      ...(atlasValidatesToolNames ? { disable_tool_validation: true } : {}) };
     const body = JSON.stringify(payload);
     await this.#waitForTokenWindow(body, options.signal);
     const timeoutSignal = AbortSignal.timeout(this.#timeoutMs);
