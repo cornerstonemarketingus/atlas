@@ -1026,6 +1026,14 @@ Integrated current main b989b5a into PR431, retaining both independent progress 
 
 Next: require fresh exact-head CI for the integrated queue PR; investigate the actual saved-task/findings failures with existing owners, obtain provisioned eligible provider keys, and complete fresh medium coder diagnosis through an authorized claim path. Preserve configured workflow review on395 and all native/tenant holds.
 
+## 2026-10-21 — Atlas Node shutdown after #407 (issue #439)
+
+The merged node client checked its stop signal only between operations, so SIGINT/SIGTERM could leave registration, long-polling or an input/output transfer stuck indefinitely. Forward the caller signal through every outbound request, response read and input pipeline; use an abortable retry delay that removes its listener; fence new render/completion starts after shutdown and clean partial workspaces. Existing enrollment, auth, lease and container APIs are unchanged. Already running renders still return under their configured timeout; client shutdown is not an acknowledged server job cancellation, and an earlier accepted request must be inspected through saved job state.
+
+Seven real-loopback shutdown tests failed against unchanged main and now pass, including stalled headers/bodies, observed TCP disconnects, workspace cleanup and no unfinished completion request. Removing only the fetch signal fails the retained stalled-claim guard; restored source passes. Affected node/compute/render/worker checks: 70 total, 68 pass, one optional browser skip, one baseline failure. The existing revoked-node streaming test fails under this host's Node24.14 Undici with "expected non-null body source"; the identical isolated failure reproduces with unchanged main source. Its assertions are preserved. Fresh Node22 Linux/Windows CI remains required; no external node/provider workloads were launched.
+
+Next: complete exact-head CI/review for this ordinary follow-up; investigate the pre-existing Node24 upload/refusal failure separately without weakening revocation assertions. Active-render cancellation and remote kill remain outside this network-shutdown fix.
+
 ## 2026-10-21 — consistent eval category quota accounting (#436)
 
 Follow-up to merged #406: per-target rates already exclude provider quota
@@ -1061,6 +1069,20 @@ Deployment and acceptance instructions: docs/WORKSPACE-PROJECT-CREATION.md. Prod
 
 Next: publish the project-creation repair PR with configured projection review, require all exact-head CI, deploy the approved commit, and verify actual customer sign-in to persisted project and working streamed preview end to end before any production fixed claim. Preserve native and tenant migration holds and the original medium-coder diagnosis queue.
 
+
+## 2026-10-21 — verified receipt run-title repair (issue #432)
+
+#372 merged cb71137; successful Cloudflare39522378601 included it after an
+initial secret-upload deployment race. D1 migrations0017-0020/0022-0023 succeeded
+in39094569327. Hosted inspect39522548783 and coder39522564249 timed out: execution
+jobs succeeded but result reporting failed. Actual GitHub job workflow_name is
+the task-specific run title, not the static Atlas Coder/Runner label.
+Reused native verifier and scoped immutable storage; both run and job title must
+match the exact saved task. Real-metadata regression failed before repair; 11
+focused tests passed after, and two weakened title guards failed assertions.
+Also preserves explicit redirect refusal tests and repairs the Windows source
+scan (guard mutation failed as expected). Full build/CI/live revalidation pending.
+No new permissions, migration, claim release or coding retry introduced.
 ## 2026-10-20 — free compute and eval baseline (#390, #398, #399, #400, #406, #407)
 
 - **Merged:** #390, the eval workflow with free targets (GitHub Models through the run's own token, Workers AI through the existing secrets), and #398, the RunPod Serverless provider, both merged by the owner; #399, the render panel on each Build project plus the `docker/render` image on a pinned Debian base (the image has never been built end to end: the session could not reach the Debian mirror).
@@ -1079,3 +1101,17 @@ Next: after #406 merges, open a protected workflow PR for a daily `--shard day/7
 2026-10-21 | (this PR) | chat release gate | The streaming chat gate could never pass: 47811fa made `verify-hosted` require model authorship, but the streamed `done` event (filtered by `customer-events.mjs`, #310) dropped `servedBy`, which the non-streaming reply already carries. The projection now keeps `servedBy` as an allowlisted provider kind and a validated model name, and `finalization` as its status only; endpoints, reasons and other backend fields stay filtered. | Live verify-hosted 39598191966 after #397: non-streaming answered by groq openai/gpt-oss-20b, streaming 257 chars but "model authorship not confirmed"; route still groq → workers-ai → openai (new vendor keys not provisioned). customer-events test; web 672/0. | Owner: provision free vendor keys. | Re-run verify-hosted chat after deploy.
 
 PR449 integration: retained the complete project-creation investigation and the concurrent free-compute/eval/chat-release history. The merged customer-event projection keeps PR437's validated model authorship alongside the separate project-preview correction. Current main cb979bd includes externally merged cloud mission work; no migrations were applied in this workstream. Next: validate the integrated creation flow and exact-head CI, obtain configured projection review, then verify deployed customer creation before any production-fixed claim.
+
+## 2026-10-22 — coder evidence survives interrupted execution
+
+A failed hosted coder left no audit artifact because the CLI flushed only after session completion. The existing redacted JSONL store now receives incremental writes during execution, with serialized coalesced flushes, a confirmed offset and latched write errors. Finalization flushes on success and exceptions without duplicating events. A real CLI blocked on loopback model HTTP leaves a readable partial trace after forced termination; the test fails against baseline CLI wiring. Focused tests pass 14/14; full CLI suite passes 617, skips 8, fails 0 (625 total); TypeScript build passes.
+
+A bounded real Ollama qwen2.5-coder:1.5b fixture run exposed the next usability defect: a textual JSON tool request was returned as completed with zero edits, leaving the requested fix undone. No local coding acceptance claimed. Next: recover or reject textual tool requests within existing turn/token limits, then repeat the disposable local task and retain independent checks. Existing launch and provider work stays with its current PR owners.
+
+
+Receipt repair #447 validation: production build/typecheck/lint passed. Local
+Windows web suite:686 total,680 passed,1 unchanged sandbox executable-bit
+expectation failed,5 optional browser skips. CI39686447928 web and every job
+except Windows local-control passed; that job timed out waiting15s for daemon
+startup. No local-control source changed. Preserved concurrent main/mission
+progress and requesting fresh CI on the integrated head. Live acceptance pending.
