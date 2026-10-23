@@ -59,7 +59,7 @@ export default function InvestorsPage() {
       <h2>Implemented foundations. A larger creation vision.</h2>
       <div>
         <p>Genesis creates supported sites, apps and APIs with checks, previews and browser verification. Local agent teams, the kernel, impact maps, event-driven goals, automations, model hosting and guarded self-improvement are implemented slices; local and hosted capability coverage differs.</p>
-        <p>Dedicated game creation, complete autonomous business operation, continuous SEO/GEO optimization, persistent cloud execution and broader independent review remain roadmap work. The public roadmap records the boundaries. Quantum physics is a founder-identified research direction whose public implementation and results still need verification.</p>
+        <p>Dedicated game creation, complete autonomous business operation, continuous SEO/GEO optimization, persistent cloud execution and broader independent review remain roadmap work. Atlas is also working toward more resilient inference through shared quota controls, local models and recoverable execution; end-to-end production reliability remains to be verified. Quantum computing is exploratory research, not a demonstrated accelerator or a workaround for external API limits.</p>
       </div>
     </section>
     <section className="closing-cta"><p>Questions about Atlas or investing?</p><h2>Build what comes next.</h2><Link href="/about">About Atlas →</Link></section>
