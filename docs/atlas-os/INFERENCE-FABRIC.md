@@ -67,6 +67,8 @@ context or tool support does not fit (the existing `incompatibility` check):
 
 - **interactive** (chat reply): fastest available — Groq → Workers AI →
   Cerebras → owned → `trains` (if allowed and the request qualifies) → OpenAI.
+  This is the free **Atlas** chat mode. The paid **Super Atlas** mode uses a
+  separate, paid-only route; see [ATLAS-CHAT-TIERS.md](ATLAS-CHAT-TIERS.md).
 - **coder** (repository tools, many turns): owned PC → Modal → Cerebras →
   Groq → Workers AI → OpenAI/Anthropic. `trains` only with the owner's `all` consent.
 - **background** (self-improvement, evals): owned compute when idle, else the

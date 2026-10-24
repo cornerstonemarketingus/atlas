@@ -105,7 +105,9 @@ button:not(:disabled) { cursor: pointer; }
 .rail-link,.rail-utility,.thread-list button { color: var(--ws-muted); }
 .rail-link:hover,.rail-utility:hover,.rail-utility.active,.thread-list>div.active,.new-thread,
 .thread-search input,.project-switcher select,.theme-switcher select,.settings-choice select,
-.composer-actions button,.composer-actions select,.panel-reopen { background: var(--ws-card); color: var(--ws-text); border-color: var(--ws-line); }
+.composer-actions button,.composer-actions select,.panel-reopen,.mode-picker { background: var(--ws-card); color: var(--ws-text); border-color: var(--ws-line); }
+.mode-picker label { color: var(--ws-muted); }
+.mode-picker label.active { background: var(--ws-panel); color: var(--ws-accent); }
 .starter-grid button,.status-card,.plan-card,.mission-form,.pair-card,.workflow-grid button,
 .task-card,.work-trace,.suggestion-card>div:last-child,.activity-steps,.agent-tree,.changed-files,
 .chat-composer,.work-panel,.atlas-side-panel { background: var(--ws-panel); color: var(--ws-text); border-color: var(--ws-line); }
