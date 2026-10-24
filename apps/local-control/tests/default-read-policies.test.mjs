@@ -12,9 +12,9 @@ import { LocalTaskStore } from "../src/store.mjs";
 // commands, publishing and desktop control still ask.
 test("a fresh install allows workspace and browser reads, and still asks for writes and commands", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "atlas-default-policies-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
   const store = new LocalTaskStore(join(directory, "atlas.sqlite"));
-  t.after(() => store.close());
+  // Close before deleting: Windows cannot remove an open database file.
+  t.after(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
   assert.equal(store.policy("filesystem.read").decision, "allow");
   assert.equal(store.policy("browser.read").decision, "allow");
   for (const capability of ["code.write", "terminal.run", "publish.remote", "deploy.remote", "desktop.control"]) {
@@ -25,14 +25,13 @@ test("a fresh install allows workspace and browser reads, and still asks for wri
 
 test("an owner's saved decision survives a restart; the new defaults never overwrite it", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "atlas-default-policies-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
   const file = join(directory, "atlas.sqlite");
   const first = new LocalTaskStore(file);
   first.setPolicy("filesystem.read", "deny");
   first.setPolicy("browser.read", "ask");
   first.close();
   const reopened = new LocalTaskStore(file);
-  t.after(() => reopened.close());
+  t.after(() => { reopened.close(); rmSync(directory, { recursive: true, force: true }); });
   assert.equal(reopened.policy("filesystem.read").decision, "deny");
   assert.equal(reopened.policy("browser.read").decision, "ask");
 });
