@@ -800,10 +800,12 @@ const RESTORE_REASONS={
 };
 const shortDigest=d=>{const s=String(d||'');const hex=s.replace(/^sha256:/,'');return hex?hex.slice(0,12)+'…':'unknown'};
 function restoreReasonText(reason){return RESTORE_REASONS[reason]||String(reason||'This project cannot be restored right now.')}
+// Each id is written once, so the snapshot panel's alternative layouts never duplicate one.
+const SNAPSHOT_HEADING='<h3 id="build-snapshot-heading">Saved snapshot</h3>',RESTORE_RESULT='<div id="restore-result" role="status" aria-live="polite"></div>';
 function snapshotPanelHtml({receipt,role,confirming=false}){
- let html='<div class="task-top"><h3 id="build-snapshot-heading">Saved snapshot</h3>'+(receipt&&receipt.snapshot?pill('saved'):pill('none'))+'</div>';
+ let html='<div class="task-top">'+SNAPSHOT_HEADING+(receipt&&receipt.snapshot?pill('saved'):pill('none'))+'</div>';
  const s=receipt&&receipt.snapshot;
- if(!s)return html+'<p class="hint" id="snapshot-none">'+esc(restoreReasonText('no-snapshot'))+'</p><div id="restore-result" role="status" aria-live="polite"></div>';
+ if(!s)return html+'<p class="hint" id="snapshot-none">'+esc(restoreReasonText('no-snapshot'))+'</p>'+RESTORE_RESULT;
  const last=receipt.lastRestore&&receipt.lastRestore.snapshot===s.id?receipt.lastRestore:null;
  const check=last?(last.verified?'Verified when it was restored on '+when(last.at)+': every file matched its digest.':'Refused when a restore was tried on '+when(last.at)+': '+(RESTORE_REFUSALS[last.code]||last.message||last.code||'it did not verify.')):'Not restored yet. Its files are checked against this digest every time it is restored, and a mismatch is refused.';
  html+='<dl class="kv" id="snapshot-receipt"><dt>Taken</dt><dd>'+esc(when(s.takenAt))+' (snapshot '+esc(String(s.seq))+', at the '+esc(String(s.state||''))+' stage'+(s.files!=null?', '+esc(String(s.files))+' files':'')+')</dd>'
@@ -814,7 +816,7 @@ function snapshotPanelHtml({receipt,role,confirming=false}){
  else if(!receipt.restorable)html+='<p class="hint" id="restore-unavailable">'+esc(restoreReasonText(receipt.reason))+'</p>';
  else if(confirming)html+='<div class="card" id="restore-confirm"><h4>Restore snapshot '+esc(String(s.seq))+'?</h4><p>Atlas recreates the snapshot\\'s files in a new folder, checks every file against the digest above, and continues from there'+(['ready','published','failed'].includes(receipt.state)?' by building and verifying the project again':'')+'. The current folder is kept for you to inspect. Changes made after '+esc(when(s.takenAt))+' are not carried over.</p><div class="actions"><button type="button" id="restore-go">Restore now</button><button type="button" class="secondary" id="restore-cancel">Keep things as they are</button></div></div>';
  else html+='<div class="actions"><button type="button" class="secondary" id="restore-start">Restore last snapshot</button></div>';
- return html+'<div id="restore-result" role="status" aria-live="polite"></div>';
+ return html+RESTORE_RESULT;
 }
 function restoreResultHtml(status,body){
  const r=body&&body.restore;
@@ -838,7 +840,7 @@ async function loadSnapshotPanel(v,{force=false,result=lastRestoreResult.id===v.
   getJson('/v1/genesis/'+encodeURIComponent(v.id)+'/snapshot').catch(error=>({error})),
   getJson('/v1/identity').catch(()=>({role:'device'}))]);
  if(panel.dataset.key!==key)return;
- if(receipt.error){panel.innerHTML='<h3 id="build-snapshot-heading">Saved snapshot</h3>'+problem(receipt.error);return}
+ if(receipt.error){panel.innerHTML=SNAPSHOT_HEADING+problem(receipt.error);return}
  const draw=(confirming)=>{panel.innerHTML=snapshotPanelHtml({receipt,role:identity.role,confirming});if(result)$('#restore-result').innerHTML=result;
   const start=panel.querySelector('#restore-start');if(start)start.onclick=()=>{result='';lastRestoreResult={id:'',html:''};panel.dataset.busy='confirm';draw(true);$('#restore-go').focus()};
   const cancel=panel.querySelector('#restore-cancel');if(cancel)cancel.onclick=()=>{delete panel.dataset.busy;draw(false);const b=$('#restore-start');if(b)b.focus()};
