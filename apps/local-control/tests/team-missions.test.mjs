@@ -446,9 +446,11 @@ test("a capability with no saved policy is reported as not allowed by default, w
   const { createLegacyPolicyEngine } = await import("../src/platform/legacy-policy-bridge.mjs");
   const model = scriptedModel({ plan: oneStep });
   const { team, until } = await harness(t, model, {
-    // The daemon's own policy: the saved allow/ask/deny table. browser.read has no row.
+    // The daemon's own policy: the saved allow/ask/deny table. browser.read is
+    // read as a capability with no saved row (what the store returns for any
+    // unseeded capability), so this holds whatever the read-only defaults are.
     authorized: ({ store, toolRegistry }) => createLegacyPolicyEngine({
-      policyForCapability: (capability) => store.policy(capability),
+      policyForCapability: (capability) => (capability === "browser.read" ? { ...store.policy("test.no-saved-row"), capability } : store.policy(capability)),
       capabilityForTool: (name) => toolRegistry.get(name)?.capability ?? name,
     }),
   });
@@ -473,15 +475,15 @@ test("an owner's saved deny is still reported as the owner's decision", async ()
   const store = new LocalTaskStore(join(dir, "atlas.sqlite"));
   try {
     const engine = createLegacyPolicyEngine({ policyForCapability: (capability) => store.policy(capability) });
-    const evaluate = () => engine.evaluate({ tool: { name: "filesystem.read", capability: "filesystem.read", risk: "low" }, grantedPermissions: ["filesystem.read"] });
+    const evaluate = () => engine.evaluate({ tool: { name: "filesystem.write", capability: "filesystem.write", risk: "low" }, grantedPermissions: ["filesystem.write"] });
     const unset = evaluate();
     assert.equal(unset.effect, "deny");
-    assert.match(unset.reasons.join(" "), /filesystem\.read is not allowed by default/u);
-    store.setPolicy("filesystem.read", "deny");
+    assert.match(unset.reasons.join(" "), /filesystem\.write is not allowed by default/u);
+    store.setPolicy("filesystem.write", "deny");
     const owner = evaluate();
     assert.equal(owner.effect, "deny");
-    assert.match(owner.reasons.join(" "), /The owner set filesystem\.read to deny/u);
-    store.setPolicy("filesystem.read", "allow");
+    assert.match(owner.reasons.join(" "), /The owner set filesystem\.write to deny/u);
+    store.setPolicy("filesystem.write", "allow");
     assert.equal(evaluate().effect, "allow");
   } finally {
     store.close();
