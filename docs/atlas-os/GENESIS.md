@@ -268,6 +268,19 @@ with its files, state and checkpoints intact.
   can also call `POST /v1/genesis/:id/restore`. For a ready, published or
   failed project, that returns to `building` on the restored files, so the
   project is verified again.
+- **In the console.** Each Build project page has a **Saved snapshot** panel
+  fed by `GET /v1/genesis/:id/snapshot` (any signed-in viewer): when the
+  latest snapshot was taken and at which stage, its tree digest (full
+  digests and commit under a disclosure), and whether its last restore
+  verified or was refused. The response also says whether the project can
+  be restored now (`restorable`, mirroring `resumeFromSnapshot`'s
+  preconditions) and why not. The owner gets **Restore last snapshot**, which
+  asks for confirmation before calling `POST /v1/genesis/:id/restore`, then
+  shows the result. A refusal such as `DIGEST_MISMATCH` is explained in
+  plain language ("the saved files no longer match the fingerprint …
+  nothing was changed"). A refused restore of a ready, published or failed
+  project changes nothing and leaves no transition, so only the immediate
+  result shows it. Tests: `tests/console-wiring.test.mjs`.
 - **Side effects never repeat.** External actions go through
   `executor.effect(projectId, key, perform)`, which is also passed to the
   coder as `effect`. The ledger lives in `genesis_effects`:
@@ -501,7 +514,7 @@ The daemon builds a `RenderRunner` at startup. It only runs inside the container
 Without a runtime and an image it reports itself unavailable and never runs on the host.
 
 - `GET /v1/render`: `{ available, reason, capabilities }`. Paired devices may read it.
-- `POST /v1/render/jobs` `{ projectId, job }`: owner only (a paired device gets 403). It renders against that project's workspace. Video outputs go into the artifact store with the project id as provenance. The response codes:
+- `POST /v1/render/jobs` `{ projectId, job }`: owner only (a paired device gets 403). It renders against that project's workspace. Outputs go into the artifact store with the project id as provenance: `.mp4`/`.webm` as `video`, `.glb`/`.gltf` as `model3d`, and `.png`/`.jpg`/`.webp` as `file` with their image media type (`RENDER_ARTIFACT_TYPES`). The store sniffs every output (a GLB must have a glTF 2.0 header whose length matches the file; a `.gltf` must be JSON with `asset.version`), and a mismatch is recorded on the file as `artifactError` instead of stored. Other outputs (EXR, TIFF, BMP, text) stay in the workspace only. Blender can render frames today; exporting `.glb` needs a Blender Python export script, which the render policy refuses, so model outputs come from tools that write them directly. The Artifacts view opens models in its 3D viewer and images inline. The response codes:
   - 200: the render succeeded.
   - 422: the render ran but failed.
   - 503: no sandbox, or no image configured.

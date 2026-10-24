@@ -326,6 +326,13 @@ sha256, renders in its container sandbox (network off, staging copy only),
 uploads each declared output with its sha256 (`PUT …/outputs`), then
 `POST …/complete` names every output's digest. The job succeeds only if all
 of them were uploaded under that claim with those digests.
+Outputs may be `.mp4`/`.webm` (stored as `video`), `.glb`/`.gltf`
+(`model3d`) or `.png`/`.jpg`/`.webp` (`file` with the image media type), the
+same mapping as the local render runner (`NODE_OUTPUT_TYPES` equals
+`RENDER_ARTIFACT_TYPES`). Each upload is size-limited and hashed while it
+streams, and the artifact store then sniffs it against its type (a GLB needs
+a glTF 2.0 header whose length matches; a `.gltf` needs `asset.version`); a
+mismatch is refused with `CONTENT_MISMATCH` and nothing is stored.
 
 - A claim that is not extended (the node died, lost its network, or stopped
   heartbeating) expires: the job is re-queued for a **different** node, at
@@ -375,6 +382,13 @@ of them were uploaded under that claim with those digests.
 - A revoked or expired node's in-flight container is not killed remotely; its
   result is refused and discarded, and the container stops at the job's own
   timeout.
+- Stopping the node cancels its outbound requests, response reads, input
+  transfers and retry waits, and removes its partial job workspace. No new
+  render or completion request starts after shutdown. An already running
+  render still returns under its configured timeout before local shutdown
+  completes. Stopping the client does not acknowledge a server-side job
+  cancellation: inspect the saved job, since an earlier request may already
+  have reached the daemon; unfinished claims recover through lease expiry.
 - Transport is the owner's HTTPS (VPN/proxy); there is no node-specific
   certificate pinning or mutual TLS yet: the node token is the node's identity.
 - Apple Silicon GPUs are not usable from Linux containers, so Mac nodes are
@@ -395,5 +409,31 @@ of them were uploaded under that claim with those digests.
     be inlined.
   - **Contract.** The render runner's container-only contract (protected
     review) has to gain a "remote GPU" mode deliberately.
-- **Routes.** No HTTP route exposes the compute service yet. A
-  `GET /api/compute/spend` for the dashboard would be a small addition.
+- **Routes.** Done for reading: see "Status route and console card" below.
+  There is no write route (the cap is configuration, not a console setting).
+
+## Status route and console card
+
+`GET /v1/compute` (`platform/compute/routes.mjs`) is owner only; a paired
+device gets 403, as with the render routes. It answers even when no compute
+service was built, with `enabled: false` and the reason. The body is
+`{ compute: { enabled, provisioning, rented, gpuSpending, reason, capMicroUsd,
+spend, leases, nodes } }`:
+
+- `rented` is true when a RunPod provider is configured; `gpuSpending` is true
+  only when it is and the monthly cap is above 0. `capMicroUsd` is the cap
+  that applies to paid GPUs (0 when there is no paid provider, since nothing
+  can be spent). `provisioning` is true when anything can run, including $0
+  Atlas Nodes.
+- `spend` is `manager.monthlySpend(tenant)`: month, settled, reserved, total
+  and remaining micro-USD for the current UTC month.
+- `leases` are the 20 most recent leases, newest first, from an allowlist of
+  fields (no instance ids).
+- `nodes` is `{ count, approved, online }` for the owner's Atlas Nodes
+  (revoked nodes are not counted; online means approved with a fresh
+  heartbeat), or null when the node service is not running.
+
+The response never contains the API key or anything from the provider
+object. The console's Models page shows it as a **Compute & spend** card:
+"GPU spending off (cap $0.00)" or "$X of $Y this month", the reason, the
+node counts and the recent leases. Tests: `tests/console-wiring.test.mjs`.

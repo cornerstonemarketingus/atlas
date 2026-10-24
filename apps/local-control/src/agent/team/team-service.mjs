@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { planMission } from "./planner.mjs";
 import { toolsForAgent } from "./permissions.mjs";
+import { whereToAllow } from "../../platform/legacy-policy-bridge.mjs";
 
 /**
  * Agent missions: a goal becomes a plan over the real organization, the plan
@@ -98,7 +99,8 @@ export function createTeamService({ family, delegation, missionService, platform
       try {
         planned = await planMission({ client, model, goal: text, roster: agents, signal });
       } catch (error) {
-        throw new TeamError(error.code ?? "PLAN_FAILED", `Atlas could not make a workable plan: ${error.message}`, "BLOCKED_BY_CAPABILITY", "Rephrase the goal more concretely, or use a stronger planning model.");
+        const [blocked, unblock] = planFailureHint(error.code);
+        throw new TeamError(error.code ?? "PLAN_FAILED", `Atlas could not make a workable plan: ${error.message}`, blocked, unblock);
       }
       const missionId = `team-${randomUUID()}`;
       let task = platformStore.createTask({ tenantId: TENANT, userId: "local-owner", agentId: leadAgent.id, objective: text, successCriteria: planned.plan.successCriteria, budget: { toolCalls: STEP_BUDGET.toolCalls * planned.plan.steps.length } });
@@ -134,7 +136,7 @@ export function createTeamService({ family, delegation, missionService, platform
     list() {
       return missionService.list()
         .filter((m) => m.children?.[0]?.metadata?.kind === "agent_step")
-        .map((m) => summarizeMission(m, platformStore));
+        .map((m) => summarizeMission(m, platformStore, toolRegistry));
     },
 
     detail(missionId) {
@@ -143,7 +145,7 @@ export function createTeamService({ family, delegation, missionService, platform
       if (!mission || meta?.kind !== "agent_step") return null;
       const taskId = meta.platformTaskId;
       return {
-        ...summarizeMission(mission, platformStore),
+        ...summarizeMission(mission, platformStore, toolRegistry),
         steps: mission.children.map((c) => ({
           id: c.id, title: c.metadata.stepTitle, agent: c.metadata.agentName, agentId: c.metadata.agentId, dependsOn: c.dependencies,
           doneWhen: c.metadata.doneWhen, state: c.state, attempts: c.attempts, usage: c.usage,
@@ -166,12 +168,12 @@ export function createTeamService({ family, delegation, missionService, platform
       if (!mission || mission.children?.[0]?.metadata?.kind !== "agent_step") throw new TeamError("UNKNOWN_MISSION", "Mission not found.");
       const updated = missionService.control(missionId, action);
       if (action === "resume") watch(missionId, mission.children[0].metadata.platformTaskId);
-      return summarizeMission(updated, platformStore);
+      return summarizeMission(updated, platformStore, toolRegistry);
     },
   };
 }
 
-function summarizeMission(mission, platformStore) {
+function summarizeMission(mission, platformStore, toolRegistry = null) {
   const meta = mission.children?.[0]?.metadata ?? {};
   const task = meta.platformTaskId ? platformStore.getTask(TENANT, meta.platformTaskId) : null;
   const usage = mission.children.reduce((sum, c) => ({
@@ -182,5 +184,43 @@ function summarizeMission(mission, platformStore) {
     steps: { total: mission.children.length, completed: mission.children.filter((c) => c.state === "completed").length, failed: mission.children.filter((c) => c.state === "failed").length },
     agents: [...new Set(mission.children.map((c) => c.metadata?.agentName).filter(Boolean))],
     usage, createdAt: task?.createdAt ?? null, updatedAt: task?.updatedAt ?? null,
+    policyBlocks: meta.platformTaskId ? policyBlocksOf(platformStore.getToolCalls(TENANT, meta.platformTaskId), toolRegistry) : [],
   };
+}
+
+/**
+ * Tools the local policy refused during a mission, one entry per tool, with
+ * where the owner can allow it. Home and Missions show these, so a first
+ * mission that needs a capability nobody has allowed yet says how to fix it.
+ */
+function policyBlocksOf(toolCalls, toolRegistry) {
+  const blocks = new Map();
+  for (const call of toolCalls) {
+    if (call.status !== "denied" || call.error?.code !== "POLICY_DENIED" || blocks.has(call.tool)) continue;
+    const capability = toolRegistry?.get?.(call.tool)?.capability ?? call.tool;
+    const rule = /rule '([a-z-]+)'/u.exec(call.error.message ?? "")?.[1] ?? "denied-by-policy";
+    blocks.set(call.tool, { tool: call.tool, capability, reason: rule, message: String(call.error.message ?? "").slice(0, 500), hint: whereToAllow(capability) });
+  }
+  return [...blocks.values()];
+}
+
+/** The unblock hint has to match why planning failed: no model is not a vague goal. */
+function planFailureHint(code) {
+  switch (code) {
+    case "MODEL_UNREACHABLE":
+      return ["BLOCKED_BY_DEPENDENCY", "Start the local model server (Models → Start model server, or run Ollama), or point ATLAS_MODEL_ENDPOINT at a running OpenAI-compatible model server, then try again."];
+    case "MODEL_NOT_FOUND":
+      return ["BLOCKED_BY_DEPENDENCY", "Install the planning model on the Models page (or set ATLAS_TEAM_MODEL to a model the model server has), then try again."];
+    case "MODEL_NOT_AUTHORIZED":
+      return ["BLOCKED_BY_PERMISSION", "The model server refused the request. Check the API key configured for the model endpoint, then try again."];
+    case "MODEL_REQUEST_FAILED":
+    case "MODEL_STREAM_INTERRUPTED":
+    case "MODEL_EMPTY_RESPONSE":
+    case "MODEL_FAILED":
+      return ["BLOCKED_BY_DEPENDENCY", "The model server did not finish the request. Check that it is running and has enough memory for the model on the Models page, then try again."];
+    case "MODEL_CANCELLED":
+      return ["BLOCKED_BY_DEPENDENCY", "Planning was cancelled before it finished. Start the mission again."];
+    default:
+      return ["BLOCKED_BY_CAPABILITY", "Rephrase the goal more concretely, or use a stronger planning model."];
+  }
 }

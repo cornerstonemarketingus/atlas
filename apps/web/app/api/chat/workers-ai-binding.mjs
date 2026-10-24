@@ -87,6 +87,17 @@ export function workersAIBindingTransport(ai) {
       result = await ai.run(body.model, inputs);
     } catch (error) {
       const status = statusOf(error);
+      // Preserve scheduling facts without returning provider text (which may
+      // echo a prompt). Daily refusal is not a two-second capacity reset.
+      const daily = status === 429 && /\bdaily (?:free )?(?:allocation|quota|limit)\b/iu.test(String(error?.message ?? error ?? ""));
+      if (daily) {
+        const now = Date.now();
+        const reset = new Date(now);
+        reset.setUTCHours(24, 0, 0, 0);
+        return Response.json({ error: { code: "WORKERS_AI_DAILY_QUOTA", message: "Workers AI daily allocation is exhausted." } }, {
+          status, headers: { "retry-after": String(Math.max(1, Math.ceil((reset.getTime() - now) / 1000))) },
+        });
+      }
       return Response.json({ error: { code: "WORKERS_AI_BINDING", message: `Workers AI refused the request (${status}).` } }, { status });
     }
     const completion = toChatCompletion(result, body.model);

@@ -356,11 +356,16 @@ test("the local executor reports its worktree patch as an artifact", async (t) =
 });
 
 test("the local executor refuses a session with no repository", async (t) => {
-  const { runtime } = await harness(t, { executors: { local: createLocalExecutor({ runCoder: async () => assert.fail("must not run"), dataDirectory: "/tmp" }) } });
-  const session = runtime.createSession({ title: "No repo", model: "m" });
-  runtime.submitTurn(session.id, { text: "Do something." });
-  await runtime.drain();
-  assert.equal(runtime.getSession(session.id).status, "failed");
+  const executor = createLocalExecutor({ runCoder: async () => assert.fail("must not run"), dataDirectory: "/tmp" });
+  const { runtime } = await harness(t, { executors: { local: executor } });
+  // Refused before a session exists, so nothing is left to fail.
+  assert.throws(() => runtime.createSession({ title: "No repo", model: "m" }), { code: "REPOSITORY_REQUIRED" });
+  assert.equal(runtime.listSessions().length, 0);
+  // The executor still refuses on its own if a session without one ever reaches it.
+  const events = [];
+  const result = await executor.run({ session: { id: "s", repository: null }, turn: { id: "t", text: "Do something." }, emit: (event) => events.push(event), budget: { record() {} }, checkpoint: async () => {} });
+  assert.equal(result.status, "failed");
+  assert.match(events[0].data.summary, /No repository/u);
 });
 
 test("an unconfigured GitHub Actions executor fails closed with an actionable message", async (t) => {

@@ -1,3 +1,5 @@
+import { planHostedSite } from "../genesis/hosted-site.mjs";
+
 export const CREATE_PROJECT_TOOL = { type: "function", function: {
   name: "workspace_create_project", description: "Create an entirely separate Genesis workspace, scaffold and verify it, then create and push a new GitHub repository under publish.remote policy. Never edits the selected repository. Returns a durable operation receipt, not a completion claim.",
   parameters: { type: "object", properties: {
@@ -23,6 +25,10 @@ export function createProjectTools({ create, status, requestId, userMessage }) {
     workspace_create_project: async (call, { emit = discard } = {}) => {
       const input = JSON.parse(call.function.arguments);
       if (input.visibility === "public" && !userWantsPublic(userMessage)) return outcome({ status: "denied", message: "Public visibility requires an explicit user request. Default to private." });
+      // A model's generic web-app guess must not turn the person's website
+      // request into a deployment-owned code-execution request. This only
+      // selects the existing non-executing builder; authorization is unchanged.
+      if (input.template === "web-app" && planHostedSite({ userMessage }).ok) input.template = "static-site";
       const result = await create({ ...input, requestId, visibility: input.visibility ?? "private", host: "github" });
       emit("project", result);
       return outcome(result);

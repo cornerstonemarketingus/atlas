@@ -4,7 +4,9 @@ import { runCoderProcess } from "./run-coder-process.mjs";
 import { PROVIDER_KEY_VARIABLES, isValidRoute, resolveCoderRoutes } from "./coder-routes.mjs";
 import path from "node:path";
 import { correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
+import { coderValidationArguments } from "./validation-isolation.mjs";
 import { enforceHostedExecutionLease } from "./claim-execution.mjs";
+import { findMarkers, requestedMarkers } from "./inspect-findings.mjs";
 
 // Also fence cached pre-claim workflow definitions that check out current main policy.
 enforceHostedExecutionLease(process.env);
@@ -119,6 +121,30 @@ function writeRedactedJson(filename, value) {
   return true;
 }
 
+const PARTIAL_PATCH_LIMIT_BYTES = 200_000;
+
+/**
+ * Captures what an interrupted coder run left in the working tree as a redacted
+ * patch next to the other task artifacts. Git is run with hooks, external diff
+ * drivers and filesystem monitors off because the tree is untrusted data.
+ */
+function savePartialPatch(parsed) {
+  const git = (...args) => spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-C", repositoryRoot, "--no-pager", ...args],
+    { encoding: "utf8", timeout: 60_000, maxBuffer: MAX_FILE_BYTES, windowsHide: true });
+  const added = git("add", "-A");
+  const diff = added.status === 0 ? git("diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv") : added;
+  if (diff.error || diff.status !== 0) return { message: `${parsed.edits.length} file(s) changed but the patch could not be captured.`, file: null };
+  const text = diff.stdout ?? "";
+  if (text.length === 0) return { message: `${parsed.edits.length} file(s) reported changed but the working tree has no differences.`, file: null };
+  if (Buffer.byteLength(text) > PARTIAL_PATCH_LIMIT_BYTES) return { message: `${parsed.edits.length} file(s) changed; the patch is larger than ${PARTIAL_PATCH_LIMIT_BYTES} bytes and was not saved.`, file: null };
+  const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
+  const redacted = spawnSync(process.execPath, [cli, "redact"], { input: text, encoding: "utf8", timeout: 120_000, maxBuffer: MAX_FILE_BYTES, windowsHide: true });
+  if (redacted.error || redacted.status !== 0) return { message: `${parsed.edits.length} file(s) changed; the patch was not saved because redaction failed.`, file: null };
+  fs.writeFileSync(path.join(outputDirectory, "partial.patch"), redacted.stdout, { encoding: "utf8", mode: 0o600 });
+  const verification = parsed.verification?.status ?? "unknown";
+  return { message: `${parsed.edits.length} file(s) changed, saved as partial.patch (verification: ${verification}); the objective is not confirmed.`, file: "partial.patch" };
+}
+
 if (metadata.mode === "inspect") {
   const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
   const commands = [
@@ -144,8 +170,28 @@ if (metadata.mode === "inspect") {
     fs.writeFileSync(path.join(outputDirectory, filename), output, { encoding: "utf8", mode: 0o600 });
   }
 
-  writeStatus("completed", "Read-only inspection completed successfully.");
-  console.log("Atlas read-only inspection completed.");
+  // The inventory above does not depend on the objective. Say what the request
+  // was and whether this run answered it, so a green job is never mistaken for
+  // an answer.
+  const markers = requestedMarkers(metadata.objective);
+  if (markers.length > 0) {
+    const found = findMarkers(repositoryRoot, markers);
+    if (!found.ok) {
+      writeStatus("failed", found.error);
+      console.error(found.error);
+      process.exit(1);
+    }
+    if (!writeRedactedJson("findings.json", { schema_version: 1, kind: "markers", answered: true, ...found })) {
+      writeStatus("failed", "The marker findings could not be written safely.");
+      process.exit(1);
+    }
+    writeStatus("completed", `Read-only inspection completed: ${found.total} ${markers.join("/")} comment(s) found.`, { answered: true });
+    console.log(`Atlas read-only inspection completed: ${found.total} marker comment(s).`);
+  } else {
+    writeJson("findings.json", { schema_version: 1, kind: "inventory", answered: false });
+    writeStatus("completed", "Read-only inspection completed: a repository inventory only. A more specific request was not answered.", { answered: false });
+    console.log("Atlas read-only inspection completed (inventory only).");
+  }
 } else if (metadata.mode === "debug") {
   const packageDirectory = path.join(repositoryRoot, "packages", "atlas-cli");
   if (!fs.existsSync(path.join(packageDirectory, "package.json"))) {
@@ -180,6 +226,8 @@ if (metadata.mode === "inspect") {
   writeStatus("completed", "Build and test succeeded on the requested branch.");
   console.log("Atlas debug run completed: build and test passed.");
 } else if (metadata.mode === "coder") {
+  // Refuse hosted misconfiguration before any model call or target execution.
+  const validationArguments = coderValidationArguments();
   // The vendor is an operator choice, not a hardcoded one. ATLAS_CODER_PROVIDER
   // is validated here rather than passed through blindly so a typo fails with a
   // clear status instead of a CLI usage error buried in a log, and so this
@@ -195,14 +243,15 @@ if (metadata.mode === "inspect") {
   try { routePlan = resolveCoderRoutes(process.env); }
   catch (error) { writeStatus("failed", error.message); console.error(error.message); process.exit(2); }
   const { provider, model, apiKeyVariable } = routePlan;
-  console.log("Coder route: " + provider + "/" + model + "; configured fallbacks: " + routePlan.fallbacks.map((route) => route.split(":").slice(0, -1).join("/")).join(", "));
+  console.log("Coder route: " + provider + "/" + model + "; configured fallbacks: " + routePlan.fallbacks.map((route) => route.split(":").slice(0, -1).join("/")).join(", ") + "; cost classes: " + routePlan.costs.join(", "));
   // A self-hosted OpenAI-compatible server (vLLM, Ollama, llama.cpp) usually
   // has no API key at all, so requiring one would make it impossible to run
   // your own model. The placeholder is applied ONLY when a custom endpoint is
   // set: against a real vendor a missing key must still fail loudly rather
   // than turn into a confusing 401 later.
   const baseUrl = (process.env.ATLAS_CODER_BASE_URL || "").trim();
-  if (!process.env[apiKeyVariable]) {
+  // A route on the owner's own model server (Ollama) has no credential at all.
+  if (apiKeyVariable !== null && !process.env[apiKeyVariable]) {
     if (baseUrl && provider === "groq") {
       process.env[apiKeyVariable] = "self-hosted-no-key";
       console.log(`No ${apiKeyVariable} set; using a placeholder because ATLAS_CODER_BASE_URL names a self-hosted endpoint.`);
@@ -222,10 +271,11 @@ if (metadata.mode === "inspect") {
   const codeArgs = [
     cli, "code", repositoryRoot, metadata.objective,
     "--provider", provider,
-    "--api-key-env", apiKeyVariable,
+    ...(apiKeyVariable === null ? [] : ["--api-key-env", apiKeyVariable]),
     "--model", model,
     "--format", "json",
   ];
+  codeArgs.push(...validationArguments);
   // A durable, redacted record of what the agent did, uploaded with the run's
   // other artifacts. Written by the CLI, so it goes through the same redactor
   // as everything else the agent emits.
@@ -307,7 +357,14 @@ if (metadata.mode === "inspect") {
   writeJson("code.json", parsed);
 
   if (parsed.status !== "completed") {
-    writeStatus(parsed.status === "approval-required" ? "blocked" : parsed.status, parsed.message ?? `Coder agent stopped with status '${parsed.status}'.`);
+    // Work done before a stop (turn limit, repeated failure, provider error) is
+    // kept as a reviewable patch. It is never turned into a pull request: the
+    // status stays the agent's own, and the objective is not claimed.
+    const partial = Array.isArray(parsed.edits) && parsed.edits.length > 0 ? savePartialPatch(parsed) : null;
+    const stopMessage = parsed.message ?? `Coder agent stopped with status '${parsed.status}'.`;
+    writeStatus(parsed.status === "approval-required" ? "blocked" : parsed.status,
+      partial === null ? stopMessage : `${stopMessage} Partial work: ${partial.message}`,
+      partial === null ? {} : { partial: { files: parsed.edits.length, patch: partial.file, verification: parsed.verification?.status ?? null } });
     console.error(`Atlas coder run stopped with status '${parsed.status}': ${parsed.message ?? "(no message)"}`);
     process.exit(1);
   } else if (parsed.edits.length === 0) {

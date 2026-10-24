@@ -101,8 +101,8 @@ test("repairs a self-inflicted failure and reports the pass count", async () => 
   assert.equal(result.verification.status, "verified");
   assert.equal(result.verification.attempts, 2);
   assert.equal(agentCalls, 2);
-  // The first pass sees only base evidence; the repair pass additionally sees what it broke.
-  assert.equal(seenEvidence[0]?.length, 1);
+  // The first pass sees base evidence plus the measured baseline; the repair pass sees base evidence plus what it broke.
+  assert.equal(seenEvidence[0]?.length, 2);
   assert.equal(seenEvidence[1]?.length, 2);
   assert.match(seenEvidence[1]?.[1]?.content ?? "", /new failure 0/u);
 });
@@ -337,4 +337,44 @@ test("without an escalation route the behaviour is unchanged", async () => {
 
 test("rejects an out-of-range escalation budget", () => {
   assert.throws(() => new VerifiedCoderSession({ plan, runAgent: async () => pass([]), runValidation: async (label) => snapshot(label), escalation: { attempts: 0, runAgent: async () => pass([]) } }), RangeError);
+});
+
+test("the first pass is told what the checks measured before any edit, including that nothing fails", async () => {
+  const seen: Array<readonly AgentEvidence[]> = [];
+  const session = new VerifiedCoderSession({
+    plan,
+    runAgent: async (evidence) => { seen.push(evidence); return pass([]); },
+    runValidation: async (label) => snapshot(label),
+  });
+  await session.run();
+  const baseline = seen[0]?.find((item) => item.label.startsWith("Repository checks before your change"));
+  assert.ok(baseline, "baseline evidence is handed to the first pass");
+  assert.match(baseline.content, /test:test: passed/u);
+  assert.match(baseline.content, /NOT reproduced here/u);
+});
+
+test("real baseline failures are listed and no other failure may be claimed", async () => {
+  const seen: Array<readonly AgentEvidence[]> = [];
+  const session = new VerifiedCoderSession({
+    plan,
+    runAgent: async (evidence) => { seen.push(evidence); return pass([]); },
+    runValidation: async (label) => snapshot(label, "failed"),
+  });
+  await session.run();
+  const baseline = seen[0]?.find((item) => item.label.startsWith("Repository checks before your change"));
+  assert.ok(baseline);
+  assert.match(baseline.content, /test:test: failed/u);
+  assert.match(baseline.content, /boom/u);
+  assert.match(baseline.content, /Do not claim any other failure/u);
+});
+
+test("no baseline evidence is invented when the checks could not run", async () => {
+  const seen: Array<readonly AgentEvidence[]> = [];
+  const session = new VerifiedCoderSession({
+    plan: skippedPlan,
+    runAgent: async (evidence) => { seen.push(evidence); return pass([]); },
+    runValidation: async (label) => snapshot(label),
+  });
+  await session.run();
+  assert.equal(seen[0]?.some((item) => item.label.startsWith("Repository checks before your change")), false);
 });

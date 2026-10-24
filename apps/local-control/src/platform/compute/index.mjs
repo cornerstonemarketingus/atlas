@@ -9,3 +9,4 @@ export { RUNPOD_API_KEY_NAME, createComputeService, parseMonthlyCapUsd } from ".
 export { ComputeLeaseStore, LEASE_STATES } from "./lease-store.mjs";
 export { ATLAS_TAG, ComputeProviderError, FakeClock, FakeGpuProvider, PROVIDER_METHODS, assertProvider, microUsdPerSecond } from "./provider.mjs";
 export { ComputeRequirementError, GPU_JOB_KINDS, detectRequirements, inferenceVramGb } from "./requirements.mjs";
+export { RECENT_LEASES, computeSummary, createComputeRoutes, nodeSummary } from "./routes.mjs";

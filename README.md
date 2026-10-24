@@ -1,11 +1,12 @@
 # Atlas — Build it. Run it. Grow it.
 
-**An autonomous software platform. From idea to operation.**
+**An always-on autonomous agent platform. From idea to operation.**
 
-Atlas turns goals into working software and repeatable digital work. It brings
-repositories, websites, applications, agents, tools and computer control into
-one platform: plan the work, create the product, test it, repair failures and
-carry the result forward through approved publishing and persistent automation.
+Atlas turns goals into working software and finished digital work. It writes
+and verifies code, operates real browsers and desktops, scales onto rented GPUs
+when a job outgrows the local machine, and keeps working on schedules and
+events long after the conversation ends—with the owner's approvals, budgets
+and policy in control.
 
 **Give it a goal. Build what comes next.**
 
@@ -18,17 +19,17 @@ operation remain development goals.
 
 ## Why Atlas matters
 
-The expensive part of building a business is often the coordination: connecting
-an idea to developers, websites, tools, deployment and daily operations. Atlas
-aims to bring that work into one continuous mission:
+The expensive part of building a business is coordination: connecting an idea
+to developers, websites, tools, compute, deployment and daily operations. Atlas
+collapses that into one continuous mission:
 
 **Goal → create → verify → launch → operate → improve.**
 
-Its investment thesis is to become the execution layer between an idea and an
-operating business. The opportunity extends from building software to operating
-it, automating recurring work and expanding the capabilities available to the
-next mission. The product combines customer-owned compute and credentials,
-persistent agents, verifiable results and policy-controlled autonomy.
+Atlas aims to become the execution layer between an idea and an operating
+business. Its edge is the combination: an agent that lives on the customer's
+own hardware and never clocks out, hands-on control of real computers, elastic
+GPU capacity on demand, parallel agent teams and verifiable results—governed by
+policy-controlled autonomy rather than blind trust.
 
 ## What Atlas can do today
 
@@ -42,6 +43,8 @@ persistent agents, verifiable results and policy-controlled autonomy.
 | **Engineer existing software** | Inspect repositories, make edits, compare baseline and post-change checks, repair regressions and deliver branches, patches or GitHub pull requests. |
 | **Run parallel agents** | Missions, isolated coder lanes, competing versions and a Command Center with controls and execution traces. |
 | **Keep working over time** | Durable sessions, scheduled/webhook/GitHub/file-change automations and bounded goals that sleep and wake on events. |
+| **Stay on, always** | A local daemon keeps agents running on the customer's machine, waking on schedules, webhooks, GitHub events and file changes, reachable from a paired phone. |
+| **Scale onto GPUs on demand** | A budget-capped compute plane sizes training, inference and render jobs, runs them locally when the hardware fits and rents cloud GPUs (RunPod Serverless) when it doesn't, with hard lifetime limits and automatic shutdown. Built and tested; live provisioning needs a funded provider account. |
 | **Operate computers remotely** | Paired Windows browser/computer execution, local desktop drivers, approvals and revocable phone access over customer-managed HTTPS/VPN. |
 | **Own the intelligence** | Local Ollama-compatible models, hardware/context fitting and optional hosted providers, with budgets, routing and provider diagnostics. |
 
@@ -125,14 +128,6 @@ These are development objectives. Atlas does not yet demonstrate unattended
 operation of arbitrary businesses, guaranteed search rankings or guaranteed
 revenue. Growth claims will be grounded in repeatable customer outcomes.
 
-## Advanced research
-
-The founder has identified quantum physics as an additional research direction.
-This public-main audit did not locate the underlying quantum/physics work.
-Its implementation status, experiments and results need to be reconciled before
-Atlas can claim a quantum capability or performance advantage. The current
-agent architecture runs on conventional software and model infrastructure.
-
 ## Start locally
 
 Install Node.js, Git and a compatible model runtime. Individual packages declare
@@ -143,6 +138,22 @@ their required Node versions; Genesis uses Node's built-in SQLite support.
 Set-Location .\apps\local-control
 npm start
 ```
+
+Atlas listens on `http://127.0.0.1:4317` (`ATLAS_LOCAL_HOST`/`ATLAS_LOCAL_PORT`
+change it). Every request needs the owner token. The first start creates one
+and stores it in your OS account's credential vault, or in
+`~/.atlas/local-token` (`$ATLAS_LOCAL_DATA_DIR/local-token`) when no vault is
+usable. Setting `ATLAS_LOCAL_TOKEN` supplies one instead. To open the console
+already signed in, run this from the repository root in a second terminal while
+Atlas is running:
+
+```powershell
+node scripts/local/open-atlas.mjs          # opens the browser signed in as owner
+node scripts/local/open-atlas.mjs --print  # prints the sign-in URL instead
+```
+
+The sign-in URL carries the token, so treat it like a password. If the script
+reports that it created a new token, restart Atlas so the daemon uses it.
 
 Follow [sovereign mode](SOVEREIGN-MODE.md) for setup, local identity, model
 configuration, device pairing and remote access. For direct coding:

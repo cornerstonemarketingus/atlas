@@ -25,7 +25,7 @@ A failed-before regression also exposed unconditional Atlas architecture and cre
 
 A bounded unauthenticated GET probe of https://atlas-web.cornerstonemarketingus.workers.dev returned 200 for /, /account, /legal/privacy, /legal/terms and /delete-account. Both /.well-known/apple-app-site-association and /.well-known/assetlinks.json returned 404 with HTML, not association JSON. /chat returned 404; the chat experience lives on existing application routes, so this alone is not a confirmed broken navigation link. Public HTTP status is not authenticated flow acceptance.
 
-The last verified hosted release remains the performance rescue dee7942; successful deployment and authenticated chat smoke evidence are recorded in PROGRESS. Branch/main CI does not establish that newer features are deployed.
+Performance rescue dee7942 has successful deployment and authenticated chat smoke evidence in PROGRESS. A later observed successful deployment is 38996029310 at 832263e. Privacy #310 merged as 9443843 after all CI passed; deployment 39006513100 was queued at this checkpoint. No authenticated live privacy acceptance is established yet. Branch/main CI alone does not prove deployment.
 
 ## Mobile and store release blockers
 

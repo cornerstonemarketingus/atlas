@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { renderRunSummary } from "./run-summary.mjs";
+import { renderFindings, renderUnanswered } from "./inspect-findings.mjs";
 import { correlationIdFromEnv, correlationLogSuffix, withCorrelationId } from "./correlation.mjs";
 
 const limit = 16000;
@@ -14,8 +15,12 @@ function read(directory, name) {
   } catch { return null; }
 }
 
-export function renderResult({ task, status, code, inspection, debug, conclusion, budget }) {
+export function renderResult({ task, status, code, inspection, findings = null, debug, conclusion, budget }) {
   const lines = [`Runner job: ${conclusion || "unknown"}.`, renderRunSummary({ task, status, code, budget })];
+  // What was asked comes before the inventory: a marker search answers it, and
+  // anything else says plainly that it was not answered.
+  if (findings?.kind === "markers" && findings.answered === true) lines.push(...renderFindings(findings));
+  else if (inspection && findings?.answered !== true) lines.push(renderUnanswered(task?.objective));
   if (inspection) {
     lines.push("Repository inspection (no implementation plan or edits were generated):",
       `Files scanned: ${inspection.fileCount ?? "unknown"}.`,
@@ -58,6 +63,15 @@ function transientTransportFailure(error) {
     && cause.errors.every((failure) => TRANSIENT_TRANSPORT_CODES.has(failure?.code));
 }
 
+// Only locally constructed diagnostics may cross the log boundary. Never print
+// arbitrary exception messages, response bodies, endpoint URLs or credentials.
+class ResultDeliveryError extends Error {}
+
+export function deliveryFailureMessage(error) {
+  const detail = error instanceof ResultDeliveryError ? error.message : "The reporting step failed before delivery could be confirmed.";
+  return `Atlas result delivery failed. ${detail} Task execution was not retried. Check the reporting job; retry reporting only after resolving its cause.`;
+}
+
 export async function deliverResult({ endpoint, token, payload }, fetcher = fetch) {
   // The receiver's task/run/attempt IDs make an acknowledgement lost after
   // commit safe to retry. Snapshot the evidence so every attempt is identical.
@@ -72,10 +86,10 @@ export async function deliverResult({ endpoint, token, payload }, fetcher = fetc
       });
     } catch (error) {
       if (!transientTransportFailure(error)) {
-        throw new Error("Result delivery failed: request could not be sent.");
+        throw new ResultDeliveryError("Result delivery failed: request could not be sent.");
       }
       if (attempt === 2) {
-        throw new Error("Result delivery failed: transport unavailable after 3 attempts.");
+        throw new ResultDeliveryError("Result delivery failed: transport unavailable after 3 attempts.");
       }
     }
     if (response) {
@@ -84,7 +98,7 @@ export async function deliverResult({ endpoint, token, payload }, fetcher = fetc
       if (response.ok) return { delivered: true };
       // Manually dispatched maintenance jobs have no hosted conversation.
       if (response.status === 404) return { delivered: false, reason: 'task-not-found' };
-      if (response.status < 500 || attempt === 2) throw new Error(`Result delivery failed: HTTP ${response.status}`);
+      if (response.status < 500 || attempt === 2) throw new ResultDeliveryError(`Result delivery failed: HTTP ${response.status}`);
     }
     // Two bounded waits (250ms, 500ms) prevent a tight outage retry loop.
     await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
@@ -101,7 +115,7 @@ async function main() {
   const directory = process.env.ATLAS_OUTPUT_DIR;
   let text;
   try {
-    text = renderResult({ task: read(directory, "task.json"), status: read(directory, "status.json"), code: read(directory, "code.json"), inspection: read(directory, "inspect.json"), debug: read(directory, "debug.json"), conclusion: process.env.ATLAS_JOB_RESULT, budget: read(directory, "budget.json") });
+    text = renderResult({ task: read(directory, "task.json"), status: read(directory, "status.json"), code: read(directory, "code.json"), inspection: read(directory, "inspect.json"), findings: read(directory, "findings.json"), debug: read(directory, "debug.json"), conclusion: process.env.ATLAS_JOB_RESULT, budget: read(directory, "budget.json") });
   } catch { text = "The runner returned malformed result data. Open the run log; no successful outcome is inferred."; }
   const redacted = spawnSync(process.execPath, [path.resolve("packages/atlas-cli/dist/src/cli.js"), "redact"], {
     input: text, encoding: "utf8", timeout: 60000, maxBuffer: 128000, windowsHide: true,
@@ -123,5 +137,5 @@ async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(() => { console.error("Atlas result delivery failed. Check the reporting job and retry it."); process.exitCode = 1; });
+  main().catch(error => { console.error(deliveryFailureMessage(error)); process.exitCode = 1; });
 }

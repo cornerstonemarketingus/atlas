@@ -1,6 +1,7 @@
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import test from "node:test";
 
 // Cloudflare Workers does not implement the Fetch standard's redirect "error"
@@ -18,11 +19,11 @@ async function sources(directory) {
 }
 
 test("no Worker code asks fetch for the redirect mode Workers does not implement", async () => {
-  const root = new URL("..", import.meta.url).pathname;
+  const root = fileURLToPath(new URL("..", import.meta.url));
   const offenders = [];
   for (const directory of ["app", "worker", "db"]) {
-    for (const file of await sources(join(root, directory)).catch(() => [])) {
-      if (/redirect:\s*["']error["']/u.test(await readFile(file, "utf8"))) offenders.push(file.slice(root.length));
+    for (const file of await sources(join(root, directory))) {
+      if (/redirect:\s*["']error["']/u.test(await readFile(file, "utf8"))) offenders.push(relative(root, file).replaceAll("\\", "/"));
     }
   }
   assert.deepEqual(offenders, []);

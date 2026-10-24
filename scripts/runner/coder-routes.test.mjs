@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveCoderRoutes } from "./coder-routes.mjs";
 const environment = { GROQ_API_KEY: "groq", OPENAI_API_KEY: "openai", ATLAS_WORKERS_AI_TOKEN: "cloud", CLOUDFLARE_ACCOUNT_ID: "a".repeat(32) };
-test("automatic cloud coder prefers configured Workers AI and includes independent providers", () => {
+test("automatic cloud coder prefers configured Workers AI and adds free-tier providers, never a paid one", () => {
   const plan = resolveCoderRoutes(environment);
   assert.equal(plan.provider, "workers-ai"); assert.equal(plan.apiKeyVariable, "ATLAS_WORKERS_AI_TOKEN");
-  assert.deepEqual(plan.fallbacks, ["openai:gpt-5.4-mini:OPENAI_API_KEY", "groq:openai/gpt-oss-120b:GROQ_API_KEY"]);
+  assert.deepEqual(plan.fallbacks, ["groq:openai/gpt-oss-120b:GROQ_API_KEY"]);
+  assert.deepEqual(plan.costs, ["workers-ai=free-tier", "groq=free-tier"]);
   assert.doesNotMatch(JSON.stringify(plan), /Bearer/);
 });
 test("explicit Groq gains available cross-vendor fallbacks without changing the selected primary", () => {
   const plan = resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "groq", ATLAS_CODER_FALLBACKS: "groq:openai/gpt-oss-20b:GROQ_API_KEY" });
-  assert.equal(plan.provider, "groq"); assert.equal(plan.fallbacks.length, 3); assert.match(plan.fallbacks[1], /^workers-ai:/); assert.match(plan.fallbacks[2], /^openai:/);
+  assert.equal(plan.provider, "groq"); assert.equal(plan.fallbacks.length, 2); assert.match(plan.fallbacks[1], /^workers-ai:/);
+  assert.equal(plan.fallbacks.some((route) => route.startsWith("openai:")), false);
 });
 test("private endpoints and explicit none never gain public cloud fallbacks", () => {
   assert.deepEqual(resolveCoderRoutes({ ...environment, ATLAS_CODER_BASE_URL: "https://private.example/v1" }).fallbacks, []);
@@ -20,7 +22,7 @@ test("provider credential names cannot be crossed or unknown routes accepted", (
   for (const route of ["openai:fixture:GROQ_API_KEY", "workers-ai:fixture:ATLAS_GITHUB_TOKEN", "unknown:model:SECRET"]) assert.throws(() => resolveCoderRoutes({ ...environment, ATLAS_CODER_FALLBACKS: route }), /Invalid coder fallback/);
   assert.throws(() => resolveCoderRoutes({ ATLAS_CODER_PROVIDER: "unknown" }), /must be/);
   assert.equal(resolveCoderRoutes({ OPENAI_API_KEY: "key" }).provider, "openai");
-  assert.equal(resolveCoderRoutes({ ...environment, CLOUDFLARE_ACCOUNT_ID: "invalid" }).provider, "openai");
+  assert.equal(resolveCoderRoutes({ ...environment, CLOUDFLARE_ACCOUNT_ID: "invalid" }).provider, "groq");
 });
 
 test("coder and automatic repair workflows provide matching cloud execution routes", async () => {
@@ -60,4 +62,41 @@ test("the coder workflows pass every free vendor's key", async () => {
     for (const key of ["CEREBRAS_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY"]) assert.ok(text.includes(key + ": ${{ secrets." + key + " }}"), workflow + " lacks " + key);
     assert.ok(text.includes("ATLAS_ALLOW_TRAINING_PROVIDERS: ${{ vars.ATLAS_ALLOW_TRAINING_PROVIDERS }}"));
   }
+});
+
+test("an explicit Ollama coder route is keyless, needs a model, and gains no automatic or paid fallbacks", async () => {
+  const { isValidRoute } = await import("./coder-routes.mjs");
+  const plan = resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "ollama", ATLAS_CODER_MODEL: "qwen2.5-coder:1.5b" });
+  assert.deepEqual(plan, { provider: "ollama", model: "qwen2.5-coder:1.5b", apiKeyVariable: null, fallbacks: [], costs: ["ollama=local"] });
+  assert.throws(() => resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "ollama" }), /Set ATLAS_CODER_MODEL/);
+  // Only a fallback the owner wrote down is used, and it must still name its own provider's key.
+  assert.deepEqual(resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "ollama", ATLAS_CODER_MODEL: "m", ATLAS_CODER_FALLBACKS: "groq:openai/gpt-oss-20b:GROQ_API_KEY" }).fallbacks, ["groq:openai/gpt-oss-20b:GROQ_API_KEY"]);
+  // Ollama is never picked automatically, inferred from a model name, or accepted as a fallback.
+  assert.notEqual(resolveCoderRoutes(environment).provider, "ollama");
+  assert.notEqual(resolveCoderRoutes({ ...environment, ATLAS_CODER_MODEL: "qwen2.5-coder:1.5b" }).provider, "ollama");
+  assert.equal(isValidRoute("ollama:m:"), false);
+  assert.equal(isValidRoute("ollama:m:OPENAI_API_KEY"), false);
+});
+
+test("coder routing does not read hosted chat routing, and chat settings cannot change it", async () => {
+  const chat = { ATLAS_CHAT_MODEL: "gpt-5.4", ATLAS_CHAT_BASE_URL: "https://chat.example/v1", ATLAS_CHAT_MODELS: "a,b", ATLAS_CHAT_FALLBACK_MODEL: "c", ATLAS_MODEL_API_KEY: "chat-key" };
+  assert.deepEqual(resolveCoderRoutes({ ...environment, ...chat }), resolveCoderRoutes(environment));
+  assert.deepEqual(resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "groq", ...chat }), resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "groq" }));
+  const { readFile } = await import("node:fs/promises");
+  for (const file of ["coder-routes.mjs", "run-task.mjs"]) {
+    assert.doesNotMatch(await readFile(new URL(`./${file}`, import.meta.url), "utf8"), /ATLAS_CHAT_|ATLAS_MODEL_API_KEY/, `${file} must not depend on chat routing variables`);
+  }
+});
+test("a paid vendor is used only as the sole usable route or when the owner lists it", () => {
+  // Alone, an OpenAI key is the owner's explicit choice of vendor.
+  const alone = resolveCoderRoutes({ OPENAI_API_KEY: "key" });
+  assert.deepEqual([alone.provider, alone.fallbacks, alone.costs], ["openai", [], ["openai=paid"]]);
+  // Listing it in ATLAS_CODER_FALLBACKS is the opt-in, and the log says it is paid.
+  const listed = resolveCoderRoutes({ ...environment, ATLAS_CODER_FALLBACKS: "openai:gpt-5.4-mini:OPENAI_API_KEY" });
+  assert.deepEqual(listed.fallbacks.slice(0, 1), ["openai:gpt-5.4-mini:OPENAI_API_KEY"]);
+  assert.ok(listed.costs.includes("openai=paid"));
+  // An explicit paid primary is honoured but gains no further paid fallback.
+  const primary = resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "openai" });
+  assert.equal(primary.provider, "openai");
+  assert.equal(primary.fallbacks.filter((route) => route.startsWith("openai:")).length, 0);
 });

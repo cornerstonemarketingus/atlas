@@ -4,16 +4,25 @@
  * A `trains` vendor's free tier may use prompts to improve its products, so it
  * joins the coder's automatic fallbacks only when the owner sets
  * ATLAS_ALLOW_TRAINING_PROVIDERS=all (chat alone uses "1").
+ *
+ * `cost` says whether a call can bill the owner per token: "paid" vendors do, so
+ * they are never added as automatic fallbacks (only listed in ATLAS_CODER_FALLBACKS
+ * or chosen as the route) and are picked automatically only when nothing else is
+ * usable. Everything else is "free-tier" (a free allowance or a plan the owner
+ * already holds) or "local".
  */
 const VENDORS = Object.freeze({
-  groq: { key: "GROQ_API_KEY", model: "openai/gpt-oss-120b", tier: "vendor" },
-  anthropic: { key: "ANTHROPIC_API_KEY", model: undefined, tier: "vendor" },
-  openai: { key: "OPENAI_API_KEY", model: "gpt-5.4-mini", tier: "vendor" },
-  "workers-ai": { key: "ATLAS_WORKERS_AI_TOKEN", model: "@cf/openai/gpt-oss-120b", tier: "vendor" },
-  cerebras: { key: "CEREBRAS_API_KEY", model: "gpt-oss-120b", tier: "vendor" },
-  gemini: { key: "GEMINI_API_KEY", model: "gemini-2.5-flash", tier: "trains" },
-  openrouter: { key: "OPENROUTER_API_KEY", model: "openai/gpt-oss-20b:free", tier: "trains" },
-  mistral: { key: "MISTRAL_API_KEY", model: "devstral-small-latest", tier: "trains" },
+  groq: { key: "GROQ_API_KEY", model: "openai/gpt-oss-120b", tier: "vendor", cost: "free-tier" },
+  anthropic: { key: "ANTHROPIC_API_KEY", model: undefined, tier: "vendor", cost: "paid" },
+  openai: { key: "OPENAI_API_KEY", model: "gpt-5.4-mini", tier: "vendor", cost: "paid" },
+  "workers-ai": { key: "ATLAS_WORKERS_AI_TOKEN", model: "@cf/openai/gpt-oss-120b", tier: "vendor", cost: "free-tier" },
+  cerebras: { key: "CEREBRAS_API_KEY", model: "gpt-oss-120b", tier: "vendor", cost: "free-tier" },
+  gemini: { key: "GEMINI_API_KEY", model: "gemini-2.5-flash", tier: "trains", cost: "free-tier" },
+  openrouter: { key: "OPENROUTER_API_KEY", model: "openai/gpt-oss-20b:free", tier: "trains", cost: "free-tier" },
+  mistral: { key: "MISTRAL_API_KEY", model: "devstral-small-latest", tier: "trains", cost: "free-tier" },
+  // A model server the owner runs (Ollama): no key, no vendor, never chosen automatically,
+  // and never given paid fallbacks it was not explicitly configured with.
+  ollama: { key: "", model: undefined, tier: "local", cost: "local" },
 });
 export const PROVIDER_KEY_VARIABLES = Object.freeze(Object.fromEntries(Object.entries(VENDORS).map(([id, vendor]) => [id, vendor.key])));
 /** provider:model:ITS_KEY_VARIABLE; the model may contain colons (OpenRouter's ":free"). */
@@ -22,7 +31,7 @@ export function isValidRoute(route) {
   if (parts.length < 3) return false;
   const [id, key] = [parts[0], parts.at(-1)];
   const model = parts.slice(1, -1).join(":");
-  return Object.hasOwn(VENDORS, id) && key === VENDORS[id].key && /^[A-Za-z0-9@._/:-]{1,128}$/u.test(model);
+  return Object.hasOwn(VENDORS, id) && VENDORS[id].key !== "" && key === VENDORS[id].key && /^[A-Za-z0-9@._/:-]{1,128}$/u.test(model);
 }
 
 // Automatic order when nothing is chosen, and the order fallbacks are added in.
@@ -38,16 +47,22 @@ export function resolveCoderRoutes(environment) {
   const selectedModel = (environment.ATLAS_CODER_MODEL ?? "").trim();
   const inferred = selectedModel.startsWith("@cf/") ? "workers-ai" : /^(gpt-|o[134](-|$))/iu.test(selectedModel) ? "openai" : /^(anthropic\/)?claude[-.]/iu.test(selectedModel) ? "anthropic"
     : selectedModel.endsWith(":free") ? "openrouter" : /^gemini-/iu.test(selectedModel) ? "gemini" : /^(?:mistral|devstral|codestral|magistral)-/iu.test(selectedModel) ? "mistral" : "groq";
-  const provider = explicit || (selectedModel || environment.ATLAS_CODER_BASE_URL ? inferred : AUTOMATIC.find(usable) ?? "groq");
+  const provider = explicit || (selectedModel || environment.ATLAS_CODER_BASE_URL ? inferred : AUTOMATIC.find((id) => usable(id) && VENDORS[id].cost !== "paid") ?? AUTOMATIC.find(usable) ?? "groq");
   if (!Object.hasOwn(VENDORS, provider)) throw new Error(`ATLAS_CODER_PROVIDER must be one of: ${Object.keys(VENDORS).join(", ")}.`);
   const model = selectedModel || modelFor(provider);
   if (!model) throw new Error("Set ATLAS_CODER_MODEL for the selected provider.");
+  const local = VENDORS[provider].tier === "local";
   const spec = (environment.ATLAS_CODER_FALLBACKS ?? "").trim();
   const fallbacks = spec.toLowerCase() === "none" ? [] : spec.split(",").map((route) => route.trim()).filter(Boolean);
   for (const route of fallbacks) if (!isValidRoute(route)) throw new Error("Invalid coder fallback; use provider:model:its_provider_key_environment.");
   // A custom/private server never acquires public fallbacks implicitly.
-  if (spec.toLowerCase() !== "none" && !environment.ATLAS_CODER_BASE_URL) {
-    for (const id of AUTOMATIC) if (id !== provider && usable(id) && !fallbacks.some((route) => route.startsWith(id + ":"))) fallbacks.push(id + ":" + modelFor(id) + ":" + VENDORS[id].key);
+  // An explicit local route keeps only the fallbacks the owner wrote down: a paid vendor
+  // key that happens to be in the environment must not receive a prompt the owner chose
+  // to keep on their own machine.
+  if (spec.toLowerCase() !== "none" && !environment.ATLAS_CODER_BASE_URL && !local) {
+    for (const id of AUTOMATIC) if (id !== provider && usable(id) && VENDORS[id].cost !== "paid" && !fallbacks.some((route) => route.startsWith(id + ":"))) fallbacks.push(id + ":" + modelFor(id) + ":" + VENDORS[id].key);
   }
-  return { provider, model, apiKeyVariable: VENDORS[provider].key, fallbacks };
+  const costOf = (id) => VENDORS[id]?.cost ?? "unknown";
+  const costs = [provider, ...fallbacks.map((route) => route.split(":")[0])].map((id) => `${id}=${costOf(id)}`);
+  return { provider, model, apiKeyVariable: local ? null : VENDORS[provider].key, fallbacks, costs };
 }

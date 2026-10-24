@@ -87,3 +87,41 @@ test("waiting for capacity honours cancellation", async () => {
     controller.abort();
     await assert.rejects(pending, (error: unknown) => error instanceof ModelProviderError && error.code === "cancelled");
 });
+
+test("routes only the owner can fix do not make the chain wait, and the report says which are unusable", async () => {
+    const seen: ModelRequest[] = [];
+    let slept = 0;
+    const disabled = (id: string) => provider(id, "m", new ModelProviderError({ message: "No request was sent: the account is marked unusable (the API key was rejected).", code: "authentication", providerId: id, retryable: false }), seen);
+    const limited = provider("c", "m", new ModelProviderError({ message: "rate limited", code: "rate-limit", providerId: "c", retryable: true, retryAfterMs: 60_000 }), seen);
+    // Two dead accounts and one rate-limited route: it waits for the one that will recover, not the dead ones.
+    const chain = new FallbackModelProvider([{ provider: disabled("a"), model: "m" }, { provider: disabled("b"), model: "m" }, { provider: limited, model: "m" }], { capacityWaitMs: 90_000, sleep: async () => { slept += 1; } });
+    await assert.rejects(chain.complete({ ...request, model: "m" }), (error: unknown) => {
+      assert.ok(error instanceof ModelProviderError);
+      assert.match(error.message, /Every usable route is out of capacity/u);
+      assert.match(error.message, /2 routes are unusable until the account, key or model is fixed/u);
+      return true;
+    });
+    assert.equal(slept, 1, "it waited once for the rate-limited route");
+});
+
+test("when every route is unusable nothing waits and the report is not about capacity", async () => {
+    const seen: ModelRequest[] = [];
+    const disabled = (id: string) => provider(id, "m", new ModelProviderError({ message: "No request was sent: the account is marked unusable.", code: "authentication", providerId: id, retryable: false }), seen);
+    const chain = new FallbackModelProvider([{ provider: disabled("a"), model: "m" }, { provider: disabled("b"), model: "m" }], { capacityWaitMs: 300_000, sleep: async () => { throw new Error("must not wait"); } });
+    await assert.rejects(chain.complete({ ...request, model: "m" }), (error: unknown) => {
+      assert.ok(error instanceof ModelProviderError);
+      assert.doesNotMatch(error.message, /out of capacity/u);
+      assert.match(error.message, /2 routes are unusable/u);
+      return true;
+    });
+    assert.equal(seen.length, 2, "each route was tried exactly once");
+});
+
+test("a rejected tool call stays on its route and never waits for capacity", async () => {
+  const seen: ModelRequest[] = [];
+  const failure = new ModelProviderError({ message: "rejected tool", code: "tool-call-rejected", providerId: "one", retryable: false });
+  const chain = new FallbackModelProvider([{ provider: provider("one", "primary", failure, seen), model: "primary" },
+    { provider: provider("two", "backup", response("two", "backup"), seen), model: "backup" }], { sleep: async () => { assert.fail("must not wait"); } });
+  await assert.rejects(chain.complete(request), (error: unknown) => error instanceof ModelProviderError && error.code === "tool-call-rejected");
+  assert.equal(seen.length, 1);
+});

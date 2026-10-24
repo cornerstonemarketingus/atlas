@@ -3,7 +3,7 @@
  * a URL, token or provider response, so it is safe to show to the person who asked.
  */
 export const UNAVAILABLE_NEXT_STEPS = Object.freeze({
-  owner_required: "Creating projects from hosted chat is limited to the deployment owner. Sign in as the owner.",
+  owner_required: "This shared Genesis execution node is limited to the deployment owner. Sign in to your workspace to build a hosted website; apps and repository publishing require an authorized execution node.",
   execution_node_not_configured: "No Genesis execution node is connected to this deployment. The owner must set the ATLAS_GENESIS_URL (an https origin) and ATLAS_GENESIS_TOKEN secrets and run \"Deploy Atlas web to Cloudflare Workers\".",
   invalid_execution_node: "ATLAS_GENESIS_URL must be a plain https origin with no path, query or credentials. Fix the secret and redeploy.",
   node_rejected_token: "The Genesis node refused this deployment's token. Rotate ATLAS_GENESIS_TOKEN on the node and in the repository secrets, then redeploy.",
@@ -36,6 +36,10 @@ export function genesisBridge(environment, { owner = false, fetchImpl = fetch, c
             headers: { authorization: `Bearer ${environment.ATLAS_GENESIS_TOKEN}`, "content-type": "application/json" },
             ...(input ? { body: JSON.stringify(input) } : {}), signal: controller.signal });
           if (!response.ok) {
+            if (response.status === 404 && path.startsWith("/v1/genesis/operations/")) {
+              await response.body?.cancel();
+              return { status: "not-found", message: "The node has no receipt for this operation. Creation is unconfirmed; checking status never resubmits it." };
+            }
             if ([400, 409].includes(response.status)) {
               const failure = await response.json().catch(() => ({}));
               if (["INVALID_PROJECT", "REQUEST_CONFLICT"].includes(failure.code)) return { status: "failed", code: failure.code, message: failure.message };

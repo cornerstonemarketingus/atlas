@@ -3,6 +3,9 @@ import { randomUUID } from "node:crypto";
 import { MissionScheduler } from "./mission-scheduler.mjs";
 import { DEFAULT_BATCH_SIZE } from "./provider-throttle.mjs";
 
+/** Mission states that are doing (or about to do) work: what an emergency stop cancels. */
+const ACTIVE_MISSION_STATES = new Set(["pending", "running"]);
+
 export class MissionServiceError extends Error {
   constructor(code, message) {
     super(message);
@@ -114,6 +117,30 @@ export class MissionService {
     else if (action === "cancel") scheduler.cancel();
     else throw new MissionServiceError("INVALID_ACTION", "Mission action must be pause, resume, or cancel.");
     return publicMission(scheduler.snapshot());
+  }
+
+  /**
+   * Emergency stop: cancels every mission that is running or queued, with
+   * the reason recorded on the mission. A mission the operator already
+   * paused (interrupted) does no work and is left resumable. One mission
+   * failing to cancel never stops the others; each failure is reported.
+   */
+  cancelAll(reason = "Mission cancelled by an emergency stop.") {
+    const cancelled = [];
+    const failed = [];
+    const ids = new Set(this.#store.missions(10_000).filter((row) => ACTIVE_MISSION_STATES.has(row.status)).map((row) => row.id));
+    for (const [id, scheduler] of this.#schedulers) if (ACTIVE_MISSION_STATES.has(scheduler.snapshot().status)) ids.add(id);
+    for (const id of ids) {
+      try {
+        const scheduler = this.#schedulers.get(id) ?? this.#restore(this.#store.mission(id).snapshot);
+        if (!ACTIVE_MISSION_STATES.has(scheduler.snapshot().status)) continue;
+        scheduler.cancel(reason);
+        cancelled.push(id);
+      } catch (error) {
+        failed.push({ id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { cancelled, failed };
   }
 
   /** Pause, resume, cancel or retry one lane of a mission (see MissionScheduler.controlChild). */

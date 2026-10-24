@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,7 +46,10 @@ test("reports count verified passes per target and category", () => {
   const summary = summarize(results, tasks).t1;
   assert.equal(summary.passRate, 0.5);
   assert.equal(summary.toolAccuracy, 0.75);
-  assert.deepEqual(summary.categories, { navigation: { runs: 1, passed: 1 }, feature: { runs: 1, passed: 0 } });
+  assert.deepEqual(summary.categories, {
+    navigation: { runs: 1, passed: 1, attempted: 1, quotaRefusals: 0, passRate: 1 },
+    feature: { runs: 1, passed: 0, attempted: 1, quotaRefusals: 0, passRate: 0 },
+  });
   assert.match(toMarkdown({ results, tasks, generatedAt: "now" }), /\| t1 \| 1\/2 \(50%\)/u);
 });
 
@@ -69,4 +72,32 @@ test("Workers AI also receives its account id, and nothing else beyond the named
 
 test("a GitHub Models target parses with its https base URL", () => {
   assert.deepEqual(parseTarget("groq:openai/gpt-4.1-mini:GITHUB_MODELS_TOKEN:https://models.github.ai/inference"), { provider: "groq", model: "openai/gpt-4.1-mini", apiKeyEnv: "GITHUB_MODELS_TOKEN", baseUrl: "https://models.github.ai/inference" });
+});
+test("evaluation attempts do not inherit the production capacity queue and explicit experiments remain selectable", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "eval-attempt-policy-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const fake = join(dir, "cli.mjs");
+  await writeFile(fake, `console.log(JSON.stringify({status:"failed",message:JSON.stringify(process.argv.slice(2)),toolCalls:0}));`);
+  const env = { PATH: process.env.PATH, HOME: dir, GROQ_API_KEY: "fixture" };
+  for (const extraArgs of [[], ["--capacity-wait-ms", "5000", "--retry-attempts", "2"]]) {
+    const outcome = await atlasCliAgent({ cliPath: fake, env, extraArgs })({ root: dir, objective: "x", target: "groq:m:GROQ_API_KEY", signal: new AbortController().signal });
+    const args = JSON.parse(outcome.message);
+    assert.equal(args.filter(arg => arg === "--capacity-wait-ms").length, 1);
+    assert.equal(args[args.indexOf("--capacity-wait-ms") + 1], extraArgs.length ? "5000" : "0");
+    assert.equal(args[args.indexOf("--retry-attempts") + 1], extraArgs.length ? "2" : "1");
+    assert.equal(outcome.status, "failed", "a refused attempt must not become a pass");
+  }
+});
+
+test("partial progress survives in logs without copying arbitrary child stderr", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "eval-progress-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const fake = join(dir, "cli.mjs");
+  await writeFile(fake, `process.stderr.write('PRIVATE_SENTINEL\\nAtlas progress: {"modelRequests":1,"toolCalls":0,"failedTools":0}\\n');console.log(JSON.stringify({status:"failed",message:"refused"}));`);
+  const logged = [];
+  t.mock.method(console, "log", value => logged.push(value));
+  await atlasCliAgent({ cliPath: fake, env: { PATH: process.env.PATH, HOME: dir, GROQ_API_KEY: "fixture" } })({ root: dir, objective: "x", target: "groq:m:GROQ_API_KEY", signal: new AbortController().signal });
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /"modelRequests":1/u);
+  assert.ok(!logged.join("").includes("PRIVATE_SENTINEL"));
 });

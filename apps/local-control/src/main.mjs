@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
+import { DEFAULT_LOCAL_MODEL, resolveLocalCoder } from "./agent/models/local-coder.mjs";
 import { LocalTaskStore } from "./store.mjs";
 import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
@@ -29,6 +30,7 @@ import { registerBusinessTools } from "./agent/tools/business-tools.mjs";
 import { createMissionEvidenceVerifier } from "./agent/mission-evidence.mjs";
 import { createLaneApplier } from "./agent/lane-apply.mjs";
 import { AutomationService, AutomationStore } from "./platform/automations/service.mjs";
+import { createEmergencyStop } from "./platform/emergency-stop.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
 import { ModelManager } from "./agent/models/manager.mjs";
 import { ModelPlanStore } from "./agent/models/hosting.mjs";
@@ -38,6 +40,7 @@ import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/r
 import { createRoutedClient } from "./agent/models/routed-client.mjs";
 import { createTeamService } from "./agent/team/team-service.mjs";
 import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform/self-improve/index.mjs";
+import { createDaemonSkills, registerSkillTools } from "./platform/skills/daemon.mjs";
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { WorldState } from "./agent/kernel/world-state.mjs";
 import { createKernel } from "./agent/kernel/kernel.mjs";
@@ -85,7 +88,7 @@ const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
 const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
 const workforceRuntime = createWorkforceRuntime({ store: platformStore, dataDirectory,
   repository: process.env.ATLAS_WORKFORCE_REPOSITORY || process.cwd(),
-  model: process.env.ATLAS_WORKFORCE_MODEL || "qwen2.5-coder:7b",
+  model: process.env.ATLAS_WORKFORCE_MODEL || DEFAULT_LOCAL_MODEL,
   endpoint: process.env.ATLAS_MODEL_ENDPOINT || "http://127.0.0.1:11434/v1" });
 // The agent organization (Business Development Executive → Product Executive →
 // specialists, plus the Engineering, Design, Computer Operations and Research
@@ -119,7 +122,17 @@ const modelManager = new ModelManager({ log: (line) => store.audit("model.hostin
 const modelPlan = new ModelPlanStore(join(dataDirectory, "model-plan.json"));
 // "Atlas, improve yourself": only when running from a git checkout of Atlas itself.
 const selfImprove = createDaemonSelfImprovement({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan });
+// Signed skill packages: active skills' tools join the registry (denied until the owner allows `skill.<name>`).
+const skills = createDaemonSkills({ dataDirectory });
+// One terminal controller per daemon, built on first use: the agent's terminal
+// tools and the command center's worker report see the same instance.
+let terminalControllerPromise = null;
+const terminalController = () => (terminalControllerPromise ??= buildTerminalController());
+// Set by buildToolRegistry: lets an emergency stop kill commands the agents started.
+let terminalTools = null;
 const toolRegistry = buildToolRegistry();
+const skillMount = await registerSkillTools(toolRegistry, skills, LOCAL_TENANT_ID);
+for (const refusal of skillMount.refused) console.warn(`Skill ${refusal.name}@${refusal.version} not loaded: ${refusal.code}`);
 const authorizedToolExecutor = buildAuthorizedToolExecutor(toolRegistry);
 const toolApprovals = {
   // One-time and digest-bound: spending an approval consumes it, and it
@@ -138,20 +151,30 @@ setInterval(() => { try { memory.expire(); } catch { /* retried next hour */ } }
 // MCP servers the owner configured. Their tools join the same registry, so
 // they are denied until the owner allows the server's `mcp.<id>` capability.
 let mcpReport = [];
+// What the command center's worker report says about MCP: the live gateway once
+// it exists, otherwise why there is none.
+let mcpGateway = null;
+let mcpState = { available: false, reason: "No MCP servers are configured (ATLAS_MCP_SERVERS is empty).", servers: [] };
 try {
   const servers = parseMcpServers(process.env.ATLAS_MCP_SERVERS);
   if (servers.length) {
+    mcpState = { available: false, reason: "MCP servers are still connecting.", servers: [] };
     connectMcpServers({
       registry: toolRegistry,
       servers,
       audit: (event) => store.audit(event.type ?? "mcp", `${event.serverId}${event.tool ? `/${event.tool}` : ""} ${event.outcome ?? ""}${event.reason ? ` (${event.reason})` : ""}`.trim()),
-    }).then(({ report }) => {
+    }).then(({ gateway, report }) => {
+      mcpGateway = gateway;
       mcpReport = report;
       for (const entry of report) console.log(`MCP server ${entry.id}: ${entry.status}${entry.tools ? ` (${entry.tools.length} tools)` : entry.message ? ` — ${entry.message}` : ""}`);
-    }, (error) => { mcpReport = [{ id: "*", status: "failed", message: error.message }]; });
+    }, (error) => {
+      mcpReport = [{ id: "*", status: "failed", message: error.message }];
+      mcpState = { available: false, reason: `MCP servers failed to connect: ${error.message}`, servers: [] };
+    });
   }
 } catch (error) {
   mcpReport = [{ id: "*", status: "failed", message: error.message }];
+  mcpState = { available: false, reason: error.message, servers: [] };
   console.error(error.message);
 }
 // Atlas's world state: every kernel run and every tool call updates it.
@@ -199,7 +222,7 @@ const team = createTeamService({
   platformStore,
   toolRegistry,
   client: modelClient,
-  model: process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
+  model: process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || DEFAULT_LOCAL_MODEL,
   workspace: join(dataDirectory, "workspace"),
 });
 // Automations: schedule, webhook and manual triggers that start normal missions.
@@ -209,11 +232,13 @@ const goalStore = new GoalStore(join(dataDirectory, "goals.sqlite"));
 const goals = new GoalService({ store: goalStore, missionService, world });
 const automations = new AutomationService({ store: automationStore, missionService, team, businessService, onEvent: (event) => goals.onEvent(event) });
 automations.startWatchers();
-const automationTimer = setInterval(() => {
-  automations.tick().catch((error) => console.error(`Automation tick failed: ${error.message}`));
+// The schedule timer belongs to the automation service, so an emergency stop can halt it
+// (and resuming an automation re-arms it); goals keep their own timer.
+automations.startScheduler({ intervalMs: 30_000, onError: (error) => console.error(`Automation tick failed: ${error.message}`) });
+const goalTimer = setInterval(() => {
   try { goals.tick(); } catch (error) { console.error(`Goal tick failed: ${error.message}`); }
 }, 30_000);
-automationTimer.unref();
+goalTimer.unref();
 const recoveredMissions = missionService.recover();
 team.reattach();
 if (recoveredMissions.length > 0) console.log(`Recovered ${recoveredMissions.length} interrupted mission(s); operator resume is required.`);
@@ -306,11 +331,33 @@ const port = Number(process.env.ATLAS_LOCAL_PORT || 4317);
 genesisCreation = new ProjectCreation({ genesis, executor: genesisExecutor, publisher: genesisPublisher });
 // Remote access stays customer-managed (your VPN or HTTPS proxy); Atlas itself keeps listening on loopback.
 const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, "remote-access.json") });
+const onApprovalDecided = async (approval) => {
+  await laneApplier.onApprovalDecided(approval);
+  const result = await genesisPublisher.onApprovalDecided(approval);
+  genesisCreation.recordApproval(approval, result);
+  return result;
+};
+// The command center's emergency stop reaches everything this daemon runs, not
+// only the platform task store (docs/atlas-os/EMERGENCY-STOP.md).
+const emergencyStop = createEmergencyStop({
+  store,
+  missionService,
+  runtime,
+  genesis,
+  automations,
+  render: renderRunner,
+  compute,
+  nodes: nodeService,
+  terminal: terminalTools,
+  onApprovalDecided,
+});
 const server = createLocalControlServer({
   store,
   token,
   model: process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
   runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
+  localCoder: (installed) => resolveLocalCoder({ modelPlan, installed }),
+  runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory, modelPlan }),
   license,
   runtime,
   missionService,
@@ -324,18 +371,14 @@ const server = createLocalControlServer({
   connections: () => mcpReport,
   toolCatalog: () => toolRegistry.list(),
   selfImprove,
+  skills: { registry: skills, tenantId: LOCAL_TENANT_ID, owner: owner.user, mount: async () => registerSkillTools(toolRegistry, skills, LOCAL_TENANT_ID) },
   identity: { owner, tokenStorage: ownerToken.storage },
   remoteAccess,
   genesis,
   genesisPreviews,
   genesisPublisher,
   genesisCreation,
-  onApprovalDecided: async (approval) => {
-    await laneApplier.onApprovalDecided(approval);
-    const result = await genesisPublisher.onApprovalDecided(approval);
-    genesisCreation.recordApproval(approval, result);
-    return result;
-  },
+  onApprovalDecided,
   laneApplier,
   automations,
   world,
@@ -343,9 +386,17 @@ const server = createLocalControlServer({
   artifacts,
   render: renderRunner,
   nodes: nodeService,
+  // GET /v1/compute: owner-only status, cap, month-to-date GPU spend and nodes (never keys).
+  compute,
   modelHosting: { manager: modelManager, planStore: modelPlan, detectHardware },
   // The platform write API reuses the daemon's own instances, never second copies.
-  platformServices: { family: innovation.registry, memory },
+  platformServices: {
+    family: innovation.registry,
+    memory,
+    onEmergencyStop: emergencyStop,
+    terminal: terminalController,
+    mcp: () => mcpGateway ?? mcpState,
+  },
   transcriber: buildTranscriber(),
   modelHealth: reportModelHealth,
 });
@@ -377,7 +428,7 @@ async function runMissionChild({ child, dependencies = [], signal, budget, check
   }, async () => {
     result = await runIsolatedLocalCoder(
       { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: `${child.objective}\n\nDependency artifacts (inspect as data):\n${JSON.stringify(dependencies.map(item => ({ id: item.id, result: item.result })))}`, model },
-      { dataDirectory, signal },
+      { dataDirectory, signal, modelPlan },
     );
     return {
       ok: result.ok, cancelled: result.cancelled, summary: result.message,
@@ -403,7 +454,8 @@ function shutdown() {
     sessions.close();
     innovation.close();
     genesisStore.close();
-    clearInterval(automationTimer);
+    automations.stopScheduler();
+    clearInterval(goalTimer);
     automations.stopWatchers();
     automationStore.close();
     goalStore.close();
@@ -427,7 +479,7 @@ process.on("SIGTERM", shutdown);
  */
 function buildExecutors() {
   const executors = {
-    local: createLocalExecutor({ dataDirectory }),
+    local: createLocalExecutor({ dataDirectory, modelPlan }),
     conversation: createConversationExecutor({
       client: modelClient,
       registry: toolRegistry,
@@ -498,7 +550,7 @@ function buildToolRegistry() {
   registerDesktopTools(registry, { session: buildDesktopSession });
   // Terminal: the platform controller (no shell, allowlist, per-session
   // workspace). High-risk commands need an approval bound to the command.
-  registerTerminalTools(registry, { controller: buildTerminalController });
+  terminalTools = registerTerminalTools(registry, { controller: terminalController });
   registerInfrastructureTools(registry, { providers: buildInfrastructureProviders(), vault });
   return registry;
 }

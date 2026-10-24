@@ -1,3 +1,4 @@
+import type { ToolFailureLimits } from "./tool-failure-tracker.js";
 import type { ReadOnlyToolContext, ReadOnlyToolRegistry } from "../domain/read-only-tool-registry.js";
 import type { SessionAuditLog } from "../domain/session-audit.js";
 import type { ToolScope } from "../domain/tool-policy.js";
@@ -11,9 +12,13 @@ export interface ReadOnlyToolAgentOptions {
   readonly audit: SessionAuditLog;
   readonly maximumTurns?: number;
   readonly maximumToolCalls?: number;
+  /** Coder mode: correct one textual tool request; never execute JSON from text. */
+  readonly recoverTextualToolCalls?: boolean;
   readonly maximumToolResultCharacters?: number;
   /** Optional serialized request byte ceiling, including tool schemas. */
   readonly maximumRequestBytes?: number;
+  /** Limits for repeated identical and consecutive tool failures; see ToolFailureTracker. */
+  readonly toolFailureLimits?: Partial<ToolFailureLimits>;
   /**
    * Caps `max_tokens` on every individual model request. Without this, a
    * provider that reports a large remaining output-token budget (see

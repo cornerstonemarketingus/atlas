@@ -5,7 +5,11 @@ const positive = value => Number.isSafeInteger(value) && value > 0;
  * The reporting job keeps the overall workflow in progress and is not execution.
  */
 export function executionOutcome(identity, task, run, page, now = Date.now()) {
+  // GitHub's jobs response uses the task-specific run-name as workflow_name.
+  // Both metadata responses must name this exact saved task, not just a role.
+  const title = `${task.mode === "coder" ? "Atlas Coder" : "Atlas Runner"} · task ${task.taskId}`;
   if (!positive(Number(identity.run_id)) || !positive(Number(identity.run_attempt))
+    || typeof task.taskId !== "string" || !task.taskId || run?.display_title !== title
     || !Array.isArray(page?.jobs) || !Number.isInteger(page.total_count)
     || page.total_count < 1 || page.total_count > 100 || page.jobs.length !== page.total_count) throw new Error("Incomplete execution job evidence");
   const jobs = page.jobs.filter(job => job?.name === "run");
@@ -15,7 +19,7 @@ export function executionOutcome(identity, task, run, page, now = Date.now()) {
   if (!positive(job.id) || String(job.run_id) !== String(identity.run_id)
     || (job.run_attempt !== undefined && String(job.run_attempt) !== String(identity.run_attempt))
     || job.status !== "completed" || !conclusions.has(job.conclusion)
-    || job.head_branch !== "main" || job.workflow_name !== (task.mode === "coder" ? "Atlas Coder" : "Atlas Runner")
+    || job.head_branch !== "main" || job.workflow_name !== title
     || !/^[0-9a-f]{40}$/.test(run.head_sha ?? "") || job.head_sha !== run.head_sha
     || typeof job.completed_at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(job.completed_at)
     || !Number.isFinite(completed) || completed > now + 60000) throw new Error("Unverified execution job evidence");

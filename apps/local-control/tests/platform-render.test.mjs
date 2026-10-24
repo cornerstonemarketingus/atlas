@@ -494,7 +494,7 @@ test("a runtime that fails to start is reported, not retried on the host", async
   await rm(ws, { recursive: true, force: true });
 });
 
-test("with an artifact store, published video outputs are stored as kind 'video' with render provenance", async () => {
+test("with an artifact store, published video outputs are stored as kind 'video' with render provenance, and other typed outputs are sniffed too", async () => {
   const ws = await workspace();
   const storeRoot = await mkdtemp(join(tmpdir(), "atlas-render-store-"));
   const store = new ArtifactStore({ root: storeRoot });
@@ -521,8 +521,9 @@ test("with an artifact store, published video outputs are stored as kind 'video'
   assert.equal(record.mediaType, "video/mp4");
   assert.deepEqual(record.provenance, { runId: "run_1", step: "render", source: "render.ffmpeg" });
   assert.equal(fake.artifactError.code, "CONTENT_MISMATCH", "the store's content sniffing still applies; the render result records it");
-  assert.equal(poster.artifact, undefined, "only video outputs go to the store");
-  assert.equal(poster.artifactError, undefined);
+  // Images go to the store too (kind "file", real media type), so a PNG that is not one is refused, not stored.
+  assert.equal(poster.artifact, undefined);
+  assert.equal(poster.artifactError.code, "CONTENT_MISMATCH");
   store.close?.();
   await rm(ws, { recursive: true, force: true });
   await rm(storeRoot, { recursive: true, force: true });
