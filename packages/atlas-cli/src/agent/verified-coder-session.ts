@@ -2,6 +2,7 @@ import { compareValidationSnapshots } from "../domain/validation-comparator.js";
 import type { ValidationComparison, ValidationSnapshot } from "../domain/validation-result.js";
 import {
   decideVerificationAction,
+  describeBaseline,
   describeNewFailures,
   type VerificationPlan,
 } from "./verification-planning.js";
@@ -124,6 +125,7 @@ export interface VerifiedCoderSessionOptions {
 }
 
 const DEFAULT_MAX_REPAIR_ATTEMPTS = 2;
+const BASELINE_EVIDENCE_LABEL = "Repository checks before your change (measured)";
 const REPAIR_EVIDENCE_LABEL = "Validation failures your previous edits introduced";
 
 /**
@@ -204,7 +206,9 @@ export class VerifiedCoderSession {
     const accumulated = new Map<string, ProposedEditOperation>();
     let pass = 0;
     let last: AgentPassResult | null = null;
-    let evidence: readonly AgentEvidence[] = this.#baseEvidence;
+    let evidence: readonly AgentEvidence[] = baseline === null
+      ? this.#baseEvidence
+      : [...this.#baseEvidence, { label: BASELINE_EVIDENCE_LABEL, content: describeBaseline(baseline) }];
     let comparison: ValidationComparison | null = null;
     let escalatedAtPass: number | undefined;
     // Repairs made so far, oldest first, each with the failure it targeted.
