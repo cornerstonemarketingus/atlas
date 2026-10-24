@@ -47,7 +47,8 @@ const defaultAudit = join(homedir(), ".atlas", "runs", `${new Date().toISOString
 const auditLog = resolve(option("--audit-log", defaultAudit));
 
 const endpoint = new URL(baseUrl);
-if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(endpoint.hostname))) {
+const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname);
+if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && loopback)) {
   throw new Error("Self-hosted endpoints must use HTTPS unless they are loopback URLs.");
 }
 
@@ -68,7 +69,7 @@ if (build.error || build.status !== 0) process.exit(build.status ?? 1);
 mkdirSync(dirname(auditLog), { recursive: true });
 const args = [
   cli, "code", resolve(repository), objective,
-  "--provider", "groq",
+  "--provider", loopback ? "local" : "groq",
   "--api-key-env", "ATLAS_LOCAL_MODEL_KEY",
   "--model", model,
   "--base-url", baseUrl,
