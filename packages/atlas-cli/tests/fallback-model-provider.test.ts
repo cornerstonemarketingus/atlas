@@ -115,6 +115,7 @@ test("when every route is unusable nothing waits and the report is not about cap
       return true;
     });
     assert.equal(seen.length, 2, "each route was tried exactly once");
+});
 
 test("a rejected tool call stays on its route and never waits for capacity", async () => {
   const seen: ModelRequest[] = [];
