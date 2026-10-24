@@ -68,6 +68,7 @@ test("in a browser: Home answers a first Hello, and a failed session is not reop
   // Choosing the coder without a repository is explained before anything is sent.
   await page.locator("#session-picker").selectOption("");
   const sessionsBefore = h.runtime.listSessions().length;
+  await page.getByText("Where this conversation works").click();
   await page.locator("#session-executor").selectOption("local");
   await page.locator("#turn-text").fill("Hello again");
   await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -79,6 +80,8 @@ test("in a browser: Home answers a first Hello, and a failed session is not reop
   h.runtime.submitTurn(failed.id, { text: "Break" });
   await h.runtime.drain();
   assert.equal(h.runtime.getSession(failed.id).status, "failed");
+  await page.reload();
+  await page.waitForFunction((id) => [...document.querySelectorAll("#session-picker option")].some((o) => o.value === id), failed.id);
   await page.locator("#session-picker").selectOption(failed.id);
   await page.waitForFunction(() => /failed/u.test(document.querySelector("#run-status").textContent));
   await page.reload();
@@ -127,7 +130,7 @@ test("in a browser: a blocked Genesis project shows no Ready card and nothing ru
   h.genesis.advance(project.id, "blocked", { reason: `"${task.title}" needs a coding model. Set one up under Models, then resume.`, evidence: { kind: "capability", missing: "model" } });
 
   const { page, errors } = await browser(t, h, `#/build/${project.id}`);
-  await page.locator("#build-detail").getByText("needs a coding model").waitFor();
+  await page.locator("#build-detail").getByText("needs a coding model").first().waitFor();
   assert.match(await page.locator("#build-detail .status").first().textContent(), /Waiting for you/iu);
   assert.equal(await page.locator("#build-detail").getByText("Open the application").count(), 0, "the old Ready card is not shown while blocked");
   assert.equal(await page.locator("#build-detail .step.running").count(), 0, "nothing is shown as running");
@@ -156,6 +159,8 @@ async function daemon(t) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => {
     await runtime.stop();
+    // The browser may still hold a session event stream open.
+    server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     sessions.close(); genesisStore.close(); store.close();
     rmSync(root, { recursive: true, force: true });
