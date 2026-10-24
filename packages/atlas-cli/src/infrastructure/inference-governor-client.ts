@@ -8,6 +8,8 @@ export interface GovernorGrant {
   readonly permanent?: boolean;
   readonly waitMs?: number;
   readonly reason?: string;
+  /** Why an account is disabled: BILLING, AUTHENTICATION or PERMISSION. */
+  readonly kind?: string;
 }
 
 export interface GovernorReservation {

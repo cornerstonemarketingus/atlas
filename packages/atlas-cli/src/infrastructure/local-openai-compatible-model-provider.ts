@@ -33,7 +33,7 @@ export class LocalOpenAiCompatibleModelProvider implements ModelProvider {
       const cancelled = cause instanceof JsonHttpTransportError && cause.kind === "cancelled";
       const status = cause instanceof JsonHttpTransportError ? cause.statusCode : undefined;
       throw new ModelProviderError({
-        message: cancelled ? "Local model request cancelled" : "Local model request failed",
+        message: cancelled ? "Local model request cancelled" : cause instanceof JsonHttpTransportError && cause.message === "Model endpoint timed out" ? "Local model request timed out; check Ollama model load and inference speed" : "Local model request failed",
         code: cancelled ? "cancelled" : status === 400 ? "invalid-request" : status === 404 ? "model-unavailable" : status === 429 ? "rate-limit" : "provider-failure",
         providerId: this.metadata.id, retryable: !cancelled && (status === undefined || status === 429 || status >= 500), cause,
       });
