@@ -35,10 +35,17 @@ export function createLegacyPolicyEngine({ policyForCapability, audit = () => {}
     version,
     evaluate({ tenantId: requestTenant = tenantId, userId: requestUser = userId, agentId = null, taskId = null, tool, input = {}, grantedPermissions = [], approval = null, correlationId = null, toolCallId = null }) {
       const capability = tool.capability ?? capabilityForTool(tool.name);
-      const configured = policyForCapability(capability)?.decision ?? "deny";
+      const row = policyForCapability(capability);
+      const configured = row?.decision ?? "deny";
       const validDecision = ["allow", "ask", "deny"].includes(configured) ? configured : "deny";
+      // Only a saved "deny" is the owner's decision. A capability with no
+      // saved row is denied by default, and the reason says where to allow it
+      // rather than blaming the owner for a denial they never made.
+      const ownerDenied = configured === "deny" && row?.default !== true;
       const rules = validDecision === "deny"
-        ? [{ id: "operator-deny", tool: tool.name, effect: "deny", reason: "The operator denied this capability." }]
+        ? [ownerDenied
+          ? { id: "operator-deny", tool: tool.name, effect: "deny", reason: `The owner set ${capability} to deny. ${whereToAllow(capability)}` }
+          : { id: "not-allowed-by-default", tool: tool.name, effect: "deny", reason: `${capability} is not allowed by default. ${whereToAllow(capability)}` }]
         : validDecision === "ask"
           ? [{ id: "operator-approval", tool: tool.name, effect: "require_approval", reason: "The operator requires approval for this capability." }]
           : [];
@@ -51,4 +58,9 @@ export function createLegacyPolicyEngine({ policyForCapability, audit = () => {}
       return record;
     },
   };
+}
+
+/** Where the owner changes a capability's policy in the console. */
+export function whereToAllow(capability) {
+  return `To let agents use it, open Computer in the Atlas console and set ${capability} to allow (or ask).`;
 }

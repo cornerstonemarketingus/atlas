@@ -254,6 +254,15 @@ test("namespaces: rlimits still apply inside the namespace", { skip: skipNamespa
 });
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
+
+/** The first of `checks` ([path, "R_OK" | "W_OK"]) uid 65534 cannot access, or null when it can access them all. */
+function unreadableBy65534(setpriv, checks) {
+  const probe = "const fs = require('fs'); for (const [path, mode] of JSON.parse(process.argv[1])) { try { fs.accessSync(path, fs.constants[mode]); } catch { process.stdout.write(path); process.exit(3); } }";
+  const result = spawnSync(setpriv, ["--reuid=65534", "--regid=65534", "--clear-groups", "--", process.execPath, "-e", probe, JSON.stringify(checks)], {
+    encoding: "utf8", timeout: 10_000, env: { PATH: process.env.PATH },
+  });
+  return result.status === 3 ? result.stdout : null;
+}
 const USERNS_SCRIPT = `
 const { TerminalController } = await import(${JSON.stringify(join(HERE, "../src/platform/terminal/terminal-controller.mjs"))});
 const root = process.argv[1];
@@ -271,6 +280,16 @@ test("namespaces (userns mode): an unprivileged daemon gets the same isolation t
   const base = await mkdtemp(join(tmpdir(), "atlas-userns-"));
   t.after(() => rm(base, { recursive: true, force: true }));
   chownSync(base, 65534, 65534);
+  // Precondition, not the behaviour under test: the impersonated daemon (uid
+  // 65534) must be able to read this checkout and use the temporary folder.
+  // Under a mode-700 parent (for example /tmp/claude-0) it cannot even load
+  // the controller, which says nothing about user-namespace isolation.
+  const unreadable = unreadableBy65534(setpriv, [
+    [join(HERE, "../src/platform/terminal/terminal-controller.mjs"), "R_OK"],
+    [join(HERE, "../../../packages/atlas-contracts/src/index.mjs"), "R_OK"],
+    [base, "W_OK"],
+  ]);
+  if (unreadable) { t.skip(`uid 65534 cannot reach ${unreadable}; run from a checkout and TMPDIR that other users can read (no mode-700 parent directory)`); return; }
   const child = spawnSync(setpriv, ["--reuid=65534", "--regid=65534", "--clear-groups", "--", process.execPath, "--input-type=module", "-e", USERNS_SCRIPT, base], {
     encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH },
   });

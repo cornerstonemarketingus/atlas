@@ -288,6 +288,12 @@ function appPages(entities, archetype, booking) {
   return pages;
 }
 
+// Entity fields are { key, label, ... } objects once a spec exists; accept a
+// bare key too, so a field is never joined into text as "[object Object]".
+const fieldKey = (f) => (typeof f === "string" ? f : f?.key ?? "");
+const fieldWords = (f) => (typeof f === "string" ? f : (f?.label ?? f?.key ?? "").toLowerCase());
+const fillInStep = (entity) => `Fill in ${entity.fields.slice(0, 4).map(fieldWords).filter(Boolean).join(", ")}`;
+
 function workflowsFor({ archetype, entities, booking, auth, pages }) {
   const flows = [];
   if (archetype === "website") {
@@ -303,9 +309,10 @@ function workflowsFor({ archetype, entities, booking, auth, pages }) {
   if (booking) flows.push({ id: "book", title: "Book an appointment", steps: ["Open Book", "Choose a service, date and time", "Enter contact details", "Submit", "See a confirmation"] });
   for (const entity of entities) {
     const plural = `${entity.name.toLowerCase()}s`;
-    flows.push({ id: `add-${entity.name.toLowerCase()}`, title: `Add a ${entity.name.toLowerCase()}`, steps: [`Open ${entity.name}s`, "Choose Add", `Fill in ${entity.fields.slice(0, 4).join(", ")}`, "Save", "See it in the list"] });
+    flows.push({ id: `add-${entity.name.toLowerCase()}`, title: `Add a ${entity.name.toLowerCase()}`, steps: [`Open ${entity.name}s`, "Choose Add", fillInStep(entity), "Save", "See it in the list"] });
     flows.push({ id: `find-${entity.name.toLowerCase()}`, title: `Find ${plural}`, steps: [`Open ${entity.name}s`, "Type in search", "See matching rows only"] });
-    if (entity.fields.includes("status") || entity.fields.includes("stage")) flows.push({ id: `update-${entity.name.toLowerCase()}`, title: `Update a ${entity.name.toLowerCase()}'s status`, steps: ["Open one", "Change status", "Save", "See the new status"] });
+    const keys = entity.fields.map(fieldKey);
+    if (keys.includes("status") || keys.includes("stage")) flows.push({ id: `update-${entity.name.toLowerCase()}`, title: `Update a ${entity.name.toLowerCase()}'s status`, steps: ["Open one", "Change status", "Save", "See the new status"] });
   }
   flows.push({ id: "overview", title: "See the overview", steps: ["Open Dashboard", "See counts by status"] });
   return flows;
@@ -435,6 +442,13 @@ export function applyChangeRequest(spec, request) {
     changes.push({ kind: "fields", summary: `Add ${addedFields.join(", ")} to ${next.entities[0].name}` });
   }
   if (!changes.length) changes.push({ kind: "feature", summary: text.slice(0, 300) });
+  // Rewrite each "add a record" step from the current fields. This also
+  // repairs a spec saved before field objects were formatted properly.
+  for (const entity of next.entities ?? []) {
+    const flow = (next.workflows ?? []).find((w) => w.id === `add-${entity.name.toLowerCase()}`);
+    const at = flow?.steps.findIndex((step) => step.startsWith("Fill in ")) ?? -1;
+    if (at >= 0) flow.steps[at] = fillInStep(entity);
+  }
   next.changeLog = [...(spec.changeLog ?? []), { request: text, changes }];
   next.version = (spec.version ?? 1) + 1;
   return { spec: next, changes };

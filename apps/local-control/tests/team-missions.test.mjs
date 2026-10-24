@@ -62,7 +62,9 @@ async function harness(t, model, { memory = null, approvals = null, policy = () 
   toolRegistry.register({ name: "communications.send", description: "Send an email.", capability: "communications.send", risk: "high", timeoutMs: 1000, maxOutputCharacters: 200, requiresApproval: false, inputSchema: { type: "object", properties: {} }, async execute() { throw new Error("must never run"); } });
   let authorizedExecutor = null;
   if (authorized) {
-    authorizedExecutor = new AuthorizedToolExecutor({ store: platformStore, policy: new PolicyEngine({ version: "test-policy", rules: [] }) });
+    // `authorized` may be a factory for the policy, so a test can use the daemon's own policy bridge.
+    const policyEngine = typeof authorized === "function" ? authorized({ store, toolRegistry }) : new PolicyEngine({ version: "test-policy", rules: [] });
+    authorizedExecutor = new AuthorizedToolExecutor({ store: platformStore, policy: policyEngine });
     for (const definition of toolRegistry.list()) {
       const adapted = adaptRegistryTool(toolRegistry.get(definition.name));
       authorizedExecutor.register(adapted.tool, { timeoutMs: adapted.timeoutMs });
@@ -438,4 +440,78 @@ test("cancelling a mission that is waiting for approval stops it", async (t) => 
   // Let the waiting step unwind at its checkpoint before the stores close.
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(approvals.executed, 0, "a late approval cannot run a cancelled step");
+});
+
+test("a capability with no saved policy is reported as not allowed by default, with where to allow it", async (t) => {
+  const { createLegacyPolicyEngine } = await import("../src/platform/legacy-policy-bridge.mjs");
+  const model = scriptedModel({ plan: oneStep });
+  const { team, until } = await harness(t, model, {
+    // The daemon's own policy: the saved allow/ask/deny table. browser.read is
+    // read as a capability with no saved row (what the store returns for any
+    // unseeded capability), so this holds whatever the read-only defaults are.
+    authorized: ({ store, toolRegistry }) => createLegacyPolicyEngine({
+      policyForCapability: (capability) => (capability === "browser.read" ? { ...store.policy("test.no-saved-row"), capability } : store.policy(capability)),
+      capabilityForTool: (name) => toolRegistry.get(name)?.capability ?? name,
+    }),
+  });
+  const started = await team.start({ goal: "Confirm the published value." });
+  await until(started.mission.id, ["completed", "failed"]);
+  const detail = team.detail(started.mission.id);
+  const denied = detail.toolCalls.find((c) => c.status === "denied");
+  assert.ok(denied, "the call was denied");
+  assert.match(denied.error.message, /browser\.read is not allowed by default/u);
+  assert.match(denied.error.message, /open Computer in the Atlas console and set browser\.read to allow/u);
+  assert.doesNotMatch(denied.error.message, /operator denied|owner set/iu, "nobody denied it");
+  // The list (Home) and the detail (Missions) both carry the hint.
+  assert.deepEqual(detail.policyBlocks.map((b) => [b.tool, b.capability, b.reason]), [["browser.extract", "browser.read", "not-allowed-by-default"]]);
+  assert.match(detail.policyBlocks[0].hint, /open Computer in the Atlas console/u);
+  const listed = team.list().find((m) => m.id === started.mission.id);
+  assert.deepEqual(listed.policyBlocks, detail.policyBlocks);
+});
+
+test("an owner's saved deny is still reported as the owner's decision", async () => {
+  const { createLegacyPolicyEngine } = await import("../src/platform/legacy-policy-bridge.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "atlas-policy-owner-"));
+  const store = new LocalTaskStore(join(dir, "atlas.sqlite"));
+  try {
+    const engine = createLegacyPolicyEngine({ policyForCapability: (capability) => store.policy(capability) });
+    const evaluate = () => engine.evaluate({ tool: { name: "filesystem.write", capability: "filesystem.write", risk: "low" }, grantedPermissions: ["filesystem.write"] });
+    const unset = evaluate();
+    assert.equal(unset.effect, "deny");
+    assert.match(unset.reasons.join(" "), /filesystem\.write is not allowed by default/u);
+    store.setPolicy("filesystem.write", "deny");
+    const owner = evaluate();
+    assert.equal(owner.effect, "deny");
+    assert.match(owner.reasons.join(" "), /The owner set filesystem\.write to deny/u);
+    store.setPolicy("filesystem.write", "allow");
+    assert.equal(evaluate().effect, "allow");
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("POST /v1/team/missions with no model server answering says to start one, not to rephrase", async (t) => {
+  const { createModelClient } = await import("../src/agent/model-client.mjs");
+  const { createLocalControlServer } = await import("../src/server.mjs");
+  const { createServer } = await import("node:net");
+  // A port that was free a moment ago: nothing answers there.
+  const port = await new Promise((resolve) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+  const client = createModelClient({ baseUrl: `http://127.0.0.1:${port}/v1` });
+  const { team } = await harness(t, client);
+  const dir = await mkdtemp(join(tmpdir(), "atlas-team-http-"));
+  const store = new LocalTaskStore(join(dir, "atlas.sqlite"));
+  const token = "team-http-owner-token-0123456789abcdef";
+  const server = createLocalControlServer({ store, token, runTask: async () => ({}), team });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); store.close(); await rm(dir, { recursive: true, force: true }); });
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/team/missions`, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ goal: "Research three competitors' pricing pages." }),
+  });
+  const body = await response.json();
+  assert.equal(body.code, "MODEL_UNREACHABLE");
+  assert.match(body.message, /Start Ollama/u);
+  assert.doesNotMatch(body.unblock, /Rephrase|stronger planning model/u, "the hint matches the error");
+  assert.match(body.unblock, /model server/u);
+  assert.match(body.unblock, /Models/u);
 });

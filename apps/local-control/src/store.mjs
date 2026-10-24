@@ -98,7 +98,9 @@ export class LocalTaskStore {
   setStatus(id, status, message = null) { this.#db.prepare("UPDATE local_tasks SET status = ?, message = ? WHERE id = ?").run(status, message, id); return this.get(id); }
 
   policies() { return this.#db.prepare("SELECT capability, decision FROM local_policies ORDER BY capability").all(); }
-  policy(capability) { return this.#db.prepare("SELECT capability, decision FROM local_policies WHERE capability = ?").get(capability) ?? { capability, decision: "deny" }; }
+  // A capability with no saved row is denied. `default: true` says so, so a
+  // denial can read "not allowed by default" instead of blaming the owner.
+  policy(capability) { return this.#db.prepare("SELECT capability, decision FROM local_policies WHERE capability = ?").get(capability) ?? { capability, decision: "deny", default: true }; }
   setPolicy(capability, decision) {
     if (!/^[a-z][a-z0-9_.-]{1,63}$/u.test(capability) || !["allow", "ask", "deny"].includes(decision)) throw new Error("Invalid policy.");
     this.#db.prepare("INSERT INTO local_policies (capability, decision) VALUES (?, ?) ON CONFLICT(capability) DO UPDATE SET decision = excluded.decision").run(capability, decision);
