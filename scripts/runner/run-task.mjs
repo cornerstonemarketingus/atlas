@@ -6,6 +6,7 @@ import path from "node:path";
 import { correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
 import { coderValidationArguments } from "./validation-isolation.mjs";
 import { enforceHostedExecutionLease } from "./claim-execution.mjs";
+import { isInventoryObjective } from "./inspect-objective.mjs";
 
 // Also fence cached pre-claim workflow definitions that check out current main policy.
 enforceHostedExecutionLease(process.env);
@@ -148,7 +149,7 @@ if (metadata.mode === "inspect") {
   // A generic repository inventory cannot satisfy an objective-specific question.
   // Do not return a misleading success without objective-specific findings.
   const objective = String(metadata.objective ?? "").trim();
-  if (objective && !/^(inspect|overview|inventory|summari[sz]e)( the)?( repository| codebase| project)?[.!]?$/i.test(objective)) {
+  if (!isInventoryObjective(objective)) {
     writeStatus("blocked", "Hosted inspect mode supports repository inventory only. Objective-specific findings were not produced; select a task mode that can search source files.", { objective_fulfilled: false });
     console.error("Atlas inspection incomplete: objective-specific findings unavailable.");
     process.exit(1);
