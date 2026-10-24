@@ -18,7 +18,7 @@ import { reviewChange } from "./reviewer.mjs";
  * - Reviewer: a separate chat call (reviewer.mjs), optionally another model.
  */
 
-export const DEFAULT_MODEL_ENDPOINT = Object.freeze({ baseUrl: "http://127.0.0.1:11434/v1", model: "qwen2.5-coder:7b" });
+export const DEFAULT_MODEL_ENDPOINT = Object.freeze({ baseUrl: "http://127.0.0.1:11434/v1", model: "qwen3:0.6b" });
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 
 /** Throws for an endpoint that would send repository content in clear text over a network. */
@@ -54,8 +54,9 @@ export function createCoderBuilder({ atlasRoot, cli, runsDirectory, endpoint, co
     const auditLog = join(runsDirectory, `${new Date().toISOString().replaceAll(":", "-")}.jsonl`);
     const args = [
       cli, "code", worktree, objective,
-      "--provider", "groq",
-      "--api-key-env", "ATLAS_SELF_IMPROVE_KEY",
+      // A local Ollama is its own provider (per-request context window, no key);
+      // a remote or non-Ollama server stays on the OpenAI-compatible path.
+      ...(isLoopback(endpoint.baseUrl) && !endpoint.apiKey ? ["--provider", "ollama"] : ["--provider", "groq", "--api-key-env", "ATLAS_SELF_IMPROVE_KEY"]),
       "--model", endpoint.model,
       "--base-url", endpoint.baseUrl,
       ...(isLoopback(endpoint.baseUrl) ? ["--context-window", contextWindow, "--max-output-tokens", maxOutputTokens] : []),

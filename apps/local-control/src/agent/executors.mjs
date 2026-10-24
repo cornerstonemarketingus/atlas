@@ -25,7 +25,7 @@ import { runIsolatedLocalCoder } from "../runner.mjs";
  * machine, with no network dependency beyond the model endpoint the operator
  * configured — which may itself be loopback Ollama.
  */
-export function createLocalExecutor({ runCoder = runIsolatedLocalCoder, dataDirectory, verifyDir } = {}) {
+export function createLocalExecutor({ runCoder = runIsolatedLocalCoder, dataDirectory, verifyDir, modelPlan = null } = {}) {
   return {
     id: "local",
     description: "Runs the coder locally in an isolated Git worktree.",
@@ -55,7 +55,7 @@ export function createLocalExecutor({ runCoder = runIsolatedLocalCoder, dataDire
       const startedAtMs = Date.now();
       const result = await runCoder(
         { id: `${session.id}-${turn.id}`, repository: session.repository, objective: turn.text, model: session.model },
-        { dataDirectory, verifyDir, signal },
+        { dataDirectory, verifyDir, signal, modelPlan },
       );
       const durationMs = Date.now() - startedAtMs;
 
