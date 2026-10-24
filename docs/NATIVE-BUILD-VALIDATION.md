@@ -1,0 +1,23 @@
+# Native mobile compilation gate
+
+The mobile-native workflow builds an Android debug APK and an unsigned iOS simulator app on mobile changes. It uses Java 21/Android SDK36 and the installed Xcode26.3 on the macOS15 runner, with the locked npm dependencies. Native plugins are synchronized before compilation. The iOS app is archived with file permissions preserved; artifacts expire after three days.
+
+These are development build artifacts, not store submissions. Android uses its normal debug signing; no production signing identity is supplied. iOS signing is disabled. No Apple account, upload token, production environment secret or publishing permission is read. Checkout does not persist its read-only repository credential. Build failures remain CI evidence and do not produce a false successful artifact.
+
+The workflow is a protected CODEOWNERS path and requires its configured review before merge. It is initially stacked on the native toolchain repair #316. The unchanged repository workflow checker passes with the actual installed Git Bash executable (the Windows WSL shim cannot run Bash here).
+
+A successful compilation does not prove the app is usable. The bundled paired-device launch now exists (PR #322), with real daemon contract and emulated-native browser acceptance. Production HTTPS/device acceptance, hosted account authentication/deletion, exact authorized approvals, native push/biometric behavior, real link associations, simulator/device accessibility, release signing, store billing decisions and review metadata remain separate release gates. Never submit these development artifacts as evidence those flows exist.
+
+Runner toolchain inventory checked against [GitHub macOS15](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md); pinned runtime migration follows [Capacitor8](https://capacitorjs.com/docs/updating/8-0) and [8.5 scene lifecycle](https://capacitorjs.com/docs/updating/8-5).
+
+First remote build evidence: Actions run 39007793513 successfully compiled both native jobs and uploaded non-expired Android debug and iOS simulator artifacts. The native project repair merged in #316; workflow PR #320 now targets main and still requires configured workflow review. This run predates the separate icon integration #318.
+
+## Paired launcher compile and package evidence
+
+Run 39029413410 successfully built the actual paired launcher at 00cb172 (integrating source cf13ccf), producing Android debug APK and unsigned iOS simulator ZIP. Combined ordinary CI 39029413335 and source CI 39029393563 also passed. Downloaded both artifacts and verified all eight reviewed www assets match the packaged files in both apps, normalizing only CRLF/LF. This closes the earlier possibility that a native compiler passed while bundling the old placeholder. It does not prove native launch, vault behavior on a physical device, production HTTPS, approval decisions or store acceptance.
+
+Reproduce from the matching source checkout: download run artifacts using gh run download RUN_ID --dir ARTIFACT_DIRECTORY, then run python mobile/scripts/verify-native-assets.py ARTIFACT_DIRECTORY. The verifier reads specific ZIP members without extraction or execution and rejects absent, modified or duplicate assets; all three negative fixtures were exercised locally. Artifact retention is three days. No production signing or review bypass occurred; workflow owner review remains pending.
+
+The iOS compiler job now also installs and launches the compiled app in an available iPhone simulator, collecting a device/runtime record, launch receipt and screenshot as atlas-ios-launch-evidence (three-day retention). Boot/install/launch are bounded and a simulator started by this job is shut down afterward. No pairing code, account, push registration or approval action is supplied. Screenshot existence is not a rendering assertion: inspect the artifact independently before claiming the paired launch screen renders. Physical devices, production HTTPS and vault/approval behavior remain separate gates. This extension is pending CI and configured workflow owner review.
+
+First actual simulator startup/rendering receipt: run 39035340838 at 42d82dd launched com.cornerstonemarketingus.atlas on iPhone 16 Pro, iOS 18.5. Independently inspected launch.png: the real native pairing screen renders with address/code fields and legal links. This is not an emulated-browser image and not a pairing/approval acceptance test. Visual review found white native inset bands; a brand background configuration follow-up is pending fresh screenshot verification. Full ordinary CI 39035340845 also passed. Required workflow review remains absent.
