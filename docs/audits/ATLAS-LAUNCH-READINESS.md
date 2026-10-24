@@ -78,8 +78,7 @@ supersession.
 
 Parts 9-14 (multi-agent evaluation, local-model qualification, replay evals,
 business launch, Windows signing, enterprise items) were not audited beyond what
-the existing suites show. The quantum-research item: no implementation, branch or
-document was found by filename search; treat it as nonexistent until shown.
+the existing suites show.
 
 ## Next (acceptance criteria)
 
