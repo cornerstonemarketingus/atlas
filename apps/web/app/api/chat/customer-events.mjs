@@ -27,13 +27,22 @@ export function customerEvent(type, data) {
     return { conversationId: data.conversationId, stored: data.stored, ...servedBy, ...finalization, ...(data.reply ? { reply: { id: data.reply.id, role: "assistant", content: data.reply.content, createdAt: data.reply.createdAt } } : {}) };
   }
   if (type === "project") {
-    const status = ["building", "publishing", "awaiting-approval", "published", "failed", "unavailable", "not-found"].includes(data.status) ? data.status : "building";
+    const status = ["building", "publishing", "awaiting-approval", "published", "ready", "failed", "unavailable", "not-found", "denied", "interrupted", "blocked"].includes(data.status) ? data.status : "building";
     const repository = data.repository;
     const safeRepository = typeof repository?.fullName === "string" && /^[\w.-]+\/[\w.-]+$/u.test(repository.fullName)
       && repository.webUrl === "https://github.com/" + repository.fullName
       ? { fullName: repository.fullName, webUrl: repository.webUrl } : null;
+    const previewUrl = typeof data.previewUrl === "string"
+      && /^\/preview\/gen_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(data.previewUrl)
+      && data.previewUrl === `/preview/${data.operationId}` ? data.previewUrl : null;
+    const message = ["failed", "unavailable", "denied", "not-found", "interrupted"].includes(status)
+      ? "Atlas could not start or complete this project. No successful creation is confirmed."
+      : status === "ready" ? "Your website preview is ready. Nothing is published; the preview does not send enquiries."
+      : status === "blocked" ? "Project creation needs your input before it can continue."
+      : status === "awaiting-approval" ? "Your approval is required before this action can continue."
+      : "Project status updated. Open your project to review its progress.";
     return { operationId: data.operationId, status, approvalId: data.approvalId, ...(safeRepository ? { repository: safeRepository } : {}),
-      message: status === "awaiting-approval" ? "Your approval is required before this action can continue." : "Project status updated. Open your project to review its progress." };
+      ...(status === "ready" && previewUrl ? { previewUrl } : {}), message };
   }
   return null;
 }

@@ -1057,6 +1057,18 @@ Parallel continuation under the owner's explicit request: prebuilt local coder p
 
 Eval438 validation follow-through: full affected atlas-eval package suite passed39/39 after the focused13/13 checks. Initial exact-head CI39598725107 and eval-fixtures39598725261 passed before this documentation-only integration with chat440. Fresh integrated-head CI remains required.
 
+## 2026-10-22 — repair workspace project creation (#444)
+
+Added the latest screenshot-backed P0 mission. Traced chat, signed sessions/tenant resolution, tool execution, node bridge, hosted renderer/persistence, public event projection and Cloudflare deployment configuration. The shared Genesis node is intentionally deployment-owner-only; hosted static website creation already authorizes signed-in workspace members independently. No owner-role expansion is appropriate.
+
+Reproduced a signed workspace owner's construction-site request failing to persist when the model selects web-app. The chat tool now corrects that template only when the original human request is recognized as a website; app/API requests remain unchanged. Separately, the public project event mapped ready to building and stripped the preview, while failed creation received misleading progress copy. Retain validated hosted preview/status fields and fixed truthful copy, continuing to drop backend diagnostics and unsafe URLs. Clarify the node-only owner diagnostic. No auth/session/tenant policy, workflow or migration change. Coordinated projection overlap on437 comment6327902525; configured review is required for this privacy-sensitive projection.
+
+Production build passed. Built-Worker end-to-end test passed with real signed fixture sessions, migrated D1 adapter, scripted model, both chat modes, project persistence/rendered preview, anonymous401, OAuth redirect/state, foreign-workspace no-write, cross-account no-read, and shared-node403. Baseline creation failed persistence; prior projection failed streamed ready state. Source correction removals fail retained guards; restored focused8tests pass. ESLint/typecheck pass. Fullweb685tests679pass1fail5optional skips: the unchanged sandbox-broker Windows executable-mode fixture independently reproduces100644 vs100755; no assertion weakened. A subsequently added template-boundary case passes focused; fresh CI remains authoritative for the full final head. Earlier lint launch was blocked before execution by usage auto-review; resumed only after its reset, no bypass.
+
+Deployment and acceptance instructions: docs/WORKSPACE-PROJECT-CREATION.md. Production user/session OAuth exchange and post-deploy full creation flow remain unverified; do not call the live issue fixed. Prior separate task-authorship repair is draft442/cfe8088 with all earlier CI green, main conflict, and parallel437 now merged; reconcile without duplicating or weakening release receipts.
+
+Next: publish the project-creation repair PR with configured projection review, require all exact-head CI, deploy the approved commit, and verify actual customer sign-in to persisted project and working streamed preview end to end before any production fixed claim. Preserve native and tenant migration holds and the original medium-coder diagnosis queue.
+
 
 ## 2026-10-21 — verified receipt run-title repair (issue #432)
 
@@ -1087,6 +1099,8 @@ No new permissions, migration, claim release or coding retry introduced.
 
 Next: after #406 merges, open a protected workflow PR for a daily `--shard day/7` schedule, and re-run one GitHub Models task to read the 4-byte body. Once the owner can build `docker/render` and run one Atlas Node, record a real render through it.
 2026-10-21 | (this PR) | chat release gate | The streaming chat gate could never pass: 47811fa made `verify-hosted` require model authorship, but the streamed `done` event (filtered by `customer-events.mjs`, #310) dropped `servedBy`, which the non-streaming reply already carries. The projection now keeps `servedBy` as an allowlisted provider kind and a validated model name, and `finalization` as its status only; endpoints, reasons and other backend fields stay filtered. | Live verify-hosted 39598191966 after #397: non-streaming answered by groq openai/gpt-oss-20b, streaming 257 chars but "model authorship not confirmed"; route still groq → workers-ai → openai (new vendor keys not provisioned). customer-events test; web 672/0. | Owner: provision free vendor keys. | Re-run verify-hosted chat after deploy.
+
+PR449 integration: retained the complete project-creation investigation and the concurrent free-compute/eval/chat-release history. The merged customer-event projection keeps PR437's validated model authorship alongside the separate project-preview correction. Current main cb979bd includes externally merged cloud mission work; no migrations were applied in this workstream. Next: validate the integrated creation flow and exact-head CI, obtain configured projection review, then verify deployed customer creation before any production-fixed claim.
 
 ## 2026-10-22 — recent implementation reconciliation
 
