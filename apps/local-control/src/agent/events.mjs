@@ -98,10 +98,14 @@ export function toolExecutionEvent({ toolCallId, tool, outcome, durationMs, summ
   };
 }
 
-export function validationResultEvent({ profileId, outcome, summary, failures = [] }) {
+/**
+ * `evidence`, when present, is a verifier's receipt: the command that ran,
+ * where, its exit code and an output excerpt (independent-verifier.mjs).
+ */
+export function validationResultEvent({ profileId, outcome, summary, failures = [], evidence = undefined }) {
   return {
     kind: "validation_result",
-    data: { profileId, outcome, summary: String(summary ?? "").slice(0, 4000), failures: failures.slice(0, 50) },
+    data: { profileId, outcome, summary: String(summary ?? "").slice(0, 4000), failures: failures.slice(0, 50), ...(evidence ? { evidence } : {}) },
   };
 }
 

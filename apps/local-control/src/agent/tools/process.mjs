@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { win32 } from "node:path";
 
 /**
  * Bounded command execution for tools.
@@ -25,6 +27,20 @@ export function safeEnvironment(extra = {}) {
     if (process.env[key] !== undefined) base[key] = process.env[key];
   }
   return { ...base, ...extra };
+}
+
+/**
+ * npm without a shell. On Windows `npm` is a .cmd shim that cannot be spawned
+ * without one (spawning "npm" fails with ENOENT), so the npm CLI that ships
+ * beside node.exe is run by node itself, the way the coder's command runner
+ * does it.
+ */
+export function npmInvocation(args, { platform = process.platform, execPath = process.execPath, exists = existsSync } = {}) {
+  if (platform === "win32") {
+    const cli = win32.join(win32.dirname(execPath), "node_modules", "npm", "bin", "npm-cli.js");
+    if (exists(cli)) return { program: execPath, args: [cli, ...args] };
+  }
+  return { program: "npm", args };
 }
 
 export function runCommand(command, args, { cwd, timeoutMs = 60_000, signal, maxBytes = 1_000_000, env = {}, input = null } = {}) {
