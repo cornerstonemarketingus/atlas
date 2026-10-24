@@ -67,7 +67,7 @@ without opening a port, which satisfies the https rule above.
 Opt-in, off by default. Set:
 
 ```
-ATLAS_SELF_HOSTED_MODEL = qwen2.5-coder:7b     (any Ollama model tag)
+ATLAS_SELF_HOSTED_MODEL = qwen2.5-coder:7b     (any Ollama model tag; the local default is qwen3:0.6b)
 ATLAS_OLLAMA_VERSION    = v0.34.1              (a tag from ollama/ollama releases)
 ATLAS_OLLAMA_SHA256     = <optional, see below>
 ```

@@ -51,6 +51,8 @@ function modelEntry(state, model) {
  * scope is unusable until the owner fixes it, including models never tried.
  */
 const ACCOUNT_KINDS = new Set([K.BILLING, K.AUTHENTICATION, K.PERMISSION]);
+/** How long an outstanding account probe holds off other requests if its outcome is never reported. */
+const ACCOUNT_PROBE_TTL_MS = 60_000;
 
 export function prune(state, now) {
   if (state.account && state.account.openUntil <= now) state.account = null;
@@ -108,7 +110,17 @@ export function reserve(state, request, now) {
   const existing = state.reservations[request.requestId];
   if (existing) return { granted: true, model: existing.model, expiresAt: existing.expiresAt, replay: true };
   // The whole account is unusable: no model in this scope is tried, and nobody queues for it.
-  if (state.account) return { granted: false, permanent: true, kind: state.account.kind, waitMs: state.account.openUntil - now, reason: "account_disabled", position: 0 };
+  // After a few minutes one request is let through as a probe, so the owner fixing the key or
+  // billing is noticed without waiting out the full cooldown; the probe's outcome reopens or clears it.
+  if (state.account) {
+    const nextProbeAt = state.account.since + CIRCUIT.accountProbeAfterMs;
+    const probe = state.account.probe;
+    const probeBusy = probe && probe.expiresAt > now && probe.requestId !== request.requestId;
+    if (now < nextProbeAt || probeBusy) {
+      return { granted: false, permanent: true, kind: state.account.kind, waitMs: Math.max(1, probeBusy ? probe.expiresAt - now : nextProbeAt - now), reason: "account_disabled", position: 0 };
+    }
+    state.account.probe = { requestId: request.requestId, expiresAt: now + ACCOUNT_PROBE_TTL_MS };
+  }
 
   const me = {
     latencyClass: request.latencyClass ?? "TASK_CRITICAL", priority: request.priority ?? 0,
@@ -241,7 +253,7 @@ export function ledgerSnapshot(state, now) {
       const { probeRequestId: _probe, ...health } = effectiveHealth(entry.health, now);
       return [model, { ...entry, health, reserved: reservedOn(state, model) }];
     })),
-    account: state.account ? { kind: state.account.kind, openUntil: state.account.openUntil } : null,
+    account: state.account ? { kind: state.account.kind, openUntil: state.account.openUntil, probeAt: state.account.since + CIRCUIT.accountProbeAfterMs } : null,
     reservations: Object.keys(state.reservations).length,
     waiting: Object.values(state.waiting).sort(compareRequests).map((waiter) => ({ latencyClass: waiter.latencyClass, priority: waiter.priority, tokens: waiter.tokens })),
   };

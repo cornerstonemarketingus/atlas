@@ -61,3 +61,27 @@ test("the coder workflows pass every free vendor's key", async () => {
     assert.ok(text.includes("ATLAS_ALLOW_TRAINING_PROVIDERS: ${{ vars.ATLAS_ALLOW_TRAINING_PROVIDERS }}"));
   }
 });
+
+test("an explicit Ollama coder route is keyless, needs a model, and gains no automatic or paid fallbacks", async () => {
+  const { isValidRoute } = await import("./coder-routes.mjs");
+  const plan = resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "ollama", ATLAS_CODER_MODEL: "qwen2.5-coder:1.5b" });
+  assert.deepEqual(plan, { provider: "ollama", model: "qwen2.5-coder:1.5b", apiKeyVariable: null, fallbacks: [] });
+  assert.throws(() => resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "ollama" }), /Set ATLAS_CODER_MODEL/);
+  // Only a fallback the owner wrote down is used, and it must still name its own provider's key.
+  assert.deepEqual(resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "ollama", ATLAS_CODER_MODEL: "m", ATLAS_CODER_FALLBACKS: "groq:openai/gpt-oss-20b:GROQ_API_KEY" }).fallbacks, ["groq:openai/gpt-oss-20b:GROQ_API_KEY"]);
+  // Ollama is never picked automatically, inferred from a model name, or accepted as a fallback.
+  assert.notEqual(resolveCoderRoutes(environment).provider, "ollama");
+  assert.notEqual(resolveCoderRoutes({ ...environment, ATLAS_CODER_MODEL: "qwen2.5-coder:1.5b" }).provider, "ollama");
+  assert.equal(isValidRoute("ollama:m:"), false);
+  assert.equal(isValidRoute("ollama:m:OPENAI_API_KEY"), false);
+});
+
+test("coder routing does not read hosted chat routing, and chat settings cannot change it", async () => {
+  const chat = { ATLAS_CHAT_MODEL: "gpt-5.4", ATLAS_CHAT_BASE_URL: "https://chat.example/v1", ATLAS_CHAT_MODELS: "a,b", ATLAS_CHAT_FALLBACK_MODEL: "c", ATLAS_MODEL_API_KEY: "chat-key" };
+  assert.deepEqual(resolveCoderRoutes({ ...environment, ...chat }), resolveCoderRoutes(environment));
+  assert.deepEqual(resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "groq", ...chat }), resolveCoderRoutes({ ...environment, ATLAS_CODER_PROVIDER: "groq" }));
+  const { readFile } = await import("node:fs/promises");
+  for (const file of ["coder-routes.mjs", "run-task.mjs"]) {
+    assert.doesNotMatch(await readFile(new URL(`./${file}`, import.meta.url), "utf8"), /ATLAS_CHAT_|ATLAS_MODEL_API_KEY/, `${file} must not depend on chat routing variables`);
+  }
+});

@@ -9,6 +9,10 @@ import { createServer } from "node:http";
  * `decide({ objective, messages, turn })` returns either
  *   { edits: [{ path, content }], say?: string }  → one propose_change_set call
  *   { say: string }                               → a final answer
+ * It speaks both the OpenAI-compatible protocol (/v1/chat/completions) and
+ * Ollama's native API (/api/chat), which is what Atlas's `ollama` provider
+ * uses; each recorded request carries its `protocol` and, for native calls,
+ * the `options` (num_ctx, num_predict) the provider sent.
  * It is called for each chat request; `turn` counts requests in the current
  * conversation (a new conversation starts when there is no tool message yet).
  */
@@ -18,7 +22,9 @@ export async function startScriptedModelServer(decide) {
     const url = new URL(request.url ?? "/", "http://localhost");
     const send = (status, value) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     if (request.method === "GET" && url.pathname === "/v1/models") return send(200, { object: "list", data: [{ id: "scripted-coder", object: "model" }] });
-    if (request.method !== "POST" || url.pathname !== "/v1/chat/completions") return send(404, { error: { message: "not found" } });
+    if (request.method === "GET" && url.pathname === "/api/tags") return send(200, { models: [{ name: "scripted-coder" }, { name: "qwen2.5-coder:1.5b" }] });
+    const native = url.pathname === "/api/chat";
+    if (request.method !== "POST" || (url.pathname !== "/v1/chat/completions" && !native)) return send(404, { error: { message: "not found" } });
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -26,8 +32,18 @@ export async function startScriptedModelServer(decide) {
     const text = (message) => (typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((part) => part.text ?? "").join("") : "");
     const objective = messages.filter((m) => m.role === "user").map(text).join("\n\n");
     const turn = messages.filter((m) => m.role === "tool").length;
-    requests.push({ model: body.model, turn, objective: objective.slice(0, 4000), tools: (body.tools ?? []).map((t) => t.function?.name) });
+    requests.push({ protocol: native ? "ollama" : "openai", options: body.options ?? null, model: body.model, turn, objective: objective.slice(0, 4000), tools: (body.tools ?? []).map((t) => t.function?.name) });
     const decision = await decide({ objective, messages, turn });
+    if (native) {
+      const calls = decision.edits?.length
+        ? [{ function: { name: "repository.propose_change_set", arguments: { edits: decision.edits.map((edit) => ({ operation: edit.operation ?? "update", path: edit.path, ...(edit.content !== undefined ? { content: edit.content } : {}) })) } } }]
+        : undefined;
+      return send(200, {
+        model: body.model, created_at: new Date().toISOString(),
+        message: { role: "assistant", content: decision.say ?? (calls ? "" : "Done."), ...(calls ? { tool_calls: calls } : {}) },
+        done: true, done_reason: "stop", prompt_eval_count: 100, eval_count: 50,
+      });
+    }
     const message = decision.edits?.length
       ? {
         role: "assistant",

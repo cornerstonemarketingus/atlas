@@ -61,9 +61,11 @@ export class BoundedJsonHttpTransport {
     return await new Promise<unknown>((resolve, reject) => {
       const client = url.protocol === "https:" ? https : http;
       let settled = false;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
       const finish = (error?: unknown, result?: unknown): void => {
         if (settled) return;
         settled = true;
+        clearTimeout(deadline);
         options.signal?.removeEventListener("abort", abort);
         error === undefined ? resolve(result) : reject(error);
       };
@@ -71,14 +73,20 @@ export class BoundedJsonHttpTransport {
         method: "POST",
         headers: { "content-type": "application/json", "content-length": String(body.byteLength) },
       }, (response) => {
+        const interrupted = (): void => {
+          finish(new JsonHttpTransportError("Model endpoint response interrupted", "network"));
+          request.destroy();
+        };
+        response.on("aborted", interrupted);
+        response.on("error", interrupted);
         const chunks: Buffer[] = [];
         let bytes = 0;
         response.on("data", (chunk: Buffer) => {
           bytes += chunk.byteLength;
           if (bytes > this.maxResponseBytes) {
+            finish(new JsonHttpTransportError("Response body exceeds configured limit", "limit"));
             response.destroy();
             request.destroy();
-            finish(new JsonHttpTransportError("Response body exceeds configured limit", "limit"));
             return;
           }
           chunks.push(chunk);
@@ -94,14 +102,16 @@ export class BoundedJsonHttpTransport {
         });
       });
       const abort = (): void => {
-        request.destroy();
         finish(new JsonHttpTransportError("Request cancelled", "cancelled"));
+        request.destroy();
       };
       options.signal?.addEventListener("abort", abort, { once: true });
-      request.setTimeout(this.timeoutMs, () => {
-        request.destroy();
+      // Bound the entire exchange, including a server that keeps sending bytes.
+      // Socket inactivity timeouts alone can be extended indefinitely.
+      deadline = setTimeout(() => {
         finish(new JsonHttpTransportError("Model endpoint timed out", "network"));
-      });
+        request.destroy();
+      }, this.timeoutMs);
       request.on("error", (cause) => finish(new JsonHttpTransportError("Model endpoint request failed", "network", undefined, { cause })));
       request.end(body);
     });

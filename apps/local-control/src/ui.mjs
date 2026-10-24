@@ -72,7 +72,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
      </details>
     </form>
     <details class="more"><summary>Where this conversation works</summary>
-     <form id="session-form"><label>Repository folder (optional)<input id="session-repository" placeholder="C:\\path\\to\\project"></label><label>Model<select id="session-model"><option>qwen2.5-coder:7b</option></select></label><label>Runs on<select id="session-executor"><option value="local">local</option></select></label></form>
+     <form id="session-form"><label>Repository folder (optional)<input id="session-repository" placeholder="C:\\path\\to\\project"></label><label>Model<select id="session-model"><option>qwen3:0.6b</option></select></label><label>Runs on<select id="session-executor"><option value="local">local</option></select></label></form>
     </details>
    </div>
    <div class="stack">
@@ -88,7 +88,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
   <p class="hint">Missions and their lanes, team missions, Genesis builds, coding tasks and Improve Atlas runs in one place. Pause, resume, cancel or retry a single lane without stopping the others. Updates every few seconds while open.</p>
   <details class="panel" id="command-launch-panel"><summary>Launch agents in parallel</summary>
    <form id="command-launch"><label>Repository folder<input id="launch-repository" required placeholder="C:\\path\\to\\project"></label>
-    <label>Model<select id="launch-model"><option>qwen2.5-coder:7b</option></select></label>
+    <label>Model<select id="launch-model"><option>qwen3:0.6b</option></select></label>
     <label>How<select id="launch-mode"><option value="auto">One task: let Atlas decide how many versions to try</option><option value="tasks">Separate tasks, one per line</option><option value="variants">Several versions of one task, to compare</option></select></label>
     <label>What to do<textarea id="launch-text" required maxlength="10000" rows="4" placeholder="Refactor the billing module so invoices can be retried"></textarea></label>
     <label id="launch-count-label" hidden>How many versions<input id="launch-count" type="number" min="2" max="5" value="3"></label>
@@ -99,7 +99,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
     <label>Repository folder<input id="goal-repository" required placeholder="C:\\path\\to\\project"></label>
     <label>GitHub repository<input id="goal-watch" required placeholder="owner/name" pattern="[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"></label>
     <label>Pull request number<input id="goal-pr" type="number" min="1" required></label>
-    <label>Model<input id="goal-model" required value="qwen2.5-coder:7b"></label>
+    <label>Model<input id="goal-model" required value="qwen3:0.6b"></label>
     <div class="actions"><button>Start and keep watching</button></div>
     <p class="hint">Atlas works now, then sleeps. It wakes when checks fail, a review arrives or someone comments, and stops when the pull request merges (at most 10 wakes, 14 days). Events arrive through a GitHub automation's webhook for that repository.</p></form></details>
   <div class="chips" id="command-counts" aria-live="polite"></div>
@@ -123,7 +123,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
     <label class="auto-business" hidden>Responsibility to review<select id="auto-responsibility"><option value="">Choose a business first</option></select></label>
     <p class="hint auto-business" id="auto-business-status" role="status" aria-live="polite" hidden></p>
     <label class="auto-mission auto-repo">Repository folder<input id="auto-repository" placeholder="C:\\path\\to\\project"></label>
-    <label class="auto-mission auto-repo">Model<select id="auto-model"><option>qwen2.5-coder:7b</option></select></label>
+    <label class="auto-mission auto-repo">Model<select id="auto-model"><option>qwen3:0.6b</option></select></label>
     <fieldset class="auto-business auto-limits" hidden><legend>Limits for each review (all required)</legend>
      <label>Input tokens<input id="auto-budget-input" type="number" min="0" step="1" value="100000"></label>
      <label>Output tokens<input id="auto-budget-output" type="number" min="0" step="1" value="20000"></label>
@@ -167,7 +167,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
   <details class="more panel"><summary>Explicit lanes for coding work (advanced)</summary>
   <section aria-labelledby="missions-heading"><div class="section-title"><div><p class="eyebrow">PARALLEL CODER LANES</p><h2 id="missions-heading">Mission Control</h2></div><button type="button" class="secondary" id="mission-refresh">Refresh</button></div>
   <p class="hint">Define the lanes yourself. Atlas starts a lane only after its dependencies finish and keeps every lane inside the mission budget.</p>
-  <form id="mission-form"><label>Mission objective<textarea id="mission-objective" required maxlength="10000" placeholder="Describe the result these lanes should deliver"></textarea></label><label>Repository folder<input id="mission-repository" required placeholder="C:\\path\\to\\project"></label><label>Model<select id="mission-model"><option>qwen2.5-coder:7b</option></select></label><label>Lanes (JSON)<textarea id="mission-lanes" required spellcheck="false" placeholder='[{"id":"research","objective":"Inspect current behavior","dependencies":[]},{"id":"build","objective":"Implement the change","dependencies":["research"]}]'></textarea></label><p class="hint">Every lane needs a dependencies array. Use [] for a lane that can start immediately.</p><label>Maximum lanes at once<input id="mission-concurrency" type="number" min="1" step="1" value="3"></label><button>Create mission</button></form><p id="mission-notice" class="hint" role="status" aria-live="polite"></p><div id="missions" class="list" aria-live="polite"><p class="empty">Unlock this tab to load missions.</p></div></section>
+  <form id="mission-form"><label>Mission objective<textarea id="mission-objective" required maxlength="10000" placeholder="Describe the result these lanes should deliver"></textarea></label><label>Repository folder<input id="mission-repository" required placeholder="C:\\path\\to\\project"></label><label>Model<select id="mission-model"><option>qwen3:0.6b</option></select></label><label>Lanes (JSON)<textarea id="mission-lanes" required spellcheck="false" placeholder='[{"id":"research","objective":"Inspect current behavior","dependencies":[]},{"id":"build","objective":"Implement the change","dependencies":["research"]}]'></textarea></label><p class="hint">Every lane needs a dependencies array. Use [] for a lane that can start immediately.</p><label>Maximum lanes at once<input id="mission-concurrency" type="number" min="1" step="1" value="3"></label><button>Create mission</button></form><p id="mission-notice" class="hint" role="status" aria-live="polite"></p><div id="missions" class="list" aria-live="polite"><p class="empty">Unlock this tab to load missions.</p></div></section>
   </details>
  </section>
 
@@ -200,7 +200,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
 
  <section class="view" data-view="projects" hidden aria-labelledby="projects-heading">
   <div class="hero"><h2 id="projects-heading">Projects</h2><p class="lede">Run a bounded coding change against a folder on this computer. It runs in an isolated copy, so your working tree is never touched until you take the result.</p></div>
-  <form id="task-form" class="panel"><label>Repository folder<input id="repository" required placeholder="C:\\path\\to\\project"></label><label>What should change<textarea id="objective" required maxlength="10000" placeholder="Describe one bounded change"></textarea></label><label>Model<select id="model"><option>qwen2.5-coder:7b</option></select></label><button>Start isolated run</button></form>
+  <form id="task-form" class="panel"><label>Repository folder<input id="repository" required placeholder="C:\\path\\to\\project"></label><label>What should change<textarea id="objective" required maxlength="10000" placeholder="Describe one bounded change"></textarea></label><label>Model<select id="model"><option>qwen3:0.6b</option></select></label><button>Start isolated run</button></form>
   <div class="section-title"><h3>Runs</h3><button class="ghost" id="refresh">Refresh</button></div><div id="tasks" class="list"><p class="empty">Unlock this tab to load runs.</p></div>
  </section>
 

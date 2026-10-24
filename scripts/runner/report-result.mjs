@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { renderRunSummary } from "./run-summary.mjs";
+import { renderFindings, renderUnanswered } from "./inspect-findings.mjs";
 import { correlationIdFromEnv, correlationLogSuffix, withCorrelationId } from "./correlation.mjs";
 
 const limit = 16000;
@@ -14,8 +15,12 @@ function read(directory, name) {
   } catch { return null; }
 }
 
-export function renderResult({ task, status, code, inspection, debug, conclusion, budget }) {
+export function renderResult({ task, status, code, inspection, findings = null, debug, conclusion, budget }) {
   const lines = [`Runner job: ${conclusion || "unknown"}.`, renderRunSummary({ task, status, code, budget })];
+  // What was asked comes before the inventory: a marker search answers it, and
+  // anything else says plainly that it was not answered.
+  if (findings?.kind === "markers" && findings.answered === true) lines.push(...renderFindings(findings));
+  else if (inspection && findings?.answered !== true) lines.push(renderUnanswered(task?.objective));
   if (inspection) {
     lines.push("Repository inspection (no implementation plan or edits were generated):",
       `Files scanned: ${inspection.fileCount ?? "unknown"}.`,
@@ -110,7 +115,7 @@ async function main() {
   const directory = process.env.ATLAS_OUTPUT_DIR;
   let text;
   try {
-    text = renderResult({ task: read(directory, "task.json"), status: read(directory, "status.json"), code: read(directory, "code.json"), inspection: read(directory, "inspect.json"), debug: read(directory, "debug.json"), conclusion: process.env.ATLAS_JOB_RESULT, budget: read(directory, "budget.json") });
+    text = renderResult({ task: read(directory, "task.json"), status: read(directory, "status.json"), code: read(directory, "code.json"), inspection: read(directory, "inspect.json"), findings: read(directory, "findings.json"), debug: read(directory, "debug.json"), conclusion: process.env.ATLAS_JOB_RESULT, budget: read(directory, "budget.json") });
   } catch { text = "The runner returned malformed result data. Open the run log; no successful outcome is inferred."; }
   const redacted = spawnSync(process.execPath, [path.resolve("packages/atlas-cli/dist/src/cli.js"), "redact"], {
     input: text, encoding: "utf8", timeout: 60000, maxBuffer: 128000, windowsHide: true,
