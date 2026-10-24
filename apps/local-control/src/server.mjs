@@ -31,6 +31,7 @@ import { createAutomationRoutes, createWebhookRoute } from "./platform/automatio
 import { createArtifactRoutes } from "./platform/artifacts/routes.mjs";
 import { createRenderRoutes } from "./platform/render/routes.mjs";
 import { createNodeRoutes } from "./platform/nodes/routes.mjs";
+import { createComputeRoutes } from "./platform/compute/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -42,7 +43,7 @@ function withDefaultModel(found, localCoder) {
   return { ...found, models: installed ? [chosen, ...found.models.filter((name) => name !== chosen)] : found.models, default: chosen, defaultInstalled: installed };
 }
 
-export function createLocalControlServer({ store, token, runTask, model = DEFAULT_LOCAL_MODEL, discoverModels = discoverLocalModels, localCoder = null, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, skills = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, nodes = null }) {
+export function createLocalControlServer({ store, token, runTask, model = DEFAULT_LOCAL_MODEL, discoverModels = discoverLocalModels, localCoder = null, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, skills = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, nodes = null, compute = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -74,6 +75,8 @@ export function createLocalControlServer({ store, token, runTask, model = DEFAUL
   const worldRoutes = world ? createWorldRoutes({ world, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const artifactRoutes = artifacts ? createArtifactRoutes({ artifacts, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const renderRoutes = render ? createRenderRoutes({ render, genesis, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
+  // Always mounted: with no compute service the route still answers "off" with the reason.
+  const computeRoutes = createComputeRoutes({ compute, nodes, tenantFor: artifactTenantFor, send: (response, status, value) => { send(response, status, value); return true; } });
   // Atlas Nodes: owner machines that dial in for render jobs. Failed node tokens are rate limited per client.
   const nodeRoutes = nodes ? createNodeRoutes({ service: nodes, tenantFor: artifactTenantFor, limiter, limits: { limit: 20, windowMs: 60_000 }, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
   const goalRoutes = goals ? createGoalRoutes({ goals, parseBody, send: (response, status, value) => { send(response, status, value); return true; } }) : null;
@@ -153,6 +156,7 @@ export function createLocalControlServer({ store, token, runTask, model = DEFAUL
       if (!renderRoutes) return send(response, 503, { message: "Rendering is not configured in this process." });
       if (await renderRoutes(request, response, identity)) return;
     }
+    if (/^\/v1\/compute(\?|$)/u.test(request.url ?? "")) { if (await computeRoutes(request, response, identity)) return; }
     if (/^\/v1\/nodes(\/|\?|$)/u.test(request.url ?? "")) {
       if (!nodeRoutes) return send(response, 503, { message: "Atlas Nodes are not enabled in this process." });
       if (await nodeRoutes.handleOwner(request, response, identity)) return;

@@ -53,8 +53,23 @@ export function renderRequirements(tool) {
   return { terminal: "container", render: [tool] };
 }
 
-/** Render outputs that go to the artifact store (kind "video"); see platform/artifacts/. */
-const VIDEO_MEDIA_TYPES = Object.freeze({ ".mp4": "video/mp4", ".webm": "video/webm" });
+/**
+ * Render outputs that go to the artifact store, by extension: videos (ffmpeg),
+ * glTF models (Blender exports) and still images (frames, thumbnails). Images
+ * are stored as kind "file", the kind that carries image media types. The
+ * store sniffs the bytes against the declared type and refuses a mismatch;
+ * any other extension stays in the workspace only. See platform/artifacts/.
+ */
+export const RENDER_ARTIFACT_TYPES = Object.freeze({
+  ".mp4": Object.freeze({ kind: "video", mediaType: "video/mp4" }),
+  ".webm": Object.freeze({ kind: "video", mediaType: "video/webm" }),
+  ".glb": Object.freeze({ kind: "model3d", mediaType: "model/gltf-binary" }),
+  ".gltf": Object.freeze({ kind: "model3d", mediaType: "model/gltf+json" }),
+  ".png": Object.freeze({ kind: "file", mediaType: "image/png" }),
+  ".jpg": Object.freeze({ kind: "file", mediaType: "image/jpeg" }),
+  ".jpeg": Object.freeze({ kind: "file", mediaType: "image/jpeg" }),
+  ".webp": Object.freeze({ kind: "file", mediaType: "image/webp" }),
+});
 
 const STAGING_PREFIX = "atlas-render-";
 const STAGING_TMP = ".tmp";
@@ -411,18 +426,22 @@ export class RenderRunner {
   }
 
   /**
-   * Puts published video outputs into the artifact store. The store sniffs
-   * content itself; a refusal is recorded on the file, not thrown, because
-   * the render already succeeded and its outputs are in the workspace.
+   * Puts published video, 3D model and image outputs into the artifact
+   * store (RENDER_ARTIFACT_TYPES). The store sniffs content itself; a refusal
+   * is recorded on the file, not thrown, because the render already succeeded
+   * and its outputs are in the workspace.
    */
   async #storeArtifacts({ result, workspace, runId, tenantId }) {
     for (const file of result.files) {
-      const mediaType = VIDEO_MEDIA_TYPES[file.path.slice(file.path.lastIndexOf(".")).toLowerCase()];
-      if (!mediaType) continue;
+      const name = file.path.slice(file.path.lastIndexOf("/") + 1);
+      const dot = name.lastIndexOf(".");
+      const type = dot > 0 ? RENDER_ARTIFACT_TYPES[name.slice(dot).toLowerCase()] : undefined;
+      if (!type) continue;
+      const { kind, mediaType } = type;
       try {
         const { artifact, created } = await this.#artifactStore.put({
-          tenantId, kind: "video", mediaType, provenance: { runId, step: "render", source: result.capability },
-          path: join(workspace, ...file.path.split("/")), name: file.path.slice(file.path.lastIndexOf("/") + 1),
+          tenantId, kind, mediaType, provenance: { runId, step: "render", source: result.capability },
+          path: join(workspace, ...file.path.split("/")), name,
         });
         file.artifact = { id: artifact.id, sha256: artifact.sha256, created };
       } catch (error) {

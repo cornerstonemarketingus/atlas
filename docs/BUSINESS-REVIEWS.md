@@ -5,7 +5,15 @@ The local owner can explicitly configure an automation with action kind
 responsibility. Existing authentication, owner-only automation configuration,
 pause/resume, run history, daily caps and interrupted-start recovery apply.
 
-POST `/v1/automations` with the owner token, using existing business and
+In the local console, open **Automations → New automation** and choose
+**Does: Prepare a business review when it is due**. The form lists your
+businesses and their active responsibilities (from `/v1/businesses`), takes
+the repository folder and model, and asks for all five limits in plain units
+(time in minutes, spend in US dollars). It checks them the way the daemon
+does before sending, and submits exactly the body below. The **Businesses**
+page (`/businesses`) is linked from the console's navigation.
+
+Or POST `/v1/automations` with the owner token, using existing business and
 responsibility IDs and an existing repository/model:
 
 ```json
