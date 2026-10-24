@@ -65,6 +65,8 @@ export class ProviderReadOnlyToolAgent {
     let turns = 0;
     let toolCalls = 0;
     let recoveredEmptyResponse = false;
+    let correctedProviderToolCall = false;
+    let toolCallsAtProviderCorrection: number | undefined;
     let recoveredTextualToolCall = false;
     let toolCallsAtTextualCorrection: number | undefined;
     let usage = EMPTY_USAGE;
@@ -146,7 +148,8 @@ export class ProviderReadOnlyToolAgent {
             messages.push({ role: "user", content: [{ type: "text", text: "Your last response described a tool request as text. It was not executed. Use the offered tool through the structured tool_calls interface, not a JSON or Markdown example. Continue the original objective within the remaining budget. Do not repeat actions that already succeeded." }] });
             continue;
           }
-          if (toolCallsAtTextualCorrection !== undefined && toolCalls === toolCallsAtTextualCorrection) {
+          if ((toolCallsAtTextualCorrection !== undefined && toolCalls === toolCallsAtTextualCorrection)
+            || (toolCallsAtProviderCorrection !== undefined && toolCalls === toolCallsAtProviderCorrection)) {
             return this.block(request.sessionId, "The model did not execute a tool after correction. The objective is not confirmed.", trace());
           }
           if (response.finishReason === "stop" && text.length === 0 && !recoveredEmptyResponse && turns < this.#maximumTurns) {
@@ -280,6 +283,17 @@ export class ProviderReadOnlyToolAgent {
           });
         }
       } catch (error: unknown) {
+        if (error instanceof ModelProviderError && error.code === "tool-call-rejected") {
+          turns += 1;
+          const recoverable = !correctedProviderToolCall && turns < this.#maximumTurns;
+          this.options.audit.append("error.recorded", { code: "PROVIDER_TOOL_CALL_REJECTED", summary: "Provider rejected an invalid tool call; no tool was executed.", recoverable });
+          if (recoverable) {
+            correctedProviderToolCall = true;
+            toolCallsAtProviderCorrection = toolCalls;
+            messages.push({ role: "user", content: [{ type: "text", text: "The provider rejected your last tool call. It was not executed. Continue the original objective with a structured tool call using an offered name and JSON arguments matching its schema exactly. Do not repeat actions that already succeeded." }] });
+            continue;
+          }
+        }
         if (error instanceof ModelProviderError && error.code === "cancelled") {
           return { status: "cancelled", message: error.message, trace: trace() };
         }

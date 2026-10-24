@@ -115,4 +115,12 @@ test("when every route is unusable nothing waits and the report is not about cap
       return true;
     });
     assert.equal(seen.length, 2, "each route was tried exactly once");
+
+test("a rejected tool call stays on its route and never waits for capacity", async () => {
+  const seen: ModelRequest[] = [];
+  const failure = new ModelProviderError({ message: "rejected tool", code: "tool-call-rejected", providerId: "one", retryable: false });
+  const chain = new FallbackModelProvider([{ provider: provider("one", "primary", failure, seen), model: "primary" },
+    { provider: provider("two", "backup", response("two", "backup"), seen), model: "backup" }], { sleep: async () => { assert.fail("must not wait"); } });
+  await assert.rejects(chain.complete(request), (error: unknown) => error instanceof ModelProviderError && error.code === "tool-call-rejected");
+  assert.equal(seen.length, 1);
 });

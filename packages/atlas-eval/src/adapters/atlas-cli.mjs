@@ -46,15 +46,32 @@ export function atlasCliAgent({ cliPath, env = process.env, extraArgs = [] }) {
     const scratch = await mkdtemp(join(tmpdir(), "atlas-eval-audit-"));
     const auditLog = join(scratch, "audit.jsonl");
     try {
+      // Qualification measures an available attempt, not five minutes waiting
+      // for capacity behind a shorter task deadline. Refusals remain failures
+      // with their actual reason; explicit experiment settings can override.
       const args = [cliPath, "code", root, objective, "--provider", spec.provider, "--model", spec.model, "--api-key-env", spec.apiKeyEnv,
+        ...(extraArgs.includes("--capacity-wait-ms") ? [] : ["--capacity-wait-ms", "0"]),
+        ...(extraArgs.includes("--retry-attempts") ? [] : ["--retry-attempts", "1"]),
         ...(spec.baseUrl ? ["--base-url", spec.baseUrl] : []), "--no-verify", "--audit-log", auditLog, "--format", "json", ...extraArgs];
       const stdout = await new Promise((resolveRun, reject) => {
         const extra = Object.fromEntries((PASS_THROUGH[spec.provider] ?? []).filter((name) => env[name]).map((name) => [name, env[name]]));
         const child = spawn(process.execPath, args, { env: { PATH: env.PATH, HOME: env.HOME, ...extra, [spec.apiKeyEnv]: key }, signal, windowsHide: true });
         let out = "";
         let err = "";
+        let progressBuffer = "";
+        const started = Date.now();
         child.stdout.on("data", (chunk) => { if (out.length < 1_000_000) out += chunk; });
-        child.stderr.on("data", (chunk) => { if (err.length < 4000) err += chunk; });
+        child.stderr.on("data", (chunk) => {
+          if (err.length < 4000) err += chunk;
+          const lines = (progressBuffer + String(chunk)).split("\n");
+          progressBuffer = lines.pop().slice(-4096);
+          for (const line of lines) {
+            const match = /^Atlas progress: (\{"modelRequests":\d+,"toolCalls":\d+,"failedTools":\d+\})\r?$/u.exec(line);
+            if (!match) continue;
+            try { console.log("Atlas eval progress: " + JSON.stringify({ elapsedMs: Date.now() - started, ...JSON.parse(match[1]) })); }
+            catch { /* Progress must not abandon the evaluated process. */ }
+          }
+        });
         child.on("error", reject);
         child.on("close", (code) => (code === 0 || out.trim().startsWith("{") ? resolveRun(out) : reject(new Error(`atlas code exited ${code}: ${err.split(key).join("[redacted]").slice(0, 300)}`))));
       });
