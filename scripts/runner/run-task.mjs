@@ -243,7 +243,7 @@ if (metadata.mode === "inspect") {
   try { routePlan = resolveCoderRoutes(process.env); }
   catch (error) { writeStatus("failed", error.message); console.error(error.message); process.exit(2); }
   const { provider, model, apiKeyVariable } = routePlan;
-  console.log("Coder route: " + provider + "/" + model + "; configured fallbacks: " + routePlan.fallbacks.map((route) => route.split(":").slice(0, -1).join("/")).join(", "));
+  console.log("Coder route: " + provider + "/" + model + "; configured fallbacks: " + routePlan.fallbacks.map((route) => route.split(":").slice(0, -1).join("/")).join(", ") + "; cost classes: " + routePlan.costs.join(", "));
   // A self-hosted OpenAI-compatible server (vLLM, Ollama, llama.cpp) usually
   // has no API key at all, so requiring one would make it impossible to run
   // your own model. The placeholder is applied ONLY when a custom endpoint is

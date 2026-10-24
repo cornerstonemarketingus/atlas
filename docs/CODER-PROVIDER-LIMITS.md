@@ -76,3 +76,16 @@ privacy controls, incident evidence and live acceptance limits.
 An output-token setting alone does not establish a provider's paid-tier capacity.
 A route may still reject the request; an independent configured cloud provider
 is the recovery path, rather than repeatedly waiting on the same oversized call.
+
+## Cost classes (hosted coder routes)
+
+Each vendor in `scripts/runner/coder-routes.mjs` has a cost class: `paid` (OpenAI,
+Anthropic: a call can bill per token), `free-tier` (Workers AI, Groq, Cerebras,
+Gemini, OpenRouter, Mistral) or `local` (Ollama). Rules:
+
+- A `paid` vendor is never added as an automatic fallback. It is used when the owner
+  names it in `ATLAS_CODER_FALLBACKS`, sets it as `ATLAS_CODER_PROVIDER`, or when it is
+  the only usable key.
+- With no provider chosen, a non-paid vendor is preferred over a paid one.
+- The run log prints `cost classes: provider=class, ...` for the route and each
+  fallback, so a paid call is never a surprise in the log.
