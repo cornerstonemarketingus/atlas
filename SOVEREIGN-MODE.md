@@ -114,6 +114,14 @@ Then run Atlas directly against any local Git checkout:
 node scripts/local/run-coder.mjs --repository C:\path\to\project --objective "Fix the failing test and verify the result"
 ```
 
+In the daemon, a coding session (**Runs on: local**) asks for `code.write`
+in Approvals first, and ends `completed` only when Atlas itself re-runs the
+repository's `npm test` in the worktree and it exits 0; the session shows the
+command, exit code and output. The coder uses the same model server as chat
+(`ATLAS_OLLAMA_URL`, else `OLLAMA_HOST`, else `ATLAS_MODEL_ENDPOINT`). The
+end-to-end acceptance for this path, and how to run it against your own
+Ollama, is [docs/atlas-os/AUTONOMOUS-ACCEPTANCE.md](docs/atlas-os/AUTONOMOUS-ACCEPTANCE.md).
+
 The default endpoint is `http://127.0.0.1:11434/v1`. Repository evidence,
 tool calls, edits, and validation remain on the machine. Audit records are
 written under the user's `.atlas/runs` directory. Use `--help` for model,
