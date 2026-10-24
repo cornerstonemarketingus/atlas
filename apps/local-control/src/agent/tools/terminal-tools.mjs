@@ -28,6 +28,8 @@ export function registerTerminalTools(registry, { controller }) {
     return resolved;
   };
   const workspaces = new Map();
+  // Commands started through these tools and not yet finished: what an emergency stop kills.
+  const running = new Set();
   const workspaceFor = async (sessionId) => {
     const key = sessionId || "default";
     if (!workspaces.has(key)) workspaces.set(key, (await need()).createWorkspace({ tenantId: TENANT, taskId: key }).id);
@@ -60,11 +62,29 @@ export function registerTerminalTools(registry, { controller }) {
       if (handle.status === "requires_approval") {
         throw new TerminalToolError("APPROVAL_REQUIRED", `Running \`${input.argv.join(" ")}\` needs your approval (${handle.reasons.join("; ")}). Approve it in Atlas, then ask again.`);
       }
-      const result = await handle.result;
+      running.add(handle.id);
+      let result;
+      try { result = await handle.result; } finally { running.delete(handle.id); }
       const parts = [`exit code ${result.exitCode ?? "none"}${result.signal ? ` (signal ${result.signal})` : ""}`];
       if (result.stdout) parts.push(`stdout:\n${result.stdout}`);
       if (result.stderr) parts.push(`stderr:\n${result.stderr}`);
       return parts.join("\n");
     },
   });
+
+  return {
+    /** Kills every command these tools started that is still running (its whole process group). */
+    async cancelRunning() {
+      const cancelled = [];
+      const failed = [];
+      for (const commandId of [...running]) {
+        try {
+          if ((await resolved.cancel(commandId)).cancelled) cancelled.push(commandId);
+        } catch (error) {
+          failed.push({ id: commandId, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return { cancelled, failed };
+    },
+  };
 }

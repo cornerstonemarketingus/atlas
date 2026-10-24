@@ -187,8 +187,8 @@ export class GenesisService {
     return this.#move(id, to, { reason, evidence, patch, expectedVersion, actor });
   }
 
-  pause(id, { actor = "owner" } = {}) {
-    return this.#move(id, "paused", { reason: "Paused by the owner.", evidence: { kind: "control" }, actor });
+  pause(id, { actor = "owner", reason = "Paused by the owner." } = {}) {
+    return this.#move(id, "paused", { reason, evidence: { kind: "control" }, actor });
   }
 
   resume(id, { actor = "owner" } = {}) {

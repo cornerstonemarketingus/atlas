@@ -174,8 +174,8 @@ export function createPlatformApiRoutes({
   family = null,
   delegation = undefined,
   memory = null,
-  terminal = null,
-  mcp = null,
+  terminal: terminalOption = null,
+  mcp: mcpOption = null,
   audit = () => {},
   tenantFor = () => LOCAL_TENANT_ID,
   browserProbe = probeBrowserWorker,
@@ -697,14 +697,28 @@ export function createPlatformApiRoutes({
     return send(response, 200, { dimensions: BUDGET_DIMENSIONS, totals, byStatus, tasks: rows, agents });
   }
 
-  function workers(context) {
+  /**
+   * `terminal` and `mcp` may be the live instances or functions (sync or
+   * async) that return them, so a daemon that builds them lazily reports
+   * what is really running. A function may also return a plain
+   * `{ available: false, reason }` report, and one that throws is reported
+   * unavailable with its reason.
+   */
+  async function resolveWorker(value) {
+    if (typeof value !== "function") return value;
+    try { return (await value()) ?? null; } catch (error) { return { available: false, reason: error instanceof Error ? error.message : "probe failed" }; }
+  }
+
+  async function workers(context) {
     const { tenantId, response } = context;
     let browser;
     try { browser = browserProbe(); } catch (error) { browser = { available: false, reason: error instanceof Error ? error.message : "probe failed" }; }
-    const terminalReport = terminal
+    const [terminal, mcp] = await Promise.all([resolveWorker(terminalOption), resolveWorker(mcpOption)]);
+    const terminalReport = terminal && typeof terminal.capabilities === "function"
       ? { available: true, rootDirectory: terminal.rootDirectory, capabilities: terminal.capabilities(), workspaces: terminal.listWorkspaces().filter((w) => w.tenantId === tenantId).length }
+      : terminal?.available === false ? { available: false, reason: String(terminal.reason ?? "unavailable") }
       : { available: false, reason: "The terminal controller is not running in this process." };
-    const mcpReport = mcp
+    const mcpReport = mcp && mcp.servers instanceof Map
       ? {
         available: true,
         servers: [...mcp.servers.values()].filter((entry) => entry.tenantId === tenantId).map((entry) => ({
@@ -715,6 +729,7 @@ export function createPlatformApiRoutes({
           rejected: entry.rejected.length,
         })),
       }
+      : mcp?.available === false ? { available: false, reason: String(mcp.reason ?? "unavailable"), servers: Array.isArray(mcp.servers) ? mcp.servers : [] }
       : { available: false, reason: "The MCP gateway is not running in this process.", servers: [] };
     const memoryReport = memory ? { available: true, ...memory.capabilities() } : { available: false };
     return send(response, 200, { browser, terminal: terminalReport, mcp: mcpReport, memory: memoryReport, familyRegistry: { available: Boolean(family) } });
