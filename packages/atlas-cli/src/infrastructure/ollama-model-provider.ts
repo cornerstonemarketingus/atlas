@@ -177,6 +177,10 @@ export function buildOllamaPayload(request: ModelRequest, numCtx: number, numPre
     model: request.model,
     messages: request.messages.map((message) => mapMessage(message, names)),
     stream: false,
+    // Qwen3 models reason before answering by default. On a small local model that
+    // spends the whole bounded reply on private thinking and returns no tool call, so
+    // it is switched off for them; other models are left as the server defaults.
+    ...(/^qwen3(?::|$)/iu.test(request.model) ? { think: false } : {}),
     options: { num_ctx: numCtx, num_predict: numPredict, ...(request.temperature === undefined ? {} : { temperature: request.temperature }) },
     ...(request.tools === undefined ? {} : { tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } })) }),
     ...(request.responseFormat === "json" ? { format: "json" } : {}),

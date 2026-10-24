@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
-import { resolveLocalCoder } from "./agent/models/local-coder.mjs";
+import { DEFAULT_LOCAL_MODEL, resolveLocalCoder } from "./agent/models/local-coder.mjs";
 import { LocalTaskStore } from "./store.mjs";
 import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
@@ -87,7 +87,7 @@ const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
 const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
 const workforceRuntime = createWorkforceRuntime({ store: platformStore, dataDirectory,
   repository: process.env.ATLAS_WORKFORCE_REPOSITORY || process.cwd(),
-  model: process.env.ATLAS_WORKFORCE_MODEL || "qwen2.5-coder:7b",
+  model: process.env.ATLAS_WORKFORCE_MODEL || DEFAULT_LOCAL_MODEL,
   endpoint: process.env.ATLAS_MODEL_ENDPOINT || "http://127.0.0.1:11434/v1" });
 // The agent organization (Business Development Executive → Product Executive →
 // specialists, plus the Engineering, Design, Computer Operations and Research
@@ -205,7 +205,7 @@ const team = createTeamService({
   platformStore,
   toolRegistry,
   client: modelClient,
-  model: process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
+  model: process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || DEFAULT_LOCAL_MODEL,
   workspace: join(dataDirectory, "workspace"),
 });
 // Automations: schedule, webhook and manual triggers that start normal missions.

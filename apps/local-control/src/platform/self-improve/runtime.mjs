@@ -18,7 +18,7 @@ import { reviewChange } from "./reviewer.mjs";
  * - Reviewer: a separate chat call (reviewer.mjs), optionally another model.
  */
 
-export const DEFAULT_MODEL_ENDPOINT = Object.freeze({ baseUrl: "http://127.0.0.1:11434/v1", model: "qwen2.5-coder:7b" });
+export const DEFAULT_MODEL_ENDPOINT = Object.freeze({ baseUrl: "http://127.0.0.1:11434/v1", model: "qwen3:0.6b" });
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 
 /** Throws for an endpoint that would send repository content in clear text over a network. */

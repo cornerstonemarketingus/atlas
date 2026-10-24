@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { LOCAL_UI_CSS, LOCAL_UI_HTML, LOCAL_UI_ICON, LOCAL_UI_JS } from "./ui.mjs";
+import { DEFAULT_LOCAL_MODEL } from "./agent/models/local-coder.mjs";
 import { decryptBackup, encryptBackup } from "./encrypted-backup.mjs";
 import { publishChange } from "./publish-adapters.mjs";
 import { discoverLocalModels } from "./model-discovery.mjs";
@@ -41,7 +42,7 @@ function withDefaultModel(found, localCoder) {
   return { ...found, models: installed ? [chosen, ...found.models.filter((name) => name !== chosen)] : found.models, default: chosen, defaultInstalled: installed };
 }
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, localCoder = null, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, skills = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, nodes = null }) {
+export function createLocalControlServer({ store, token, runTask, model = DEFAULT_LOCAL_MODEL, discoverModels = discoverLocalModels, localCoder = null, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, skills = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, nodes = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();

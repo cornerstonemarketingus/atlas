@@ -23,7 +23,7 @@ if (process.argv.includes("--help")) {
 
 Options:
   --provider <id>           ollama (default, native API), local (credential-free OpenAI-compatible, loopback only) or groq
-  --model <name>            Model (default: $ATLAS_LOCAL_CODER_MODEL, else qwen2.5-coder:7b)
+  --model <name>            Model (default: $ATLAS_LOCAL_CODER_MODEL, else qwen3:0.6b)
   --base-url <url>          OpenAI-compatible base URL (default: http://127.0.0.1:11434/v1)
   --context-window <n>      Served context window (default: 16384)
   --max-output-tokens <n>   Output limit per turn (default: 2048)
@@ -41,7 +41,7 @@ if (!repository || !objective) throw new Error("--repository and --objective are
 
 const provider = option("--provider", "ollama");
 if (!["ollama", "local", "groq"].includes(provider)) throw new Error("--provider must be ollama, local or groq for a local run.");
-const model = option("--model", process.env.ATLAS_LOCAL_CODER_MODEL || "qwen2.5-coder:7b");
+const model = option("--model", process.env.ATLAS_LOCAL_CODER_MODEL || "qwen3:0.6b");
 const baseUrl = option("--base-url", "http://127.0.0.1:11434/v1");
 const contextWindow = option("--context-window", "16384");
 const maxOutputTokens = option("--max-output-tokens", "2048");

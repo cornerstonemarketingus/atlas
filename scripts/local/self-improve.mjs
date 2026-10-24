@@ -33,7 +33,7 @@ Options:
   --iterations <n>          Attempts to make, one improvement each (default: 1)
   --verify-dir <path>       Directory whose checks gate acceptance (default: apps/local-control)
   --prepare <command>       Run before checks in each fresh worktree, e.g. "npm ci --ignore-scripts"
-  --model <name>            Builder model (default: qwen2.5-coder:7b)
+  --model <name>            Builder model (default: qwen3:0.6b)
   --review-model <name>     Reviewer model (default: same as --model)
   --base-url <url>          OpenAI-compatible endpoint (default: http://127.0.0.1:11434/v1)
   --api-key-env <NAME>      Environment variable holding a key, for a hosted endpoint
@@ -51,7 +51,7 @@ const repository = resolve(option("--repository", atlasRoot));
 const iterations = Math.max(1, Math.min(50, Number(option("--iterations", "1")) || 1));
 const verifyDirectory = option("--verify-dir", "apps/local-control");
 const prepare = option("--prepare", "") ? [option("--prepare").split(/\s+/u).filter(Boolean)] : [];
-const model = option("--model", "qwen2.5-coder:7b");
+const model = option("--model", "qwen3:0.6b");
 const reviewModel = option("--review-model", model);
 const baseUrl = option("--base-url", "http://127.0.0.1:11434/v1");
 const apiKeyEnv = option("--api-key-env", "");
