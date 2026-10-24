@@ -52,6 +52,33 @@ export const VENDORS = Object.freeze({
   }),
 });
 
+/**
+ * Whether a call can bill the owner per token, for every provider id Atlas
+ * routes to (including the ones that are not catalogued vendors). One answer
+ * here replaces each router keeping its own idea of "paid":
+ *   paid      a call can be billed per token (OpenAI, Anthropic).
+ *   free-tier a free allowance or a plan the owner already holds.
+ *   local     the owner's own hardware; nothing is billed.
+ * Unknown ids are "unknown", never assumed free.
+ */
+export const COST = Object.freeze({ PAID: "paid", FREE_TIER: "free-tier", LOCAL: "local", UNKNOWN: "unknown" });
+
+const COST_BY_PROVIDER = Object.freeze({
+  openai: COST.PAID, anthropic: COST.PAID,
+  groq: COST.FREE_TIER, cerebras: COST.FREE_TIER, gemini: COST.FREE_TIER, openrouter: COST.FREE_TIER, mistral: COST.FREE_TIER,
+  "workers-ai": COST.FREE_TIER, nvidia: COST.FREE_TIER,
+  ollama: COST.LOCAL, local: COST.LOCAL, "self-hosted": COST.LOCAL,
+});
+
+export function costClass(providerId) {
+  return Object.hasOwn(COST_BY_PROVIDER, providerId) ? COST_BY_PROVIDER[providerId] : COST.UNKNOWN;
+}
+
+/** `provider=class` for a route list, as printed in run logs. */
+export function describeCosts(providerIds) {
+  return providerIds.map((id) => `${id}=${costClass(id)}`);
+}
+
 const NAME = /^[A-Za-z0-9@._:/-]{1,128}$/u;
 
 /** The tier a vendor has for this deployment: `ATLAS_<VENDOR>_TIER=paid` moves a training tier to vendor terms. */

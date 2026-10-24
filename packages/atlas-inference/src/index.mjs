@@ -7,4 +7,4 @@ export { CIRCUIT, TargetHealth, admit as admitToTarget, effectiveHealth, initial
 export { listModels, validateBaseUrl } from "./openai-compatible.mjs";
 export { MODEL_LIST_TTL_MS, createTargetRegistry } from "./target-registry.mjs";
 export { cacheReport, canonicalJson, prefixChanges, promptFingerprint, withCachedTokens } from "./prompt-fingerprint.mjs";
-export { TRUST, VENDORS, atlasAuthored, qualifiesForTraining, trainingProvidersAllowed, vendorEndpoint, vendorTier } from "./catalog.mjs";
+export { COST, TRUST, VENDORS, costClass, describeCosts, atlasAuthored, qualifiesForTraining, trainingProvidersAllowed, vendorEndpoint, vendorTier } from "./catalog.mjs";
