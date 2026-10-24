@@ -6,6 +6,7 @@ import { isAbsolute, join, posix } from "node:path";
 import { ProviderReadOnlyToolAgent } from "./agent/provider-read-only-tool-agent.js";
 import { VerifiedCoderSession } from "./agent/verified-coder-session.js";
 import { planVerification } from "./agent/verification-planning.js";
+import { objectiveSourceContext } from "./agent/objective-source-context.js";
 import { RepositoryCommandDetector } from "./infrastructure/repository-command-detector.js";
 import { SafeValidationProfileRunner } from "./infrastructure/validation-profile-runner.js";
 import { FilesystemRepositoryInspector } from "./infrastructure/filesystem-repository-inspector.js";
@@ -868,6 +869,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     systemPrompt: CODE_SYSTEM_PROMPT,
   });
   const agent = makeAgent(provider, model);
+  const initialSourceEvidence = await objectiveSourceContext(objective, registry, repositoryId);
 
   let usage = { turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0 };
   const runAgentWith = (passAgent: typeof agent) => async (evidence: readonly { label: string; content: string }[]) => {
@@ -903,7 +905,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     // Full repository detail remains available through bounded read tools. The
     // first request carries only a compact map so entry-level hosted-model TPM
     // limits cannot reject the run before the agent gets its first turn.
-    baseEvidence: [{ label: "Deterministic repository summary", content: renderJson(compactRepositorySummary(summary)) }],
+    baseEvidence: [{ label: "Deterministic repository summary", content: renderJson(compactRepositorySummary(summary)) }, ...initialSourceEvidence],
     runAgent: runAgentWith(agent),
     ...(escalationRoute ? { escalation: { attempts: escalationAttemptsOption ?? 2, runAgent: runAgentWith(makeAgent(escalationRoute.provider, escalationRoute.model)) } } : {}),
     runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),

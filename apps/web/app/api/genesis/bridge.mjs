@@ -3,7 +3,7 @@
  * a URL, token or provider response, so it is safe to show to the person who asked.
  */
 export const UNAVAILABLE_NEXT_STEPS = Object.freeze({
-  owner_required: "Creating projects from hosted chat is limited to the deployment owner. Sign in as the owner.",
+  owner_required: "This shared Genesis execution node is limited to the deployment owner. Sign in to your workspace to build a hosted website; apps and repository publishing require an authorized execution node.",
   execution_node_not_configured: "No Genesis execution node is connected to this deployment. The owner must set the ATLAS_GENESIS_URL (an https origin) and ATLAS_GENESIS_TOKEN secrets and run \"Deploy Atlas web to Cloudflare Workers\".",
   invalid_execution_node: "ATLAS_GENESIS_URL must be a plain https origin with no path, query or credentials. Fix the secret and redeploy.",
   node_rejected_token: "The Genesis node refused this deployment's token. Rotate ATLAS_GENESIS_TOKEN on the node and in the repository secrets, then redeploy.",

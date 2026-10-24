@@ -1,68 +1,99 @@
 # Atlas mobile shell
 
-A thin Capacitor shell around the responsive Atlas web app. It exists for the
-four things a bookmark cannot do:
+A Capacitor app that pairs a phone with an Atlas daemon (`apps/local-control`)
+and shows what is waiting there. It is early. This page separates what the
+shipped web assets do today from what is planned.
 
-- **Background push** for pending approvals, so a decision reaches the operator
-  when the app is closed.
-- **Biometric re-authentication** at the moment of a high-risk approval. Session
-  authentication proves the device was enrolled; it does not prove the person
-  holding an unlocked phone is the operator.
-- **Credentials in the Keychain or Android Keystore**, never in web storage.
-- **Deep links** that open the exact pending approval, verified before anything
-  is navigated to.
+## What works today
 
-Do not submit a plain WebView. Apple and Google both reject wrapped websites,
-and more to the point a wrapper would deliver none of the above.
+The app loads `www/index.html`, which runs `www/launch.mjs` and
+`www/device-client.mjs`. That is the whole runtime.
 
-## What lives where
+- **Pairing.** You enter the Atlas server's HTTPS origin and a six-digit
+  pairing code. An owner session creates the code with `POST /v1/pair` on the
+  daemon, and it expires after five minutes. The app claims it with
+  `POST /v1/pair/claim`. It only accepts an `https:` origin with no path,
+  credentials, query or fragment, and it refuses redirects.
+- **Device credential storage.** The device token returned by the claim is
+  saved through `capacitor-secure-storage-plugin` (`SecureStoragePlugin`), not
+  in web storage. Disconnecting removes it. Revoking the device in Atlas device
+  settings ends its access on the server.
+- **Counts.** After pairing, the app calls `GET /v1/tasks` and
+  `GET /v1/approvals` and shows two numbers: the number of tasks and the number
+  of pending approvals. Task contents and approval details are not shown.
+- **No decisions.** The screen states it directly: "Mobile decisions are not
+  yet available." Approvals are still made on the owner device.
+- Opened outside the native app (for example in a desktop browser), the page
+  refuses to pair.
 
-| Concern | Where |
+`tests/daemon-contract.test.mjs` runs the device client against a real
+`createLocalControlServer` instance. It covers code consumption, restoring a
+session and rejecting a revoked device.
+
+## Built but not loaded
+
+These modules have tests, but nothing in `www/` imports them, so the app does
+not use them:
+
+| Module | Intended job |
 | --- | --- |
-| Signed deep links, push payloads, biometric policy, session states, crash redaction | `apps/local-control/src/mobile/` — shared with the daemon, which issues the links |
-| Keychain/Keystore access, plugin wiring, deep-link handling | `mobile/src/` |
-| Native projects | `mobile/ios/`, `mobile/android/` — generated and checked in for reviewable platform configuration |
+| `mobile/src/bridge.mjs` (`startShell`) | Wire push registration, deep links and secure storage into the shell |
+| `mobile/src/secure-storage.mjs` | Keychain/Keystore wrapper that refuses credentials in web storage |
+| `mobile/src/deep-link-handler.mjs` | Verify a signed deep link before navigating to an approval |
+| `apps/local-control/src/mobile/{push,biometric-policy,deep-links,session-state,crash-reporting}.mjs` | Daemon-side push payloads, biometric policy for high-risk approvals, signed links and association files, session states, crash-report redaction. No daemon code imports them either. |
+
+The native projects include the push-notification and biometric plugins
+(`ios/App/Podfile`, `android/capacitor.settings.gradle`), but no code calls
+them. The Atlas web host does not serve `/.well-known/apple-app-site-association`
+or `/.well-known/assetlinks.json`, so universal links and app links do not open
+the app.
+
+## Planned
+
+- Background push for pending approvals.
+- Biometric re-authentication before a high-risk approval.
+- Signed deep links that open the exact pending approval.
+- Approving or rejecting from the phone.
+
+Native work in progress:
+
+- [#320](https://github.com/cornerstonemarketingus/atlas/pull/320): compiles
+  the Android debug and iOS simulator apps in CI.
+- [#329](https://github.com/cornerstonemarketingus/atlas/pull/329): checks
+  that native secure storage works before a pairing code is used up.
+
+Neither PR has merged as of 2026-10-20. Neither app has run on a physical
+device or been submitted to a store. See
+[`../MOBILE-RELEASE.md`](../MOBILE-RELEASE.md) for the store gates, including
+Sign in with Apple.
 
 ## Building
 
-The native projects are checked in. Install dependencies, sync the web assets,
-and open the relevant platform project:
+The native projects in `ios/` and `android/` are generated and checked in. The
+iOS project needs macOS, Xcode and CocoaPods.
 
 ```
 cd mobile
 npm install
-npm run sync
+npm run sync          # cap sync: copies www/ into the native projects
 npm run open:ios      # or open:android
 ```
 
-`www/` must contain a build of the responsive web app before `cap sync`.
-
-## Universal and app links
-
-Serve the association files from the Atlas web host. Generate them rather than
-writing them by hand — a typo in either silently downgrades every link to
-opening a web page instead of the app:
-
-```js
-import { appleAppSiteAssociation, androidAssetLinks } from "../apps/local-control/src/mobile/deep-links.mjs";
-```
-
-- iOS: `/.well-known/apple-app-site-association`, served as `application/json`
-  with no redirect.
-- Android: `/.well-known/assetlinks.json`, with the release signing
-  certificate's SHA-256 fingerprint.
-
-## What is not done
-
-The native projects have been generated and synchronized, but the iOS project
-still requires macOS/Xcode/CocoaPods and neither platform has run on a physical
-device or been submitted. Everything in `mobile/src/` and
-`apps/local-control/src/mobile/` is covered by tests. See
-[`../MOBILE-RELEASE.md`](../MOBILE-RELEASE.md) for the remaining store gates,
-including Sign in with Apple, which is still open.
+Checks, as CI runs them: `npm run check && npm test`.
 
 ## Native icon artwork
 
-Native icons are rendered from the established apps/web/public/favicon.svg, preserving its paths and colors. Run npm run icons:render from mobile after installing browser-worker dependencies and Chromium, or configure ATLAS_TEST_PLAYWRIGHT and ATLAS_TEST_BROWSER for an existing browser installation. No runtime browser dependency is added to the app.
+Native icons are rendered from `apps/web/public/favicon.svg`, keeping its paths
+and colors. Run `npm run icons:render` from `mobile` after installing the
+browser-worker dependencies and Chromium. Alternatively, set
+`ATLAS_TEST_PLAYWRIGHT` and `ATLAS_TEST_BROWSER` to use a browser you already
+have installed. The app gets no runtime browser dependency.
 
-The generator writes the opaque 1024px iOS catalog icon and five Android densities for legacy, round and transparent adaptive foreground icons. icon-manifest.json records the canonical SVG digest, renderer version and artifact hashes. Mobile tests check dimensions, Apple opacity, adaptive transparency, source freshness and real RGB pixels in the negative space; regenerate after changing the source vector. App Store screenshots, final launch screens and physical-device masking review remain release work.
+The generator writes the opaque 1024px iOS catalog icon and five Android
+densities for legacy, round and transparent adaptive foreground icons.
+`icon-manifest.json` records the canonical SVG digest, the renderer version and
+the artifact hashes. The mobile tests check dimensions, Apple opacity, adaptive
+transparency, source freshness and real RGB pixels in the negative space.
+Regenerate the icons after changing the source vector. App Store screenshots,
+final launch screens and the physical-device masking review are still release
+work.

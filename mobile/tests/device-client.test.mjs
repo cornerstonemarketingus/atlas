@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createDeviceClient, trustedOrigin } from '../www/device-client.mjs';
 const token = 'a'.repeat(43);
-function fixture(request) {
+function fixture(request, options = {}) {
   const values = new Map();
   const vault = { async get({key}) { return {value:values.get(key)}; }, async set({key,value}) { values.set(key,value); }, async remove({key}) { values.delete(key); } };
   const calls = [];
   const http = { async request(options) { calls.push(options); return request ? request(options) : {status:201,url:options.url,data:{device:{id:'phone'},deviceToken:token}}; } };
-  return { client:createDeviceClient({http,vault,timeoutMs:20}),values,calls,vault };
+  return { client:createDeviceClient({http,vault,timeoutMs:20,...options}),values,calls,vault };
 }
 test('pair uses existing endpoint, binds a token to HTTPS origin in vault, and reads safe counts', async () => {
   const f = fixture(options => ({status:200,url:options.url,data:options.method==='POST'?{device:{id:'phone'},deviceToken:token}:options.url.endsWith('/tasks')?{tasks:[{error:'PRIVATE'}]}:{approvals:[{status:'pending',summary:'PRIVATE'}]}}));
@@ -44,13 +44,14 @@ test('disconnect fences an in-flight pairing response',async()=>{
   let finish;
   const f=fixture(()=>new Promise(resolve=>{finish=resolve}));
   const pending=f.client.pair({origin:'https://atlas.example',code:'123456'});
+  await new Promise(resolve=>setTimeout(resolve,0));
   await f.client.disconnect();
   finish({status:201,url:'https://atlas.example/v1/pair/claim',data:{deviceToken:token,device:{id:'x'}}});
   assert.equal(await pending,false);assert.equal(f.values.size,0);
 });
 
 test('native vault write failures cannot become customer diagnostic text',async()=>{
- const f=fixture();f.vault.set=async()=>{throw new Error('PRIVATE_KEYCHAIN_STACK');};
+ const f=fixture();const baseSet=f.vault.set;f.vault.set=async options=>{if(options.key==='atlas.device.credential')throw new Error('PRIVATE_KEYCHAIN_STACK');return baseSet(options);};
  await assert.rejects(f.client.pair({origin:'https://atlas.example',code:'123456'}),error=>!error.message.includes('PRIVATE')&&error.message.includes('secure device access'));
  await assert.rejects(f.client.refresh(),/Pair this device/);
 });
@@ -58,10 +59,42 @@ test('native vault write failures cannot become customer diagnostic text',async(
 test('late pairing vault cleanup failures stay customer-safe after disconnect',async()=>{
  let finish;
  const f=fixture();
- f.vault.set=()=>new Promise(resolve=>{finish=resolve});
- let removes=0;f.vault.remove=async()=>{if(++removes===2)throw new Error('PRIVATE_NATIVE_STACK')};
+ const baseSet=f.vault.set,baseRemove=f.vault.remove;
+ f.vault.set=options=>options.key==='atlas.device.credential'?new Promise(resolve=>{finish=resolve}):baseSet(options);
+ let removes=0;f.vault.remove=async options=>{if(options.key==='atlas.device.credential'&&++removes===2)throw new Error('PRIVATE_NATIVE_STACK');return baseRemove(options);};
  const pending=f.client.pair({origin:'https://atlas.example',code:'123456'});
  await new Promise(resolve=>setTimeout(resolve,0));
  await f.client.disconnect();finish();
  await assert.rejects(pending,error=>!error.message.includes('PRIVATE')&&error.message.includes('Revoke this device'));
+});
+
+test('unavailable or unverifiable native storage cannot consume a pairing code',async()=>{
+ for(const failure of ['set','get','remove','mismatch']){
+  const f=fixture();
+  if(failure==='mismatch')f.vault.get=async()=>({value:'wrong'});
+  else f.vault[failure]=async()=>{throw new Error('PRIVATE_NATIVE_FAILURE')};
+  await assert.rejects(f.client.pair({origin:'https://atlas.example',code:'123456'}),error=>error.code==='SECURE_STORAGE_UNAVAILABLE'&&!error.message.includes('PRIVATE'));
+  assert.equal(f.calls.length,0);
+ }
+});
+test('restore checks native vault readiness without overwriting saved credentials',async()=>{
+ const f=fixture();const saved=JSON.stringify({version:1,origin:'https://atlas.example',token});
+ f.values.set('atlas.device.credential',saved);
+ assert.equal(await f.client.restore(),true);assert.equal(f.values.get('atlas.device.credential'),saved);assert.equal(f.values.size,1);
+ f.vault.get=async()=>{throw new Error('PRIVATE_NATIVE_FAILURE')};
+ await assert.rejects(f.client.restore(),error=>error.code==='SECURE_STORAGE_UNAVAILABLE');
+ assert.equal(f.values.get('atlas.device.credential'),saved);assert.equal(f.calls.length,0);
+});
+test('stalled native probes expire safely and reuse the in-flight operation on retry',async()=>{
+ const f=fixture(undefined,{vaultTimeoutMs:5});let writes=0;
+ f.vault.set=()=>{writes++;return new Promise(()=>{})};
+ for(let attempt=0;attempt<2;attempt++)await assert.rejects(f.client.restore(),error=>error.code==='SECURE_STORAGE_UNAVAILABLE');
+ assert.equal(writes,1);assert.equal(f.calls.length,0);
+});
+test('disconnect during native storage preflight prevents any pairing dispatch',async()=>{
+ const f=fixture();let finish;const baseSet=f.vault.set;
+ f.vault.set=async options=>{await baseSet(options);await new Promise(resolve=>{finish=resolve})};
+ const pending=f.client.pair({origin:'https://atlas.example',code:'123456'});
+ await new Promise(resolve=>setTimeout(resolve,0));await f.client.disconnect();finish();
+ assert.equal(await pending,false);assert.equal(f.calls.length,0);assert.equal(f.values.size,0);
 });

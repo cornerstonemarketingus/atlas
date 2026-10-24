@@ -4,6 +4,7 @@ import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json" with { type: "json" };
 import sandboxSettings from "./sandbox.config.json" with { type: "json" };
 import { sandboxEnabled, withSandboxBindings } from "./sandbox/wrangler-sandbox.mjs";
+import { d1DatabaseBindings } from "./d1-binding.mjs";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
@@ -44,15 +45,9 @@ export default defineConfig(async ({ command }) => {
     main: "./worker/index.ts",
     triggers: { crons: ["*/15 * * * *"] },
     compatibility_flags: ["nodejs_compat"],
-    d1_databases: d1 && d1DatabaseId
-      ? [
-          {
-            binding: d1,
-            database_name: productionDatabaseName ?? "site-creator-d1",
-            database_id: d1DatabaseId,
-          },
-        ]
-      : [],
+    // Includes migrations_dir: "drizzle", so `wrangler d1 migrations apply`
+    // finds the checked-in migrations (see d1-binding.mjs).
+    d1_databases: d1DatabaseBindings({ binding: d1, databaseId: d1DatabaseId, databaseName: productionDatabaseName }),
     // One inference governor per provider quota scope: reservations every
     // isolate shares (docs/PROGRAM.md Phase 1.2). SQLite-backed.
     durable_objects: {
