@@ -1,5 +1,9 @@
 import { planHostedSite } from "../genesis/hosted-site.mjs";
 
+// A request that also asks for application behaviour is not a plain website:
+// it must stay on the template the model chose and be authorized as such.
+const APPLICATION_WORK = /\b(apis?|back-?ends?|servers?|database|databases|sql|auth|authentication|log-?ins?|sign-?ups?|accounts?|web ?apps?|apps?|saas|crm|dashboards?|endpoints?|webhooks?|microservices?|cli|bots?)\b/iu;
+
 export const CREATE_PROJECT_TOOL = { type: "function", function: {
   name: "workspace_create_project", description: "Create an entirely separate Genesis workspace, scaffold and verify it, then create and push a new GitHub repository under publish.remote policy. Never edits the selected repository. Returns a durable operation receipt, not a completion claim.",
   parameters: { type: "object", properties: {
@@ -28,7 +32,8 @@ export function createProjectTools({ create, status, requestId, userMessage }) {
       // A model's generic web-app guess must not turn the person's website
       // request into a deployment-owned code-execution request. This only
       // selects the existing non-executing builder; authorization is unchanged.
-      if (input.template === "web-app" && planHostedSite({ userMessage }).ok) input.template = "static-site";
+      // Mixed website-plus-API/app requests are left alone.
+      if (input.template === "web-app" && !APPLICATION_WORK.test(String(userMessage ?? "")) && planHostedSite({ userMessage }).ok) input.template = "static-site";
       const result = await create({ ...input, requestId, visibility: input.visibility ?? "private", host: "github" });
       emit("project", result);
       return outcome(result);
