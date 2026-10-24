@@ -10,3 +10,11 @@
 .request-history button:disabled{opacity:.55;cursor:default}
 .request-history :is(button,a,summary):focus-visible{outline:2px solid var(--ws-accent);outline-offset:3px}
 @media(max-width:600px){.request-history-body{max-height:300px}.request-history-actions>*{flex:1;text-align:center}}
+.hosted-sites-list{list-style:none;margin:0;padding:0}
+.hosted-sites .site-status{font-weight:600}
+.hosted-sites .site-status.ready{color:var(--ws-accent)}
+.hosted-sites .site-status.failed{color:#ff8d82}
+.hosted-sites .site-no-preview{opacity:.75}
+.hosted-sites .request-history-actions{margin-top:8px}
+.hosted-sites .request-history-actions a{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}
+.hosted-sites .request-history-body{max-height:420px}

@@ -53,7 +53,7 @@ test("a hosted coder run that stops after real edits keeps them as partial.patch
   const code = await new Promise((resolve) => child.on("close", resolve));
 
   assert.equal(code, 1, stderr);
-  assert.match(stdout, /Coder route: ollama\/qwen2\.5-coder:1\.5b; configured fallbacks: \s*$/mu, "no automatic fallbacks, paid or otherwise");
+  assert.match(stdout, /Coder route: ollama\/qwen2\.5-coder:1\.5b; configured fallbacks: ; cost classes: ollama=local\s*$/mu, "no automatic fallbacks, paid or otherwise");
   assert.ok(seen.every((r) => r.url === "/api/chat"), "every request went to the configured Ollama only");
   assert.equal(seen.length, 4, "one edit, then three identical failures, then stop: no turns wasted");
   const status = JSON.parse(readFileSync(join(out, "status.json"), "utf8"));

@@ -29,7 +29,7 @@ export function createAgentRoutes({ runtime, transcriber = null, modelHealth = n
     }
 
     if (request.method === "GET" && path === "/v1/executors") {
-      return send(response, 200, { executors: runtime.executorIds() });
+      return send(response, 200, { executors: runtime.executorIds(), details: runtime.executorDetails(), default: runtime.defaultExecutor() });
     }
 
     if (request.method === "POST" && path === "/v1/transcribe") {
@@ -58,9 +58,9 @@ export function createAgentRoutes({ runtime, transcriber = null, modelHealth = n
       const model = trimmed(body.model, 200);
       if (!title || !model) return send(response, 400, { message: "title and model are required." });
       try {
-        return send(response, 201, { session: runtime.createSession({ title, repository, model, executor: trimmed(body.executor, 64) || "local", budget: body.budget ?? {} }) });
+        return send(response, 201, { session: runtime.createSession({ title, repository, model, executor: trimmed(body.executor, 64) || runtime.defaultExecutor({ repository }), budget: body.budget ?? {} }) });
       } catch (error) {
-        return send(response, statusForError(error), { message: error.message });
+        return send(response, statusForError(error), errorBody(error));
       }
     }
 
@@ -88,7 +88,7 @@ export function createAgentRoutes({ runtime, transcriber = null, modelHealth = n
       try {
         return send(response, 202, runtime.submitTurn(sessionId, { text, attachments: normalizeAttachments(body.attachments) }));
       } catch (error) {
-        return send(response, statusForError(error), { message: error.message });
+        return send(response, statusForError(error), errorBody(error));
       }
     }
 
@@ -109,7 +109,7 @@ export function createAgentRoutes({ runtime, transcriber = null, modelHealth = n
         }
         return send(response, 200, { session: runtime[action](sessionId) });
       } catch (error) {
-        return send(response, statusForError(error), { message: error.message });
+        return send(response, statusForError(error), errorBody(error));
       }
     }
 
@@ -171,7 +171,12 @@ function statusForError(error) {
     UNKNOWN_SESSION: 404, UNKNOWN_TURN: 404, UNKNOWN_EXECUTOR: 400,
     ALREADY_RUNNING: 409, NOT_RUNNING: 409, NOT_RESUMABLE: 409,
     NOT_RETRYABLE: 409, NOTHING_TO_RETRY: 409, NOTHING_TO_REGENERATE: 409,
+    REPOSITORY_REQUIRED: 400,
   }[error.code] ?? 400;
+}
+
+function errorBody(error) {
+  return error instanceof AgentRuntimeError ? { code: error.code, message: error.message } : { message: error.message };
 }
 
 function trimmed(value, max) {

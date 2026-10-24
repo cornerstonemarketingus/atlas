@@ -156,6 +156,53 @@ test("a finished project takes changes conversationally instead of starting over
   store.close();
 }));
 
+test("POST /v1/genesis/:id/changes keeps the requirements readable (field names, not [object Object])", () => withDirectory(async (directory) => {
+  const store = new GenesisStore(join(directory, "genesis.sqlite"));
+  const genesis = new GenesisService({ store, policy: () => ({ decision: "allow" }) });
+  const handle = createGenesisRoutes({ genesis, parseBody: async (request) => request.body ?? {}, send: (response, status, value) => { response.status = status; response.body = value; return true; } });
+  const call = async (method, url, body) => { const response = {}; await handle({ method, url, body }, response, { role: "admin" }); return response; };
+  const created = await call("POST", "/v1/genesis", { prompt: "Build a simple customer lead tracker with name, email, phone, status, notes and search" });
+  assert.equal(created.status, 201);
+  const id = created.body.project.id;
+  const addSteps = (spec) => spec.workflows.find((w) => w.id === "add-lead").steps;
+  assert.ok(addSteps(created.body.project.spec).includes("Fill in name, email, phone, status"), JSON.stringify(addSteps(created.body.project.spec)));
+  assert.ok(created.body.project.spec.workflows.some((w) => w.id === "update-lead"), "a status field gets an update-status workflow");
+  for (const [to, reason] of [["scaffolding", "s"], ["building", "b"], ["verifying", "v"], ["previewing", "p"], ["reviewing", "r"], ["ready", "done"]]) genesis.advance(id, to, { reason });
+  const changed = await call("POST", `/v1/genesis/${id}/changes`, { request: "Add a company field to each lead" });
+  assert.equal(changed.status, 200);
+  const text = JSON.stringify(changed.body.project);
+  assert.doesNotMatch(text, /\[object Object\]/u, "no object is joined as a string anywhere in the project");
+  assert.deepEqual(changed.body.project.spec.entities[0].fields.map((f) => f.key), ["name", "email", "phone", "status", "notes", "company"]);
+  assert.ok(addSteps(changed.body.project.spec).includes("Fill in name, email, phone, status"));
+  assert.doesNotMatch(JSON.stringify((await call("GET", `/v1/genesis/${id}`)).body), /\[object Object\]/u);
+  store.close();
+}));
+
+test("GET /v1/genesis/:id while blocked shows nothing running and no Ready step done", () => withDirectory(async (directory) => {
+  const store = new GenesisStore(join(directory, "genesis.sqlite"));
+  const genesis = new GenesisService({ store, policy: () => ({ decision: "allow" }) });
+  const handle = createGenesisRoutes({ genesis, parseBody: async (request) => request.body ?? {}, send: (response, status, value) => { response.status = status; response.body = value; return true; } });
+  const call = async (method, url, body) => { const response = {}; await handle({ method, url, body }, response, { role: "admin" }); return response; };
+  const id = (await call("POST", "/v1/genesis", { prompt: "Build a simple customer lead tracker with name, email, phone, status, notes" })).body.project.id;
+  // A first build reached Ready; a change sends it back through the build.
+  for (const [to, reason] of [["scaffolding", "s"], ["building", "b"], ["verifying", "v"], ["previewing", "p"], ["reviewing", "r"], ["ready", "done"]]) genesis.advance(id, to, { reason });
+  await genesis.change(id, "Add Google login");
+  genesis.advance(id, "scaffolding", { reason: "s" });
+  genesis.advance(id, "building", { reason: "b" });
+  const first = (await call("GET", `/v1/genesis/${id}`)).body.project.tasks[0];
+  store.updateTask("local", id, first.id, { status: "running", attempt: true, evidence: { kind: "start" } });
+  genesis.advance(id, "blocked", { reason: `"${first.title}" needs a coding model. Set one up under Models, then resume.`, evidence: { kind: "capability", missing: "model" } });
+  const { project } = (await call("GET", `/v1/genesis/${id}`)).body;
+  assert.equal(project.state, "blocked");
+  assert.equal(project.label, "Waiting for you");
+  const steps = project.progress.steps;
+  assert.equal(steps.filter((s) => s.status === "running").length, 0, "nothing is shown as running while Atlas waits for the owner");
+  assert.equal(steps.find((s) => s.label === first.title).status, "blocked", "the interrupted task shows where it is waiting");
+  assert.equal(steps.at(-1).label, "Ready");
+  assert.equal(steps.at(-1).done, false);
+  store.close();
+}));
+
 test("a refinement from the Intelligence Layer is used only when it keeps the contract", () => withDirectory(async (directory) => {
   const store = new GenesisStore(join(directory, "genesis.sqlite"));
   const good = new GenesisService({ store, intelligence: { name: "test-model", refineSpecification: async ({ draft }) => ({ ...draft, name: "Refined Name" }) } });

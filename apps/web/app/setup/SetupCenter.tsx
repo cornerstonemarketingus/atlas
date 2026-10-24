@@ -2,9 +2,15 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AtlasShell } from "../AtlasShell.js";
+import { chatCardSummary, chatRouteSummary, providerChecks, quotaSummary, toneClass } from "./chat-health.mjs";
 
 type SetupStep = { id: string; label: string; state: "complete" | "action-required" | "failed"; detail: string; action?: string };
-type SetupStatus = { audience?: "customer" | "owner"; overall: string; completedSteps: number; totalSteps: number; steps: SetupStep[]; optional: { stripeConfigured?: boolean } };
+type SetupStatus = { audience?: "customer" | "owner"; overall: string; completedSteps: number; totalSteps: number; steps: SetupStep[]; optional: { stripeConfigured?: boolean; chat?: unknown; inferenceGovernor?: unknown } };
+type ProviderCheck = ReturnType<typeof providerChecks>[number];
+type ProviderState = { phase: "idle" } | { phase: "checking" } | { phase: "done"; checks: ProviderCheck[]; at: string } | { phase: "error"; message: string };
+
+/** A real provider check makes up to four sequential calls with 15-second limits each. */
+const PROVIDER_CHECK_DEADLINE_MS = 65000;
 
 function validStatus(value: unknown): value is SetupStatus {
   if (!value || typeof value !== "object") return false;
@@ -45,6 +51,39 @@ export function SetupCenter() {
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const statusRequest = useRef<{ generation: number; controller: AbortController | null }>({ generation: 0, controller: null });
+  const [providers, setProviders] = useState<ProviderState>({ phase: "idle" });
+  const providerRequest = useRef<AbortController | null>(null);
+
+  useEffect(() => () => providerRequest.current?.abort(), []);
+
+  /**
+   * Runs only when the owner asks: each check sends one tiny real inference,
+   * which spends a little provider quota, and quota is what is scarce.
+   */
+  async function checkProviders() {
+    providerRequest.current?.abort();
+    const controller = new AbortController();
+    providerRequest.current = controller;
+    const deadline = setTimeout(() => controller.abort(), PROVIDER_CHECK_DEADLINE_MS);
+    setProviders({ phase: "checking" });
+    try {
+      const response = await fetch("/api/setup/providers", { cache: "no-store", signal: controller.signal });
+      if (response.status === 401) { window.location.href = "/"; return; }
+      if (response.status === 403) throw new Error("Only the deployment owner can run provider checks.");
+      if (!response.ok) throw new Error("Provider checks are unavailable right now. Try again shortly.");
+      const checks = providerChecks(await response.json());
+      if (providerRequest.current === controller) setProviders({ phase: "done", checks, at: new Date().toISOString().slice(11, 16) });
+    } catch (failure) {
+      if (providerRequest.current !== controller) return;
+      const message = controller.signal.aborted
+        ? "The provider check took too long. Try again shortly."
+        : failure instanceof Error && failure.message.startsWith("Only the deployment owner") ? failure.message : "Provider checks are unavailable right now. Try again shortly.";
+      setProviders({ phase: "error", message });
+    } finally {
+      clearTimeout(deadline);
+      if (providerRequest.current === controller) providerRequest.current = null;
+    }
+  }
 
   const refresh = useCallback(async () => {
     const generation = ++statusRequest.current.generation;
@@ -137,6 +176,15 @@ export function SetupCenter() {
     }
   }
 
+  const owner = status?.audience === "owner";
+  const sectionNumber = (base: number) => String(owner && base > 1 ? base + 1 : base).padStart(2, "0");
+  const route = owner && status ? chatRouteSummary(status.optional.chat) : null;
+  const quota = owner && status ? quotaSummary(status.optional.inferenceGovernor) : null;
+  const chatCard = chatCardSummary({
+    model, owner, governor: owner && status ? status.optional.inferenceGovernor : undefined,
+    checks: providers.phase === "done" ? providers.checks : null, checkedAt: providers.phase === "done" ? providers.at : null,
+  });
+
   return <AtlasShell section="connections" headerContext={
     <span className="context-chip">{status?.audience === "customer" ? "Account connected" : status ? `${status.completedSteps}/${status.totalSteps} ready` : "Checking…"}</span>
   }>
@@ -149,7 +197,7 @@ export function SetupCenter() {
         </header>
 
         <section className="page-block">
-          <h2><span>01</span>Live status</h2>
+          <h2><span>{sectionNumber(1)}</span>Live status</h2>
           <div className="status-grid">
             <article className={github?.connected ? "status-card good" : "status-card"}>
               <small>GITHUB</small>
@@ -157,12 +205,10 @@ export function SetupCenter() {
               <p>Atlas needs GitHub access to read your projects and open pull requests.</p>
               {github?.installUrl && !github.connected && <a href={github.installUrl} rel="noreferrer">Install the GitHub App ↗</a>}
             </article>
-            <article className={model?.configured ? "status-card good" : "status-card"}>
+            <article className={toneClass(chatCard.tone)}>
               <small>CHAT MODEL</small>
-              <strong>{model === null ? "Checking…" : model.configured ? "Model endpoint connected" : "No model endpoint"}</strong>
-              <p>{model?.configured
-                ? "Chat is connected. Atlas works with any OpenAI-compatible model server, hosted or your own."
-                : status?.audience === "owner" ? model?.reason ?? "Chat cannot answer until a model endpoint is configured." : "Chat is temporarily unavailable. Refresh or contact support."}</p>
+              <strong>{chatCard.headline}</strong>
+              <p>{chatCard.detail}</p>
             </article>
             <article className="status-card">
               <small>COMPUTER</small>
@@ -173,8 +219,43 @@ export function SetupCenter() {
           </div>
         </section>
 
+        {owner && route && quota && <section className="page-block" aria-labelledby="chat-health-heading">
+          <h2 id="chat-health-heading"><span>02</span>Chat providers and quota</h2>
+          <p className="block-hint">Which model providers chat uses, and whether any of them is at a limit. Only you can see this.</p>
+          <div className="status-grid">
+            <article className={toneClass(route.tone)}>
+              <small>CHAT ROUTE</small>
+              <strong>{route.headline}</strong>
+              <p>{route.detail}</p>
+            </article>
+            <article className={toneClass(quota.tone)}>
+              <small>QUOTA</small>
+              <strong>{quota.headline}</strong>
+              <p>{quota.detail}</p>
+            </article>
+          </div>
+          <p className="block-hint provider-check-hint">The provider check sends one short test message to each provider and reports whether its credential works. It uses a little quota, so it only runs when you ask.</p>
+          <button className="page-action" type="button" onClick={() => void checkProviders()} disabled={providers.phase === "checking"}>
+            {providers.phase === "checking" ? "Checking providers…" : providers.phase === "done" ? "Check providers again" : "Check providers"}
+          </button>
+          <div aria-live="polite">
+            {providers.phase === "checking" && <p className="block-hint provider-check-hint" role="status">Checking each provider. This can take up to a minute.</p>}
+            {providers.phase === "error" && <p className="page-notice" role="alert">{providers.message}</p>}
+            {providers.phase === "done" && <>
+              <p className="block-hint provider-check-hint" role="status">Checked at {providers.at} UTC.</p>
+              <div className="status-grid">
+                {providers.checks.map((check) => <article className={toneClass(check.tone)} key={check.id}>
+                  <small>{check.label.toUpperCase()}</small>
+                  <strong>{check.headline}</strong>
+                  <p>{check.detail}</p>
+                </article>)}
+              </div>
+            </>}
+          </div>
+        </section>}
+
         <section className="page-block">
-          <h2><span>02</span>How far Atlas may go</h2>
+          <h2><span>{sectionNumber(2)}</span>How far Atlas may go</h2>
           <p className="block-hint">Code changes always arrive as a pull request. Choose what happens to it next.</p>
           <div className="policy-row">
             <label>Project
@@ -193,7 +274,7 @@ export function SetupCenter() {
         </section>
 
         <section className="page-block">
-          <h2><span>03</span>{status?.audience === "customer" ? "Account status" : "Setup checklist"}</h2>
+          <h2><span>{sectionNumber(3)}</span>{status?.audience === "customer" ? "Account status" : "Setup checklist"}</h2>
           {error && <p className="page-notice" role="alert">{error}</p>}
           {!status && !error && <p className="block-hint">Checking the live environment…</p>}
           <div className="check-list">

@@ -11,6 +11,7 @@ import { MessageBody } from "./MessageBody.js";
 import { TaskActivity } from "./TaskActivity.js";
 import { AgentTree, ToolSteps, WorkPanel, itemFromPreview, type Preview, type AgentNode, type LogLine, type ToolStep, type WorkItem } from "./Workspace.js";
 import { createEventParser } from "../api/chat/stream.mjs";
+import { readWithIdleTimeout, STREAM_IDLE_MS } from "./stream-idle.mjs";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
 import { PROJECT_CHANGE_EVENT, PROJECT_STORAGE_KEY } from "../ProjectSwitcher.js";
@@ -317,7 +318,9 @@ export function ChatSection() {
       setLiveAgents([]);
       addLog({ kind: "note", text: `› ${text.length > 120 ? `${text.slice(0, 120)}…` : text}` });
       for (;;) {
-        const { value, done } = await reader.read();
+        // Never wait on a silent stream forever: the server keeps a working
+        // turn alive with comments, so silence means it is gone.
+        const { value, done } = await readWithIdleTimeout(reader, STREAM_IDLE_MS);
         if (current !== generation.current) { await reader.cancel(); return; }
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
@@ -361,7 +364,12 @@ export function ChatSection() {
       if (!succeeded && !diagnosed) setNotice("The reply ended before completion. Your message is ready to retry.");
       setVersion((value) => value + 1);
     } catch (error) {
-      if (current === generation.current && !(error instanceof DOMException && error.name === "AbortError")) setNotice("Chat is temporarily unavailable. Your message is ready to retry.");
+      if (current !== generation.current || (error instanceof DOMException && error.name === "AbortError")) { /* stopped or superseded */ }
+      else if (error instanceof Error && error.name === "StreamIdleError") {
+        controller.abort();
+        setNotice(diagnosed ? "Atlas could not finish that reply. Your message is ready to retry." : "The reply stopped responding before it finished. Your message is ready to retry.");
+      }
+      else setNotice("Chat is temporarily unavailable. Your message is ready to retry.");
     } finally {
       if (current === generation.current) {
         if (!succeeded) setDraft((value) => value || submittedDraft);
