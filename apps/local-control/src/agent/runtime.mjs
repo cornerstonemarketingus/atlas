@@ -294,6 +294,36 @@ export class AgentRuntime {
     return this.#sessions.session(sessionId);
   }
 
+  /**
+   * Emergency stop: cancels every run in flight in this process (running or
+   * paused at a checkpoint) and every session that is queued or waiting on
+   * an approval, so nothing picks the work back up. Interrupted, idle and
+   * finished sessions are not doing work and are left as they are. Unlike
+   * stop(), the runtime keeps accepting new turns afterwards.
+   */
+  cancelAll(reason = "emergency stop") {
+    const cancelled = [];
+    const failed = [];
+    for (const [sessionId, run] of this.#runs) {
+      try {
+        run.control.cancel(reason);
+        cancelled.push(sessionId);
+      } catch (error) {
+        failed.push({ id: sessionId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    for (const session of this.#sessions.sessions(10_000)) {
+      if (this.#runs.has(session.id) || !["queued", "awaiting_approval"].includes(session.status)) continue;
+      try {
+        this.cancel(session.id);
+        cancelled.push(session.id);
+      } catch (error) {
+        failed.push({ id: session.id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { cancelled, failed };
+  }
+
   /** Resolves once every in-flight run in this process has settled. */
   async drain() {
     while (this.#runs.size > 0) await Promise.allSettled([...this.#runs.values()].map((run) => run.finished));
