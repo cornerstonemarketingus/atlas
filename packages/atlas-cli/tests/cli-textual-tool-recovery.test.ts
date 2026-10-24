@@ -8,8 +8,9 @@ import { promisify } from "node:util";
 import test from "node:test";
 const execute = promisify(execFile);
 
+for (const provider of ["groq", "local"]) {
 for (const recovers of [true, false]) {
-  test(`real coder ${recovers ? "recovers and verifies edits" : "blocks without edits"} after textual tool output`, async t => {
+  test(`real ${provider} coder ${recovers ? "recovers and verifies edits" : "blocks without edits"} after textual tool output`, async t => {
     const root = await mkdtemp(join(tmpdir(), "atlas-textual-tool-"));
     const original = "export const answer = 1;\n";
     await writeFile(join(root, "answer.mjs"), original);
@@ -21,6 +22,7 @@ for (const recovers of [true, false]) {
     let calls = 0;
     let textExecuted = false;
     const server = createServer(async (request, response) => {
+      if (provider === "local") assert.equal(request.headers.authorization, undefined);
       for await (const _chunk of request) { /* consume fixture request */ }
       calls++;
       if (calls === 2) textExecuted = (await readFile(join(root, "answer.mjs"), "utf8")) !== original;
@@ -38,7 +40,7 @@ for (const recovers of [true, false]) {
     const address = server.address(); assert.ok(address && typeof address === "object");
     let stdout: string;
     try {
-      ({ stdout } = await execute(process.execPath, [join(process.cwd(), "dist/src/cli.js"), "code", root, "Set answer to 2", "--provider", "groq",
+      ({ stdout } = await execute(process.execPath, [join(process.cwd(), "dist/src/cli.js"), "code", root, "Set answer to 2", "--provider", provider,
         "--model", "fixture", "--api-key-env", "ATLAS_TEST_KEY", "--base-url", `http://127.0.0.1:${address.port}/v1`, "--format", "json"],
       { timeout: 30000, windowsHide: true, env: { ...process.env, ATLAS_TEST_KEY: "fixture-key", ATLAS_CODER_CONTEXT_WINDOW: "", ATLAS_CODER_MAX_OUTPUT_TOKENS: "" } }));
     } catch (error) {
@@ -58,4 +60,6 @@ for (const recovers of [true, false]) {
       assert.match(independent, /verified/u);
     }
   });
+}
+
 }
