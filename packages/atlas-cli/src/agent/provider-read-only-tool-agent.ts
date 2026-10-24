@@ -10,6 +10,7 @@ import { ModelProviderError, type ModelMessage, type ModelUsage } from "../model
 import { validateModelResponse } from "../model/model-contract-validation.js";
 import { resolveOfferedToolName } from "./tool-name-resolution.js";
 import { boundCoderContext } from "../model/bounded-coder-context.js";
+import { ToolFailureTracker, type ToolFailureVerdict } from "./tool-failure-tracker.js";
 
 const EMPTY_USAGE: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
@@ -69,6 +70,11 @@ export class ProviderReadOnlyToolAgent {
     let recoveredTextualToolCall = false;
     let toolCallsAtTextualCorrection: number | undefined;
     let usage = EMPTY_USAGE;
+    const failures = new ToolFailureTracker(this.options.toolFailureLimits);
+    // Small budgets keep every turn for work; larger ones reserve the last turn
+    // for an honest status report instead of ending on an unexplained cut-off.
+    const reserveFinalReport = this.#maximumTurns >= 4;
+    let warnedLowBudget = false;
     const trace = (): ReadOnlyToolAgentTrace => ({
       turns,
       toolCalls,
@@ -84,6 +90,11 @@ export class ProviderReadOnlyToolAgent {
       if (request.signal?.aborted === true) {
         this.options.audit.append("session.blocked", { sessionId: request.sessionId, summary: "cancelled" });
         return { status: "cancelled", message: "Agent execution was cancelled.", trace: trace() };
+      }
+      if (reserveFinalReport && turns === this.#maximumTurns - 1) return this.reportAtTurnLimit(request, messages, trace, () => usage, (next) => { usage = addUsage(usage, next); }, () => { turns += 1; });
+      if (reserveFinalReport && !warnedLowBudget && this.#maximumTurns - turns <= 3) {
+        warnedLowBudget = true;
+        messages.push({ role: "user", content: [{ type: "text", text: `Turn budget: ${this.#maximumTurns - turns} turns remain, and the last is reserved for your final report. Finish the edit you are on, or stop exploring and say what is done and what remains. Do not repeat a call that already failed.` }] });
       }
       const requestId = `${request.sessionId}:model:${turns + 1}`;
       const fullRequest = {
@@ -196,6 +207,7 @@ export class ProviderReadOnlyToolAgent {
             // wrong thing to invite after one.
             if (!(error instanceof ReadOnlyToolRegistryError) || error.code !== "TOOL_NOT_FOUND") throw error;
             const availableTools = this.options.tools.map((tool) => tool.name);
+            const verdict = failures.recordFailure({ tool: call.name, argumentsDigest: digestArguments(call.arguments, argumentsDigestKey), errorCode: "TOOL_NOT_FOUND" });
             this.options.audit.append("tool.completed", {
               toolCallId: call.id,
               outcome: "failed",
@@ -213,9 +225,11 @@ export class ProviderReadOnlyToolAgent {
                   error: `No tool named '${call.name}' exists. Call one of the available tools exactly as named.`,
                   code: "TOOL_NOT_FOUND",
                   availableTools,
+                  ...(verdict.action === "stop" ? {} : { guidance: verdict.guidance }),
                 }),
               }],
             });
+            if (verdict.action === "stop") return this.stopOnFailure(request.sessionId, verdict, trace());
             continue;
           }
           this.options.audit.append("tool.policy_decided", {
@@ -233,6 +247,7 @@ export class ProviderReadOnlyToolAgent {
             const correction = result.errorCode === "INVALID_TOOL_INPUT"
               ? { validFields: properties && typeof properties === "object" && !Array.isArray(properties) ? Object.keys(properties) : [] }
               : {};
+            const verdict = failures.recordFailure({ tool: canonicalName ?? call.name, argumentsDigest: digestArguments(call.arguments, argumentsDigestKey), errorCode: result.errorCode ?? "TOOL_FAILED" });
             this.options.audit.append("tool.completed", {
               toolCallId: call.id,
               outcome: "failed",
@@ -244,14 +259,16 @@ export class ProviderReadOnlyToolAgent {
               role: "tool",
               toolCallId: call.id,
               isError: true,
-              content: [{ type: "text", text: JSON.stringify({ error: result.message, ...correction, ...(result.errorCode === undefined ? {} : { code: result.errorCode }) }) }],
+              content: [{ type: "text", text: JSON.stringify({ error: result.message, ...correction, ...(result.errorCode === undefined ? {} : { code: result.errorCode }), ...(verdict.action === "stop" ? {} : { guidance: verdict.guidance }) }) }],
             });
+            if (verdict.action === "stop") return this.stopOnFailure(request.sessionId, verdict, trace());
             continue;
           }
           const serialized = JSON.stringify(result.output);
           if (serialized.length > this.#maximumToolResultCharacters) {
             return this.block(request.sessionId, "Tool result exceeds the agent context limit.", trace());
           }
+          failures.recordSuccess();
           this.options.audit.append("tool.completed", {
             toolCallId: call.id,
             outcome: "succeeded",
@@ -288,6 +305,49 @@ export class ProviderReadOnlyToolAgent {
       }
     }
     return this.block(request.sessionId, "Turn limit reached.", trace());
+  }
+
+  /**
+   * A loop of identical or fruitless failures ends here as `blocked`, not
+   * `failed`: the edits already applied are real work and must be reported.
+   */
+  private stopOnFailure(sessionId: string, verdict: Extract<ToolFailureVerdict, { action: "stop" }>, trace: ReadOnlyToolAgentTrace): ReadOnlyToolAgentResult {
+    this.options.audit.append("error.recorded", { code: verdict.reason === "no-progress" ? "NO_PROGRESS" : "REPEATED_TOOL_FAILURE", summary: verdict.message.slice(0, 500), recoverable: false });
+    return this.block(sessionId, verdict.message, trace);
+  }
+
+  /**
+   * The last reserved turn: no tools, one short factual status. The text is the
+   * model's own account, so it is labelled as such and never counts as
+   * verification; if the request fails the run still ends as plain "blocked".
+   */
+  private async reportAtTurnLimit(
+    request: ReadOnlyToolAgentRequest,
+    messages: ModelMessage[],
+    trace: () => ReadOnlyToolAgentTrace,
+    _usage: () => ModelUsage,
+    addToUsage: (usage: ModelUsage) => void,
+    countTurn: () => void,
+  ): Promise<ReadOnlyToolAgentResult> {
+    messages.push({ role: "user", content: [{ type: "text", text: "The turn budget is used up. Do not call any tool. In at most 120 words say which files you changed, what you did and did not check, and what remains. Do not claim anything you did not observe." }] });
+    const fullRequest = { model: this.options.model, messages, maxOutputTokens: Math.min(1_024, this.#maximumOutputTokensPerTurn) };
+    const bounded = this.options.maximumRequestBytes === undefined ? fullRequest : boundCoderContext(fullRequest, this.options.maximumRequestBytes);
+    let report = "";
+    if (bounded !== undefined) {
+      const requestId = `${request.sessionId}:model:final-report`;
+      this.options.audit.append("model.requested", { requestId, providerId: this.options.provider.metadata.id, modelId: this.options.model, messageCount: messages.length, inputCharacters: countMessageCharacters(bounded.messages), toolsOffered: 0 });
+      try {
+        const response = validateModelResponse(await this.options.provider.complete(bounded, request.signal === undefined ? {} : { signal: request.signal }));
+        countTurn();
+        addToUsage(response.usage);
+        messages.push(response.message);
+        this.options.audit.append("model.responded", { requestId, responseId: response.id, finishReason: response.finishReason, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens, outputCharacters: 0, toolCallCount: 0 });
+        report = response.message.content.filter((item) => item.type === "text").map((item) => item.type === "text" ? item.text.trim() : "").filter(Boolean).join(" ").slice(0, 1_500);
+      } catch (error: unknown) {
+        if (error instanceof ModelProviderError && error.code === "cancelled") return { status: "cancelled", message: error.message, trace: trace() };
+      }
+    }
+    return this.block(request.sessionId, report.length === 0 ? "Turn limit reached." : `Turn limit reached. The model's own unverified status report: ${report}`, trace());
   }
 
   private block(sessionId: string, message: string, trace: ReadOnlyToolAgentTrace): ReadOnlyToolAgentResult {

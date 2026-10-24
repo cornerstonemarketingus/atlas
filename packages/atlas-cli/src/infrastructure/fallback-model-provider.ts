@@ -58,7 +58,11 @@ export class FallbackModelProvider implements ModelProvider {
     for (;;) {
       const failures: string[] = [];
       let last: ModelProviderError | undefined;
-      let allOutOfCapacity = true;
+      // Routes only the owner can fix (rejected key, no credit, model gone) neither count as
+      // capacity nor hold the chain back from waiting on the routes that will recover.
+      let unusable = 0;
+      let capacityLimited = 0;
+      let otherFailures = 0;
       let soonestMs = Number.POSITIVE_INFINITY;
       for (const route of this.#routes) {
         const capabilities = route.provider.metadata.models.find((item) => item.model === route.model);
@@ -74,13 +78,15 @@ export class FallbackModelProvider implements ModelProvider {
           failures.push(`${route.provider.metadata.id}/${route.model}: ${error.code}`);
           last = error;
           if (error.code === "cancelled" || error.code === "invalid-request" || error.code === "tool-call-rejected") throw chained(error, failures);
-          if (isOutOfCapacity(error)) soonestMs = Math.min(soonestMs, error.retryAfterMs ?? UNSTATED_CAPACITY_WAIT_MS);
-          else allOutOfCapacity = false;
+          if (isOutOfCapacity(error)) { capacityLimited += 1; soonestMs = Math.min(soonestMs, error.retryAfterMs ?? UNSTATED_CAPACITY_WAIT_MS); }
+          else if (isUnusable(error)) unusable += 1;
+          else otherFailures += 1;
         }
       }
+      const allOutOfCapacity = capacityLimited > 0 && otherFailures === 0;
       const delayMs = Number.isFinite(soonestMs) ? Math.max(1, Math.ceil(soonestMs)) : UNSTATED_CAPACITY_WAIT_MS;
       if (!allOutOfCapacity || last === undefined || this.#waitedMs + delayMs > this.#capacityWaitMs) {
-        throw chained(last!, failures, allOutOfCapacity && Number.isFinite(soonestMs) ? soonestMs : undefined);
+        throw chained(last!, failures, allOutOfCapacity && Number.isFinite(soonestMs) ? soonestMs : undefined, unusable);
       }
       try {
         await this.#sleep(delayMs, options.signal);
@@ -99,14 +105,20 @@ function isOutOfCapacity(error: ModelProviderError): boolean {
   return error.code === "model-unavailable" && isCapacityFailure(error);
 }
 
+/** A refusal that waiting cannot fix and only the owner can: the key, the billing or the permission. A model that is simply gone keeps its own, stricter handling. */
+function isUnusable(error: ModelProviderError): boolean {
+  return error.code === "authentication";
+}
+
 function isCapacityFailure(error: ModelProviderError): boolean {
   return /capacity|overload|temporar(?:ily|y) unavailable|tokens per minute/iu.test(error.message);
 }
 
-function chained(error: ModelProviderError, failures: readonly string[], resetMs?: number): ModelProviderError {
-  const reset = resetMs === undefined ? "" : ` Every route is out of capacity; the soonest stated reset is in about ${Math.max(1, Math.round(resetMs / 60_000))} min.`;
+function chained(error: ModelProviderError, failures: readonly string[], resetMs?: number, unusable = 0): ModelProviderError {
+  const reset = resetMs === undefined ? "" : ` Every ${unusable > 0 ? "usable " : ""}route is out of capacity; the soonest stated reset is in about ${Math.max(1, Math.round(resetMs / 60_000))} min.`;
+  const unusableNote = unusable > 0 ? ` ${unusable} route${unusable === 1 ? " is" : "s are"} unusable until the account, key or model is fixed.` : "";
   return new ModelProviderError({
-    message: `${error.message}${failures.length > 1 ? ` (routes tried: ${failures.join(", ")})` : ""}${reset}`,
+    message: `${error.message}${failures.length > 1 ? ` (routes tried: ${failures.join(", ")})` : ""}${reset}${unusableNote}`,
     code: error.code,
     providerId: error.providerId,
     retryable: error.retryable,
