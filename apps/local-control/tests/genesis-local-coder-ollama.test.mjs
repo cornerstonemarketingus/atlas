@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { DEFAULT_CONTEXT_WINDOW, LEGACY_DEFAULT_MODEL, resolveLocalCoder } from "../src/agent/models/local-coder.mjs";
+import { DEFAULT_CONTEXT_WINDOW, DEFAULT_LOCAL_MODEL, LEGACY_DEFAULT_MODEL, resolveLocalCoder } from "../src/agent/models/local-coder.mjs";
 import { runIsolatedLocalCoder } from "../src/runner.mjs";
 import { startScriptedModelServer } from "./helpers/scripted-model-server.mjs";
 
@@ -23,9 +23,10 @@ test("repository.coder model selection: request, env, model plan, then the legac
   assert.equal(resolveLocalCoder({ requested: "c:3b", modelPlan: plan({ tag: "a:1b" }), env: { ATLAS_LOCAL_CODER_MODEL: "b:2b" } }).source, "request");
   // The plan's window applies only to the plan's own model.
   assert.equal(resolveLocalCoder({ requested: "c:3b", modelPlan: plan({ tag: "a:1b", context: 4096 }), env: {} }).contextWindow, DEFAULT_CONTEXT_WINDOW);
-  // Nothing configured: the old default, unchanged.
+  // Nothing configured: the default.
   const none = resolveLocalCoder({ requested: LEGACY_DEFAULT_MODEL, modelPlan: plan(null), env: {} });
-  assert.deepEqual([none.model, none.source], [LEGACY_DEFAULT_MODEL, "default"]);
+  assert.deepEqual([none.model, none.source], [DEFAULT_LOCAL_MODEL, "default"]);
+  assert.equal(DEFAULT_LOCAL_MODEL, "qwen3:0.6b");
   // Output is always smaller than the window.
   assert.ok(resolveLocalCoder({ env: { ATLAS_LOCAL_CODER_CONTEXT_WINDOW: "2048", ATLAS_LOCAL_CODER_MAX_OUTPUT_TOKENS: "4096" } }).maxOutputTokens < 2048);
 });
@@ -92,7 +93,12 @@ test("with nothing configured, an installed small model is used instead of an un
   const only15 = resolveLocalCoder({ requested: LEGACY_DEFAULT_MODEL, modelPlan: plan(null), env: {}, installed: ["qwen3:1.7b", "qwen2.5-coder:1.5b"] });
   assert.deepEqual([only15.model, only15.source], ["qwen2.5-coder:1.5b", "installed"]);
   // The 7B is used when it really is installed, and the plan still wins over what is merely installed.
-  assert.equal(resolveLocalCoder({ requested: LEGACY_DEFAULT_MODEL, modelPlan: plan(null), env: {}, installed: [LEGACY_DEFAULT_MODEL, "qwen2.5-coder:1.5b"] }).model, LEGACY_DEFAULT_MODEL);
+  // The default is used when it is installed; the pre-filled name never overrides what is configured.
+  assert.equal(resolveLocalCoder({ requested: "", modelPlan: plan(null), env: {}, installed: ["qwen2.5-coder:7b", DEFAULT_LOCAL_MODEL] }).model, DEFAULT_LOCAL_MODEL);
+  for (const placeholder of [DEFAULT_LOCAL_MODEL, LEGACY_DEFAULT_MODEL]) {
+    assert.equal(resolveLocalCoder({ requested: placeholder, modelPlan: plan({ tag: "qwen2.5-coder:1.5b" }), env: {} }).model, "qwen2.5-coder:1.5b", `${placeholder} is a placeholder, not a choice`);
+  }
+  assert.equal(resolveLocalCoder({ requested: LEGACY_DEFAULT_MODEL, modelPlan: plan(null), env: {}, installed: [LEGACY_DEFAULT_MODEL, "qwen2.5-coder:1.5b"] }).model, LEGACY_DEFAULT_MODEL, "uninstalled default: the installed coder is used");
   assert.equal(resolveLocalCoder({ requested: LEGACY_DEFAULT_MODEL, modelPlan: plan({ tag: "x:1b" }), env: {}, installed: ["qwen2.5-coder:1.5b"] }).model, "x:1b");
 });
 

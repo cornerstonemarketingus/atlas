@@ -84,3 +84,11 @@ test("provider selection: ollama is explicit, never inferred from a model name",
   assert.ok(inferred.ok);
   assert.notEqual(inferred.selection.profile.providerId, "ollama");
 });
+
+test("Qwen3 models are asked not to think, so their bounded reply is not spent on reasoning; other models are unchanged", async () => {
+  for (const [name, expected] of [["qwen3:0.6b", false], ["qwen3:1.7b", false], ["qwen2.5-coder:1.5b", undefined]] as const) {
+    const { provider: p, calls } = provider(() => ({ body: { ...ok, model: name } }), [{ ...MODEL, model: name }]);
+    await p.complete({ model: name, messages: [user("hi")] } as ModelRequest);
+    assert.equal(calls[0]!.body.think, expected, name);
+  }
+});

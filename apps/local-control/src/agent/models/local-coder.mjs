@@ -7,12 +7,16 @@
  *   1. a model the caller asked for by name,
  *   2. ATLAS_LOCAL_CODER_MODEL,
  *   3. the coder in the model plan the owner applied on the Models page,
- *   4. the legacy default.
+ *   4. the default, qwen3:0.6b.
  *
- * The legacy default counts as "not specified": the local UI's model pickers
- * offer only that one option, so a task carrying it has not chosen anything.
+ * The default and the older 7B default count as "not specified": the local
+ * UI's model pickers pre-fill one of them, so a task carrying it has not chosen
+ * anything.
  */
+export const DEFAULT_LOCAL_MODEL = "qwen3:0.6b";
 export const LEGACY_DEFAULT_MODEL = "qwen2.5-coder:7b";
+/** Model names the UI pre-fills; a task carrying one of them has not chosen a model. */
+const PLACEHOLDERS = new Set([DEFAULT_LOCAL_MODEL, LEGACY_DEFAULT_MODEL]);
 export const DEFAULT_CONTEXT_WINDOW = 16_384;
 export const DEFAULT_MAX_OUTPUT_TOKENS = 2_048;
 
@@ -33,13 +37,13 @@ export function resolveLocalCoder({ requested = "", modelPlan = null, env = proc
   const configured = env.ATLAS_LOCAL_CODER_MODEL?.trim() || null;
   let model;
   let source;
-  if (asked && asked !== LEGACY_DEFAULT_MODEL) { model = asked; source = "request"; }
+  if (asked && !PLACEHOLDERS.has(asked)) { model = asked; source = "request"; }
   else if (configured) { model = configured; source = "ATLAS_LOCAL_CODER_MODEL"; }
   else if (coder?.tag) { model = coder.tag; source = "model plan"; }
-  // Nothing configured: the legacy default if it is installed (or the list is unknown),
+  // Nothing configured: the default if it is installed (or the list is unknown),
   // otherwise what is actually installed, so a machine with only a small model works.
-  else if (Array.isArray(installed) && installed.length > 0 && !installed.includes(asked || LEGACY_DEFAULT_MODEL)) { model = pickInstalledCoder(installed); source = "installed"; }
-  else { model = asked || LEGACY_DEFAULT_MODEL; source = "default"; }
+  else if (Array.isArray(installed) && installed.length > 0 && !installed.includes(DEFAULT_LOCAL_MODEL)) { model = pickInstalledCoder(installed); source = "installed"; }
+  else { model = DEFAULT_LOCAL_MODEL; source = "default"; }
   const planned = coder?.tag === model ? positive(coder.context) : null;
   const contextWindow = positive(env.ATLAS_LOCAL_CODER_CONTEXT_WINDOW) ?? planned ?? DEFAULT_CONTEXT_WINDOW;
   const requestedOutput = positive(env.ATLAS_LOCAL_CODER_MAX_OUTPUT_TOKENS) ?? DEFAULT_MAX_OUTPUT_TOKENS;
