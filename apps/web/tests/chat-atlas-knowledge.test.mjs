@@ -122,3 +122,12 @@ test("the prompt says Atlas remembers and explains how its GitHub credential is 
   assert.match(prompt, /Deploy Atlas web to Cloudflare Workers/u);
   assert.match(prompt, /There is no runner to restart/u);
 });
+
+test("the prompt keeps specific questions about code out of inspect mode, which only returns an inventory and marker comments", () => {
+  for (const isOwner of [true, false]) {
+    const prompt = atlasSystemPrompt({ isOwner, repository: "someone/app" });
+    assert.match(prompt, /repository inventory/u);
+    assert.match(prompt, /never use it to answer a specific question about code/u);
+    assert.match(prompt, /search_repository_code and read_repository_file/u);
+  }
+});
