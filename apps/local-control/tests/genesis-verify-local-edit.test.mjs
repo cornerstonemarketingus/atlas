@@ -45,5 +45,5 @@ test("verify-local-edit fails a model that only talks about the fix, and a wrong
   t.after(() => wrong.close());
   const bad = await run(wrong.baseUrl.replace(/\/v1$/u, ""), process.env.TMPDIR || "/tmp");
   assert.equal(bad.code, 1, bad.out);
-  assert.match(bad.out, /check still fails when run independently/u);
+  assert.match(bad.out, /original check fails/u);
 });

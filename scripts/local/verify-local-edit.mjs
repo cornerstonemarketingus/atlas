@@ -15,8 +15,9 @@ import { fileURLToPath } from "node:url";
  * runs Atlas's isolated local coder on it exactly as the dashboard's
  * repository.coder does (same model resolution, same Ollama provider, same
  * worktree and patch), and then judges the result itself rather than trusting
- * the coder's own report: the file must have changed, the check must now pass
- * when run independently, and the patch must apply to a clean checkout.
+ * the coder's own report: the file must have changed, the original check and a hidden
+ * second case must pass when run independently, only the named file may be
+ * patched, and the patch must apply to a clean checkout.
  *
  * A model that only describes a fix, or edits the wrong thing, fails here.
  * Nothing outside the scratch directory is touched.
@@ -34,6 +35,7 @@ Exit code 0 only when the file was really changed, the check passes independentl
   process.exit(0);
 }
 
+const { judgeEdit } = await import(pathToFileURL(join(atlasRoot, "scripts/local/verify-local-edit-judge.mjs")).href);
 const { runIsolatedLocalCoder } = await import(pathToFileURL(join(atlasRoot, "apps/local-control/src/runner.mjs")).href);
 const { ModelPlanStore } = await import(pathToFileURL(join(atlasRoot, "apps/local-control/src/agent/models/hosting.mjs")).href);
 const { homedir } = await import("node:os");
@@ -48,7 +50,8 @@ try {
   git(checkout, "config", "user.name", "Atlas");
   const original = "export function add(a, b) {\n  return a - b;\n}\n";
   await writeFile(join(checkout, "math.mjs"), original);
-  await writeFile(join(checkout, "check.mjs"), 'import { add } from "./math.mjs";\nif (add(2, 3) !== 5) { console.error("add(2, 3) should be 5"); process.exit(1); }\nconsole.log("check passed");\n');
+  const originalCheck = 'import { add } from "./math.mjs";\nif (add(2, 3) !== 5) { console.error("add(2, 3) should be 5"); process.exit(1); }\nconsole.log("check passed");\n';
+  await writeFile(join(checkout, "check.mjs"), originalCheck);
   await writeFile(join(checkout, "package.json"), JSON.stringify({ type: "module", scripts: { test: "node check.mjs" } }));
   git(checkout, "add", "-A");
   git(checkout, "commit", "--quiet", "-m", "Initial commit");
@@ -65,14 +68,10 @@ try {
   const seconds = Math.round((Date.now() - started) / 1000);
   console.log(`\n--- coder output (tail) ---\n${String(result.message ?? "").slice(-1500)}\n---------------------------\n`);
 
-  const reasons = [];
-  const edited = result.worktree && existsSync(join(result.worktree, "math.mjs")) ? readFileSync(join(result.worktree, "math.mjs"), "utf8") : null;
-  if (edited === null) reasons.push("No isolated worktree was produced.");
-  else if (edited === original) reasons.push("The file was not changed: the model described or attempted a fix but no edit landed.");
-  const independent = result.worktree ? spawnSync(process.execPath, ["check.mjs"], { cwd: result.worktree, encoding: "utf8" }) : null;
-  if (independent && independent.status !== 0) reasons.push(`The check still fails when run independently: ${(independent.stderr || independent.stdout || "").trim().slice(0, 200)}`);
-  if (!result.patch || !existsSync(result.patch)) reasons.push("No patch was produced.");
-  else if (git(checkout, "apply", "--check", result.patch).status !== 0) reasons.push("The patch does not apply to a clean checkout.");
+  const judged = await judgeEdit({ worktree: result.worktree, patch: result.patch, originalSource: original, originalCheck });
+  const reasons = [...judged.reasons];
+  const edited = judged.edited;
+  if (result.patch && existsSync(result.patch) && git(checkout, "apply", "--check", result.patch).status !== 0) reasons.push("The patch does not apply to a clean checkout.");
   if (git(checkout, "status", "--porcelain").stdout.trim() !== "") reasons.push("The original checkout was modified (isolation failed).");
   verdict = { ok: reasons.length === 0, reasons, seconds, patch: result.patch ?? null, worktree: result.worktree ?? null, edited };
 } catch (error) {
