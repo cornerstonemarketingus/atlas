@@ -3,8 +3,8 @@ import { getDb, getD1 } from "../../../../db";
 import { taskStorageReadiness } from "../../tasks/storage-readiness.mjs";
 import { githubOAuthConfiguration } from "../../auth/github-oauth.mjs";
 import { stripeConfiguration } from "../../billing/stripe.mjs";
-import { chatReadiness, resolveChatModel } from "../../chat/model-endpoint.mjs";
-import { chatRoute } from "../../chat/providers.mjs";
+import { chatReadiness } from "../../chat/model-endpoint.mjs";
+import { chatRoute, resolveChatProvider } from "../../chat/providers.mjs";
 import { governorReadiness } from "../../inference/governor-client.mjs";
 import { workerEnv } from "../../inference/worker-env.mjs";
 import { createInstallationToken, githubAppConfiguration } from "../../tasks/github-app.mjs";
@@ -69,6 +69,7 @@ export async function GET(request: Request) {
     }, { headers: { "cache-control": "no-store" } });
   }
 
+  const bindings = { ai: (workerEnv as { AI?: unknown }).AI };
   const githubOAuth = githubOAuthConfiguration();
   const stripe = stripeConfiguration();
   const githubApp = githubAppConfiguration();
@@ -98,6 +99,9 @@ export async function GET(request: Request) {
     completedSteps,
     totalSteps: steps.length,
     steps,
-    optional: { stripeConfigured: stripe.configured, chat: { ...chatReadiness(process.env), route: chatRoute(process.env, { ai: (workerEnv as { AI?: unknown }).AI }) }, inferenceGovernor: await governorReadiness(resolveChatModel(process.env), workerEnv) },
+    // The quota readout is for the provider chat tries first (the same scope
+    // governChain records its calls under), not only an explicitly configured
+    // endpoint: a deployment on the Workers AI binding has no ATLAS_CHAT_BASE_URL.
+    optional: { stripeConfigured: stripe.configured, chat: { ...chatReadiness(process.env), route: chatRoute(process.env, bindings) }, inferenceGovernor: await governorReadiness(resolveChatProvider(process.env, "auto", bindings), workerEnv) },
   }, { headers: { "cache-control": "no-store" } });
 }

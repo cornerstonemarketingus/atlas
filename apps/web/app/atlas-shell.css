@@ -99,6 +99,13 @@
 .status-card small{color:#5f6862;font:650 9px var(--font-geist-mono);letter-spacing:.12em}
 .status-card strong{display:block;margin:9px 0 7px;font-size:14px}
 .status-card.good strong{color:var(--ws-accent)}
+.status-card.warn{border-color:#6b5a26}
+.status-card.warn strong{color:#f2c96b}
+.status-card.bad{border-color:#6e302b}
+.status-card.bad strong{color:#ff8d82}
+.provider-check-hint{margin:16px 0 12px}
+html[data-atlas-theme="light"] .status-card.warn strong{color:#7a5a00}html[data-atlas-theme="light"] .status-card.bad strong{color:#b3261e}
+@media(prefers-color-scheme:light){html[data-atlas-theme="system"] .status-card.warn strong{color:#7a5a00}html[data-atlas-theme="system"] .status-card.bad strong{color:#b3261e}}
 .status-card p{margin:0;color:var(--ws-muted);font-size:12px;line-height:1.55}
 .status-card a{display:inline-block;margin-top:11px;color:var(--ws-accent);font-size:12px;text-decoration:underline;text-underline-offset:3px}
 
