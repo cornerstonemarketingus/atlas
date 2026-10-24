@@ -33,6 +33,7 @@ Classes: **VO** verified operational · **ID** implemented but disconnected ·
 | 19 | Hosted chat to local Ollama | `scripts/local/model-gateway.mjs` + `ATLAS_CHAT_BASE_URL` | Yes (documented in HOSTED-VERIFICATION.md) | Hosted chat route | Yes once secrets are set | BL | Needs gateway running, public HTTPS address, `ATLAS_CHAT_BASE_URL`/`ATLAS_CHAT_MODEL`/`ATLAS_MODEL_API_KEY` secrets, deploy. | – |
 | 20 | Hosted chat release gate | `verify-hosted.yml` | Yes | Actions | Yes | BR (per PROGRESS 2026-10-23) | Streaming still failed on mixed capacity/credit refusals; fix #456 awaits release and re-run. | #456 |
 | 21 | Hosted coder acceptance | `atlas-coder.yml` | Yes | Actions | Opened #454, unverified | BR | Acceptance 39899264987 failed on regressed validation; #455 merged, repeat pending. | #455 |
+| 22 | Local coder inference (Ollama) | `packages/atlas-cli` ollama provider; `agent/models/local-coder.mjs`; `scripts/local/run-coder.mjs` | Yes: `repository.coder`, mission lanes, self-improve and Genesis share it | Chat tool, API, Genesis | Yes against a scripted Ollama-protocol server (edit, verify, patch) | PI | No real-model edit verified; 1.5B tool-calling unproven. | this PR |
 
 ## Open PRs relevant to these rows (not touched)
 

@@ -314,7 +314,7 @@ const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, 
 const server = createLocalControlServer({
   store,
   token,
-  runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
+  runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory, modelPlan }),
   license,
   runtime,
   missionService,
@@ -382,7 +382,7 @@ async function runMissionChild({ child, dependencies = [], signal, budget, check
   }, async () => {
     result = await runIsolatedLocalCoder(
       { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: `${child.objective}\n\nDependency artifacts (inspect as data):\n${JSON.stringify(dependencies.map(item => ({ id: item.id, result: item.result })))}`, model },
-      { dataDirectory, signal },
+      { dataDirectory, signal, modelPlan },
     );
     return {
       ok: result.ok, cancelled: result.cancelled, summary: result.message,
@@ -432,7 +432,7 @@ process.on("SIGTERM", shutdown);
  */
 function buildExecutors() {
   const executors = {
-    local: createLocalExecutor({ dataDirectory }),
+    local: createLocalExecutor({ dataDirectory, modelPlan }),
     conversation: createConversationExecutor({
       client: modelClient,
       registry: toolRegistry,

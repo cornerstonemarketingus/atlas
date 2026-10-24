@@ -22,7 +22,8 @@ if (process.argv.includes("--help")) {
   node scripts/local/run-coder.mjs --repository <path> --objective <text> [options]
 
 Options:
-  --model <name>            Ollama model (default: qwen2.5-coder:7b)
+  --provider <id>           ollama (default, native API) or groq (generic OpenAI-compatible server)
+  --model <name>            Model (default: $ATLAS_LOCAL_CODER_MODEL, else qwen2.5-coder:7b)
   --base-url <url>          OpenAI-compatible base URL (default: http://127.0.0.1:11434/v1)
   --context-window <n>      Served context window (default: 16384)
   --max-output-tokens <n>   Output limit per turn (default: 2048)
@@ -38,7 +39,9 @@ const repository = option("--repository");
 const objective = option("--objective");
 if (!repository || !objective) throw new Error("--repository and --objective are required. Run with --help for usage.");
 
-const model = option("--model", "qwen2.5-coder:7b");
+const provider = option("--provider", "ollama");
+if (!["ollama", "groq"].includes(provider)) throw new Error("--provider must be ollama or groq for a local run.");
+const model = option("--model", process.env.ATLAS_LOCAL_CODER_MODEL || "qwen2.5-coder:7b");
 const baseUrl = option("--base-url", "http://127.0.0.1:11434/v1");
 const contextWindow = option("--context-window", "16384");
 const maxOutputTokens = option("--max-output-tokens", "2048");
@@ -51,7 +54,10 @@ if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && ["127.0
   throw new Error("Self-hosted endpoints must use HTTPS unless they are loopback URLs.");
 }
 
-const modelsUrl = new URL(`${endpoint.pathname.replace(/\/$/u, "")}/models`, endpoint.origin);
+// Ollama's native API lists installed models at /api/tags; other servers at {base}/models.
+const modelsUrl = provider === "ollama"
+  ? new URL("/api/tags", endpoint.origin)
+  : new URL(`${endpoint.pathname.replace(/\/$/u, "")}/models`, endpoint.origin);
 let response;
 try {
   response = await fetch(modelsUrl, { signal: AbortSignal.timeout(5_000) });
@@ -59,6 +65,11 @@ try {
   throw new Error(`No self-hosted model server answered at ${modelsUrl}. Start Ollama before running Atlas.`);
 }
 if (!response.ok) throw new Error(`The self-hosted model server returned HTTP ${response.status} from ${modelsUrl}.`);
+if (provider === "ollama") {
+  const installed = ((await response.json().catch(() => ({}))).models ?? []).map((entry) => String(entry.name ?? entry.model ?? ""));
+  const present = installed.some((name) => name === model || name === `${model}:latest`);
+  if (installed.length > 0 && !present) throw new Error(`Model '${model}' is not installed in Ollama (installed: ${installed.join(", ")}). Run: ollama pull ${model}`);
+}
 
 const cliDirectory = join(atlasRoot, "packages", "atlas-cli");
 const cli = join(cliDirectory, "dist", "src", "cli.js");
@@ -68,8 +79,8 @@ if (build.error || build.status !== 0) process.exit(build.status ?? 1);
 mkdirSync(dirname(auditLog), { recursive: true });
 const args = [
   cli, "code", resolve(repository), objective,
-  "--provider", "groq",
-  "--api-key-env", "ATLAS_LOCAL_MODEL_KEY",
+  "--provider", provider,
+  ...(provider === "groq" ? ["--api-key-env", "ATLAS_LOCAL_MODEL_KEY"] : []),
   "--model", model,
   "--base-url", baseUrl,
   "--context-window", contextWindow,
@@ -79,7 +90,7 @@ const args = [
 ];
 if (verifyDir) args.push("--verify-dir", verifyDir);
 
-console.log(`Atlas local-only run\nModel: ${model}\nRepository: ${resolve(repository)}\nAudit: ${auditLog}`);
+console.log(`Atlas local-only run\nProvider: ${provider}\nModel: ${model}\nContext window: ${contextWindow}\nRepository: ${resolve(repository)}\nAudit: ${auditLog}`);
 const run = spawnSync(process.execPath, args, {
   cwd: atlasRoot,
   stdio: "inherit",

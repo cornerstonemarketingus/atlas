@@ -7,12 +7,12 @@
  * observable in production.
  */
 
-export type CoderProviderId = "anthropic" | "groq" | "openai" | "workers-ai" | "cerebras" | "gemini" | "openrouter" | "mistral";
+export type CoderProviderId = "anthropic" | "ollama" | "groq" | "openai" | "workers-ai" | "cerebras" | "gemini" | "openrouter" | "mistral";
 
 export interface CoderProviderProfile {
   readonly providerId: CoderProviderId;
   readonly displayName: string;
-  /** Used when `--api-key-env` is omitted. */
+  /** Used when `--api-key-env` is omitted. Empty for a provider that takes no key. */
   readonly defaultApiKeyEnvironmentVariable: string;
   readonly contextWindowTokens: number;
   /**
@@ -23,6 +23,8 @@ export interface CoderProviderProfile {
 }
 
 const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
+  // A server you run: keyless, and the window is whatever --context-window declares.
+  ollama: { providerId: "ollama", displayName: "Ollama (local)", defaultApiKeyEnvironmentVariable: "", contextWindowTokens: 16_384, maxOutputTokensPerTurn: 2_048 },
   openai: { providerId: "openai", displayName: "OpenAI", defaultApiKeyEnvironmentVariable: "OPENAI_API_KEY", contextWindowTokens: 128_000, maxOutputTokensPerTurn: 8_192 },
   "workers-ai": { providerId: "workers-ai", displayName: "Cloudflare Workers AI", defaultApiKeyEnvironmentVariable: "ATLAS_WORKERS_AI_TOKEN", contextWindowTokens: 131_072, maxOutputTokensPerTurn: 8_192 },
   // OpenAI-compatible vendors at fixed origins (packages/atlas-inference/src/catalog.mjs).
@@ -56,7 +58,12 @@ const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
   },
 };
 
-export const CODER_PROVIDER_IDS: readonly CoderProviderId[] = ["anthropic", "groq", "openai", "workers-ai", "cerebras", "gemini", "openrouter", "mistral"];
+export const CODER_PROVIDER_IDS: readonly CoderProviderId[] = ["anthropic", "groq", "openai", "workers-ai", "cerebras", "gemini", "openrouter", "mistral", "ollama"];
+
+/** Providers that run on a machine the operator controls and need no credential. */
+export function isKeylessCoderProvider(providerId: CoderProviderId): boolean {
+  return PROFILES[providerId].defaultApiKeyEnvironmentVariable === "";
+}
 
 export function isCoderProviderId(value: string): value is CoderProviderId {
   return (CODER_PROVIDER_IDS as readonly string[]).includes(value);

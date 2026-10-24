@@ -28,13 +28,14 @@ import { InMemoryUsageBudgetLedger } from "./infrastructure/in-memory-usage-budg
 import { LocalOpenAiCompatibleModelProvider } from "./infrastructure/local-openai-compatible-model-provider.js";
 import { CloudModelProvider } from "./infrastructure/cloud-model-provider.js";
 import { GroqModelProvider } from "./infrastructure/groq-model-provider.js";
+import { OllamaModelProvider, resolveOllamaChatUrl } from "./infrastructure/ollama-model-provider.js";
 import { AnthropicModelProvider } from "./infrastructure/anthropic-model-provider.js";
 import { RetryingModelProvider } from "./infrastructure/retrying-model-provider.js";
 import { GovernedModelProvider } from "./infrastructure/governed-model-provider.js";
 import { governorFromEnvironment } from "./infrastructure/inference-governor-client.js";
 import { FallbackModelProvider } from "./infrastructure/fallback-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
-import { OUTPUT_TOKENS_PER_TURN_RANGE, selectCoderProvider } from "./model/coder-provider-selection.js";
+import { OUTPUT_TOKENS_PER_TURN_RANGE, isKeylessCoderProvider, selectCoderProvider } from "./model/coder-provider-selection.js";
 import { compactRepositorySummary } from "./model/compact-repository-summary.js";
 import { resolveCoderEndpoint, resolveSelfHostedLimits } from "./model/coder-endpoint.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
@@ -82,7 +83,7 @@ const USAGE = `Usage:
   atlas github prs <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas github issues <owner>/<repository> [--state open|closed] [--max-results N] [--format text|json]
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
-  atlas code <repository-path> <objective> --model <name> [--provider anthropic|groq|openai|workers-ai|cerebras|gemini|openrouter|mistral] [--api-key-env <ENV_VAR>]
+  atlas code <repository-path> <objective> --model <name> [--provider anthropic|ollama|groq|openai|workers-ai|cerebras|gemini|openrouter|mistral] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
        [--retry-attempts N] [--retry-max-delay-ms N] [--capacity-wait-ms N]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N] [--max-repair-ms N] [--max-same-failure N]
@@ -573,12 +574,26 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     console.error(selection.message);
     return 2;
   }
-  const resolvedEndpoint = resolveCoderEndpoint(baseUrlOption);
-  if (!resolvedEndpoint.ok) {
-    console.error(resolvedEndpoint.message);
-    return 2;
+  // Ollama is its own provider on its native API (it can be told a context
+  // window per request); every other self-hosted server stays on the
+  // OpenAI-compatible path behind --provider groq.
+  const ollama = selection.selection.profile.providerId === "ollama";
+  let endpoint: URL | undefined;
+  if (ollama) {
+    try {
+      endpoint = resolveOllamaChatUrl(baseUrlOption?.trim() || process.env["ATLAS_OLLAMA_URL"]?.trim() || "http://127.0.0.1:11434");
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : "Invalid Ollama endpoint.");
+      return 2;
+    }
+  } else {
+    const resolvedEndpoint = resolveCoderEndpoint(baseUrlOption);
+    if (!resolvedEndpoint.ok) {
+      console.error(resolvedEndpoint.message);
+      return 2;
+    }
+    endpoint = resolvedEndpoint.endpoint;
   }
-  const endpoint = resolvedEndpoint.endpoint;
   const selfHosted = resolveSelfHostedLimits(contextWindowOption ?? undefined, maxOutputOption ?? undefined);
   if (!selfHosted.ok) {
     console.error(selfHosted.message);
@@ -593,12 +608,12 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   // Refused rather than ignored. A custom endpoint that silently did nothing
   // would send the repository to the vendor the operator was trying to avoid,
   // and they would have no way to tell from the output.
-  if (endpoint !== undefined && selection.selection.profile.providerId !== "groq") {
+  if (endpoint !== undefined && !ollama && selection.selection.profile.providerId !== "groq") {
     console.error("--base-url applies only to the groq OpenAI-compatible server path; cloud vendor credentials cannot be redirected.");
     return 2;
   }
   const { profile, apiKeyEnvironmentVariable, maxOutputTokensPerTurn } = selection.selection;
-  const apiKey = process.env[apiKeyEnvironmentVariable];
+  const apiKey = isKeylessCoderProvider(profile.providerId) ? "local-ollama-no-credential" : process.env[apiKeyEnvironmentVariable];
   if (apiKey === undefined || apiKey.trim().length === 0) {
     console.error(
       `Environment variable ${apiKeyEnvironmentVariable} is not set (required for provider '${profile.providerId}').`,
@@ -699,14 +714,17 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       supportsJson: true,
       supportsStreaming: false,
     }];
-    const upstream = routeSelection.profile.providerId === "anthropic"
+    const upstream = routeSelection.profile.providerId === "ollama"
+      ? new OllamaModelProvider({ models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) })
+      : routeSelection.profile.providerId === "anthropic"
       ? new AnthropicModelProvider({ apiKey: routeApiKey, models: routeCapabilities, defaultMaxOutputTokens: routeSelection.maxOutputTokensPerTurn })
       : routeSelection.profile.providerId === "groq"
         ? new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) })
         : new CloudModelProvider({ providerId: routeSelection.profile.providerId, apiKey: routeApiKey, models: routeCapabilities, ...(process.env["CLOUDFLARE_ACCOUNT_ID"] ? { accountId: process.env["CLOUDFLARE_ACCOUNT_ID"] } : {}) });
     // With a shared governor configured, every physical attempt (retries included) reserves capacity
     // against the same provider ledger hosted chat uses; without one this is unchanged.
-    const governor = governorFromEnvironment(process.env, { providerId: routeSelection.profile.providerId, apiKey: routeApiKey, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
+    // A local server has no shared provider quota to reserve against.
+    const governor = routeSelection.profile.providerId === "ollama" ? undefined : governorFromEnvironment(process.env, { providerId: routeSelection.profile.providerId, apiKey: routeApiKey, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
     const redacted = new RedactingModelProvider(upstream, new PatternSecretRedactor());
     return new RetryingModelProvider(governor === undefined ? redacted : new GovernedModelProvider(redacted, governor, { maximumWaitMs: Math.min(30_000, retryOptions.maximumDelayMs) }), retryOptions);
   };
