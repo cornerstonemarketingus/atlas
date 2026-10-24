@@ -38,6 +38,7 @@ import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/r
 import { createRoutedClient } from "./agent/models/routed-client.mjs";
 import { createTeamService } from "./agent/team/team-service.mjs";
 import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform/self-improve/index.mjs";
+import { createDaemonSkills, registerSkillTools } from "./platform/skills/daemon.mjs";
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { WorldState } from "./agent/kernel/world-state.mjs";
 import { createKernel } from "./agent/kernel/kernel.mjs";
@@ -119,7 +120,11 @@ const modelManager = new ModelManager({ log: (line) => store.audit("model.hostin
 const modelPlan = new ModelPlanStore(join(dataDirectory, "model-plan.json"));
 // "Atlas, improve yourself": only when running from a git checkout of Atlas itself.
 const selfImprove = createDaemonSelfImprovement({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan });
+// Signed skill packages: active skills' tools join the registry (denied until the owner allows `skill.<name>`).
+const skills = createDaemonSkills({ dataDirectory });
 const toolRegistry = buildToolRegistry();
+const skillMount = await registerSkillTools(toolRegistry, skills, LOCAL_TENANT_ID);
+for (const refusal of skillMount.refused) console.warn(`Skill ${refusal.name}@${refusal.version} not loaded: ${refusal.code}`);
 const authorizedToolExecutor = buildAuthorizedToolExecutor(toolRegistry);
 const toolApprovals = {
   // One-time and digest-bound: spending an approval consumes it, and it
@@ -323,6 +328,7 @@ const server = createLocalControlServer({
   connections: () => mcpReport,
   toolCatalog: () => toolRegistry.list(),
   selfImprove,
+  skills: { registry: skills, tenantId: LOCAL_TENANT_ID, owner: owner.user, mount: async () => registerSkillTools(toolRegistry, skills, LOCAL_TENANT_ID) },
   identity: { owner, tokenStorage: ownerToken.storage },
   remoteAccess,
   genesis,
