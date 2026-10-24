@@ -71,7 +71,7 @@ export function createAgentRoutes({ runtime, transcriber = null, modelHealth = n
     if (request.method === "GET" && !suffix) {
       const session = runtime.getSession(sessionId);
       return session
-        ? send(response, 200, { session, turns: runtime.getTurns(sessionId) })
+        ? send(response, 200, { session, turns: runtime.getTurns(sessionId), verification: runtime.getVerification?.(sessionId) ?? null })
         : send(response, 404, { message: "Session not found." });
     }
 
@@ -171,7 +171,7 @@ function statusForError(error) {
     UNKNOWN_SESSION: 404, UNKNOWN_TURN: 404, UNKNOWN_EXECUTOR: 400,
     ALREADY_RUNNING: 409, NOT_RUNNING: 409, NOT_RESUMABLE: 409,
     NOT_RETRYABLE: 409, NOTHING_TO_RETRY: 409, NOTHING_TO_REGENERATE: 409,
-    REPOSITORY_REQUIRED: 400,
+    REPOSITORY_REQUIRED: 400, REPOSITORY_NOT_FOUND: 404, REPOSITORY_NOT_ABSOLUTE: 400, NOT_A_GIT_REPOSITORY: 400,
   }[error.code] ?? 400;
 }
 

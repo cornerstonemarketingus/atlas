@@ -193,6 +193,16 @@ will struggle with long edits; point `--base-url`/`--model` (and
 `--api-key-env`) at a stronger OpenAI-compatible model for harder work, and
 keep the reviewer on a different model from the builder where you can.
 
+### Verified coding sessions
+
+In the daemon, a coding session (**Runs on: local**) asks for `code.write`
+in Approvals first, and ends `completed` only when Atlas itself re-runs the
+repository's `npm test` in the worktree and it exits 0; the session shows the
+command, exit code and output. The coder uses the same model server as chat
+(`ATLAS_OLLAMA_URL`, else `OLLAMA_HOST`, else a loopback `ATLAS_MODEL_ENDPOINT`). The
+end-to-end acceptance for this path, and how to run it against your own
+Ollama, is [docs/atlas-os/AUTONOMOUS-ACCEPTANCE.md](docs/atlas-os/AUTONOMOUS-ACCEPTANCE.md).
+
 ### Local computer use
 
 The Windows companion remains the default computer-control executor. Browser

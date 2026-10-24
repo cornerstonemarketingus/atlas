@@ -1,8 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
 
 /**
  * Looks at a running Genesis application the way a person would, and reports
@@ -25,23 +23,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
  * Records created by a check are named "Atlas check …" and deleted afterwards.
  */
 
-const here = dirname(fileURLToPath(import.meta.url));
-const atlasRoot = resolve(here, "..", "..", "..", "..", "..");
-
-export async function loadPlaywright() {
-  const candidates = [
-    () => import("playwright-core"),
-    () => import(pathToFileURL(createRequire(join(atlasRoot, "apps", "browser-worker", "package.json")).resolve("playwright-core")).href),
-  ];
-  for (const load of candidates) {
-    try {
-      const module = await load();
-      // The CommonJS build arrives as { default: { chromium, … } } when imported by path.
-      return module?.chromium ? module : module?.default?.chromium ? module.default : null;
-    } catch { /* next */ }
-  }
-  return null;
-}
+// One search for Playwright, shared with the agent's browser tools (agent/browser/load-playwright.mjs).
+export { loadPlaywright } from "../../agent/browser/load-playwright.mjs";
+import { loadPlaywright } from "../../agent/browser/load-playwright.mjs";
 
 const finding = (check, page, expected, observed, severity = "error") => ({ check, page, expected, observed: String(observed).slice(0, 500), severity });
 

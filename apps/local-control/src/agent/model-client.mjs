@@ -78,7 +78,12 @@ export function createModelClient({ baseUrl = DEFAULT_BASE_URL, apiKey = null, f
           : response.status === 400 || response.status === 422
             ? "MODEL_INVALID_INPUT"
             : "MODEL_REQUEST_FAILED";
-        throw new ModelRequestError(code, `The model endpoint returned HTTP ${response.status}. ${summarize(detail)}`);
+        // A 5xx means a server answered but could not run the model (Ollama
+        // reports a crashed or out-of-memory runner this way): say what to check.
+        const hint = response.status >= 500
+          ? ` The model server at ${endpoint.origin} is running but could not answer with '${model}'. Check that the model is installed and fits in memory (Ollama: \`ollama ps\`, \`ollama pull ${model}\`, and the \`ollama serve\` log), then retry.`
+          : "";
+        throw new ModelRequestError(code, `The model endpoint returned HTTP ${response.status}. ${summarize(detail)}${hint}`);
       }
       if (!response.body) throw new ModelRequestError("MODEL_REQUEST_FAILED", "The model endpoint returned no body.");
 

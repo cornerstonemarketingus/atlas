@@ -53,17 +53,38 @@ export const defaultUrlGuard = (url) => assertPublicUrl(url, { allowHosts: allow
 
 export function registerBrowserTools(registry, { session, uploadRoot = null, urlGuard = defaultUrlGuard }) {
   let resolved = typeof session === "function" ? undefined : session;
+  let building = null;
   const need = async () => {
+    // A browser that was closed (the window closed, the process crashed or was
+    // killed) is relaunched on the next use instead of failing every call
+    // until Atlas restarts.
+    if (typeof session === "function" && typeof resolved?.isClosed === "function" && resolved.isClosed()) resolved = undefined;
     if (resolved === undefined) {
+      building ??= Promise.resolve().then(() => session()).finally(() => { building = null; });
       try {
-        resolved = await session();
+        resolved = await building;
       } catch (error) {
-        resolved = null;
+        // Not remembered: a launch that failed once (a profile still locked by
+        // a browser that was shutting down, say) is tried again next time.
+        resolved = undefined;
         throw new BrowserToolError("NO_BROWSER", error?.message ?? "No browser session is available on this machine.");
       }
     }
     if (!resolved) throw new BrowserToolError("NO_BROWSER", "No browser session is available on this machine.");
     return resolved;
+  };
+  // The browser can die between two calls before anything has noticed. Such a
+  // failure drops the dead session; navigating opens a new browser and tries
+  // again, while acting on a page that no longer exists says so plainly.
+  const closedUnderUs = (error) => typeof session === "function" && /(Target page, context or browser has been closed|Browser has been closed|Target closed|browser has disconnected)/iu.test(String(error?.message ?? ""));
+  const onPage = async (action) => {
+    try {
+      return await action(await need());
+    } catch (error) {
+      if (!closedUnderUs(error)) throw error;
+      resolved = undefined;
+      throw new BrowserToolError("BROWSER_CLOSED", "The browser was closed, so the page it showed is gone. Open the page again with browser.navigate; Atlas starts a new browser for it.");
+    }
   };
 
   registry.register({
@@ -83,8 +104,16 @@ export function registerBrowserTools(registry, { session, uploadRoot = null, url
       const url = assertNavigableUrl(input.url);
       try { await urlGuard(url); }
       catch (error) { throw new BrowserToolError(error?.code ?? "URL_REFUSED", error?.message ?? "That address is not allowed."); }
-      const browser = await need();
-      const result = await browser.navigate({ url, signal });
+      let browser = await need();
+      let result;
+      try {
+        result = await browser.navigate({ url, signal });
+      } catch (error) {
+        if (!closedUnderUs(error)) throw error;
+        resolved = undefined;
+        browser = await need();
+        result = await browser.navigate({ url, signal });
+      }
       // A redirect can land somewhere the first check never saw; check where we ended up.
       if (result?.url && result.url !== url) {
         try { await urlGuard(result.url); }
@@ -107,7 +136,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null, url
     requiresApproval: false,
     inputSchema: { type: "object", required: [], properties: {} },
     async execute({ signal }) {
-      const snapshot = await (await need()).snapshot({ signal });
+      const snapshot = await onPage((browser) => browser.snapshot({ signal }));
       return typeof snapshot === "string" ? snapshot : JSON.stringify(snapshot);
     },
   });
@@ -129,7 +158,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null, url
       },
     },
     async execute({ input, signal }) {
-      const result = await (await need()).click({ ref: input.ref, signal });
+      const result = await onPage((browser) => browser.click({ ref: input.ref, signal }));
       return result?.summary ?? `Clicked ${input.description || input.ref}.`;
     },
   });
@@ -157,7 +186,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null, url
         // so the model must ask for the submitting tool explicitly.
         throw new BrowserToolError("APPROVAL_REQUIRED", "Use browser.submit to send a form; it requires the operator's approval.");
       }
-      const result = await (await need()).type({ ref: input.ref, text: input.text, submit: false, signal });
+      const result = await onPage((browser) => browser.type({ ref: input.ref, text: input.text, submit: false, signal }));
       return result?.summary ?? `Typed ${input.text.length} characters into ${input.ref}.`;
     },
   });
@@ -180,7 +209,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null, url
       },
     },
     async execute({ input, signal }) {
-      const result = await (await need()).click({ ref: input.ref, submit: true, signal });
+      const result = await onPage((browser) => browser.click({ ref: input.ref, submit: true, signal }));
       return result?.summary ?? `Submitted: ${input.intent}.`;
     },
   });
@@ -210,7 +239,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null, url
           throw new BrowserToolError("PATH_OUTSIDE_WORKSPACE", "An upload must come from the configured workspace.");
         }
       }
-      const result = await (await need()).upload({ ref: input.ref, path: input.path, signal });
+      const result = await onPage((browser) => browser.upload({ ref: input.ref, path: input.path, signal }));
       return result?.summary ?? `Attached ${input.path} to ${input.ref}.`;
     },
   });
@@ -232,7 +261,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null, url
       },
     },
     async execute({ input, signal }) {
-      const result = await (await need()).download({ ref: input.ref, toPath: input.toPath || null, signal });
+      const result = await onPage((browser) => browser.download({ ref: input.ref, toPath: input.toPath || null, signal }));
       return result?.summary ?? `Downloaded to ${result?.path ?? "the workspace"}.`;
     },
   });
@@ -264,7 +293,7 @@ export function registerBrowserTools(registry, { session, uploadRoot = null, url
       },
     },
     async execute({ input, signal }) {
-      const extracted = await (await need()).extract({ fields: input.fields, signal });
+      const extracted = await onPage((browser) => browser.extract({ fields: input.fields, signal }));
       // Page content is data, never instructions; it is returned as JSON so
       // it reads as a value rather than as prose the model might obey.
       return JSON.stringify(extracted ?? {});

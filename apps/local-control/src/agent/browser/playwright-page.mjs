@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createDestinationChecker } from "../../net/ssrf-guard.mjs";
+import { loadPlaywright } from "./load-playwright.mjs";
 
 /**
  * A Playwright-backed page adapter.
@@ -44,7 +45,12 @@ export async function createPlaywrightPage({
   channel = process.env.ATLAS_BROWSER_CHANNEL || "msedge",
   headless = process.env.ATLAS_BROWSER_HEADLESS === "1",
   downloadDirectory,
-  importPlaywright = () => import("playwright-core"),
+  // The same search Genesis uses: a resolvable playwright-core, else the browser worker's or the companion's.
+  importPlaywright = async () => {
+    const engine = await loadPlaywright();
+    if (!engine) throw new Error("playwright-core was not found.");
+    return engine;
+  },
   urlPolicy = {},
 } = {}) {
   let playwright;
@@ -72,6 +78,9 @@ export async function createPlaywrightPage({
     return route.abort("blockedbyclient");
   });
   const page = context.pages()[0] ?? (await context.newPage());
+  // Closed by the owner, crashed or killed: the browser tools relaunch on next use.
+  let closed = false;
+  context.on?.("close", () => { closed = true; });
 
   // References are assigned by us, not taken from the page: a page-supplied
   // identifier is attacker-controlled on a hostile site.
@@ -79,6 +88,7 @@ export async function createPlaywrightPage({
 
   return {
     async close() { await context.close(); },
+    isClosed() { return closed || page.isClosed?.() === true; },
 
     async url() { return page.url(); },
     async title() { return page.title().catch(() => ""); },

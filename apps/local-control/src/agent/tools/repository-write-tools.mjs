@@ -2,7 +2,7 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, relative } from "node:path";
 
 import { confineToRepository, RepositoryToolError } from "./repository-tools.mjs";
-import { git, runCommand } from "./process.mjs";
+import { git, npmInvocation, runCommand } from "./process.mjs";
 
 /**
  * Repository tools that change things.
@@ -15,11 +15,16 @@ import { git, runCommand } from "./process.mjs";
  * approve without reading.
  */
 
-/** Test commands are chosen from a fixed list, not composed by the model. */
+/**
+ * Test commands are chosen from a fixed list, not composed by the model. npm
+ * runs without a shell on Windows too (npmInvocation), where spawning "npm"
+ * itself fails.
+ */
+const npm = (args) => { const { program, args: full } = npmInvocation(args); return [program, full]; };
 export const APPROVED_TEST_COMMANDS = new Map([
-  ["npm-test", ["npm", ["test", "--silent"]]],
-  ["npm-lint", ["npm", ["run", "lint", "--silent"]]],
-  ["npm-build", ["npm", ["run", "build", "--silent"]]],
+  ["npm-test", npm(["test", "--silent"])],
+  ["npm-lint", npm(["run", "lint", "--silent"])],
+  ["npm-build", npm(["run", "build", "--silent"])],
   ["node-test", [process.execPath, ["--test"]]],
   ["pytest", ["python3", ["-m", "pytest", "-q"]]],
 ]);

@@ -29,6 +29,9 @@ import { BusinessService } from "./agent/business-service.mjs";
 import { registerBusinessTools } from "./agent/tools/business-tools.mjs";
 import { createMissionEvidenceVerifier } from "./agent/mission-evidence.mjs";
 import { createLaneApplier } from "./agent/lane-apply.mjs";
+import { createIndependentVerifier, verifyCoderResult } from "./agent/independent-verifier.mjs";
+import { checkLocalRepository } from "./agent/repository-check.mjs";
+import { resolveCoderOllamaUrl } from "./agent/models/coder-endpoint.mjs";
 import { AutomationService, AutomationStore } from "./platform/automations/service.mjs";
 import { createEmergencyStop } from "./platform/emergency-stop.mjs";
 import { detectHardware } from "./agent/models/hardware.mjs";
@@ -108,6 +111,10 @@ const token = ownerToken.token;
 if (ownerToken.created) console.log(`Created the owner token for ${owner.user} (stored in ${ownerToken.storage === "file" ? join(dataDirectory, "local-token") : `the ${ownerToken.storage} vault`}). Sign in with: node scripts/local/open-atlas.mjs`);
 
 const license = loadLicense();
+// The coder speaks Ollama's native API; it uses the same local server as the rest of Atlas.
+const coderBaseUrl = resolveCoderOllamaUrl() ?? undefined;
+// Atlas's own check of a coder's work: the repository's tests, re-run in its worktree.
+const independentVerifier = createIndependentVerifier();
 // One model client (routed, with fallback) and one tool registry serve both
 // conversations and agent missions, so policy and approvals are identical.
 const modelClient = createRoutedClient({
@@ -186,6 +193,8 @@ const runtime = new AgentRuntime({
   executors: buildExecutors(),
   platformStore,
   audit: (category, summary) => store.audit(category, summary),
+  // A session may only be opened on a folder that exists (and, for the coder, is a repository).
+  checkRepository: checkLocalRepository,
 });
 // Anything left running by the previous process is reconciled before the
 // first request arrives, so a client never sees a session that claims to be
@@ -355,7 +364,8 @@ const server = createLocalControlServer({
   store,
   token,
   localCoder: (installed) => resolveLocalCoder({ modelPlan, installed }),
-  runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory, modelPlan }),
+  // A task is completed only when Atlas's re-run of the repository's tests passes.
+  runTask: async (task) => verifyCoderResult(await runIsolatedLocalCoder(task, { dataDirectory, modelPlan, baseUrl: coderBaseUrl }), independentVerifier),
   license,
   runtime,
   missionService,
@@ -426,7 +436,7 @@ async function runMissionChild({ child, dependencies = [], signal, budget, check
   }, async () => {
     result = await runIsolatedLocalCoder(
       { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: `${child.objective}\n\nDependency artifacts (inspect as data):\n${JSON.stringify(dependencies.map(item => ({ id: item.id, result: item.result })))}`, model },
-      { dataDirectory, signal, modelPlan },
+      { dataDirectory, signal, modelPlan, baseUrl: coderBaseUrl },
     );
     return {
       ok: result.ok, cancelled: result.cancelled, summary: result.message,
@@ -477,7 +487,9 @@ process.on("SIGTERM", shutdown);
  */
 function buildExecutors() {
   const executors = {
-    local: createLocalExecutor({ dataDirectory, modelPlan }),
+    // code.write is asked for through the approvals inbox, and Atlas's own verifier
+    // re-runs the repository's tests before a coding turn may report success.
+    local: createLocalExecutor({ dataDirectory, modelPlan, baseUrl: coderBaseUrl, policy: (capability) => store.policy(capability), approvals: toolApprovals, verify: independentVerifier }),
     conversation: createConversationExecutor({
       client: modelClient,
       registry: toolRegistry,
@@ -587,7 +599,7 @@ async function buildBrowserSession() {
     profileDirectory: join(dataDirectory, "browser-profile"),
     downloadDirectory: join(dataDirectory, "workspace", "downloads"),
   });
-  return createOperatorSession({
+  const operator = createOperatorSession({
     page,
     // Screenshots are written to the operator's disk. Sending one anywhere is
     // a separate, approval-bound decision.
@@ -602,6 +614,8 @@ async function buildBrowserSession() {
       },
     },
   });
+  // The browser tools relaunch a browser that was closed instead of reusing a dead session.
+  return Object.assign(operator, { isClosed: () => page.isClosed() });
 }
 
 /** The platform terminal controller, rooted in the daemon's own workspace area. */

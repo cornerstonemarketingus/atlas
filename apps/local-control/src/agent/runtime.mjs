@@ -42,6 +42,8 @@ export class AgentRuntime {
   #platformStore;
   #platformTenantId;
   #platformUserId;
+  #checkRepository;
+  #leaseRecoveryTimer = null;
   #runs = new Map();
   #listeners = new Map();
   #stopped = false;
@@ -56,6 +58,9 @@ export class AgentRuntime {
     platformStore = null,
     platformTenantId = "local",
     platformUserId = "local-owner",
+    // ({ executor, repository }) -> null, or { code, message } refusing that
+    // repository for that executor (agent/repository-check.mjs in the daemon).
+    checkRepository = null,
   }) {
     if (!sessions) throw new Error("An agent session store is required.");
     if (!executors || Object.keys(executors).length === 0) throw new Error("At least one executor is required.");
@@ -68,6 +73,7 @@ export class AgentRuntime {
     this.#platformStore = platformStore;
     this.#platformTenantId = platformTenantId;
     this.#platformUserId = platformUserId;
+    this.#checkRepository = checkRepository;
   }
 
   get instanceId() { return this.#instanceId; }
@@ -90,6 +96,20 @@ export class AgentRuntime {
   getSession(sessionId) { return this.#sessions.session(sessionId); }
   getTurns(sessionId) { return this.#sessions.turns(sessionId); }
   getEvents(sessionId, afterSequence = 0) { return this.#sessions.events(sessionId, afterSequence); }
+  /**
+   * The latest independent verification receipt for a session (the command
+   * Atlas re-ran, its exit code and output), or null when nothing was verified.
+   */
+  getVerification(sessionId) {
+    let latest = null;
+    let after = 0;
+    for (;;) {
+      const page = this.#sessions.events(sessionId, after, 1_000);
+      for (const event of page) if (event.kind === "validation_result" && event.data?.evidence?.verifier) latest = { ...event.data.evidence, sequence: event.sequence };
+      if (page.length < 1_000) return latest;
+      after = page.at(-1).sequence;
+    }
+  }
   healthSnapshot() {
     const sessions = this.#sessions.sessions(10_000);
     let queuedTurns = 0;
@@ -115,7 +135,35 @@ export class AgentRuntime {
       this.#emit(sessionId, statusEvent("Atlas restarted; this session was interrupted and can be resumed.", { recoverable: true }));
       recovered.push(sessionId);
     }
+    this.#scheduleLeaseRecovery();
     return recovered;
+  }
+
+  /**
+   * A process killed outright leaves its sessions "running" under a lease that
+   * has not lapsed yet. Boot-time recovery cannot take those (another runtime
+   * might still hold them), and nothing ever looked again, so after a quick
+   * restart they claimed to be running forever. Instead, look again once the
+   * last such lease has run out: a lease nobody renewed belongs to a process
+   * that is gone, and its session is marked interrupted like any other.
+   */
+  #scheduleLeaseRecovery() {
+    clearTimeout(this.#leaseRecoveryTimer);
+    const now = Date.now();
+    const held = this.#sessions.sessions(10_000)
+      .filter((session) => ["running", "queued"].includes(session.status) && session.leaseOwner && session.leaseOwner !== this.#instanceId && Date.parse(session.leaseExpiresAt ?? "") > now);
+    if (held.length === 0 || this.#stopped) return;
+    const due = Math.max(...held.map((session) => Date.parse(session.leaseExpiresAt)));
+    this.#leaseRecoveryTimer = setTimeout(() => {
+      if (this.#stopped) return;
+      try {
+        const late = this.recover();
+        if (late.length > 0) this.#audit("agent.recovered", `${late.length} session(s) whose runtime stopped without releasing them were marked interrupted.`);
+      } catch (error) {
+        this.#audit("agent.recovery_failed", error instanceof Error ? error.message : String(error));
+      }
+    }, Math.max(0, due - now) + 250);
+    this.#leaseRecoveryTimer.unref?.();
   }
 
   createSession({ title, repository = null, model, executor = "local", budget = {} }) {
@@ -348,6 +396,7 @@ export class AgentRuntime {
 
   async stop() {
     this.#stopped = true;
+    clearTimeout(this.#leaseRecoveryTimer);
     for (const run of this.#runs.values()) run.control.cancel("shutdown");
     await this.drain();
   }
@@ -359,6 +408,12 @@ export class AgentRuntime {
   }
 
   #requireRepository(executor, repository) {
+    if (repository && this.#checkRepository) {
+      // Refused before a session or turn exists, so nothing starts against a
+      // folder that is not there.
+      const refusal = this.#checkRepository({ executor, repository });
+      if (refusal) throw new AgentRuntimeError(refusal.code, refusal.message);
+    }
     if (this.#executors[executor]?.requiresRepository !== true || repository) return;
     throw new AgentRuntimeError(
       "REPOSITORY_REQUIRED",
@@ -432,6 +487,9 @@ export class AgentRuntime {
 
     try {
       let turn = this.#sessions.nextPendingTurn(sessionId);
+      // A turn whose executor verified its work says how; that receipt, not a
+      // generic "answered", is what the finished session reports.
+      let verifiedSummary = null;
       while (turn) {
         await control.checkpoint();
         this.#sessions.setTurnState(turn.id, "running");
@@ -465,10 +523,11 @@ export class AgentRuntime {
           return;
         }
         this.#sessions.setTurnState(turn.id, "completed");
+        verifiedSummary = result?.verified === true && result.summary ? result.summary : null;
         turn = this.#sessions.nextPendingTurn(sessionId);
       }
       chargeElapsed();
-      this.#finish(sessionId, "completed", "All queued turns are answered.", budget);
+      this.#finish(sessionId, "completed", verifiedSummary ?? "All queued turns are answered.", budget);
     } catch (error) {
       chargeElapsed(error instanceof RunCancelledError && error.reason === "time-budget");
       this.#handleRunError(sessionId, error, budget);
