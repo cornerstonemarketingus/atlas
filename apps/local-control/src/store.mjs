@@ -54,7 +54,7 @@ export class LocalTaskStore {
       CREATE INDEX IF NOT EXISTS local_mission_events_mission_id_idx ON local_mission_events(mission_id);
       CREATE TRIGGER IF NOT EXISTS local_mission_events_no_update BEFORE UPDATE ON local_mission_events BEGIN SELECT RAISE(ABORT, 'Mission events are append-only'); END;
       CREATE TRIGGER IF NOT EXISTS local_mission_events_no_delete BEFORE DELETE ON local_mission_events BEGIN SELECT RAISE(ABORT, 'Mission events are append-only'); END;
-      INSERT OR IGNORE INTO local_policies (capability, decision) VALUES ('code.write', 'ask'), ('computer.high_risk', 'ask'), ('publish.remote', 'ask'), ('repository.read', 'allow'), ('desktop.observe', 'ask'), ('desktop.control', 'ask'), ('terminal.run', 'ask'), ('genesis.plan', 'allow'), ('genesis.build', 'allow'), ('deploy.remote', 'ask');
+      INSERT OR IGNORE INTO local_policies (capability, decision) VALUES ('code.write', 'ask'), ('computer.high_risk', 'ask'), ('publish.remote', 'ask'), ('repository.read', 'allow'), ('desktop.observe', 'ask'), ('desktop.control', 'ask'), ('terminal.run', 'ask'), ('genesis.plan', 'allow'), ('genesis.build', 'allow'), ('deploy.remote', 'ask'), ('filesystem.read', 'allow'), ('browser.read', 'allow');
     `);
     // Additive migrations for approvals bound to an agent action. Older
     // installations have the table without these columns; adding them is
@@ -98,7 +98,9 @@ export class LocalTaskStore {
   setStatus(id, status, message = null) { this.#db.prepare("UPDATE local_tasks SET status = ?, message = ? WHERE id = ?").run(status, message, id); return this.get(id); }
 
   policies() { return this.#db.prepare("SELECT capability, decision FROM local_policies ORDER BY capability").all(); }
-  policy(capability) { return this.#db.prepare("SELECT capability, decision FROM local_policies WHERE capability = ?").get(capability) ?? { capability, decision: "deny" }; }
+  // A capability with no saved row is denied. `default: true` says so, so a
+  // denial can read "not allowed by default" instead of blaming the owner.
+  policy(capability) { return this.#db.prepare("SELECT capability, decision FROM local_policies WHERE capability = ?").get(capability) ?? { capability, decision: "deny", default: true }; }
   setPolicy(capability, decision) {
     if (!/^[a-z][a-z0-9_.-]{1,63}$/u.test(capability) || !["allow", "ask", "deny"].includes(decision)) throw new Error("Invalid policy.");
     this.#db.prepare("INSERT INTO local_policies (capability, decision) VALUES (?, ?) ON CONFLICT(capability) DO UPDATE SET decision = excluded.decision").run(capability, decision);
@@ -144,9 +146,9 @@ export class LocalTaskStore {
       throw error;
     }
   }
-  decideApproval(id, decision, { confirmed = false } = {}) { if (!['approved','denied'].includes(decision)) throw new Error("Invalid approval decision."); const current = this.approval(id); if (!current || current.status !== 'pending') return null;
+  decideApproval(id, decision, { confirmed = false, reason = null } = {}) { if (!['approved','denied'].includes(decision)) throw new Error("Invalid approval decision."); const current = this.approval(id); if (!current || current.status !== 'pending') return null;
     // Level 4 (money, production, destroyed data, credentials): approving takes a second, explicit confirmation.
-    if (decision === 'approved' && (current.riskLevel ?? 0) >= 4 && confirmed !== true) { const error = new Error("This action needs a second confirmation: approve it again with confirm set."); error.code = "CONFIRMATION_REQUIRED"; throw error; } this.#db.prepare("UPDATE local_approvals SET status = ?, resolved_at = ? WHERE id = ?").run(decision, new Date().toISOString(), id); this.audit("approval.decided", `${id}=${decision}`); return this.approval(id); }
+    if (decision === 'approved' && (current.riskLevel ?? 0) >= 4 && confirmed !== true) { const error = new Error("This action needs a second confirmation: approve it again with confirm set."); error.code = "CONFIRMATION_REQUIRED"; throw error; } this.#db.prepare("UPDATE local_approvals SET status = ?, resolved_at = ? WHERE id = ?").run(decision, new Date().toISOString(), id); this.audit("approval.decided", `${id}=${decision}${reason ? ` (${reason})` : ""}`); return this.approval(id); }
 
   addPairingCode(codeHash, expiresAt) { this.#db.prepare("INSERT INTO local_pairing_codes VALUES (?, ?, NULL)").run(codeHash, expiresAt); }
   consumePairingCode(codeHash, now) { const row = this.#db.prepare("SELECT code_hash AS codeHash FROM local_pairing_codes WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?").get(codeHash, now); if (!row) return false; this.#db.prepare("UPDATE local_pairing_codes SET used_at = ? WHERE code_hash = ?").run(now, codeHash); return true; }

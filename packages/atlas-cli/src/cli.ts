@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 import { BoundedJsonHttpTransport } from "./infrastructure/bounded-json-http-transport.js";
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, posix } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ProviderReadOnlyToolAgent } from "./agent/provider-read-only-tool-agent.js";
 import { VerifiedCoderSession } from "./agent/verified-coder-session.js";
 import { planVerification } from "./agent/verification-planning.js";
+import { objectiveSourceContext } from "./agent/objective-source-context.js";
 import { RepositoryCommandDetector } from "./infrastructure/repository-command-detector.js";
 import { SafeValidationProfileRunner } from "./infrastructure/validation-profile-runner.js";
 import { FilesystemRepositoryInspector } from "./infrastructure/filesystem-repository-inspector.js";
@@ -91,9 +94,25 @@ const USAGE = `Usage:
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--verify-container <absolute-runtime-path>] [--audit-log <path>] [--format text|json]
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
 
+/**
+ * The usage lines for one command (with their continuation lines), or null
+ * when the command is unknown. `atlas code --help` should answer about code,
+ * not print the whole list.
+ */
+export function usageFor(command: string | undefined): string | null {
+  if (command === undefined || command.startsWith("-")) return null;
+  const picked: string[] = [];
+  let inside = false;
+  for (const line of USAGE.split("\n").slice(1)) {
+    if (line.startsWith("  atlas ")) inside = line.startsWith(`  atlas ${command} `);
+    if (inside) picked.push(line);
+  }
+  return picked.length > 0 ? `Usage:\n${picked.join("\n")}` : null;
+}
+
 export async function main(args: readonly string[]): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
-    console.log(USAGE);
+    console.log(usageFor(args[0]) ?? USAGE);
     return 0;
   }
   if (args[0] === "redact") {
@@ -868,6 +887,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     systemPrompt: CODE_SYSTEM_PROMPT,
   });
   const agent = makeAgent(provider, model);
+  const initialSourceEvidence = await objectiveSourceContext(objective, registry, repositoryId);
 
   let usage = { turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0 };
   const runAgentWith = (passAgent: typeof agent) => async (evidence: readonly { label: string; content: string }[]) => {
@@ -903,7 +923,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     // Full repository detail remains available through bounded read tools. The
     // first request carries only a compact map so entry-level hosted-model TPM
     // limits cannot reject the run before the agent gets its first turn.
-    baseEvidence: [{ label: "Deterministic repository summary", content: renderJson(compactRepositorySummary(summary)) }],
+    baseEvidence: [{ label: "Deterministic repository summary", content: renderJson(compactRepositorySummary(summary)) }, ...initialSourceEvidence],
     runAgent: runAgentWith(agent),
     ...(escalationRoute ? { escalation: { attempts: escalationAttemptsOption ?? 2, runAgent: runAgentWith(makeAgent(escalationRoute.provider, escalationRoute.model)) } } : {}),
     runValidation: async (label) => validationRunner.run({ label, profiles: plan.profiles }),
@@ -1032,6 +1052,22 @@ function readOptionalInteger(
   return value;
 }
 
-if (process.argv[1]?.endsWith("cli.ts") || process.argv[1]?.endsWith("cli.js")) {
+/**
+ * True when this module is the program being run. `npm link` and `npx`
+ * install the bin as a symlink named `atlas`, so the entry path is compared
+ * after resolving links rather than by its file name; otherwise the CLI
+ * would do nothing and exit 0.
+ */
+function invokedAsProgram(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (invokedAsProgram()) {
   process.exitCode = await main(process.argv.slice(2));
 }

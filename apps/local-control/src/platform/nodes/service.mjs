@@ -50,10 +50,17 @@ export const DEFAULT_MAX_INPUT_BYTES = 2 * 1024 ** 3;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const MESSAGE_LIMIT = 500;
 
-/** Render outputs a node may return, and how the artifact store files them. */
+/**
+ * Render outputs a node may return, and how the artifact store files them.
+ * The same mapping as the local runner's RENDER_ARTIFACT_TYPES (a test keeps
+ * them equal). The store sniffs every upload against the declared type,
+ * including the GLB header/length and glTF asset.version checks.
+ */
 export const NODE_OUTPUT_TYPES = Object.freeze({
   ".mp4": { kind: "video", mediaType: "video/mp4" },
   ".webm": { kind: "video", mediaType: "video/webm" },
+  ".glb": { kind: "model3d", mediaType: "model/gltf-binary" },
+  ".gltf": { kind: "model3d", mediaType: "model/gltf+json" },
   ".png": { kind: "file", mediaType: "image/png" },
   ".jpg": { kind: "file", mediaType: "image/jpeg" },
   ".jpeg": { kind: "file", mediaType: "image/jpeg" },

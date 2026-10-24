@@ -187,8 +187,8 @@ export class GenesisService {
     return this.#move(id, to, { reason, evidence, patch, expectedVersion, actor });
   }
 
-  pause(id, { actor = "owner" } = {}) {
-    return this.#move(id, "paused", { reason: "Paused by the owner.", evidence: { kind: "control" }, actor });
+  pause(id, { actor = "owner", reason = "Paused by the owner." } = {}) {
+    return this.#move(id, "paused", { reason, evidence: { kind: "control" }, actor });
   }
 
   resume(id, { actor = "owner" } = {}) {
@@ -233,7 +233,9 @@ export function progressOf(project, tasks, transitions) {
     { label: "Understanding your idea", done: reached.has("requirements") },
     { label: project.spec ? `Requirements: ${plural(project.spec.pages.length, "page")}, ${plural(project.spec.entities.length, "record type")}` : "Requirements", done: reached.has("planned") || reached.has("blocked") },
     { label: project.plan ? `Plan: ${tasks.length} tasks` : "Planning", done: reached.has("planned") },
-    ...tasks.map((t) => ({ label: t.title, done: t.status === "passed", status: t.status, attempts: t.attempts })),
+    // Nothing runs while the project is waiting, paused or stopped: a task left
+    // "running" by the interrupted stage shows the project's hold instead.
+    ...tasks.map((t) => ({ label: t.title, done: t.status === "passed", status: t.status === "running" && !ACTIVE_STATES.includes(project.state) ? (project.state === "blocked" ? "blocked" : project.state === "paused" ? "paused" : "stopped") : t.status, attempts: t.attempts })),
     { label: "Ready", done: project.state === "ready" || project.state === "published" },
   ];
   const current = ACTIVE_STATES.includes(project.state) ? STATE_LABELS[project.state] : null;

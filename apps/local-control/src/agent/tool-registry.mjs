@@ -262,7 +262,7 @@ export class ToolRegistry {
       return {
         status: "rejected",
         code: prohibited ? "PROHIBITED" : "POLICY_DENIED",
-        message: prohibited ? `Atlas will not do this on its own: ${autonomy.autonomy.reasons.join("; ")}.` : `Local policy denies the capability '${tool.capability}'.`,
+        message: prohibited ? `Atlas will not do this on its own: ${autonomy.autonomy.reasons.join("; ")}.` : `Local policy does not allow '${tool.capability}'. To let agents use it, open Computer in the Atlas console and set ${tool.capability} to allow (or ask).`,
         input,
         ...autonomy,
       };

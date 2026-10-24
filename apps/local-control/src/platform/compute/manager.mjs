@@ -250,6 +250,27 @@ export class ComputeManager {
   }
 
   /**
+   * Emergency stop: ends every lease that is provisioning or running, for
+   * every tenant. Each instance is terminated and its cost settled exactly as
+   * any other ended lease (reason "emergency_stop"); a running job's signal
+   * is aborted. One lease failing to end never stops the others.
+   */
+  async terminateAll(reason = "emergency_stop") {
+    const ended = [];
+    const failed = [];
+    for (const lease of this.#leases.listByStates(ACTIVE_STATES)) {
+      try {
+        const result = await this.#end(lease.tenantId, lease.id, reason);
+        if (result.error) failed.push({ id: lease.id, error: String(result.error) });
+        else ended.push(lease.id);
+      } catch (error) {
+        failed.push({ id: lease.id, error: String(error?.code ?? error?.message ?? error) });
+      }
+    }
+    return { ended, failed };
+  }
+
+  /**
    * Full job lifecycle: start, run `execute({ instance, heartbeat, signal })`,
    * hand its result to `saveOutputs` while the instance still exists, and
    * terminate whether the job succeeded or failed.

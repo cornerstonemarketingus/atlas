@@ -127,7 +127,17 @@ export class GroqModelProvider implements ModelProvider {
   }
 
   async #send(validated: ModelRequest, options: { readonly signal?: AbortSignal }): Promise<ModelResponse> {
-    const payload = buildOpenAiChatPayload(validated);
+    // Match the local chat path: small Qwen3 models otherwise spend their
+    // entire bounded generation on private reasoning instead of a tool call.
+    const localSmallQwen = ["127.0.0.1", "localhost", "[::1]"].includes(this.#endpoint.hostname)
+      && /^qwen3:(0\.6b|1\.7b)$/iu.test(validated.model);
+    // Groq's name-membership check rejects aliases before Atlas can return a
+    // bounded tool error or resolve a unique offered alias. Request native
+    // structured calls instead; Atlas still validates arguments, offered
+    // names, scope and policy before executing anything.
+    const atlasValidatesToolNames = this.#endpoint.origin === "https://api.groq.com" && (validated.tools?.length ?? 0) > 0;
+    const payload = { ...buildOpenAiChatPayload(validated), ...(localSmallQwen ? { reasoning_effort: "none" } : {}),
+      ...(atlasValidatesToolNames ? { disable_tool_validation: true } : {}) };
     const body = JSON.stringify(payload);
     await this.#waitForTokenWindow(body, options.signal);
     const timeoutSignal = AbortSignal.timeout(this.#timeoutMs);
@@ -144,7 +154,7 @@ export class GroqModelProvider implements ModelProvider {
     } catch (cause) {
       const cancelled = options.signal?.aborted === true;
       throw new ModelProviderError({
-        message: cancelled ? "Groq request cancelled" : "Groq request failed",
+        message: cancelled ? "Groq request cancelled" : timeoutSignal.aborted ? `Groq request timed out after ${this.#timeoutMs} ms` : "Groq request failed",
         code: cancelled ? "cancelled" : "provider-failure",
         providerId: this.metadata.id,
         retryable: !cancelled,
@@ -173,6 +183,14 @@ export class GroqModelProvider implements ModelProvider {
         ? recoverRejectedToolCall(text, validated.model, this.metadata.id)
         : undefined;
       if (recovered !== undefined) return recovered;
+      if (response.status === 400) {
+        let code: unknown;
+        try { code = JSON.parse(text)?.error?.code; } catch { /* not a recognized rejection */ }
+        if (code === "tool_use_failed") throw new ModelProviderError({
+          message: "The provider rejected an invalid tool call; no tool was executed.",
+          code: "tool-call-rejected", providerId: this.metadata.id, retryable: false,
+        });
+      }
 
       const allowance = (response.status === 413 || response.status === 429) ? statedAllowance(text, validated) : undefined;
 

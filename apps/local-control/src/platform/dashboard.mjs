@@ -116,6 +116,7 @@ export const PLATFORM_UI_HTML = `<!doctype html>
 <header class="cc-header"><div><p class="eyebrow">COMMAND CENTER</p><h1>Atlas Tasks</h1></div>
 <div class="cc-header-actions"><span class="role" id="role">locked</span><a href="/">Control plane</a><button type="button" class="danger" id="emergency-stop" data-write>Emergency stop</button></div></header>
 <p id="notice" class="notice" role="status" aria-live="polite"></p>
+<section class="panel" id="stop-summary" hidden><div class="section-title"><h2>Emergency stop</h2><span class="hint" id="stop-when"></span></div><div id="stop-services" class="health"></div></section>
 <section class="panel" id="unlock"><h2>Local access</h2><label>Access token<input id="token" type="password" autocomplete="off" placeholder="Paste the token printed at first launch"></label><button id="save-token">Unlock this tab</button></section>
 <div class="cc-grid">
 <div class="cc-main">
@@ -177,6 +178,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
 .stat{border:1px solid #33443a;border-radius:12px;padding:10px}.stat b{display:block;font-size:1.25rem}.stat span{font-size:.72rem;color:#9aafa0;letter-spacing:.08em;text-transform:uppercase}
 table{width:100%;border-collapse:collapse;font-size:.82rem}th,td{text-align:left;padding:6px 4px;border-top:1px solid #29372f;vertical-align:top}th{color:#9aafa0;font-weight:600}
+#stop-summary{margin-bottom:16px}.stop-failed{color:#ffb0a7;font-size:.85em;margin:2px 0 0}
 .health{display:grid;gap:8px}.health div{display:flex;justify-content:space-between;gap:10px;border-top:1px solid #29372f;padding-top:8px}.ok{color:#9be89b}.bad{color:#ffb0a7}
 .family ul{list-style:none;margin:0;padding-left:18px;border-left:1px dashed #33443a}.family>ul{padding-left:0;border-left:0}
 .family li{margin:8px 0}.agent{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.agent b{font-size:.95rem}
@@ -337,10 +339,27 @@ q('#composer').onsubmit=async e=>{
 };
 q('#memory-search').onsubmit=e=>{e.preventDefault();loadMemory()};
 q('#memory-add').onsubmit=async e=>{e.preventDefault();const content=q('#memory-content').value.trim();if(!content)return;const r=await call('POST','/v1/platform/memory',{content});notice(r.ok?'Remembered.':(r.data.message||'Could not store it.'),!r.ok);if(r.ok)q('#memory-content').value='';loadMemory()};
+const STOP_LABELS={automations:'Automations paused',missions:'Missions cancelled',sessions:'Agent sessions cancelled',genesis:'Genesis builds paused',renders:'Renders cancelled',compute:'Compute leases ended',nodes:'Node jobs cancelled',terminal:'Terminal commands killed',approvals:'Inbox approvals denied'};
+function showStopSummary(d){
+  const hook=d.hook||{};const services=hook.services||{};
+  const rows=[['Platform tasks cancelled',{status:d.cancelled.length?'stopped':'idle',stopped:d.cancelled,failed:[]}],['Platform approvals rejected',{status:d.rejectedApprovals.length?'stopped':'idle',stopped:d.rejectedApprovals,failed:[]}]]
+    .concat(Object.keys(services).map(k=>[STOP_LABELS[k]||k,services[k]]));
+  const text=s=>s.status==='not_running'?'not running here':s.status==='idle'?'nothing in flight':s.status==='failed'?'failed':s.stopped.length+(s.status==='partial'?' (some failed)':'');
+  q('#stop-services').innerHTML=rows.map(([name,s])=>'<div><span>'+esc(name)+'</span><span class="'+(s.failed&&s.failed.length?'bad':'ok')+'">'+esc(text(s))+'</span></div>'+
+    (s.failed||[]).map(f=>'<p class="stop-failed">'+esc((f.id?f.id+': ':'')+f.error)+'</p>').join('')).join('')+
+    (hook.error?'<p class="stop-failed">'+esc('The daemon-wide stop failed: '+hook.error)+'</p>':'')+
+    (!d.hook?'<p class="stop-failed">Only platform tasks were stopped: this daemon has no daemon-wide stop wired.</p>':'');
+  q('#stop-when').textContent='at '+new Date(d.stoppedAt).toLocaleTimeString();
+  q('#stop-summary').hidden=false;
+}
 q('#emergency-stop').onclick=async()=>{
-  if(!confirm('Emergency stop: cancel every task in flight and reject every pending approval?'))return;
+  if(!confirm('Emergency stop: cancel every mission, agent session, task and render in flight, pause automations and Genesis builds, and deny every pending approval?'))return;
   const r=await call('POST','/v1/platform/emergency-stop',{confirm:true,reason:'stopped from the command center'});
-  notice(r.ok?'Emergency stop: '+r.data.cancelled.length+' task(s) cancelled, '+r.data.rejectedApprovals.length+' approval(s) rejected.':(r.data.message||'Emergency stop failed.'),!r.ok);
+  if(r.ok){
+    const hook=r.data.hook||{};const failed=(hook.failed||0)+(hook.error?1:0);
+    notice('Emergency stop: '+(r.data.cancelled.length+r.data.rejectedApprovals.length+(hook.stopped||0))+' item(s) stopped'+(failed?', '+failed+' could not be stopped (see below).':'.'),failed>0);
+    showStopSummary(r.data);
+  }else notice(r.data.message||'Emergency stop failed.',true);
   loadAll();
 };
 q('#save-token').onclick=()=>{sessionStorage.setItem('atlas-token',q('#token').value);loadAll()};

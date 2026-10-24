@@ -10,10 +10,10 @@ import { createLocalControlServer } from "../src/server.mjs";
 import { LocalTaskStore } from "../src/store.mjs";
 import { PlatformTaskStore } from "../src/platform/index.mjs";
 import { ArtifactStore } from "../src/platform/artifacts/index.mjs";
-import { RenderRunner, buildBlenderJob } from "../src/platform/render/index.mjs";
+import { RENDER_ARTIFACT_TYPES, RenderRunner, buildBlenderJob } from "../src/platform/render/index.mjs";
 import { ComputeLeaseStore, ComputeManager, FakeClock, FakeGpuProvider } from "../src/platform/compute/index.mjs";
 import {
-  LOCAL_OWNER_ID, NodeProvider, NodeService, defaultComputeProviders, nodeRenderJob, runNodeRender,
+  LOCAL_OWNER_ID, NODE_OUTPUT_TYPES, NodeProvider, NodeService, defaultComputeProviders, nodeRenderJob, runNodeRender,
 } from "../src/platform/nodes/index.mjs";
 import { AtlasNodeAgent, nodeCapabilities, validateDaemonUrl } from "../src/node/agent.mjs";
 import { nodeOptionsFromArgs } from "../src/node/main.mjs";
@@ -279,6 +279,62 @@ test("an upload whose bytes do not match the declared sha256 is refused and noth
   const done = await f.nodeCall(agent.token, "POST", `/v1/node/jobs/${queued.id}/complete`, { json: { claimId, files: [{ path: "out/clip.mp4", sha256: sha(MP4) }] } });
   assert.equal(done.status, 200);
   assert.equal(done.body.job.state, "succeeded");
+});
+
+/** A valid one-triangle GLB (glTF 2.0 binary). */
+function triangleGlb() {
+  const bin = Buffer.from(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]).buffer);
+  const json = {
+    asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    buffers: [{ byteLength: bin.length }], bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: bin.length }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3", min: [0, 0, 0], max: [1, 1, 0] }],
+  };
+  let text = Buffer.from(JSON.stringify(json));
+  if (text.length % 4) text = Buffer.concat([text, Buffer.alloc(4 - (text.length % 4), 0x20)]);
+  const header = Buffer.alloc(12);
+  header.write("glTF", 0, "latin1"); header.writeUInt32LE(2, 4); header.writeUInt32LE(12 + 8 + text.length + 8 + bin.length, 8);
+  const chunk = (type, data) => { const h = Buffer.alloc(8); h.writeUInt32LE(data.length, 0); h.writeUInt32LE(type, 4); return Buffer.concat([h, data]); };
+  return Buffer.concat([header, chunk(0x4e4f534a, text), chunk(0x004e4942, bin)]);
+}
+
+test("node outputs use the local runner's artifact types: a valid GLB is stored as model3d, a fake GLB is refused", async (t) => {
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(NODE_OUTPUT_TYPES).map(([ext, type]) => [ext, { ...type }])),
+    Object.fromEntries(Object.entries(RENDER_ARTIFACT_TYPES).map(([ext, type]) => [ext, { ...type }])),
+    "a node and the local runner file the same outputs the same way",
+  );
+  const f = await fixture(t);
+  const agent = await f.approvedAgent("Desktop");
+  const queued = await f.queue(ffmpegJob(["out/model.glb", "out/fake.glb", "out/scene.gltf"]));
+  const claim = await f.nodeCall(agent.token, "POST", "/v1/node/claim", { json: { waitMs: 0 } });
+  assert.equal(claim.body.job.id, queued.id);
+  const { claimId } = claim.body.job;
+  const put = (path, bytes) => f.nodeCall(agent.token, "PUT", `/v1/node/jobs/${queued.id}/outputs?claim=${claimId}&path=${encodeURIComponent(path)}`, { body: bytes, headers: { "x-atlas-sha256": sha(bytes) } });
+
+  const glb = triangleGlb();
+  const stored = await put("out/model.glb", glb);
+  assert.equal(stored.status, 201, JSON.stringify(stored.body));
+  const record = f.artifacts.get("local", sha(glb));
+  assert.equal(record.kind, "model3d");
+  assert.equal(record.mediaType, "model/gltf-binary");
+  assert.deepEqual(record.provenance, { runId: queued.id, step: "render", source: "atlas-node" });
+
+  // Starts with "glTF" and its sha256 matches, but the header's length is a lie: the store's sniffing refuses it.
+  const fake = triangleGlb(); fake.writeUInt32LE(fake.length + 64, 8);
+  const refused = await put("out/fake.glb", fake);
+  assert.equal(refused.status, 422);
+  assert.equal(refused.body.code, "CONTENT_MISMATCH");
+  assert.equal(f.artifacts.get("local", sha(fake)), null, "refused bytes never reach the artifact store");
+  // JSON that is not a glTF document is refused as .gltf, too.
+  const notGltf = Buffer.from(JSON.stringify({ meshes: [] }));
+  assert.equal((await put("out/scene.gltf", notGltf)).body.code, "CONTENT_MISMATCH");
+  const gltf = Buffer.from(JSON.stringify({ asset: { version: "2.0" }, scenes: [{ nodes: [] }] }));
+  assert.equal((await put("out/scene.gltf", gltf)).status, 201);
+  assert.equal(f.artifacts.get("local", sha(gltf)).mediaType, "model/gltf+json");
+  // The job cannot complete while an output was refused.
+  const early = await f.nodeCall(agent.token, "POST", `/v1/node/jobs/${queued.id}/complete`, { json: { claimId, files: [{ path: "out/model.glb", sha256: sha(glb) }, { path: "out/fake.glb", sha256: sha(fake) }, { path: "out/scene.gltf", sha256: sha(gltf) }] } });
+  assert.equal(early.body.code, "OUTPUT_MISSING");
 });
 
 test("an output bigger than the job allows is refused before it is read", async (t) => {

@@ -53,8 +53,23 @@ export function renderRequirements(tool) {
   return { terminal: "container", render: [tool] };
 }
 
-/** Render outputs that go to the artifact store (kind "video"); see platform/artifacts/. */
-const VIDEO_MEDIA_TYPES = Object.freeze({ ".mp4": "video/mp4", ".webm": "video/webm" });
+/**
+ * Render outputs that go to the artifact store, by extension: videos (ffmpeg),
+ * glTF models (Blender exports) and still images (frames, thumbnails). Images
+ * are stored as kind "file", the kind that carries image media types. The
+ * store sniffs the bytes against the declared type and refuses a mismatch;
+ * any other extension stays in the workspace only. See platform/artifacts/.
+ */
+export const RENDER_ARTIFACT_TYPES = Object.freeze({
+  ".mp4": Object.freeze({ kind: "video", mediaType: "video/mp4" }),
+  ".webm": Object.freeze({ kind: "video", mediaType: "video/webm" }),
+  ".glb": Object.freeze({ kind: "model3d", mediaType: "model/gltf-binary" }),
+  ".gltf": Object.freeze({ kind: "model3d", mediaType: "model/gltf+json" }),
+  ".png": Object.freeze({ kind: "file", mediaType: "image/png" }),
+  ".jpg": Object.freeze({ kind: "file", mediaType: "image/jpeg" }),
+  ".jpeg": Object.freeze({ kind: "file", mediaType: "image/jpeg" }),
+  ".webp": Object.freeze({ kind: "file", mediaType: "image/webp" }),
+});
 
 const STAGING_PREFIX = "atlas-render-";
 const STAGING_TMP = ".tmp";
@@ -145,6 +160,7 @@ export class RenderRunner {
   #options;
   #redact;
   #artifactStore;
+  #active = new Map();
 
   /**
    * @param options.container   the container sandbox option ({ runtime, cpus, memoryBytes, ... }); required to run anything
@@ -211,6 +227,22 @@ export class RenderRunner {
     }
     const capabilities = RENDER_TOOLS.filter((tool) => this.#images[tool]).map((tool) => RENDER_CAPABILITIES[tool]);
     return { available: capabilities.length > 0, reason: capabilities.length ? "container sandbox ready" : "no render image configured", capabilities };
+  }
+
+  /** Jobs whose container is running now. */
+  activeJobs() { return [...this.#active.keys()]; }
+
+  /**
+   * Emergency stop: removes the container of every job in flight; each ends
+   * with status "cancelled" and its outputs discarded. Returns the job ids.
+   */
+  cancelAll(reason = "emergency stop") {
+    const cancelled = [];
+    for (const [jobId, stop] of this.#active) {
+      stop(`cancelled: ${reason}`);
+      cancelled.push(jobId);
+    }
+    return { cancelled };
   }
 
   /** The `render` list for a worker registry capability declaration. */
@@ -292,6 +324,7 @@ export class RenderRunner {
       const finish = (value) => {
         if (settled) return;
         settled = true;
+        this.#active.delete(jobId);
         for (const timer of timers) { clearTimeout(timer); clearInterval(timer); }
         resolve({ ...value, stopReason });
       };
@@ -310,6 +343,7 @@ export class RenderRunner {
         finish({ exitCode: null, signal: null, spawnError: error.message });
         return;
       }
+      this.#active.set(jobId, stop);
       child.stdout?.on("data", (chunk) => stdout.push(chunk));
       child.stderr?.on("data", (chunk) => stderr.push(chunk));
       child.on("error", (error) => finish({ exitCode: null, signal: null, spawnError: error.message }));
@@ -366,7 +400,10 @@ export class RenderRunner {
     result.missing = job.outputs.filter((o) => !present.has(o));
     const outputBytes = [...present.values()].reduce((a, b) => a + b, 0);
 
-    if (outcome.stopReason === "timeout") {
+    if (outcome.stopReason?.startsWith("cancelled")) {
+      result.status = "cancelled";
+      result.error = `render ${outcome.stopReason}; container removed, outputs discarded`;
+    } else if (outcome.stopReason === "timeout") {
       result.status = "timed_out";
       result.error = `render exceeded ${job.timeoutMs} ms; container removed`;
     } else if (outcome.stopReason === "output_limit" || writtenBytes > job.maxOutputBytes || outputBytes > job.maxOutputBytes) {
@@ -389,18 +426,22 @@ export class RenderRunner {
   }
 
   /**
-   * Puts published video outputs into the artifact store. The store sniffs
-   * content itself; a refusal is recorded on the file, not thrown, because
-   * the render already succeeded and its outputs are in the workspace.
+   * Puts published video, 3D model and image outputs into the artifact
+   * store (RENDER_ARTIFACT_TYPES). The store sniffs content itself; a refusal
+   * is recorded on the file, not thrown, because the render already succeeded
+   * and its outputs are in the workspace.
    */
   async #storeArtifacts({ result, workspace, runId, tenantId }) {
     for (const file of result.files) {
-      const mediaType = VIDEO_MEDIA_TYPES[file.path.slice(file.path.lastIndexOf(".")).toLowerCase()];
-      if (!mediaType) continue;
+      const name = file.path.slice(file.path.lastIndexOf("/") + 1);
+      const dot = name.lastIndexOf(".");
+      const type = dot > 0 ? RENDER_ARTIFACT_TYPES[name.slice(dot).toLowerCase()] : undefined;
+      if (!type) continue;
+      const { kind, mediaType } = type;
       try {
         const { artifact, created } = await this.#artifactStore.put({
-          tenantId, kind: "video", mediaType, provenance: { runId, step: "render", source: result.capability },
-          path: join(workspace, ...file.path.split("/")), name: file.path.slice(file.path.lastIndexOf("/") + 1),
+          tenantId, kind, mediaType, provenance: { runId, step: "render", source: result.capability },
+          path: join(workspace, ...file.path.split("/")), name,
         });
         file.artifact = { id: artifact.id, sha256: artifact.sha256, created };
       } catch (error) {

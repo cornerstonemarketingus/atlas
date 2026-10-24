@@ -40,6 +40,50 @@ that has capacity), `ATLAS_TAVILY_API_KEY` (chat's web search), and
 and how many models the pool has, as flags and counts only. `apps/web/tests/deploy-configuration.test.mjs` fails if chat reads
 a variable the deploy does not upload.
 
+### Seeing chat health on the Connections page
+
+Signed in as the deployment owner (GitHub sign-in with the owner login, or the
+operator token), **Connections → Chat providers and quota** shows, in plain
+language and without any secret, model name or endpoint:
+
+- **Chat route**: the providers chat tries, in order (from
+  `optional.chat.route`), and whether a fallback model and web search are set.
+- **Quota**: the inference governor's readout for the main chat provider
+  (`optional.inferenceGovernor`): whether quota tracking is on and answering,
+  how many models are held back at a rate or daily limit (`limitedModels`), and
+  whether the whole provider account is paused (`accountPause`: `BILLING`,
+  `AUTHENTICATION` or `PERMISSION`, with the time it is retried).
+- **Check providers**: runs `GET /api/setup/providers` on request only, since
+  each check sends one tiny real inference. It reports the Workers AI binding
+  and the Workers AI API token as a category (working, at its limit, wrong
+  permission, ...) with the next step. The route is owner-only: the owner's
+  session and the operator token both reach it; any other account gets 403.
+
+The **Chat model** card under Live status reports configuration, not
+reachability: a configured endpoint reads "configured". For the owner it shows
+the last real outcome the quota ledger recorded for the provider chat tries
+first (`failingModels` and `recentFailureKinds`, e.g. `SERVER_ERROR` for a 5xx,
+plus `limitedModels` for 429s). It says "working" only after a provider check
+on that page got a real reply. Loading the page makes no model call.
+
+Customers see none of this; their Connections page shows only their account.
+
+### Streaming chat always ends
+
+A streaming turn (`POST /api/chat` with `stream: true`) always ends with a
+`done` or `error` event: a turn that throws emits `error` and closes. While the
+turn works, the Worker sends a `: keep-alive` comment every 10 seconds. The
+browser treats 45 seconds with no bytes at all as a dead stream. It stops
+waiting, says the reply stopped responding, and puts the message back in the
+composer to retry. A Workers AI binding call now honours chat's per-call
+timeout like an HTTP provider does, because `ai.run` has no deadline of its own.
+
+### Finding hosted websites again
+
+Websites Atlas builds in hosted chat are listed under **Code → Your websites**
+(`GET /api/genesis/projects`, tenant-scoped): name, status and when each last
+changed, with a link to its `/preview/<id>` page once a preview exists.
+
 A chat turn always ends in words. If the model's last response carried none (an
 empty HTTP 200, a tool call on the final round, a reasoning model that spent its
 budget thinking) or a rate limit interrupts work already done, one final

@@ -6,6 +6,8 @@ import { InMemorySessionAuditLog } from "../src/infrastructure/in-memory-session
 import { MockModelProvider } from "../src/infrastructure/mock-model-provider.js";
 import { PolicyEnforcedReadOnlyToolRegistry } from "../src/infrastructure/policy-enforced-read-only-tool-registry.js";
 import type { ModelProviderMetadata, ModelResponse, ModelToolDefinition } from "../src/model/model-provider.js";
+import { ModelProviderError } from "../src/model/model-provider.js";
+import { GroqModelProvider } from "../src/infrastructure/groq-model-provider.js";
 
 const metadata: ModelProviderMetadata = {
   id: "mock", displayName: "Mock",
@@ -16,6 +18,46 @@ const tool: ModelToolDefinition = {
   description: "Inspect.",
   inputSchema: { type: "object", additionalProperties: false },
 };
+
+for (const scenario of ["alias", "unknown", "approval"] as const) {
+  test(`native Groq tool calls still enforce Atlas policy: ${scenario}`, async () => {
+    let requests = 0;
+    let executions = 0;
+    const target = new PolicyEnforcedReadOnlyToolRegistry({ policy: { defaultDecision: scenario === "approval" ? "ask" : "allow", rules: [] } });
+    target.register({ name: tool.name, description: "Inspect", risk: "low", validateInput: input => input, execute: async () => { executions++; return {}; } });
+    const provider = new GroqModelProvider({ apiKey: "fixture", models: metadata.models, fetchImplementation: async (_url, init) => {
+      assert.equal(JSON.parse(String(init?.body)).disable_tool_validation, true);
+      requests++;
+      const message = requests === 1 ? { tool_calls: [{ id: "native", type: "function", function: { name: scenario === "unknown" ? "repository.unoffered" : "repo_inspect", arguments: "{}" } }] } : { content: "Finished inspection." };
+      return new Response(JSON.stringify({ id: "native", model: "test", choices: [{ message, finish_reason: requests === 1 ? "tool_calls" : "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+    } });
+    const result = await new ProviderReadOnlyToolAgent({ provider, model: "test", registry: target, tools: [tool], audit: new InMemorySessionAuditLog() }).run({ sessionId: "native", objective: "Inspect", evidence: [], scope: { kind: "global" }, context: { repositoryId: "atlas" } });
+    assert.equal(executions, scenario === "alias" ? 1 : 0);
+    if (scenario === "approval") assert.equal(result.status, "approval-required");
+    if (scenario === "unknown") assert.match(JSON.stringify(result.trace.messages), /TOOL_NOT_FOUND/u);
+  });
+}
+
+for (const scenario of ["valid-call", "unexecuted-final", "repeated", "last-turn", "approval"] as const) {
+  test(`provider tool rejection gets one bounded correction: ${scenario}`, async () => {
+    let requests = 0;
+    const rejected = () => new ModelProviderError({ message: "Provider rejected an invalid tool call.", code: "tool-call-rejected", providerId: "mock", retryable: false });
+    const provider = { metadata, async complete() {
+      requests++;
+      if (requests === 1 || scenario === "repeated") throw rejected();
+      if (requests === 2 && scenario !== "unexecuted-final") return response("call", [{ type: "tool-call", id: "real-call", name: tool.name, arguments: {} }], "tool-calls");
+      return response("done", [{ type: "text", text: "Done" }], "stop");
+    } };
+    const audit = new InMemorySessionAuditLog();
+    const result = await new ProviderReadOnlyToolAgent({ provider, model: "test", registry: registry(scenario === "approval" ? "ask" : "allow"), tools: [tool], audit,
+      maximumTurns: scenario === "last-turn" ? 1 : 8 }).run({ sessionId: "rejected", objective: "Inspect", evidence: [], scope: { kind: "global" }, context: { repositoryId: "atlas" } });
+    assert.equal(result.status, scenario === "valid-call" ? "completed" : scenario === "approval" ? "approval-required" : scenario === "repeated" || scenario === "last-turn" ? "failed" : "blocked");
+    assert.equal(requests, scenario === "last-turn" ? 1 : scenario === "valid-call" ? 3 : 2);
+    assert.equal(result.trace.turns, requests);
+    assert.equal(result.trace.toolCalls, scenario === "valid-call" || scenario === "approval" ? 1 : 0);
+    if (scenario !== "valid-call") assert.ok(!audit.snapshot().some(e => e.type === "session.completed"));
+  });
+}
 
 test("coder corrects textual tool JSON once and executes only a subsequent structured call", async () => {
   const text = '```json\n{"name":"repository.inspect","arguments":{}}\n```';

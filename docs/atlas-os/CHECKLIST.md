@@ -55,6 +55,7 @@ quality.
 | Browser tools behind policy, SSRF guard on navigation and redirects | Tested | `tool-families.test.mjs` (SEC-3), `windows-companion/tests/url-safety.test.mjs` |
 | Desktop control through the companion, fails closed without a desktop | Tested (Windows test in CI) | commit 54adf1a |
 | Terminal: no shell, allow-listed commands, separate workspace, `ask` by default | Tested | commit 6e37451; default policy `terminal.run = ask` |
+| Read-only defaults: `filesystem.read` (workspace roots only, symlink-aware) and `browser.read` (the agent's own browser) `allow`; writes, commands, publishing and desktop control `ask`; an owner's saved decision is never overwritten | Tested | `tests/default-read-policies.test.mjs`; owner decision 2026-10-24 |
 | Hosted browser refuses rather than queueing work nothing runs | Tested | SEC-10 (`computer/browser-plan.mjs`) |
 
 ## Phase 4: security

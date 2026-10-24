@@ -87,7 +87,41 @@ test("setup readiness reports counts only", async () => {
   const namespace = { idFromName: (name) => name, get: () => ({ fetch: (request) => handleGovernorRequest(core, request) }) };
   assert.deepEqual(await governorReadiness({ configured: false }, { INFERENCE_GOVERNOR: namespace }), { bound: true, reachable: null });
   const ready = await governorReadiness({ configured: true, baseUrl: "https://api.groq.com/openai/v1", apiKey: "k" }, { INFERENCE_GOVERNOR: namespace });
-  assert.deepEqual(ready, { bound: true, reachable: true, models: 0, reservations: 0, waiting: 0 });
+  assert.deepEqual(ready, { bound: true, reachable: true, models: 0, reservations: 0, waiting: 0, limitedModels: 0, accountPause: null, failingModels: 0, recentFailureKinds: [] });
+});
+
+test("setup readiness reports held-back models and an account pause as categories only", async () => {
+  const storage = fakeStorage();
+  const core = createGovernorCore({ storage, now: () => 1_000 });
+  const namespace = { idFromName: (name) => name, get: () => ({ fetch: (request) => handleGovernorRequest(core, request) }) };
+  const endpoint = { configured: true, baseUrl: "https://api.groq.com/openai/v1", apiKey: "gsk_live_secret" };
+  // Route through the same scope the readiness call will read.
+  await core.reserve({ requestId: "limited", models: ["private-model-a"], estimatedTokens: 10 });
+  await core.release({ requestId: "limited", status: 429, retryAfterMs: 60_000 });
+  await core.reserve({ requestId: "billing", models: ["private-model-b"], estimatedTokens: 10 });
+  await core.release({ requestId: "billing", kind: "BILLING" });
+  const ready = await governorReadiness(endpoint, { INFERENCE_GOVERNOR: namespace });
+  assert.equal(ready.reachable, true);
+  assert.equal(ready.limitedModels, 1, "the rate-limited model is held back; the account pause is reported on its own");
+  assert.equal(ready.accountPause.kind, "BILLING");
+  assert.equal(ready.failingModels, 1, "the billing failure is the paused model's last outcome; a 429 is not a failure of the model");
+  assert.deepEqual(ready.recentFailureKinds, ["BILLING"]);
+  assert.match(ready.accountPause.until, /^\d{4}-\d{2}-\d{2}T/u);
+  assert.doesNotMatch(JSON.stringify(ready), /private-model|gsk_live_secret|groq/u);
+});
+
+test("setup readiness reports a model whose last call failed with a 5xx, and clears it after a success", async () => {
+  const core = createGovernorCore({ storage: fakeStorage(), now: () => 1_000 });
+  const namespace = { idFromName: (name) => name, get: () => ({ fetch: (request) => handleGovernorRequest(core, request) }) };
+  const endpoint = { configured: true, baseUrl: "https://workers-ai.binding/v1/", apiKey: null };
+  await core.reserve({ requestId: "one", models: ["m"], estimatedTokens: 1 });
+  await core.release({ requestId: "one", status: 502, kind: "SERVER_ERROR" });
+  let ready = await governorReadiness(endpoint, { INFERENCE_GOVERNOR: namespace });
+  assert.equal(ready.failingModels, 1); assert.deepEqual(ready.recentFailureKinds, ["SERVER_ERROR"]);
+  await core.reserve({ requestId: "two", models: ["m"], estimatedTokens: 1 });
+  await core.release({ requestId: "two", status: 200, kind: null });
+  ready = await governorReadiness(endpoint, { INFERENCE_GOVERNOR: namespace });
+  assert.equal(ready.failingModels, 0); assert.deepEqual(ready.recentFailureKinds, []);
 });
 
 test("the Durable Object speaks the governor protocol and rejects anything else", async () => {

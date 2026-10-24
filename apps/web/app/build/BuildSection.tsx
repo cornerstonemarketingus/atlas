@@ -3,6 +3,7 @@ import Link from "next/link";
 import { statusLine } from "./task-presentation.mjs";
 import { submitTaskRequest } from "./task-request-client.mjs";
 import { RequestHistory } from "./RequestHistory.js";
+import { HostedSites } from "./HostedSites.js";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AtlasMark } from "../AtlasMark.js";
 import { AtlasShell } from "../AtlasShell.js";
@@ -267,6 +268,7 @@ export function BuildSection() {
         </div>
         {notice && <p className="composer-notice" role="status">{notice}</p>}
       </form>
+      <HostedSites />
       <RequestHistory version={version} />
     </div>
     {panelOpen && <aside className="work-panel">
