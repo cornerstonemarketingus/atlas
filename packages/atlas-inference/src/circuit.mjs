@@ -23,6 +23,9 @@ export const CIRCUIT = Object.freeze({
   baseCooldownMs: 30_000,
   maxCooldownMs: 600_000,
   configurationCooldownMs: 3_600_000,
+  // A disabled account is retried with one probe after this long, so a fixed key or restored
+  // billing is noticed in minutes instead of waiting out the whole configuration cooldown.
+  accountProbeAfterMs: 300_000,
 });
 
 const COUNTED = new Set([K.SERVER_ERROR, K.TIMEOUT, K.NETWORK, K.CAPACITY, K.EMPTY_MODEL_RESPONSE, K.INVALID_RESPONSE, K.UNKNOWN]);

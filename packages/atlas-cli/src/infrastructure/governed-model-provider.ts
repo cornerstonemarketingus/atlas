@@ -80,6 +80,7 @@ export class GovernedModelProvider implements ModelProvider {
       if (grant.granted) break;
       if (grant.permanent) {
         await this.#withdraw(requestId);
+        if (grant.reason === "account_disabled") throw accountDisabled(providerId, request.model, grant);
         throw new ModelProviderError({ message: `The shared capacity ledger refuses this request for ${request.model} (${grant.reason ?? "unavailable"}).`, code: "model-unavailable", providerId, retryable: false });
       }
       const waitMs = Number.isFinite(grant.waitMs) && (grant.waitMs ?? 0) > 0 ? Math.ceil(grant.waitMs as number) : 1_000;
@@ -118,6 +119,28 @@ export class GovernedModelProvider implements ModelProvider {
   #throwIfCancelled(signal: AbortSignal | undefined): void {
     if (signal?.aborted) throw cancelled(this.metadata.id);
   }
+}
+
+const ACCOUNT_PROBLEM: Readonly<Record<string, string>> = {
+  AUTHENTICATION: "the API key was rejected",
+  BILLING: "there is no credit or a billing problem",
+  PERMISSION: "the key has no permission for this model or project",
+};
+
+/**
+ * The provider's account, not its capacity, is the problem. The wording avoids
+ * "capacity" on purpose: a fallback chain must not wait for an account that
+ * only the owner can fix, and the person reading the report should be told what to fix.
+ */
+function accountDisabled(providerId: string, model: string, grant: { readonly kind?: string; readonly waitMs?: number }): ModelProviderError {
+  const problem = ACCOUNT_PROBLEM[grant.kind ?? ""] ?? "its account was reported unusable";
+  const minutes = Math.max(1, Math.ceil((grant.waitMs ?? 0) / 60_000));
+  return new ModelProviderError({
+    message: `No request was sent: the ${providerId} account is marked unusable for ${model} because ${problem}. Fix the key or billing; Atlas tries it again automatically in about ${minutes} min.`,
+    // "authentication" covers every account-level refusal (key, billing, permission); the message says which.
+    code: "authentication",
+    providerId, retryable: false,
+  });
 }
 
 function unavailable(providerId: string): ModelProviderError {
