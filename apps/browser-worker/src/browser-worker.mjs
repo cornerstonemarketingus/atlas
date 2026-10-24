@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { newId, nowIso } from "../../../packages/atlas-contracts/src/index.mjs";
 import { startEgressProxy } from "./egress-proxy.mjs";
 
@@ -165,6 +167,7 @@ export class BrowserWorker {
         lookup: typeof options.lookup === "function" ? options.lookup : undefined,
         allowPrivateHosts: options.allowPrivateHosts,
       },
+      downloadDirectory: options.downloadDirectory ?? null,
     };
   }
 
@@ -553,6 +556,37 @@ export class BrowserWorker {
     });
   }
 
+  /**
+   * Structured accessibility-first snapshot used by the local control plane's
+   * browser session adapter. The extra `target` field is for the adapter; it
+   * is ignored by callers that only need human-readable content.
+   */
+  async snapshot(sessionId, { maxChars = 40_000, maxElements = 250 } = {}) {
+    return this.#act(sessionId, "snapshot", { maxChars, maxElements }, async (session) => {
+      const text = await session.page.locator("body").ariaSnapshot({ timeout: session.limits.actionTimeoutMs }).catch(() => "");
+      const locators = await session.page.locator("a, button, input, textarea, select, [role=button], [role=link], [role=textbox]").all().catch(() => []);
+      const elements = [];
+      for (const [index, locator] of locators.slice(0, maxElements).entries()) {
+        const detail = await describeInteractiveElement(locator).catch(() => null);
+        if (!detail?.name) continue;
+        elements.push({
+          ref: `e${index + 1}`,
+          role: detail.role,
+          name: detail.name.slice(0, 200),
+          value: detail.value,
+          target: { role: detail.role, name: detail.name.slice(0, 200), exact: true },
+        });
+      }
+      return {
+        url: session.page.url(),
+        text: text.slice(0, maxChars),
+        truncated: text.length > maxChars,
+        elements,
+        untrusted: true,
+      };
+    });
+  }
+
   async inspectDom(sessionId, { selector = "body", maxChars = 20_000 } = {}) {
     return this.#act(sessionId, "inspect_dom", { selector, maxChars }, async (session) => {
       const locator = session.page.locator(selector).first();
@@ -671,6 +705,25 @@ export class BrowserWorker {
       if (!fields || typeof fields !== "object" || !Object.keys(fields).length) {
         throw new BrowserWorkerError("INVALID_INPUT", "Name at least one field to extract.");
       }
+
+      async download(sessionId, { target, toPath = null } = {}) {
+        return this.#act(sessionId, "download", { target, toPath }, async (session) => {
+          if (session.limits.maxDownloads <= 0) {
+            throw new BrowserWorkerError("DOWNLOADS_DISABLED", "This browser session was opened without download permission.");
+          }
+          const locator = await this.#single(session, target);
+          const [download] = await Promise.all([
+            session.page.waitForEvent("download", { timeout: session.limits.actionTimeoutMs }),
+            locator.click({ timeout: session.limits.actionTimeoutMs }),
+          ]);
+          const targetPath = toPath || join(this.#options.downloadDirectory ?? process.cwd(), download.suggestedFilename().slice(0, 200));
+          await mkdir(dirname(targetPath), { recursive: true });
+          await download.saveAs(targetPath);
+          await this.#settle(session);
+          const urlAfter = this.#assertStillConfined(session, session.page.url());
+          return { path: targetPath, url: urlAfter, suggestedFilename: download.suggestedFilename().slice(0, 200), untrusted: true };
+        });
+      }
       const values = {};
       const missing = [];
       for (const [name, spec] of Object.entries(fields)) {
@@ -680,6 +733,29 @@ export class BrowserWorker {
           values[name] = null;
           missing.push(name);
           continue;
+        }
+
+        async function describeInteractiveElement(locator) {
+          return locator.evaluate((node) => {
+            const trim = (value) => typeof value === "string" ? value.replace(/\s+/gu, " ").trim() : "";
+            const attr = (name) => trim(node.getAttribute?.(name) ?? "");
+            const role = attr("role") || (
+              node.tagName === "A" ? "link"
+                : node.tagName === "BUTTON" ? "button"
+                  : node.tagName === "SELECT" ? "combobox"
+                    : node.tagName === "TEXTAREA" ? "textbox"
+                      : node.tagName === "INPUT"
+                        ? ["button", "submit", "reset"].includes((node.type || "").toLowerCase()) ? "button" : "textbox"
+                        : trim(node.tagName.toLowerCase())
+            );
+            const name = attr("aria-label")
+              || trim(node.innerText)
+              || attr("placeholder")
+              || attr("name")
+              || attr("value");
+            const value = ["INPUT", "TEXTAREA", "SELECT"].includes(node.tagName) ? trim(node.value ?? "") : null;
+            return { role, name, value: value || null };
+          });
         }
         if (count > 1) throw new BrowserWorkerError("AMBIGUOUS_TARGET", `Field '${name}' matches ${count} elements.`);
         const value = await locator.evaluate((node) =>
