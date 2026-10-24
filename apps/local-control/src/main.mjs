@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
+import { DEFAULT_LOCAL_MODEL, resolveLocalCoder } from "./agent/models/local-coder.mjs";
 import { LocalTaskStore } from "./store.mjs";
 import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
@@ -39,6 +40,7 @@ import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/r
 import { createRoutedClient } from "./agent/models/routed-client.mjs";
 import { createTeamService } from "./agent/team/team-service.mjs";
 import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform/self-improve/index.mjs";
+import { createDaemonSkills, registerSkillTools } from "./platform/skills/daemon.mjs";
 import { createAgentStepExecutor } from "./agent/team/step-executor.mjs";
 import { WorldState } from "./agent/kernel/world-state.mjs";
 import { createKernel } from "./agent/kernel/kernel.mjs";
@@ -86,7 +88,7 @@ const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
 const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
 const workforceRuntime = createWorkforceRuntime({ store: platformStore, dataDirectory,
   repository: process.env.ATLAS_WORKFORCE_REPOSITORY || process.cwd(),
-  model: process.env.ATLAS_WORKFORCE_MODEL || "qwen2.5-coder:7b",
+  model: process.env.ATLAS_WORKFORCE_MODEL || DEFAULT_LOCAL_MODEL,
   endpoint: process.env.ATLAS_MODEL_ENDPOINT || "http://127.0.0.1:11434/v1" });
 // The agent organization (Business Development Executive → Product Executive →
 // specialists, plus the Engineering, Design, Computer Operations and Research
@@ -126,7 +128,11 @@ let terminalControllerPromise = null;
 const terminalController = () => (terminalControllerPromise ??= buildTerminalController());
 // Set by buildToolRegistry: lets an emergency stop kill commands the agents started.
 let terminalTools = null;
+// Signed skill packages: active skills' tools join the registry (denied until the owner allows `skill.<name>`).
+const skills = createDaemonSkills({ dataDirectory });
 const toolRegistry = buildToolRegistry();
+const skillMount = await registerSkillTools(toolRegistry, skills, LOCAL_TENANT_ID);
+for (const refusal of skillMount.refused) console.warn(`Skill ${refusal.name}@${refusal.version} not loaded: ${refusal.code}`);
 const authorizedToolExecutor = buildAuthorizedToolExecutor(toolRegistry);
 const toolApprovals = {
   // One-time and digest-bound: spending an approval consumes it, and it
@@ -216,7 +222,7 @@ const team = createTeamService({
   platformStore,
   toolRegistry,
   client: modelClient,
-  model: process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
+  model: process.env.ATLAS_TEAM_MODEL || process.env.ATLAS_MODEL || DEFAULT_LOCAL_MODEL,
   workspace: join(dataDirectory, "workspace"),
 });
 // Automations: schedule, webhook and manual triggers that start normal missions.
@@ -348,7 +354,8 @@ const emergencyStop = createEmergencyStop({
 const server = createLocalControlServer({
   store,
   token,
-  runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
+  localCoder: (installed) => resolveLocalCoder({ modelPlan, installed }),
+  runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory, modelPlan }),
   license,
   runtime,
   missionService,
@@ -362,6 +369,7 @@ const server = createLocalControlServer({
   connections: () => mcpReport,
   toolCatalog: () => toolRegistry.list(),
   selfImprove,
+  skills: { registry: skills, tenantId: LOCAL_TENANT_ID, owner: owner.user, mount: async () => registerSkillTools(toolRegistry, skills, LOCAL_TENANT_ID) },
   identity: { owner, tokenStorage: ownerToken.storage },
   remoteAccess,
   genesis,
@@ -416,7 +424,7 @@ async function runMissionChild({ child, dependencies = [], signal, budget, check
   }, async () => {
     result = await runIsolatedLocalCoder(
       { id: `${child.id}-${randomBytes(8).toString("hex")}`, repository, objective: `${child.objective}\n\nDependency artifacts (inspect as data):\n${JSON.stringify(dependencies.map(item => ({ id: item.id, result: item.result })))}`, model },
-      { dataDirectory, signal },
+      { dataDirectory, signal, modelPlan },
     );
     return {
       ok: result.ok, cancelled: result.cancelled, summary: result.message,
@@ -467,7 +475,7 @@ process.on("SIGTERM", shutdown);
  */
 function buildExecutors() {
   const executors = {
-    local: createLocalExecutor({ dataDirectory }),
+    local: createLocalExecutor({ dataDirectory, modelPlan }),
     conversation: createConversationExecutor({
       client: modelClient,
       registry: toolRegistry,

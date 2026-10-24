@@ -145,12 +145,53 @@ test("a model-scoped failure leaves the account and its other models alone; succ
   assert.equal(reserveCapacity(state, ask("e", 100, { models: ["one"] }), 6).granted, false, "the model that does not exist stays disabled");
 });
 
-test("an account block ends after its cooldown, so the owner's fix is noticed without a restart", () => {
+test("a disabled account lets one probe through after a few minutes, so the owner's fix is noticed without waiting an hour", () => {
+  const FIVE = 300_000;
+  const state = emptyLedgerState();
+  reserveCapacity(state, ask("a", 100), 0);
+  releaseReservation(state, { requestId: "a", model: "big", status: 401, kind: "AUTHENTICATION" }, 0);
+  const early = reserveCapacity(state, ask("b", 100), FIVE - 1_000);
+  assert.deepEqual([early.granted, early.permanent, early.reason], [false, true, "account_disabled"]);
+  assert.equal(early.waitMs, 1_000, "it says when the next probe is due");
+  assert.equal(ledgerSnapshot(state, 0).account.probeAt, FIVE);
+
+  // The first request after that is the probe; others still wait behind it.
+  assert.equal(reserveCapacity(state, ask("c", 100), FIVE).granted, true);
+  const behind = reserveCapacity(state, ask("d", 100), FIVE + 1);
+  assert.deepEqual([behind.granted, behind.permanent], [false, true]);
+  assert.equal(reserveCapacity(state, ask("c", 100), FIVE + 2).replay, true, "the probe's own retry is not blocked");
+
+  // A probe that fails again reopens the block from that moment.
+  releaseReservation(state, { requestId: "c", model: "big", status: 401, kind: "AUTHENTICATION" }, FIVE + 10);
+  assert.equal(reserveCapacity(state, ask("e", 100), FIVE + 20).granted, false);
+  assert.equal(reserveCapacity(state, ask("f", 100), 2 * FIVE + 10).granted, true, "the next probe is another five minutes later");
+
+  // A probe that succeeds clears the account for everyone.
+  releaseReservation(state, { requestId: "f", model: "big", status: 200, kind: null }, 2 * FIVE + 20);
+  assert.equal(ledgerSnapshot(state, 2 * FIVE + 30).account, null);
+  assert.equal(reserveCapacity(state, ask("g", 100), 2 * FIVE + 30).granted, true);
+});
+
+test("a probe whose outcome is never reported does not hold the account closed for long", () => {
   const state = emptyLedgerState();
   reserveCapacity(state, ask("a", 100), 0);
   releaseReservation(state, { requestId: "a", model: "big", status: 402, kind: "BILLING" }, 0);
-  assert.equal(reserveCapacity(state, ask("b", 100), 3_599_000).permanent, true);
-  assert.equal(reserveCapacity(state, ask("c", 100, { models: ["other"] }), 3_600_001).granted, true);
+  assert.equal(reserveCapacity(state, ask("p", 100), 300_000).granted, true);
+  assert.equal(reserveCapacity(state, ask("q", 100), 330_000).granted, false);
+  // After the probe's 60 s the account gate lets the next request through to the ordinary capacity
+  // rules (which may still make it wait behind the first request's unreleased reservation).
+  const after = reserveCapacity(state, ask("r", 100), 361_000);
+  assert.notEqual(after.reason, "account_disabled");
+  assert.notEqual(after.permanent, true);
+  assert.equal(reserveCapacity(state, ask("s", 100), 421_000).granted, true, "and once that reservation expires it is granted");
+});
+
+test("an account block that nobody probes still ends after the full cooldown", () => {
+  const state = emptyLedgerState();
+  reserveCapacity(state, ask("a", 100), 0);
+  releaseReservation(state, { requestId: "a", model: "big", status: 402, kind: "BILLING" }, 0);
+  assert.equal(ledgerSnapshot(state, 3_599_000).account.kind, "BILLING");
+  assert.equal(ledgerSnapshot(state, 3_600_001).account, null);
 });
 
 test("a request bigger than a model's whole allowance is never queued for it; another model that fits is used", () => {
