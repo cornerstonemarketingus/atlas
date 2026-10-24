@@ -100,3 +100,8 @@ test("a paid vendor is used only as the sole usable route or when the owner list
   assert.equal(primary.provider, "openai");
   assert.equal(primary.fallbacks.filter((route) => route.startsWith("openai:")).length, 0);
 });
+test("every coder vendor has a known cost class from the shared catalog", async () => {
+  const { PROVIDER_KEY_VARIABLES } = await import("./coder-routes.mjs");
+  const { costClass, COST } = await import("../../packages/atlas-inference/src/catalog.mjs");
+  for (const id of Object.keys(PROVIDER_KEY_VARIABLES)) assert.notEqual(costClass(id), COST.UNKNOWN, `${id} has no cost class in packages/atlas-inference`);
+});
