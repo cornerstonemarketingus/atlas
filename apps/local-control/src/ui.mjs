@@ -71,7 +71,7 @@ export const LOCAL_UI_HTML = `<!doctype html>
      </details>
     </form>
     <details class="more"><summary>Where this conversation works</summary>
-     <form id="session-form"><label>Repository folder (optional)<input id="session-repository" placeholder="C:\\path\\to\\project"></label><label>Model<select id="session-model"><option>qwen2.5-coder:7b</option></select></label><label>Runs on<select id="session-executor"><option value="local">local</option></select></label></form>
+     <form id="session-form"><label>Repository folder (optional)<input id="session-repository" placeholder="C:\\path\\to\\project"></label><label>Model<select id="session-model"><option>qwen2.5-coder:7b</option></select></label><label>Runs on<select id="session-executor"><option value="conversation">conversation</option></select></label></form>
     </details>
    </div>
    <div class="stack">
@@ -94,11 +94,11 @@ export const LOCAL_UI_HTML = `<!doctype html>
     <div class="actions"><button>Start</button></div>
     <p class="hint">Each agent works in its own copy of the repository and hands back a patch; nothing changes in your folder until you apply one.</p></form></details>
   <details class="panel" id="command-goal-panel"><summary>Keep at it until a pull request merges</summary>
-   <form id="command-goal"><label>What to keep doing<textarea id="goal-text" required maxlength="4000" rows="3" placeholder="Get this pull request merged: fix failing checks and answer review comments"></textarea></label>
-    <label>Repository folder<input id="goal-repository" required placeholder="C:\\path\\to\\project"></label>
-    <label>GitHub repository<input id="goal-watch" required placeholder="owner/name" pattern="[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"></label>
-    <label>Pull request number<input id="goal-pr" type="number" min="1" required></label>
-    <label>Model<input id="goal-model" required value="qwen2.5-coder:7b"></label>
+   <form id="command-goal"><label>What to keep doing<textarea id="command-goal-text" required maxlength="4000" rows="3" placeholder="Get this pull request merged: fix failing checks and answer review comments"></textarea></label>
+    <label>Repository folder<input id="command-goal-repository" required placeholder="C:\\path\\to\\project"></label>
+    <label>GitHub repository<input id="command-goal-watch" required placeholder="owner/name" pattern="[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"></label>
+    <label>Pull request number<input id="command-goal-pr" type="number" min="1" required></label>
+    <label>Model<input id="command-goal-model" required value="qwen2.5-coder:7b"></label>
     <div class="actions"><button>Start and keep watching</button></div>
     <p class="hint">Atlas works now, then sleeps. It wakes when checks fail, a review arrives or someone comments, and stops when the pull request merges (at most 10 wakes, 14 days). Events arrive through a GitHub automation's webhook for that repository.</p></form></details>
   <div class="chips" id="command-counts" aria-live="polite"></div>
@@ -350,6 +350,8 @@ function line(event){
  el.innerHTML='<span class="who">'+esc(WHO[event.kind]||event.kind)+'</span><p>'+esc(text)+'</p>';
  transcript.append(el);transcript.scrollTop=transcript.scrollHeight;
  if(event.kind==='completion')runStatus.textContent='Session '+d.status+'.';
+ /* A failed session is not reopened on the next visit; the next message starts fresh. */
+ if(event.kind==='completion'&&d.status==='failed')sessionStorage.removeItem('atlas-session');
 }
 /* Streams with fetch rather than EventSource: EventSource cannot carry the
    local bearer token, and putting that token in a query string would write it
@@ -379,21 +381,34 @@ async function selectSession(id,{replay=true}={}){
  transcript.innerHTML='';runStatus.textContent='';
  if(replay)await openStream();
  const detail=await api('/v1/sessions/'+id);
- if(detail.ok){const v=await detail.json();q('#session-repository').value=v.session.repository||'';runStatus.textContent='Session '+v.session.status+'.'}
+ if(detail.ok){const v=await detail.json();q('#session-repository').value=v.session.repository||'';runStatus.textContent='Session '+v.session.status+'.';if(v.session.status==='failed')sessionStorage.removeItem('atlas-session')}
+ else if(detail.status===404){sessionId='';sessionStorage.removeItem('atlas-session')}
+}
+/* Runs on: the coder needs a repository; a plain conversation does not. */
+let executorInfo=[],executorPicked=false;
+const needsRepository=id=>executorInfo.some(e=>e.id===id&&e.requiresRepository);
+function pickExecutor(){
+ if(executorPicked||!executorInfo.length)return;
+ const repo=q('#session-repository').value.trim(),ids=executorInfo.map(e=>e.id);
+ q('#session-executor').value=repo&&ids.includes('local')?'local':(executorInfo.find(e=>!e.requiresRepository)||executorInfo[0]).id;
 }
 async function loadSessions(){
  const response=await api('/v1/sessions');if(!response.ok)return;
  const list=(await response.json()).sessions;
  q('#session-picker').innerHTML='<option value="">New conversation…</option>'+list.map(s=>'<option value="'+s.id+'"'+(s.id===sessionId?' selected':'')+'>'+esc(s.title)+' · '+esc(s.status)+'</option>').join('');
  const executors=await api('/v1/executors');
- if(executors.ok)q('#session-executor').innerHTML=(await executors.json()).executors.map(e=>'<option value="'+esc(e)+'">'+esc(e)+'</option>').join('');
+ if(executors.ok){const v=await executors.json(),chosen=q('#session-executor').value;executorInfo=v.details||v.executors.map(id=>({id,requiresRepository:id==='local'}));q('#session-executor').innerHTML=executorInfo.map(e=>'<option value="'+esc(e.id)+'">'+esc(e.id+(e.requiresRepository?' (needs a repository folder)':''))+'</option>').join('');if(executorPicked&&executorInfo.some(e=>e.id===chosen))q('#session-executor').value=chosen;else pickExecutor()}
 }
+q('#session-executor').onchange=()=>{executorPicked=true};
+q('#session-repository').oninput=()=>pickExecutor();
 q('#session-picker').onchange=e=>{if(e.target.value)selectSession(e.target.value);else{sessionId='';sessionStorage.removeItem('atlas-session');transcript.innerHTML='';runStatus.textContent=''}};
 q('#turn-form').onsubmit=async e=>{
  e.preventDefault();
  const text=q('#turn-text').value.trim();if(!text)return;
  if(!sessionId){
-  const created=await api('/v1/sessions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({title:text.slice(0,80),repository:q('#session-repository').value||null,model:q('#session-model').value,executor:q('#session-executor').value})});
+  const executor=q('#session-executor').value,repository=q('#session-repository').value.trim();
+  if(needsRepository(executor)&&!repository){runStatus.textContent='"'+executor+'" runs the coder inside a repository. Add a repository folder under "Where this conversation works", or set Runs on to conversation to just talk.';q('#session-form').closest('details').open=true;return}
+  const created=await api('/v1/sessions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({title:text.slice(0,80),repository:repository||null,model:q('#session-model').value,executor})});
   if(!created.ok){runStatus.textContent=(await created.json()).message;return}
   await selectSession((await created.json()).session.id,{replay:false});openStream();
  }
@@ -412,7 +427,13 @@ async function control(action){
 }
 q('#pause').onclick=()=>control('pause');q('#resume').onclick=()=>control('resume');q('#stop').onclick=()=>control('cancel');q('#retry').onclick=()=>control('retry');
 /* Reopening the tab resumes the transcript from where it stopped. */
-if(sessionStorage.getItem('atlas-token')){loadSessions();if(sessionId)selectSession(sessionId)}
+if(sessionStorage.getItem('atlas-token')){loadSessions();if(sessionId)restoreSession()}
+async function restoreSession(){
+ const detail=await api('/v1/sessions/'+sessionId);
+ const status=detail.ok?(await detail.json()).session.status:null;
+ if(detail.status===404||status==='failed'){sessionId='';sessionStorage.removeItem('atlas-session');loadSessions();return}
+ selectSession(sessionId);
+}
 /* Attachments are read in the browser and sent inline: a file the operator
    picks never becomes a temporary file on disk for Atlas to forget about. */
 async function collectAttachments(){
@@ -685,7 +706,8 @@ async function loadBuild(){
   list.innerHTML=projects.length?projects.map(p=>'<a class="card" href="#/build/'+esc(p.id)+'"><div class="task-top"><h4>'+esc(p.name)+'</h4>'+pill(p.label)+'</div><time>'+when(p.updatedAt)+'</time></a>').join(''):'<p class="empty">Nothing built yet. Describe an app above.</p>';
   if(!id){detail.hidden=true;clearRenderPanel();return}
   const {project:v}=await getJson('/v1/genesis/'+encodeURIComponent(id));
-  const ready=v.transitions.findLast(t=>t.to==='ready')?.evidence?.summary;
+  /* The Ready card describes the current version only: after a change, a block or a failure it would be stale. */
+  const ready=['ready','published'].includes(v.state)?v.transitions.findLast(t=>t.to==='ready')?.evidence?.summary:null;
   const last=v.transitions.at(-1);
   const online=v.transitions.findLast(t=>t.evidence?.kind==='deployed')?.evidence?.deployment?.url;
   const publishedTo=v.transitions.findLast(t=>t.evidence?.kind==='published')?.evidence;
@@ -773,7 +795,7 @@ function renderPanelHtml({project,render,role,artifacts=[]}){
    +'<p class="hint">Renders run only inside the container sandbox, never on this computer directly. To turn them on, set ATLAS_TERMINAL_CONTAINER_RUNTIME and ATLAS_RENDER_FFMPEG_IMAGE (see docker/render/README.md) and restart Atlas.</p>'
    +'<div class="actions"><button type="button" class="secondary" id="render-recheck">Check again</button></div>';
  }else{
-  html+='<p class="hint" id="render-reason">Renders run inside the container sandbox with the network off ('+esc(caps.join(', '))+'). Outputs are saved in the project folder under renders/ and in Artifacts.</p>';
+  html+='<p class="hint" id="render-sandbox-note">Renders run inside the container sandbox with the network off ('+esc(caps.join(', '))+'). Outputs are saved in the project folder under renders/ and in Artifacts.</p>';
   if(role!=='owner')html+='<p id="render-owner-only">Only the owner, on this computer, can start a render. A paired device can watch the results in Artifacts.</p>';
   else if(!project?.workspace)html+='<p>This project has no folder yet. Render once it has been built.</p>';
   else if(!caps.includes('render.ffmpeg'))html+='<p>The presets here use ffmpeg. Set ATLAS_RENDER_FFMPEG_IMAGE to use them.</p>';
@@ -915,10 +937,10 @@ $('#command-launch').onsubmit=async e=>{e.preventDefault();const notice=$('#comm
  notice.textContent='Starting…';
  try{await sendJson('/v1/missions','POST',body);notice.textContent='Started.';$('#launch-text').value='';$('#command-launch-panel').open=false}catch(error){notice.textContent=error.message}
  loadCommand().catch(()=>{})};
-$('#command-goal').onsubmit=async e=>{e.preventDefault();const notice=$('#command-notice');
- const body={objective:$('#goal-text').value.trim(),repository:$('#goal-repository').value.trim(),model:$('#goal-model').value.trim(),watch:{repository:$('#goal-watch').value.trim(),pullRequest:Number($('#goal-pr').value)}};
+$('#command-goal').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,field=id=>form.querySelector('#'+id),notice=$('#command-notice');
+ const body={objective:field('command-goal-text').value.trim(),repository:field('command-goal-repository').value.trim(),model:field('command-goal-model').value.trim(),watch:{repository:field('command-goal-watch').value.trim(),pullRequest:Number(field('command-goal-pr').value)}};
  notice.textContent='Starting…';
- try{await sendJson('/v1/goals','POST',body);notice.textContent='Started; Atlas will keep watching.';$('#goal-text').value='';$('#command-goal-panel').open=false}catch(error){notice.textContent=error.message}
+ try{await sendJson('/v1/goals','POST',body);notice.textContent='Started; Atlas will keep watching.';field('command-goal-text').value='';$('#command-goal-panel').open=false}catch(error){notice.textContent=error.message}
  loadCommand().catch(()=>{})};
 setInterval(()=>{if(currentView==='command'&&isUnlocked()&&!document.hidden)loadCommand().catch(()=>{})},4000);
 
@@ -965,9 +987,13 @@ async function loadBadge(){
  const badge=$('#approvals-badge');badge.hidden=!pending.length;badge.textContent=String(pending.length);
  return pending;
 }
+const policyBlockTitle=b=>b.capability+(b.reason==='not-allowed-by-default'?' is not allowed by default':' is denied by policy');
 async function loadHome(){
  const [pending,team,health,executors]=await Promise.all([loadBadge().catch(()=>[]),getJson('/v1/team/missions').catch(()=>({missions:[]})),fetch('/health').then(r=>r.json()).catch(()=>null),getJson('/v1/executors').catch(()=>({executors:[]}))]);
- $('#home-attention').innerHTML=pending.length?pending.slice(0,4).map(a=>'<a class="card" href="#/approvals"><h4>'+esc(a.summary)+'</h4><div class="meta"><span>'+esc(a.capability)+'</span><time>'+when(a.createdAt)+'</time></div></a>').join(''):'<p class="empty">Nothing is waiting for you.</p>';
+ /* A mission stopped by a capability nobody has allowed yet also needs the owner, with where to allow it. */
+ const blocks=[...new Map(team.missions.slice().reverse().flatMap(m=>m.policyBlocks||[]).map(b=>[b.capability,b])).values()].slice(0,3);
+ const attention=pending.slice(0,4).map(a=>'<a class="card" href="#/approvals"><h4>'+esc(a.summary)+'</h4><div class="meta"><span>'+esc(a.capability)+'</span><time>'+when(a.createdAt)+'</time></div></a>').join('')+blocks.map(b=>'<a class="card" href="#/computer"><h4>'+esc(policyBlockTitle(b))+'</h4><p class="hint">'+esc(b.hint)+'</p></a>').join('');
+ $('#home-attention').innerHTML=attention||'<p class="empty">Nothing is waiting for you.</p>';
  const running=team.missions.filter(m=>!['completed','failed','cancelled'].includes(m.status));
  $('#home-running').innerHTML=running.length?running.slice(0,4).map(m=>'<a class="card" href="#/missions" data-mission-link="'+esc(m.id)+'"><div class="task-top"><h4>'+esc(m.goal)+'</h4>'+pill(m.status)+'</div><progress max="'+m.steps.total+'" value="'+m.steps.completed+'"></progress><div class="meta"><span>'+m.steps.completed+' of '+m.steps.total+' steps</span><span>'+esc(m.agents.join(', '))+'</span></div></a>').join(''):'<p class="empty">No missions are running.</p>';
  $$('[data-mission-link]').forEach(a=>a.addEventListener('click',()=>{openMissionId=a.dataset.missionLink}));
@@ -990,7 +1016,7 @@ async function startGoal(goal,noticeEl){
   openMissionId=body.mission.id;return body;
  }catch(error){noticeEl.textContent=error.message+(error.unblock?' '+error.unblock:'');return null}
 }
-$('#goal-form').onsubmit=async e=>{e.preventDefault();const goal=$('#goal-text').value.trim();if(!goal)return;const started=await startGoal(goal,$('#goal-notice'));if(started){$('#goal-text').value='';loadTeam()}};
+$('#goal-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,text=form.querySelector('#goal-text'),goal=text.value.trim();if(!goal)return;const started=await startGoal(goal,form.querySelector('#goal-notice'));if(started){text.value='';loadTeam()}};
 $('#to-team').onclick=async()=>{const goal=$('#turn-text').value.trim();if(!goal){runStatus.textContent='Write the goal in the message box first.';return}const started=await startGoal(goal,runStatus);if(started){$('#turn-text').value='';location.hash='#/missions'}};
 $('#team-refresh').onclick=()=>loadTeam();
 async function loadTeam(){
@@ -1015,8 +1041,9 @@ async function openMission(id){
   const steps='<ol class="steps">'+m.steps.map(s=>'<li class="'+esc(s.state)+'"><div class="task-top"><strong>'+esc(s.title)+'</strong>'+pill(s.verified===true?'verified':s.state)+'</div><div class="meta"><span>'+esc(s.agent)+'</span>'+(s.dependsOn?.length?'<span>after '+esc(s.dependsOn.map(d=>titles.get(d)||d).join(', '))+'</span>':'')+'<span>'+(s.usage?.toolCalls??0)+' tool calls</span></div><p class="hint">Done when: '+esc(s.doneWhen)+'</p>'+(s.summary?'<p>'+esc(s.summary)+'</p>':'')+'</li>').join('')+'</ol>';
   const calls=m.toolCalls.length?'<table class="table"><thead><tr><th>Agent</th><th>Tool</th><th>Result</th></tr></thead><tbody>'+m.toolCalls.map(c=>'<tr><td>'+esc(c.agent)+'</td><td><code>'+esc(c.tool)+'</code></td><td>'+pill(c.status)+(c.error?.message?'<div class="hint">'+esc(c.error.message)+'</div>':'')+'</td></tr>').join('')+'</tbody></table>':'<p class="empty">No tools used yet.</p>';
   const artifacts=m.artifacts.length?m.artifacts.map(a=>'<details class="card"><summary><strong>'+esc(a.step||a.kind)+'</strong> · '+esc(a.agent||'')+' '+pill(a.verification)+'</summary>'+(a.report?'<p>'+esc(a.report)+'</p>':'')+(a.evidence||[]).map(ev=>'<p class="hint">Check: '+esc(ev.check||'')+' — '+esc(ev.reason||'')+'</p>').join('')+'</details>').join(''):'<p class="empty">No reports yet.</p>';
+  const blocked=(m.policyBlocks||[]).map(b=>'<div class="card"><h4>'+esc(policyBlockTitle(b))+'</h4><p class="hint">'+esc(b.hint)+'</p><a class="button secondary" href="#/computer">Open Computer</a></div>').join('');
   const handoffs=m.messages.length?'<table class="table"><thead><tr><th>Message</th><th>From</th><th>To</th></tr></thead><tbody>'+m.messages.map(x=>'<tr><td>'+esc(x.type.replaceAll('_',' ').toLowerCase())+'</td><td>'+esc(x.from)+'</td><td>'+esc(x.to)+'</td></tr>').join('')+'</tbody></table>':'<p class="empty">No hand-offs yet.</p>';
-  panel.innerHTML='<div class="task-top"><h3>'+esc(m.goal)+'</h3>'+pill(missionState(m))+'</div><div class="meta"><span>'+m.usage.toolCalls+' tool calls</span><span>'+(m.usage.inputTokens+m.usage.outputTokens).toLocaleString()+' tokens</span><span>'+esc(m.agents.join(', '))+'</span></div>'+controls+'<h3>Plan</h3>'+steps+'<h3>Reports and checks</h3><div class="list">'+artifacts+'</div><h3>Tools used</h3>'+calls+'<details class="more"><summary>Hand-offs between agents</summary>'+handoffs+'</details>';
+  panel.innerHTML='<div class="task-top"><h3>'+esc(m.goal)+'</h3>'+pill(missionState(m))+'</div><div class="meta"><span>'+m.usage.toolCalls+' tool calls</span><span>'+(m.usage.inputTokens+m.usage.outputTokens).toLocaleString()+' tokens</span><span>'+esc(m.agents.join(', '))+'</span></div>'+controls+blocked+'<h3>Plan</h3>'+steps+'<h3>Reports and checks</h3><div class="list">'+artifacts+'</div><h3>Tools used</h3>'+calls+'<details class="more"><summary>Hand-offs between agents</summary>'+handoffs+'</details>';
   panel.querySelectorAll('[data-team-action]').forEach(b=>b.onclick=async()=>{
    if(b.dataset.teamAction==='cancel'&&!confirm('Cancel this mission? Steps in progress stop at their next checkpoint.'))return;
    try{await sendJson('/v1/team/missions/'+encodeURIComponent(id)+'/'+b.dataset.teamAction,'POST',{});setNotice('Mission '+b.dataset.teamAction+' requested.')}catch(error){setNotice(error.message)}

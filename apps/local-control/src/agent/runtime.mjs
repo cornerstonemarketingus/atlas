@@ -72,6 +72,20 @@ export class AgentRuntime {
 
   get instanceId() { return this.#instanceId; }
   executorIds() { return Object.keys(this.#executors); }
+  executorDetails() {
+    return Object.entries(this.#executors).map(([id, executor]) => ({ id, description: executor.description ?? "", requiresRepository: executor.requiresRepository === true }));
+  }
+  /**
+   * The executor a session gets when none is named: the coder when there is a
+   * repository to work in, otherwise one that can just talk. A first "Hello"
+   * must never land on an executor that cannot run without a repository.
+   */
+  defaultExecutor({ repository = null } = {}) {
+    const ids = this.executorIds();
+    if (repository) return ids.includes("local") ? "local" : ids[0];
+    if (ids.includes("conversation")) return "conversation";
+    return ids.find((id) => this.#executors[id].requiresRepository !== true) ?? (ids.includes("local") ? "local" : ids[0]);
+  }
   listSessions(limit = 50) { return this.#sessions.sessions(limit); }
   getSession(sessionId) { return this.#sessions.session(sessionId); }
   getTurns(sessionId) { return this.#sessions.turns(sessionId); }
@@ -106,6 +120,7 @@ export class AgentRuntime {
 
   createSession({ title, repository = null, model, executor = "local", budget = {} }) {
     if (!this.#executors[executor]) throw new AgentRuntimeError("UNKNOWN_EXECUTOR", `No executor named '${executor}' is registered.`);
+    this.#requireRepository(executor, repository);
     let platformTaskId = null;
     if (this.#platformStore && executor === "conversation") {
       const task = this.#platformStore.createTask({
@@ -131,6 +146,8 @@ export class AgentRuntime {
    */
   submitTurn(sessionId, { text, attachments = [] }) {
     const session = this.#requireSession(sessionId);
+    // Said before the turn is queued, so the session is not failed for it.
+    this.#requireRepository(session.executor, session.repository);
     if (session.status === "cancelled" || session.status === "completed" || session.status === "failed") {
       this.#sessions.setStatus(sessionId, "idle");
     }
@@ -309,6 +326,14 @@ export class AgentRuntime {
     const session = this.#sessions.session(sessionId);
     if (!session) throw new AgentRuntimeError("UNKNOWN_SESSION", "Session not found.");
     return session;
+  }
+
+  #requireRepository(executor, repository) {
+    if (this.#executors[executor]?.requiresRepository !== true || repository) return;
+    throw new AgentRuntimeError(
+      "REPOSITORY_REQUIRED",
+      `'${executor}' runs the coder inside a repository, and this conversation has none. Add a repository folder under "Where this conversation works", or choose "conversation" to talk without one.`,
+    );
   }
 
   #start(sessionId) {

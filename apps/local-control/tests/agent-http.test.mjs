@@ -105,6 +105,61 @@ test("a session runs end to end over HTTP and streams its events", async (t) => 
   assert.equal(fetched.turns.length, 1);
 });
 
+test("a first message with no repository talks instead of failing the coder session", async (t) => {
+  const { createLocalExecutor } = await import("../src/agent/executors.mjs");
+  const directory = await mkdtemp(join(tmpdir(), "atlas-agent-first-"));
+  const store = new LocalTaskStore(join(directory, "atlas.sqlite"));
+  const sessions = new AgentSessionStore(join(directory, "agent.sqlite"));
+  let coderRuns = 0;
+  // The real daemon's two executors, in the daemon's order: the coder first.
+  const runtime = new AgentRuntime({ sessions, executors: {
+    local: createLocalExecutor({ runCoder: async () => { coderRuns += 1; return { ok: true, message: "done" }; } }),
+    conversation: { ...echoExecutor, id: "conversation" },
+  } });
+  const server = createLocalControlServer({ store, token: TOKEN, runTask: async () => ({ ok: true, message: "" }), runtime });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await runtime.stop(); await new Promise((resolve) => server.close(resolve)); sessions.close(); store.close(); await rm(directory, { recursive: true, force: true }); });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const admin = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+  const post = async (path, body) => { const response = await fetch(origin + path, { method: "POST", headers: admin, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() }; };
+
+  const executors = await (await fetch(`${origin}/v1/executors`, { headers: admin })).json();
+  assert.deepEqual(executors.executors, ["local", "conversation"]);
+  assert.deepEqual(executors.details.map((e) => [e.id, e.requiresRepository]), [["local", true], ["conversation", false]]);
+  assert.equal(executors.default, "conversation", "with no repository the safe default is to talk");
+
+  // "Hello" on Home with no executor named: a conversation, and it answers.
+  const hello = await post("/v1/sessions", { title: "Hello", model: "qwen2.5-coder:7b" });
+  assert.equal(hello.status, 201);
+  assert.equal(hello.body.session.executor, "conversation");
+  const streamed = readEvents(`${origin}/v1/sessions/${hello.body.session.id}/events`, admin, (events) => events.some((event) => event.kind === "completion"));
+  assert.equal((await post(`/v1/sessions/${hello.body.session.id}/turns`, { text: "Hello" })).status, 202);
+  assert.equal((await streamed).at(-1).data.status, "completed");
+
+  // Naming the coder with no repository is explained before anything runs.
+  const before = runtime.listSessions().length;
+  const coder = await post("/v1/sessions", { title: "Hello", model: "qwen2.5-coder:7b", executor: "local" });
+  assert.equal(coder.status, 400);
+  assert.equal(coder.body.code, "REPOSITORY_REQUIRED");
+  assert.match(coder.body.message, /repository folder/u);
+  assert.match(coder.body.message, /conversation/u);
+  assert.equal(runtime.listSessions().length, before, "no session is created to fail");
+
+  // A coder session saved without a repository (before this fix) refuses the turn; it is not failed.
+  const stale = sessions.createSession({ title: "Old", repository: null, model: "m", executor: "local" });
+  const refused = await post(`/v1/sessions/${stale.id}/turns`, { text: "Hello" });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.code, "REPOSITORY_REQUIRED");
+  assert.equal(runtime.getSession(stale.id).status, "idle");
+  assert.equal(runtime.getTurns(stale.id).length, 0);
+  assert.equal(coderRuns, 0);
+
+  // With a repository, the coder is the default and is accepted.
+  const repo = await post("/v1/sessions", { title: "Fix it", model: "m", repository: directory });
+  assert.equal(repo.status, 201);
+  assert.equal(repo.body.session.executor, "local");
+});
+
 test("reopening the stream with a cursor replays only what was missed", async (t) => {
   const { origin, admin, runtime } = await serve(t, echoExecutor);
   const { session } = await (await fetch(`${origin}/v1/sessions`, {

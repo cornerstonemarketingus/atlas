@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, posix } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ProviderReadOnlyToolAgent } from "./agent/provider-read-only-tool-agent.js";
 import { VerifiedCoderSession } from "./agent/verified-coder-session.js";
 import { planVerification } from "./agent/verification-planning.js";
@@ -89,9 +91,25 @@ const USAGE = `Usage:
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--verify-container <absolute-runtime-path>] [--audit-log <path>] [--format text|json]
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
 
+/**
+ * The usage lines for one command (with their continuation lines), or null
+ * when the command is unknown. `atlas code --help` should answer about code,
+ * not print the whole list.
+ */
+export function usageFor(command: string | undefined): string | null {
+  if (command === undefined || command.startsWith("-")) return null;
+  const picked: string[] = [];
+  let inside = false;
+  for (const line of USAGE.split("\n").slice(1)) {
+    if (line.startsWith("  atlas ")) inside = line.startsWith(`  atlas ${command} `);
+    if (inside) picked.push(line);
+  }
+  return picked.length > 0 ? `Usage:\n${picked.join("\n")}` : null;
+}
+
 export async function main(args: readonly string[]): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
-    console.log(USAGE);
+    console.log(usageFor(args[0]) ?? USAGE);
     return 0;
   }
   if (args[0] === "redact") {
@@ -994,6 +1012,22 @@ function readOptionalInteger(
   return value;
 }
 
-if (process.argv[1]?.endsWith("cli.ts") || process.argv[1]?.endsWith("cli.js")) {
+/**
+ * True when this module is the program being run. `npm link` and `npx`
+ * install the bin as a symlink named `atlas`, so the entry path is compared
+ * after resolving links rather than by its file name; otherwise the CLI
+ * would do nothing and exit 0.
+ */
+function invokedAsProgram(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (invokedAsProgram()) {
   process.exitCode = await main(process.argv.slice(2));
 }

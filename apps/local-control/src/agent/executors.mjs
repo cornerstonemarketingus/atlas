@@ -29,6 +29,8 @@ export function createLocalExecutor({ runCoder = runIsolatedLocalCoder, dataDire
   return {
     id: "local",
     description: "Runs the coder locally in an isolated Git worktree.",
+    // The runtime refuses a session or turn without one before anything runs.
+    requiresRepository: true,
     async run({ session, turn, emit, budget, signal, checkpoint }) {
       await checkpoint();
       if (!session.repository) {
