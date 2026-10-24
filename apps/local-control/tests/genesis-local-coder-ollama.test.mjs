@@ -78,8 +78,8 @@ test("the real isolated coder edits a file on the configured 1.5B model over Oll
     assert.ok(request.options.num_predict < 8192);
   }
   // Real file modification, in the worktree only.
-  assert.equal(readFileSync(join(result.worktree, "answer.mjs"), "utf8"), "export const answer = 2;\n");
-  assert.equal(readFileSync(join(checkout, "answer.mjs"), "utf8"), "export const answer = 1;\n");
+  assert.equal(readFileSync(join(result.worktree, "answer.mjs"), "utf8").replace(/\r\n/gu, "\n"), "export const answer = 2;\n");
+  assert.equal(readFileSync(join(checkout, "answer.mjs"), "utf8").replace(/\r\n/gu, "\n"), "export const answer = 1;\n");
   assert.equal(git(checkout, "status", "--porcelain").trim(), "");
   // Patch delivery: a portable patch that applies to a pristine clone.
   assert.ok(result.patch && existsSync(result.patch));

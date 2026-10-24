@@ -38,7 +38,9 @@ test("verify-local-edit fails a model that only talks about the fix, and a wrong
   const talked = await run(talker.baseUrl.replace(/\/v1$/u, ""), process.env.TMPDIR || "/tmp");
   assert.equal(talked.code, 1, talked.out);
   assert.match(talked.out, /FAIL:/u);
-  assert.match(talked.out, /file was not changed/u);
+  assert.match(talked.out, /No patch was produced/u);
+  assert.match(talked.out, /original check fails/u);
+  assert.match(talked.out, /hidden check fails/u);
 
   const wrong = await startScriptedModelServer(({ turn }) => turn === 0
     ? { edits: [{ path: "math.mjs", content: "export function add(a, b) {\n  return a * b;\n}\n" }] } : { say: "done" });
