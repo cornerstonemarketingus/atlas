@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -28,13 +30,19 @@ test("repository.coder model selection: request, env, model plan, then the legac
   assert.ok(resolveLocalCoder({ env: { ATLAS_LOCAL_CODER_CONTEXT_WINDOW: "2048", ATLAS_LOCAL_CODER_MAX_OUTPUT_TOKENS: "4096" } }).maxOutputTokens < 2048);
 });
 
+// The real coder is built from packages/atlas-cli, which needs its own dev dependencies (TypeScript).
+// The Genesis CI job installs them and sets GENESIS_REQUIRE_FULL; elsewhere the test says why it is skipped.
+const atlasRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const cliBuildable = existsSync(join(atlasRoot, "packages", "atlas-cli", "node_modules", "typescript"));
+const skip = cliBuildable || process.env.GENESIS_REQUIRE_FULL === "1" ? false : "packages/atlas-cli dependencies are not installed";
+
 const git = (cwd, ...args) => {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
   assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
   return result.stdout;
 };
 
-test("the real isolated coder edits a file on the configured 1.5B model over Ollama's API and delivers a patch", { timeout: 180_000 }, async (t) => {
+test("the real isolated coder edits a file on the configured 1.5B model over Ollama's API and delivers a patch", { skip, timeout: 180_000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "atlas-local-coder-"));
   const checkout = join(directory, "checkout");
   git(directory, "init", "--quiet", "checkout");
