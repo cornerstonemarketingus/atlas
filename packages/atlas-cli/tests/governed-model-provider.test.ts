@@ -234,3 +234,22 @@ test("the governor URL must be https except loopback, and configuration needs bo
   assert.throws(() => governorFromEnvironment({ ATLAS_GOVERNOR_TOKEN: "t" }, route), /both/u);
   assert.ok(governorFromEnvironment({ ATLAS_GOVERNOR_URL: "https://a.test/g", ATLAS_GOVERNOR_TOKEN: "t" }, route));
 });
+
+test("a disabled account is reported as a key, billing or permission problem, never as capacity, and nothing is sent", async () => {
+  for (const [kind, code, phrase] of [["AUTHENTICATION", "authentication", /API key was rejected/u], ["BILLING", "authentication", /credit or a billing problem/u], ["PERMISSION", "authentication", /no permission/u]] as const) {
+    const { governor, log } = fakeGovernor([{ granted: false, permanent: true, reason: "account_disabled", kind, waitMs: 180_000 }]);
+    const inner = new Spy([ok]);
+    await assert.rejects(new GovernedModelProvider(inner, governor).complete(request), (error: unknown) => {
+      assert.ok(error instanceof ModelProviderError);
+      assert.equal(error.code, code, kind);
+      assert.match(error.message, phrase);
+      assert.match(error.message, /No request was sent/u);
+      assert.match(error.message, /again automatically in about 3 min/u);
+      assert.doesNotMatch(error.message, /capacity/iu, "a fallback chain would wait on any message that says capacity");
+      assert.equal(error.retryable, false);
+      return true;
+    });
+    assert.equal(inner.requests.length, 0);
+    assert.deepEqual(log, ["reserve", "withdraw"]);
+  }
+});
