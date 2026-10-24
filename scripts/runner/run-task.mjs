@@ -120,6 +120,30 @@ function writeRedactedJson(filename, value) {
   return true;
 }
 
+const PARTIAL_PATCH_LIMIT_BYTES = 200_000;
+
+/**
+ * Captures what an interrupted coder run left in the working tree as a redacted
+ * patch next to the other task artifacts. Git is run with hooks, external diff
+ * drivers and filesystem monitors off because the tree is untrusted data.
+ */
+function savePartialPatch(parsed) {
+  const git = (...args) => spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-C", repositoryRoot, "--no-pager", ...args],
+    { encoding: "utf8", timeout: 60_000, maxBuffer: MAX_FILE_BYTES, windowsHide: true });
+  const added = git("add", "-A");
+  const diff = added.status === 0 ? git("diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv") : added;
+  if (diff.error || diff.status !== 0) return { message: `${parsed.edits.length} file(s) changed but the patch could not be captured.`, file: null };
+  const text = diff.stdout ?? "";
+  if (text.length === 0) return { message: `${parsed.edits.length} file(s) reported changed but the working tree has no differences.`, file: null };
+  if (Buffer.byteLength(text) > PARTIAL_PATCH_LIMIT_BYTES) return { message: `${parsed.edits.length} file(s) changed; the patch is larger than ${PARTIAL_PATCH_LIMIT_BYTES} bytes and was not saved.`, file: null };
+  const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
+  const redacted = spawnSync(process.execPath, [cli, "redact"], { input: text, encoding: "utf8", timeout: 120_000, maxBuffer: MAX_FILE_BYTES, windowsHide: true });
+  if (redacted.error || redacted.status !== 0) return { message: `${parsed.edits.length} file(s) changed; the patch was not saved because redaction failed.`, file: null };
+  fs.writeFileSync(path.join(outputDirectory, "partial.patch"), redacted.stdout, { encoding: "utf8", mode: 0o600 });
+  const verification = parsed.verification?.status ?? "unknown";
+  return { message: `${parsed.edits.length} file(s) changed, saved as partial.patch (verification: ${verification}); the objective is not confirmed.`, file: "partial.patch" };
+}
+
 if (metadata.mode === "inspect") {
   const cli = path.resolve("packages/atlas-cli/dist/src/cli.js");
   const commands = [
@@ -205,7 +229,8 @@ if (metadata.mode === "inspect") {
   // set: against a real vendor a missing key must still fail loudly rather
   // than turn into a confusing 401 later.
   const baseUrl = (process.env.ATLAS_CODER_BASE_URL || "").trim();
-  if (!process.env[apiKeyVariable]) {
+  // A route on the owner's own model server (Ollama) has no credential at all.
+  if (apiKeyVariable !== null && !process.env[apiKeyVariable]) {
     if (baseUrl && provider === "groq") {
       process.env[apiKeyVariable] = "self-hosted-no-key";
       console.log(`No ${apiKeyVariable} set; using a placeholder because ATLAS_CODER_BASE_URL names a self-hosted endpoint.`);
@@ -225,7 +250,7 @@ if (metadata.mode === "inspect") {
   const codeArgs = [
     cli, "code", repositoryRoot, metadata.objective,
     "--provider", provider,
-    "--api-key-env", apiKeyVariable,
+    ...(apiKeyVariable === null ? [] : ["--api-key-env", apiKeyVariable]),
     "--model", model,
     "--format", "json",
   ];
@@ -311,7 +336,14 @@ if (metadata.mode === "inspect") {
   writeJson("code.json", parsed);
 
   if (parsed.status !== "completed") {
-    writeStatus(parsed.status === "approval-required" ? "blocked" : parsed.status, parsed.message ?? `Coder agent stopped with status '${parsed.status}'.`);
+    // Work done before a stop (turn limit, repeated failure, provider error) is
+    // kept as a reviewable patch. It is never turned into a pull request: the
+    // status stays the agent's own, and the objective is not claimed.
+    const partial = Array.isArray(parsed.edits) && parsed.edits.length > 0 ? savePartialPatch(parsed) : null;
+    const stopMessage = parsed.message ?? `Coder agent stopped with status '${parsed.status}'.`;
+    writeStatus(parsed.status === "approval-required" ? "blocked" : parsed.status,
+      partial === null ? stopMessage : `${stopMessage} Partial work: ${partial.message}`,
+      partial === null ? {} : { partial: { files: parsed.edits.length, patch: partial.file, verification: parsed.verification?.status ?? null } });
     console.error(`Atlas coder run stopped with status '${parsed.status}': ${parsed.message ?? "(no message)"}`);
     process.exit(1);
   } else if (parsed.edits.length === 0) {
