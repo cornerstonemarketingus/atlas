@@ -76,13 +76,20 @@ test("endpoints: native, /v1 base and full URL resolve to /api/chat; remote http
   assert.equal(resolveOllamaChatUrl("https://gpu.example.com").href, "https://gpu.example.com/api/chat");
 });
 
-test("provider selection: ollama is explicit, never inferred from a model name", () => {
+test("provider selection: an Ollama tag stays on this machine; it is never inferred as a hosted vendor", () => {
   const chosen = selectCoderProvider({ provider: "ollama", model: "qwen2.5-coder:1.5b", tokenBudget: 16384 });
   assert.ok(chosen.ok);
   assert.equal(chosen.selection.profile.providerId, "ollama");
+  // Before the local-only guarantee this inferred Groq, sending the repository
+  // to a hosted API whenever GROQ_API_KEY happened to be set.
   const inferred = selectCoderProvider({ model: "qwen2.5-coder:1.5b", tokenBudget: 16384 });
   assert.ok(inferred.ok);
-  assert.notEqual(inferred.selection.profile.providerId, "ollama");
+  assert.equal(inferred.selection.profile.providerId, "ollama");
+  assert.equal(inferred.selection.inferred, true);
+  // With the operator's own --base-url the OpenAI-compatible client is pointed at that server, as before.
+  const custom = selectCoderProvider({ model: "qwen2.5-coder:1.5b", tokenBudget: 16384, customEndpoint: true });
+  assert.ok(custom.ok);
+  assert.equal(custom.selection.profile.providerId, "groq");
 });
 
 test("Qwen3 models are asked not to think, so their bounded reply is not spent on reasoning; other models are unchanged", async () => {

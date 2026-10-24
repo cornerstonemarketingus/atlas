@@ -25,9 +25,12 @@ function positive(value) {
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
-/** Of the installed models, the one to use when nothing was configured: a coder model if there is one. */
+/** Embedding and speech models answer /api/tags like any other but cannot chat or call tools. */
+const NOT_A_CHAT_MODEL = /(?:^|[/:_-])(?:embed|embedding|nomic-embed|mxbai-embed|bge|minilm|e5|gte|snowflake-arctic-embed|all-minilm|whisper|rerank(?:er)?)(?:$|[/:_.-])/iu;
+
+/** Of the installed models, the one to use when nothing was configured: a coder model if there is one, never an embedding model. */
 export function pickInstalledCoder(installed) {
-  const names = (Array.isArray(installed) ? installed : []).filter((name) => typeof name === "string" && name);
+  const names = (Array.isArray(installed) ? installed : []).filter((name) => typeof name === "string" && name && !NOT_A_CHAT_MODEL.test(name));
   return names.find((name) => /coder/iu.test(name)) ?? names[0] ?? null;
 }
 
@@ -42,7 +45,7 @@ export function resolveLocalCoder({ requested = "", modelPlan = null, env = proc
   else if (coder?.tag) { model = coder.tag; source = "model plan"; }
   // Nothing configured: the default if it is installed (or the list is unknown),
   // otherwise what is actually installed, so a machine with only a small model works.
-  else if (Array.isArray(installed) && installed.length > 0 && !installed.includes(DEFAULT_LOCAL_MODEL)) { model = pickInstalledCoder(installed); source = "installed"; }
+  else if (Array.isArray(installed) && pickInstalledCoder(installed) && !installed.includes(DEFAULT_LOCAL_MODEL)) { model = pickInstalledCoder(installed); source = "installed"; }
   else { model = DEFAULT_LOCAL_MODEL; source = "default"; }
   const planned = coder?.tag === model ? positive(coder.context) : null;
   const contextWindow = positive(env.ATLAS_LOCAL_CODER_CONTEXT_WINDOW) ?? planned ?? DEFAULT_CONTEXT_WINDOW;

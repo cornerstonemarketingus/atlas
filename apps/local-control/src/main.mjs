@@ -22,7 +22,6 @@ import { LOCAL_TENANT_ID } from "./platform/dashboard.mjs";
 import { createGitHubActionsExecutor, createLocalExecutor } from "./agent/executors.mjs";
 import { createGitHubActionsClient } from "./agent/github-actions-client.mjs";
 import { createConversationExecutor } from "./agent/conversation-executor.mjs";
-import { createModelClient } from "./agent/model-client.mjs";
 import { createSpeechTranscriber } from "./agent/speech.mjs";
 import { MissionService } from "./agent/mission-service.mjs";
 import { BusinessService } from "./agent/business-service.mjs";
@@ -38,6 +37,8 @@ import { discoverModelServers } from "./agent/models/discovery.mjs";
 import { recommendModels } from "./agent/models/recommend.mjs";
 import { createModelRouter, describeRoutes, parseRoutes } from "./agent/models/router.mjs";
 import { createRoutedClient } from "./agent/models/routed-client.mjs";
+import { checkModelEgress, describeModelEgress, egressSummary, isLoopbackUrl, modelEgressPolicy, resolveModelProtocol, resolveOllamaBaseUrl } from "./agent/models/egress.mjs";
+import { createDaemonModelClient, daemonContextWindow, defaultModelEndpoint } from "./agent/models/daemon-client.mjs";
 import { createTeamService } from "./agent/team/team-service.mjs";
 import { createDaemonSelfImprovement, registerSelfImproveTool } from "./platform/self-improve/index.mjs";
 import { createDaemonSkills, registerSkillTools } from "./platform/skills/daemon.mjs";
@@ -84,12 +85,21 @@ const dataDirectory = process.env.ATLAS_LOCAL_DATA_DIR || join(homedir(), ".atla
 mkdirSync(dataDirectory, { recursive: true });
 
 const store = new LocalTaskStore(join(dataDirectory, "atlas.sqlite"));
+// The local-only guarantee (agent/models/egress.mjs): model, transcription and
+// vision requests go to this machine unless the owner named a remote endpoint,
+// and every request that does leave is audited.
+const modelEgress = modelEgressPolicy(process.env);
+console.log(egressSummary(modelEgress));
+store.audit("model.egress", egressSummary(modelEgress));
+const auditRemoteModel = ({ host, variable, model, purpose }) => store.audit("model.remote", `${purpose} request${model ? ` for ${model}` : ""} sent to ${host} (remote endpoint configured by ${variable})`);
+const localModelEndpoint = defaultModelEndpoint(process.env);
+const chatContext = daemonContextWindow(process.env, resolveModelProtocol(localModelEndpoint, process.env));
 const sessions = new AgentSessionStore(join(dataDirectory, "agent.sqlite"));
 const platformStore = new PlatformTaskStore(join(dataDirectory, "platform.sqlite"));
 const workforceRuntime = createWorkforceRuntime({ store: platformStore, dataDirectory,
   repository: process.env.ATLAS_WORKFORCE_REPOSITORY || process.cwd(),
   model: process.env.ATLAS_WORKFORCE_MODEL || DEFAULT_LOCAL_MODEL,
-  endpoint: process.env.ATLAS_MODEL_ENDPOINT || "http://127.0.0.1:11434/v1" });
+  endpoint: localModelEndpoint });
 // The agent organization (Business Development Executive → Product Executive →
 // specialists, plus the Engineering, Design, Computer Operations and Research
 // peers) and the Innovation Backlog it works from.
@@ -113,15 +123,17 @@ const license = loadLicense();
 const modelClient = createRoutedClient({
   routes: parseRoutes(process.env.ATLAS_MODEL_ROUTES ?? "[]"),
   task: "planning",
-  createClient: (route) => createModelClient({ baseUrl: route.endpoint }),
-  fallback: createModelClient({ baseUrl: process.env.ATLAS_MODEL_ENDPOINT || undefined }),
-  onRoute: (route, { failedOver }) => store.audit("model.route", `${route.model} served a model turn${failedOver ? " after failover" : ""}`),
+  createClient: (route) => createDaemonModelClient({ baseUrl: route.endpoint, protocol: route.protocol, egress: modelEgress, onRemote: auditRemoteModel, contextWindow: route.contextSource === "configured" ? route.contextWindow : chatContext.contextWindow }),
+  fallback: createDaemonModelClient({ baseUrl: localModelEndpoint, egress: modelEgress, onRemote: auditRemoteModel, contextWindow: chatContext.contextWindow }),
+  egress: modelEgress,
+  onRoute: (route, { failedOver }) => store.audit("model.route", `${route.model} served a model turn${failedOver ? " after failover" : ""}${isLoopbackUrl(route.endpoint) ? "" : ` (remote: ${new URL(route.endpoint).host})`}`),
 });
 // Models → Install → Run: Atlas manages a loopback model server and the applied model plan.
-const modelManager = new ModelManager({ log: (line) => store.audit("model.hosting", line) });
+const ollamaBase = resolveOllamaBaseUrl(process.env);
+const modelManager = new ModelManager({ ...(isLoopbackUrl(ollamaBase) ? { baseUrl: ollamaBase } : {}), log: (line) => store.audit("model.hosting", line) });
 const modelPlan = new ModelPlanStore(join(dataDirectory, "model-plan.json"));
 // "Atlas, improve yourself": only when running from a git checkout of Atlas itself.
-const selfImprove = createDaemonSelfImprovement({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan });
+const selfImprove = selfImprovementAllowed() ? createDaemonSelfImprovement({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan }) : null;
 // Signed skill packages: active skills' tools join the registry (denied until the owner allows `skill.<name>`).
 const skills = createDaemonSkills({ dataDirectory });
 // One terminal controller per daemon, built on first use: the agent's terminal
@@ -304,9 +316,9 @@ const genesisExecutor = new GenesisExecutor({
   kernel,
   projectsRoot: join(dataDirectory, "genesis", "projects"),
   runCheck,
-  coder: createGenesisCoder({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan, intelligence: genesis.intelligence }),
+  coder: createGenesisCoder({ atlasRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."), dataDirectory, modelPlan, intelligence: genesis.intelligence, egress: modelEgress, onRemote: auditRemoteModel }),
   preview: genesisPreviews,
-  inspector: createInspector({ artifactsRoot: join(dataDirectory, "genesis", "inspections"), vision: createVisionReviewer() }),
+  inspector: createInspector({ artifactsRoot: join(dataDirectory, "genesis", "inspections"), vision: createVisionReviewer({ egress: modelEgress, onRemote: auditRemoteModel }) }),
   // Repair loops stop at a time/token limit or when a failure stops moving (loop-policy.mjs).
   loopPolicy: loopPolicyFromEnvironment(process.env, (line) => console.log(`Genesis: ${line}`)),
 });
@@ -480,6 +492,9 @@ function buildExecutors() {
     local: createLocalExecutor({ dataDirectory, modelPlan }),
     conversation: createConversationExecutor({
       client: modelClient,
+      // The window chat is fitted to is the window the local model is told (num_ctx).
+      contextWindow: chatContext.contextWindow,
+      contextSource: chatContext.contextSource,
       registry: toolRegistry,
       approvals: toolApprovals,
       kernel,
@@ -693,7 +708,7 @@ function buildInfrastructureProviders() {
 
 const router = createModelRouter({
   routes: parseRoutes(process.env.ATLAS_MODEL_ROUTES ?? "[]"),
-  createClient: (route) => createModelClient({ baseUrl: route.endpoint }),
+  createClient: (route) => createDaemonModelClient({ baseUrl: route.endpoint, protocol: route.protocol, egress: modelEgress, onRemote: auditRemoteModel }),
 });
 
 /**
@@ -704,7 +719,9 @@ const router = createModelRouter({
  */
 async function reportModelHealth() {
   // The configured endpoint and routes are checked too, not only the default local ports.
-  const endpoints = [...new Set(["http://127.0.0.1:11434/v1", "http://127.0.0.1:8080/v1", process.env.ATLAS_MODEL_ENDPOINT, ...router.routes.map((route) => route.endpoint)].filter(Boolean).map((endpoint) => endpoint.replace(/\/+$/u, "")))];
+  // Only endpoints the egress policy permits are probed: local-only mode never contacts a remote host, not even for health.
+  const endpoints = [...new Set([`${resolveOllamaBaseUrl(process.env)}/v1`, "http://127.0.0.1:8080/v1", process.env.ATLAS_MODEL_ENDPOINT, ...router.routes.map((route) => route.endpoint)].filter(Boolean).map((endpoint) => endpoint.replace(/\/+$/u, "")))]
+    .filter((endpoint) => { try { checkModelEgress(endpoint, modelEgress, "discovery"); return true; } catch { return false; } });
   const [hardware, servers] = await Promise.all([detectHardware(), discoverModelServers({ endpoints })]);
   const installed = servers.flatMap((server) => server.models);
   return {
@@ -717,12 +734,21 @@ async function reportModelHealth() {
     })),
     ...recommendModels({ hardware, installed }),
     routes: describeRoutes(router),
+    egress: describeModelEgress(modelEgress),
   };
+}
+
+/** Under ATLAS_LOCAL_ONLY a remote self-improvement endpoint is refused: the loop is not started rather than sending Atlas's code away. */
+function selfImprovementAllowed() {
+  const configured = process.env.ATLAS_SELF_IMPROVE_BASE_URL?.trim();
+  if (!configured) return true;
+  try { checkModelEgress(configured, modelEgress, "self-improvement"); return true; }
+  catch (error) { console.warn(`Self-improvement is off: ${error.message}`); return false; }
 }
 
 function buildTranscriber() {
   try {
-    return createSpeechTranscriber();
+    return createSpeechTranscriber({ egress: modelEgress, onRemote: auditRemoteModel });
   } catch {
     // A misconfigured endpoint disables dictation; it must not stop Atlas.
     return null;

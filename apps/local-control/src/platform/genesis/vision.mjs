@@ -2,6 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { CATALOG } from "../../agent/models/catalog.mjs";
 import { assertSafeEndpoint, isLoopback } from "../self-improve/runtime.mjs";
+import { checkModelEgress, modelEgressPolicy, resolveOllamaBaseUrl } from "../../agent/models/egress.mjs";
 
 /**
  * A visual review of the screenshots the inspector saved, by a vision-capable
@@ -81,9 +82,10 @@ export function parseVisionAnswer(text) {
   }
 }
 
-export function createVisionReviewer({ environment = process.env, fetchImpl = fetch } = {}) {
-  const baseUrl = environment.ATLAS_GENESIS_VISION_BASE_URL || environment.ATLAS_GENESIS_BASE_URL || "http://127.0.0.1:11434/v1";
+export function createVisionReviewer({ environment = process.env, fetchImpl = fetch, egress = undefined, onRemote = null, timeoutMs = 600_000 } = {}) {
+  const baseUrl = environment.ATLAS_GENESIS_VISION_BASE_URL || environment.ATLAS_GENESIS_BASE_URL || `${resolveOllamaBaseUrl(environment)}/v1`;
   assertSafeEndpoint(baseUrl);
+  const policy = egress ?? modelEgressPolicy(environment);
   const apiKey = environment.ATLAS_GENESIS_API_KEY_ENV ? environment[environment.ATLAS_GENESIS_API_KEY_ENV] ?? "" : "";
   const reviewed = new Map();
 
@@ -106,12 +108,18 @@ export function createVisionReviewer({ environment = process.env, fetchImpl = fe
     if (!files.length) return { reviewed: false, reason: "No screenshots were captured.", findings: [] };
     const content = [{ type: "text", text: visionPrompt(files) }, ...files.map((file) => ({ type: "image_url", image_url: { url: `data:image/png;base64,${readFileSync(file).toString("base64")}` } }))];
     let answer;
+    let destination;
+    // Screenshots of the person's app are not sent anywhere the owner did not configure.
+    try { destination = checkModelEgress(`${baseUrl.replace(/\/+$/u, "")}/chat/completions`, policy, "vision"); }
+    catch (error) { return { reviewed: false, model: tag, reason: error.message, findings: [] }; }
+    if (destination.remote) onRemote?.({ host: destination.host, variable: destination.variable, model: tag, purpose: "vision" });
     try {
       const response = await fetchImpl(`${baseUrl.replace(/\/+$/u, "")}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
         body: JSON.stringify({ model: tag, temperature: 0, max_tokens: 800, messages: [{ role: "user", content }] }),
-        signal: AbortSignal.timeout(180_000),
+        // Several screenshots through a vision model on a CPU take minutes, not seconds.
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) return { reviewed: false, model: tag, reason: `The vision model answered ${response.status}.`, findings: [] };
       answer = (await response.json()).choices?.[0]?.message?.content;

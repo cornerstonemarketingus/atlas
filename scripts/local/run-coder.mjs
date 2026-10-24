@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { safeEnvironment } from "../../apps/local-control/src/agent/tools/process.mjs";
+import { resolveOllamaBaseUrl } from "../../apps/local-control/src/agent/models/egress.mjs";
 
 const atlasRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -24,14 +25,16 @@ if (process.argv.includes("--help")) {
 Options:
   --provider <id>           ollama (default, native API), local (credential-free OpenAI-compatible, loopback only) or groq
   --model <name>            Model (default: $ATLAS_LOCAL_CODER_MODEL, else qwen3:0.6b)
-  --base-url <url>          OpenAI-compatible base URL (default: http://127.0.0.1:11434/v1)
+  --base-url <url>          Model server base URL (default: $ATLAS_OLLAMA_URL or $OLLAMA_HOST, else http://127.0.0.1:11434/v1)
   --context-window <n>      Served context window (default: 16384)
   --max-output-tokens <n>   Output limit per turn (default: 2048)
   --verify-dir <path>       Package directory containing build/test scripts
   --audit-log <path>        Local audit log destination
 
 This path uses local Git, local tools, and a self-hosted OpenAI-compatible model.
-It does not need a GitHub, Cloudflare, Groq, or Anthropic credential.`);
+It does not need a GitHub, Cloudflare, Groq, or Anthropic credential. With a
+loopback --base-url the coder runs with --local-only: no route may leave this
+machine, and if the model server is down the run fails instead of switching.`);
   process.exit(0);
 }
 
@@ -42,7 +45,7 @@ if (!repository || !objective) throw new Error("--repository and --objective are
 const provider = option("--provider", "ollama");
 if (!["ollama", "local", "groq"].includes(provider)) throw new Error("--provider must be ollama, local or groq for a local run.");
 const model = option("--model", process.env.ATLAS_LOCAL_CODER_MODEL || "qwen3:0.6b");
-const baseUrl = option("--base-url", "http://127.0.0.1:11434/v1");
+const baseUrl = option("--base-url", `${resolveOllamaBaseUrl(process.env)}/v1`);
 const contextWindow = option("--context-window", "16384");
 const maxOutputTokens = option("--max-output-tokens", "2048");
 const verifyDir = option("--verify-dir", "");
@@ -88,6 +91,8 @@ const args = [
   "--max-output-tokens", maxOutputTokens,
   "--audit-log", auditLog,
   "--format", "text",
+  // A loopback server means a local run: the CLI refuses any route off this machine.
+  ...(loopback ? ["--local-only"] : []),
 ];
 if (verifyDir) args.push("--verify-dir", verifyDir);
 

@@ -1,5 +1,6 @@
 import { ModelRequestError } from "../model-client.mjs";
 import { NoRouteError } from "./router.mjs";
+import { isLoopbackUrl, modelEgressPolicy } from "./egress.mjs";
 
 const TERMINAL = new Set(["MODEL_NOT_AUTHORIZED", "MODEL_INVALID_INPUT"]);
 
@@ -16,8 +17,13 @@ const TERMINAL = new Set(["MODEL_NOT_AUTHORIZED", "MODEL_INVALID_INPUT"]);
  * Routes whose model matches the one the session asked for are tried first,
  * so a person's explicit choice wins while the others remain as fallback.
  * `onRoute` records which model actually did the work.
+ *
+ * Local first: when the first route tried is on this machine, a remote route
+ * is never used as its fallback unless the owner set
+ * ATLAS_MODEL_REMOTE_FALLBACK=1 (`egress.remoteFallback`). A local outage
+ * then ends in a clear error rather than a quiet switch to a hosted model.
  */
-export function createRoutedClient({ routes = [], task = "planning", createClient, fallback, onRoute = () => {} }) {
+export function createRoutedClient({ routes = [], task = "planning", createClient, fallback, onRoute = () => {}, egress = undefined }) {
   const candidates = routes.filter((route) => route.task === task);
   if (!candidates.length) return fallback;
   return {
@@ -26,7 +32,13 @@ export function createRoutedClient({ routes = [], task = "planning", createClien
     async *stream(request) {
       const ordered = [...candidates.filter((r) => r.model === request.model), ...candidates.filter((r) => r.model !== request.model)];
       const failures = [];
+      const policy = egress ?? modelEgressPolicy();
+      const localFirst = ordered.length > 0 && isLoopbackUrl(ordered[0].endpoint);
       for (const route of ordered) {
+        if (localFirst && !policy.remoteFallback && !isLoopbackUrl(route.endpoint)) {
+          failures.push(`${route.model}: not tried, it is remote and the local route came first (set ATLAS_MODEL_REMOTE_FALLBACK=1 to allow that fallback)`);
+          continue;
+        }
         let started = false;
         try {
           for await (const chunk of createClient(route).stream({ ...request, model: route.model })) {

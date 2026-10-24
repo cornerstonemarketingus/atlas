@@ -1,6 +1,7 @@
-const DEFAULT_ENDPOINT = "http://127.0.0.1:11434/v1";
+import { defaultModelEndpoint } from "./agent/models/daemon-client.mjs";
 
-export async function discoverLocalModels({ endpoint = process.env.ATLAS_MODEL_ENDPOINT || DEFAULT_ENDPOINT, fetchImpl = fetch } = {}) {
+/** The models the configured endpoint serves; with nothing configured, the local Ollama (OLLAMA_HOST honoured). */
+export async function discoverLocalModels({ endpoint = defaultModelEndpoint(process.env), fetchImpl = fetch } = {}) {
   const url = new URL("models", endpoint.endsWith("/") ? endpoint : `${endpoint}/`);
   if (url.protocol !== "https:" && !["127.0.0.1", "localhost", "::1"].includes(url.hostname)) {
     throw new Error("Model discovery requires HTTPS unless the server is loopback.");

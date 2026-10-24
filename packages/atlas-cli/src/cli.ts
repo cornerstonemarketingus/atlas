@@ -41,6 +41,7 @@ import { FallbackModelProvider } from "./infrastructure/fallback-model-provider.
 import { PolicyEnforcedReadOnlyToolRegistry } from "./infrastructure/policy-enforced-read-only-tool-registry.js";
 import { OUTPUT_TOKENS_PER_TURN_RANGE, isKeylessCoderProvider, selectCoderProvider } from "./model/coder-provider-selection.js";
 import { compactRepositorySummary } from "./model/compact-repository-summary.js";
+import { type CoderRouteDescription, isLocalOnlyRequested, isLoopbackHostname, isRemoteRoute, localOnlyRefusal, remoteRouteNotice, resolveOllamaOrigin } from "./model/model-egress.js";
 import { resolveCoderEndpoint, resolveSelfHostedLimits } from "./model/coder-endpoint.js";
 import { PatternSecretRedactor } from "./infrastructure/pattern-secret-redactor.js";
 import { RedactingModelProvider } from "./infrastructure/redacting-model-provider.js";
@@ -89,7 +90,7 @@ const USAGE = `Usage:
   atlas chat <repository-path> <objective> --endpoint <loopback-url> --model <name> [--allow-source] [--token-budget N] [--max-turns N] [--format text|json]
   atlas code <repository-path> <objective> --model <name> [--provider local|anthropic|ollama|groq|openai|workers-ai|cerebras|gemini|openrouter|mistral] [--api-key-env <ENV_VAR>]
        [--base-url <url>] [--context-window N] [--max-output-tokens N] [--fallback <provider:model:API_KEY_ENV>] [--escalate <provider:model:API_KEY_ENV>] [--escalation-attempts N] [--token-budget N] [--max-turns N] [--output-tokens-per-turn N]
-       [--retry-attempts N] [--retry-max-delay-ms N] [--capacity-wait-ms N]
+       [--retry-attempts N] [--retry-max-delay-ms N] [--capacity-wait-ms N] [--local-only]
       [--no-verify] [--dry-run] [--verify-dir <relative-path>] [--max-repair-attempts N] [--max-repair-ms N] [--max-same-failure N]
        [--verify-timeout-ms N] [--verify-package-manager <name>] [--verify-container <absolute-runtime-path>] [--audit-log <path>] [--format text|json]
   atlas undo <repository-path> [--session <id>] [--dry-run] [--format text|json]   (puts back what a coder session changed)`;
@@ -429,6 +430,12 @@ async function runChat(args: readonly string[], format: "json" | "text"): Promis
   if (tokenBudgetOption === null || maximumTurnsOption === null) return 2;
   const tokenBudget = tokenBudgetOption ?? 8_192;
   const maximumTurns = maximumTurnsOption ?? 8;
+  let chatEndpoint: URL;
+  try { chatEndpoint = new URL(endpoint); } catch { console.error("--endpoint must be a URL."); return 2; }
+  if (!isLoopbackHostname(chatEndpoint.hostname)) {
+    if (isLocalOnlyRequested(args, process.env)) { console.error(`Local-only mode refuses --endpoint ${chatEndpoint.host}: it is not on this machine.`); return 2; }
+    console.error(`Atlas: model requests for this chat go off this machine, to ${chatEndpoint.host} (explicitly configured with --endpoint).`);
+  }
 
   const inspector = new FilesystemRepositoryInspector();
   const summary = await inspector.inspect(args[1] ?? "");
@@ -472,6 +479,7 @@ async function runChat(args: readonly string[], format: "json" | "text"): Promis
   const maxOutputTokensPerTurn = Math.min(4_096, tokenBudget);
   const localProvider = new LocalOpenAiCompatibleModelProvider({
     endpoint,
+    transport: new BoundedJsonHttpTransport({ timeoutMs: LOCAL_MODEL_TIMEOUT_MS }),
     models: [{
       model,
       contextWindowTokens: 32_768,
@@ -542,6 +550,9 @@ export function splitRouteSpecification(specification: string | undefined): [str
   return route.some((part) => part.trim().length === 0) ? undefined : route;
 }
 
+/** Ten minutes: CPU inference of a long prompt on a small machine, the same bound the Ollama provider uses. */
+export const LOCAL_MODEL_TIMEOUT_MS = 600_000;
+
 export function groqRequestByteLimit(outputTokensPerTurn: number | undefined): number {
   return outputTokensPerTurn === undefined ? 18_000 : 160_000;
 }
@@ -588,12 +599,15 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   const outputTokensPerTurn = readOptionalInteger(args, "--output-tokens-per-turn", OUTPUT_TOKENS_PER_TURN_RANGE.minimum, OUTPUT_TOKENS_PER_TURN_RANGE.maximum);
   if (tokenBudgetOption === null || maximumTurnsOption === null || repairAttemptsOption === null || verifyTimeoutOption === null || retryAttemptsOption === null || retryMaxDelayOption === null || capacityWaitOption === null || outputTokensPerTurn === null) return 2;
   const tokenBudget = tokenBudgetOption ?? 16_384;
+  // Local-only (docs: SOVEREIGN-MODE.md): every route must be on this machine.
+  const localOnly = isLocalOnlyRequested(args, process.env);
   const selection = selectCoderProvider({
     provider: providerOption,
     model,
     apiKeyEnvironmentVariable: apiKeyEnvOption,
     tokenBudget,
     outputTokensPerTurn,
+    customEndpoint: (baseUrlOption ?? "").trim().length > 0,
   });
   if (!selection.ok) {
     console.error(selection.message);
@@ -606,7 +620,7 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   let endpoint: URL | undefined;
   if (ollama) {
     try {
-      endpoint = resolveOllamaChatUrl(baseUrlOption?.trim() || process.env["ATLAS_OLLAMA_URL"]?.trim() || "http://127.0.0.1:11434");
+      endpoint = resolveOllamaChatUrl(baseUrlOption?.trim() || resolveOllamaOrigin(process.env));
     } catch (error) {
       console.error(error instanceof Error ? error.message : "Invalid Ollama endpoint.");
       return 2;
@@ -643,6 +657,11 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
   }
   if (profile.providerId === "local" && (args.includes("--fallback") || args.includes("--escalate"))) {
     console.error("Local coding cannot use cloud fallback or escalation routes."); return 2;
+  }
+  const primaryRoute: CoderRouteDescription = { providerId: profile.providerId, displayName: profile.displayName, model, endpoint };
+  if (isRemoteRoute(primaryRoute)) {
+    if (localOnly) { console.error(localOnlyRefusal(primaryRoute, "primary")); return 2; }
+    console.error(remoteRouteNotice(primaryRoute, "primary", selection.selection.inferred));
   }
   const apiKey = profile.providerId === "local" ? "local-no-credential" : isKeylessCoderProvider(profile.providerId) ? "local-ollama-no-credential" : process.env[apiKeyEnvironmentVariable];
   if (apiKey === undefined || apiKey.trim().length === 0) {
@@ -745,23 +764,28 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
       supportsJson: true,
       supportsStreaming: false,
     }];
+    // A model on this machine may be CPU-only: a long prompt can take minutes
+    // before the first token, so loopback routes get the same ten minutes
+    // the Ollama provider allows. Hosted vendors keep their own short limits.
+    const onThisMachine = routeEndpoint !== undefined && isLoopbackHostname(routeEndpoint.hostname);
     const upstream = routeSelection.profile.providerId === "local"
-      ? new LocalOpenAiCompatibleModelProvider({ endpoint: routeEndpoint!, models: routeCapabilities, providerId: "local", transport: new BoundedJsonHttpTransport({ timeoutMs: 60_000 }) })
+      ? new LocalOpenAiCompatibleModelProvider({ endpoint: routeEndpoint!, models: routeCapabilities, providerId: "local", transport: new BoundedJsonHttpTransport({ timeoutMs: LOCAL_MODEL_TIMEOUT_MS }) })
       : routeSelection.profile.providerId === "ollama"
       ? new OllamaModelProvider({ models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) })
       : routeSelection.profile.providerId === "anthropic"
       ? new AnthropicModelProvider({ apiKey: routeApiKey, models: routeCapabilities, defaultMaxOutputTokens: routeSelection.maxOutputTokensPerTurn })
       : routeSelection.profile.providerId === "groq"
-        ? new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) })
+        ? new GroqModelProvider({ apiKey: routeApiKey, models: routeCapabilities, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }), ...(onThisMachine ? { timeoutMs: LOCAL_MODEL_TIMEOUT_MS } : {}) })
         : new CloudModelProvider({ providerId: routeSelection.profile.providerId, apiKey: routeApiKey, models: routeCapabilities, ...(process.env["CLOUDFLARE_ACCOUNT_ID"] ? { accountId: process.env["CLOUDFLARE_ACCOUNT_ID"] } : {}) });
     // With a shared governor configured, every physical attempt (retries included) reserves capacity
     // against the same provider ledger hosted chat uses; without one this is unchanged.
     // A local server has no shared provider quota to reserve against.
-    const governor = ["local", "ollama"].includes(routeSelection.profile.providerId) ? undefined : governorFromEnvironment(process.env, { providerId: routeSelection.profile.providerId, apiKey: routeApiKey, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
+    const governor = ["local", "ollama"].includes(routeSelection.profile.providerId) || onThisMachine ? undefined : governorFromEnvironment(process.env, { providerId: routeSelection.profile.providerId, apiKey: routeApiKey, ...(routeEndpoint === undefined ? {} : { endpoint: routeEndpoint }) });
     const redacted = new RedactingModelProvider(upstream, new PatternSecretRedactor());
     return new RetryingModelProvider(governor === undefined ? redacted : new GovernedModelProvider(redacted, governor, { maximumWaitMs: Math.min(30_000, retryOptions.maximumDelayMs) }), retryOptions);
   };
   const routes = [{ provider: makeRoute(model, selection.selection, apiKey, endpoint), model }];
+  const routeDescriptions: CoderRouteDescription[] = [primaryRoute];
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] !== "--fallback") continue;
     const parts = splitRouteSpecification(args[index + 1]);
@@ -772,18 +796,29 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     const [fallbackProvider, fallbackModel, fallbackKeyEnvironment] = parts;
     const fallbackSelection = selectCoderProvider({ provider: fallbackProvider, model: fallbackModel, apiKeyEnvironmentVariable: fallbackKeyEnvironment, tokenBudget, outputTokensPerTurn });
     if (!fallbackSelection.ok) { console.error(fallbackSelection.message); return 2; }
+    const fallbackRoute: CoderRouteDescription = { providerId: fallbackSelection.selection.profile.providerId, displayName: fallbackSelection.selection.profile.displayName, model: fallbackModel, endpoint: undefined };
+    if (localOnly && isRemoteRoute(fallbackRoute)) { console.error(localOnlyRefusal(fallbackRoute, "fallback")); return 2; }
     const fallbackKey = process.env[fallbackSelection.selection.apiKeyEnvironmentVariable];
     if (!fallbackKey?.trim()) {
       console.error(`Environment variable ${fallbackSelection.selection.apiKeyEnvironmentVariable} is not set (required for fallback provider '${fallbackProvider}').`);
       return 2;
     }
     routes.push({ provider: makeRoute(fallbackModel, fallbackSelection.selection, fallbackKey), model: fallbackModel });
+    routeDescriptions.push(fallbackRoute);
+    if (isRemoteRoute(fallbackRoute)) console.error(`${remoteRouteNotice(fallbackRoute, "fallback", false)} It is used only if the routes before it fail.`);
   }
   // When every route is out of capacity, wait for the soonest stated reset
   // rather than lose the run's work (docs/atlas-os/INFERENCE-FABRIC.md).
   // Five minutes by default: the runner bounds the whole coder process at fifteen.
   const capacityWaitMs = capacityWaitOption ?? 300_000;
-  const routedProvider = profile.providerId === "local" ? routes[0]!.provider : new FallbackModelProvider(routes, { capacityWaitMs });
+  const routedProvider = profile.providerId === "local" ? routes[0]!.provider : new FallbackModelProvider(routes, {
+    capacityWaitMs,
+    // A switch to the next route is never silent, least of all from this machine to a hosted API.
+    onFallback: ({ from, to, code, toIndex }) => {
+      const next = routeDescriptions[toIndex];
+      console.error(`Atlas: model route ${from} failed (${code}); trying ${to}${next !== undefined && isRemoteRoute(next) ? `, which is remote (${next.endpoint?.host ?? "hosted API"})` : ""}.`);
+    },
+  });
   // Retries, fallbacks and escalation share one outer budget ledger, so
   // changing routes or models cannot reset the task's hard output-token ceiling.
   const budgetLedger = new InMemoryUsageBudgetLedger({ outputTokens: tokenBudget });
@@ -804,6 +839,11 @@ async function runCode(args: readonly string[], format: "json" | "text"): Promis
     const [escalationProvider, escalationModel, escalationKeyEnvironment] = parts;
     const escalationSelection = selectCoderProvider({ provider: escalationProvider, model: escalationModel, apiKeyEnvironmentVariable: escalationKeyEnvironment, tokenBudget, outputTokensPerTurn });
     if (!escalationSelection.ok) { console.error(escalationSelection.message); return 2; }
+    const escalationDescription: CoderRouteDescription = { providerId: escalationSelection.selection.profile.providerId, displayName: escalationSelection.selection.profile.displayName, model: escalationModel, endpoint: undefined };
+    if (isRemoteRoute(escalationDescription)) {
+      if (localOnly) { console.error(localOnlyRefusal(escalationDescription, "escalation")); return 2; }
+      console.error(`${remoteRouteNotice(escalationDescription, "escalation", false)} It is used only for repairs the primary model could not finish.`);
+    }
     const escalationKey = process.env[escalationSelection.selection.apiKeyEnvironmentVariable];
     if (!escalationKey?.trim()) {
       console.error(`Environment variable ${escalationSelection.selection.apiKeyEnvironmentVariable} is not set (required for escalation provider '${escalationProvider}').`);

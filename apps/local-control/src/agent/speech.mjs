@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 
 import { assertReachableEndpoint, ModelRequestError } from "./model-client.mjs";
+import { checkModelEgress, modelEgressPolicy } from "./models/egress.mjs";
 
 /**
  * Speech-to-text against a configurable OpenAI-compatible transcription
@@ -29,7 +30,10 @@ export function createSpeechTranscriber({
   model = process.env.ATLAS_SPEECH_MODEL || "whisper-1",
   apiKeyEnv = "ATLAS_SPEECH_API_KEY",
   fetchImpl = fetch,
-  timeoutMs = 120_000,
+  // A CPU-only whisper server can take several minutes for a long recording.
+  timeoutMs = 600_000,
+  egress = undefined,
+  onRemote = null,
 } = {}) {
   const endpoint = assertReachableEndpoint(baseUrl);
 
@@ -52,12 +56,17 @@ export function createSpeechTranscriber({
         { name: "file", filename: `speech.${extension}`, contentType: mediaType, value: audio },
       ]);
 
+      // Audio is as private as anything Atlas handles: the local-only policy
+      // applies before a byte is sent.
+      const url = new URL("audio/transcriptions", endpoint);
+      const destination = checkModelEgress(url, egress ?? modelEgressPolicy(), "transcription");
+      if (destination.remote) onRemote?.({ host: destination.host, variable: destination.variable, model, purpose: "transcription" });
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       signal?.addEventListener("abort", () => controller.abort(), { once: true });
       try {
         const apiKey = process.env[apiKeyEnv];
-        const response = await fetchImpl(new URL("audio/transcriptions", endpoint), {
+        const response = await fetchImpl(url, {
           method: "POST",
           signal: controller.signal,
           headers: {
