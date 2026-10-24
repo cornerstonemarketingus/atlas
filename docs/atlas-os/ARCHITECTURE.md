@@ -258,23 +258,65 @@ is not supported by this callback API (predates the change). Delegated audit
 terminal reads were stalled and interrupted, so the inventory relies on the
 parent's repository reads, fresh local tests and identified CI/live results;
 no independent repository audit or test execution is attributed to those agents.
-## C. Disconnected or superseded infrastructure
+## C. Built but not wired
 
-- `agent/child-agents.mjs`: ChildAgentRegistry has no production constructor
-  found in local source; family graph and mission scheduler already supply live
-  delegation. Prefer consolidating rather than wiring another competing scheduler.
-- `platform/orchestrator/{dag,agent-loop,replay}.mjs`: reusable library with tests;
-  daemon main uses the mission service and kernel instead of constructing TaskDag.
-- `platform/models/router.mjs`: CapabilityRouter is used by planning helpers,
-  not directly instantiated by main's execution routing; static configured route
-  execution and kernel economics are separate from this capability library.
-- `platform/skills/`: no live SkillRegistry constructor or approved-package loader.
-- `platform/mcp-server/`: runnable stdio/HTTP server entry points exist separately;
-  main does not automatically expose them. Being a package entry point is not dead
-  code; hosted integration remains incomplete.
-- `src/atlas_agent`: legacy Python prototype, not the live JS/TS agent runtime.
-- Historical September AUDIT/CURRENT-STATE/launch documents are evidence for their
-  dates, not current subsystem statuses. No duplicate TODO created.
+Checked on 2026-10-21 against main at `8f08b07`. Method: a relative-import
+graph over every non-test source file, walked from the real entry points. Those
+are the daemon (`apps/local-control/src/main.mjs`), the Atlas Node
+(`src/node/main.mjs`), the MCP stdio launcher, the CLI (`packages/atlas-cli/src/cli.ts`),
+the browser worker, the Windows companion, the mobile `www/` shell, everything
+under `apps/web/{app,worker}` and `scripts/`. A grep for path strings then ruled
+out dynamic imports. Each module below is reached **only by tests**.
+"Wire later" names the PROGRAM.md phase that owns the work. "Candidate to
+delete" means something else on main already does the job. Nothing has been
+deleted. Delete only in a PR of its own, after review.
+
+**Daemon (`apps/local-control/src/`)**
+
+| Module | Disposition | Reason |
+|---|---|---|
+| `platform/orchestrator/*` (`dag`, `agent-loop`, `control`, `replay`, `store`, `index`) | Wire later (Phase 3.1; replay feeds the first-external-user "deterministic run manifests/replay") | Pause/cancel propagation, restart recovery and execution replay are what the activity view needs. The daemon runs missions through `agent/mission-scheduler.mjs` and the kernel instead. Fold the propagation and replay into those; do not run a second scheduler beside them. |
+| `platform/planning/cost-aware.mjs` | Wire later (Phase 4.6) | Prices a plan with the same `CapabilityRouter` the workforce runtime already uses (`platform/models/router.mjs` is reached). It belongs with routing by measured results. |
+| `platform/planning/{team-selection,performance}.mjs` | Candidate to delete | The workforce runtime (`platform/workforce.mjs`) and the family graph already assign agents. A second selector would compete with them. |
+| `platform/planning/debate.mjs` | Candidate to delete | No phase asks for multi-agent design debate. Executable acceptance checks are the eval harness's job (Phase 2.1, `packages/atlas-eval`). |
+| `platform/desktop/*` (safety layer, simulated and Xvfb adapters) | Wire later (Phase 3.4) | Enrollment, approved sessions, emergency stop and audit sit over the companion's drivers. This is the "audit Windows/X11 drivers, unified action vocabulary" work. |
+| `platform/workers/observability.mjs` | Wire later (Phase 3.1) | A read-only per-task rollup of tools, models and cost over `PlatformTaskStore`, which is what the activity view needs. (`platform/workers/registry.mjs` is no longer in this list: Atlas Nodes, #407, reach it.) |
+| `platform/voice/voice-commands.mjs` | Candidate to delete | No PROGRAM.md phase or deferred item covers voice. The transcriber it wraps (`agent/speech.mjs`) stays, and intent parsing can be rebuilt when voice is scheduled. |
+| `platform/models/capability-suite.mjs` | Wire later (Phase 4.6) | Turns declared model capabilities into measured ones, which is what "route by measured results" needs. It already accepts the `agent/model-client.mjs` `stream()` interface. |
+| `platform/models/ollama-adapter.mjs` | Candidate to delete | The runtime reaches Ollama through its OpenAI-compatible endpoint, and the capability suite works without this adapter. Phase 4 native inference does not go through an external server. |
+| `agent/models/evaluations.mjs` | Candidate to delete | A four-prompt smoke evaluation, superseded by the capability suite and `packages/atlas-eval`. |
+| `agent/child-agents.mjs` | Candidate to delete | `ChildAgentRegistry` is never constructed. The family graph and `agent/mission-scheduler.mjs` already supply live delegation and budgets. |
+| `platform/skills/*` (registry, packages, approvals, proposals, templates, knowledge exchange, test runner) | Wire later (no phase owns it yet; earliest is after the first-external-user milestone) | Nothing constructs `SkillRegistry` or opens the skills database. Installing, loading and revoking signed skills is unbuilt (see the MCP / signed skills row above). |
+| `mobile/{push,biometric-policy,deep-links,session-state,crash-reporting}.mjs` | Wire later (milestone: first external user — paired devices, notifications) | No daemon module imports them. The mobile `www/` shell does not use them either, and the web host does not serve the association files `deep-links.mjs` generates. See `mobile/README.md`. Native build and storage work is in #320 and #329. |
+| `agent/browser/{hosted-browser,cloudflare-browser,quota}.mjs` | Wire later (Phase 3.3) | This is the hosted-browser executor and its server-side quota (only `hosted-browser.mjs` imports `quota.mjs`). `apps/web/app/api/computer/browser-plan.mjs` sets `HOSTED_BROWSER_EXECUTOR_AVAILABLE = false`, and the task route returns 503 because no consumer exists. |
+| `platform/mcp-server/http.mjs` | Keep; wire only on demand | The Streamable HTTP transport (loopback, bearer tokens). Nothing launches it, while the stdio server is runnable (`npm run mcp-server`, [MCP-SERVER.md](MCP-SERVER.md)). |
+
+**`packages/atlas-inference` exports with no production importer**
+
+Production importers are `apps/web/app/api/chat/agent-loop.mjs` (error
+classification and token estimate) and `apps/web/worker/inference-governor-core.mjs`
+(quota ledger).
+
+| Export | Disposition | Reason |
+|---|---|---|
+| `createTargetRegistry` | Wire later (Phase 1.3) | Model availability probing for the target pool. |
+| `promptFingerprint`, `cacheReport` | Wire later (Phase 1.4) | PromptFingerprint and measuring the cache hit ratio are named in 1.4 and its exit gate. |
+| `createInferenceRequest`, `createCheckpoint` | Wire later (Phases 1.2–1.3) | Durable request identity, and "checkpoint at each consequential call so any target can continue". |
+| `admitToTarget`, `recordOutcome`, `parseRateLimitHeaders` | Keep | No caller imports these exports, but the functions already run in production inside the quota ledger the Worker governor uses (`reserve` calls `admit`, `release` calls `recordOutcome`, `observe` calls `parseRateLimitHeaders`). Only the public re-export is unused. |
+
+**`packages/atlas-cli/src` modules not reached from `cli.ts`**
+
+| Module | Disposition | Reason |
+|---|---|---|
+| `domain/repository-ownership.ts`, `infrastructure/codeowners-ownership-resolver.ts` | Wire later (Phase 2.6) | CODEOWNERS-aware ownership is what the coder and PR steward need so they never touch protected paths unreviewed. |
+| `domain/repository-workspace.ts` (with `infrastructure/repository-workspace-detector.ts`, also test-only) | Candidate to delete | `RepositoryPackageGraph` (`atlas packages`, `atlas map`) already reads workspaces and `pnpm-workspace.yaml`. |
+| `model/model-registry.ts`, `model/provider-configuration.ts` | Candidate to delete | `model/coder-provider-selection.ts` and the vendor catalog in `packages/atlas-inference/src/catalog.mjs` superseded them. The CLI resolves keys from environment variables, not from these credential references. |
+| `agent/read-only-planning-agent.ts` (with `agent/provider-read-only-planning-agent.ts`, also test-only) | Candidate to delete | `atlas chat` and `atlas code` both use `ProviderReadOnlyToolAgent`. |
+
+Also outside the live runtime: `src/atlas_agent` is the legacy Python prototype,
+not the JS/TS agent runtime. The historical September AUDIT, CURRENT-STATE and
+launch documents record what was true on their dates, not current subsystem
+status.
 
 ## D. Open PR reconciliation (29 open, checked 2026-10-08)
 
