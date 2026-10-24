@@ -21,7 +21,13 @@ function positive(value) {
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
-export function resolveLocalCoder({ requested = "", modelPlan = null, env = process.env } = {}) {
+/** Of the installed models, the one to use when nothing was configured: a coder model if there is one. */
+export function pickInstalledCoder(installed) {
+  const names = (Array.isArray(installed) ? installed : []).filter((name) => typeof name === "string" && name);
+  return names.find((name) => /coder/iu.test(name)) ?? names[0] ?? null;
+}
+
+export function resolveLocalCoder({ requested = "", modelPlan = null, env = process.env, installed = null } = {}) {
   const asked = typeof requested === "string" ? requested.trim() : "";
   const coder = modelPlan?.read?.()?.coder ?? null;
   const configured = env.ATLAS_LOCAL_CODER_MODEL?.trim() || null;
@@ -30,6 +36,9 @@ export function resolveLocalCoder({ requested = "", modelPlan = null, env = proc
   if (asked && asked !== LEGACY_DEFAULT_MODEL) { model = asked; source = "request"; }
   else if (configured) { model = configured; source = "ATLAS_LOCAL_CODER_MODEL"; }
   else if (coder?.tag) { model = coder.tag; source = "model plan"; }
+  // Nothing configured: the legacy default if it is installed (or the list is unknown),
+  // otherwise what is actually installed, so a machine with only a small model works.
+  else if (Array.isArray(installed) && installed.length > 0 && !installed.includes(asked || LEGACY_DEFAULT_MODEL)) { model = pickInstalledCoder(installed); source = "installed"; }
   else { model = asked || LEGACY_DEFAULT_MODEL; source = "default"; }
   const planned = coder?.tag === model ? positive(coder.context) : null;
   const contextWindow = positive(env.ATLAS_LOCAL_CODER_CONTEXT_WINDOW) ?? planned ?? DEFAULT_CONTEXT_WINDOW;

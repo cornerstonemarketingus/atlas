@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLocalControlServer } from "./server.mjs";
 import { runIsolatedLocalCoder } from "./runner.mjs";
+import { resolveLocalCoder } from "./agent/models/local-coder.mjs";
 import { LocalTaskStore } from "./store.mjs";
 import { verifyOfflineLicense } from "./offline-license.mjs";
 import { AgentSessionStore } from "./agent/session-store.mjs";
@@ -314,6 +315,7 @@ const remoteAccess = new RemoteAccess({ port, settingsPath: join(dataDirectory, 
 const server = createLocalControlServer({
   store,
   token,
+  localCoder: (installed) => resolveLocalCoder({ modelPlan, installed }),
   runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory, modelPlan }),
   license,
   runtime,

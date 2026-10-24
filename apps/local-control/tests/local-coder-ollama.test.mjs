@@ -79,3 +79,30 @@ test("the real isolated coder edits a file on the configured 1.5B model over Oll
   assert.match(patch, /\+export const answer = 2;/u);
   git(checkout, "apply", "--check", result.patch);
 });
+
+test("with nothing configured, an installed small model is used instead of an uninstalled 7B", () => {
+  const only15 = resolveLocalCoder({ requested: LEGACY_DEFAULT_MODEL, modelPlan: plan(null), env: {}, installed: ["qwen3:1.7b", "qwen2.5-coder:1.5b"] });
+  assert.deepEqual([only15.model, only15.source], ["qwen2.5-coder:1.5b", "installed"]);
+  // The 7B is used when it really is installed, and the plan still wins over what is merely installed.
+  assert.equal(resolveLocalCoder({ requested: LEGACY_DEFAULT_MODEL, modelPlan: plan(null), env: {}, installed: [LEGACY_DEFAULT_MODEL, "qwen2.5-coder:1.5b"] }).model, LEGACY_DEFAULT_MODEL);
+  assert.equal(resolveLocalCoder({ requested: LEGACY_DEFAULT_MODEL, modelPlan: plan({ tag: "x:1b" }), env: {}, installed: ["qwen2.5-coder:1.5b"] }).model, "x:1b");
+});
+
+test("GET /v1/models lists the configured coder first and names the default", async (t) => {
+  const { createLocalControlServer } = await import("../src/server.mjs");
+  const { LocalTaskStore } = await import("../src/store.mjs");
+  const directory = await mkdtemp(join(tmpdir(), "atlas-models-default-"));
+  const store = new LocalTaskStore(join(directory, "t.sqlite"));
+  const TOKEN = "0123456789abcdef0123456789abcdef";
+  const server = createLocalControlServer({
+    store, token: TOKEN, runTask: async () => ({ ok: true, message: "" }),
+    discoverModels: async () => ({ endpoint: "http://127.0.0.1:11434", models: ["qwen2.5-coder:1.5b", "qwen2.5-coder:7b", "qwen3:1.7b"] }),
+    localCoder: (installed) => resolveLocalCoder({ modelPlan: plan({ tag: "qwen3:1.7b" }), env: {}, installed }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); store.close(); await rm(directory, { recursive: true, force: true }); });
+  const body = await (await fetch(`http://127.0.0.1:${server.address().port}/v1/models`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+  assert.equal(body.models[0], "qwen3:1.7b");
+  assert.equal(body.default, "qwen3:1.7b");
+  assert.equal(body.defaultInstalled, true);
+});

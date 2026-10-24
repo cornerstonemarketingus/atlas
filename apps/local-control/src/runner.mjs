@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { discoverLocalModels } from "./model-discovery.mjs";
 import { resolveLocalCoder } from "./agent/models/local-coder.mjs";
 import { safeEnvironment } from "./agent/tools/process.mjs";
 
@@ -12,9 +13,14 @@ export function localCoderEnvironment() {
   return safeEnvironment({ ATLAS_LOCAL_MODEL_KEY: "local-only-no-credential" });
 }
 
-export function runLocalCoder(task, options = {}) {
+export async function runLocalCoder(task, options = {}) {
   const script = resolve(atlasRoot, "scripts", "local", "run-coder.mjs");
-  const local = resolveLocalCoder({ requested: task.model, modelPlan: options.modelPlan });
+  let local = resolveLocalCoder({ requested: task.model, modelPlan: options.modelPlan });
+  if (local.source === "default") {
+    // Nothing configured: look at what is installed rather than assume a model that may not be.
+    const installed = await (options.installedModels ?? (async () => (await discoverLocalModels()).models))().catch(() => []);
+    local = resolveLocalCoder({ requested: task.model, modelPlan: options.modelPlan, installed });
+  }
   const args = [script, "--repository", task.repository, "--objective", task.objective, "--provider", "ollama", "--model", local.model,
     "--context-window", String(local.contextWindow), "--max-output-tokens", String(local.maxOutputTokens)];
   const baseUrl = options.baseUrl ?? local.baseUrl;

@@ -33,7 +33,15 @@ import { createNodeRoutes } from "./platform/nodes/routes.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, skills = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, nodes = null }) {
+/** The configured coder first, so every model picker opens on the model that will actually run. */
+function withDefaultModel(found, localCoder) {
+  const chosen = localCoder?.(found.models)?.model ?? null;
+  if (!chosen) return found;
+  const installed = found.models.includes(chosen);
+  return { ...found, models: installed ? [chosen, ...found.models.filter((name) => name !== chosen)] : found.models, default: chosen, defaultInstalled: installed };
+}
+
+export function createLocalControlServer({ store, token, runTask, model = "qwen2.5-coder:7b", discoverModels = discoverLocalModels, localCoder = null, license = { mode: "community", valid: true }, runtime = null, missionService = null, businessService = null, workforceRuntime = null, transcriber = null, modelHealth = null, platformStore = null, platformServices = {}, innovation = null, platformStream = null, team = null, memory = null, connections = () => [], toolCatalog = null, selfImprove = null, skills = null, modelHosting = null, identity: localIdentity = null, remoteAccess = null, genesis = null, genesisPreviews = null, genesisPublisher = null, genesisCreation = null, onApprovalDecided = null, laneApplier = null, automations = null, world = null, goals = null, artifacts = null, artifactTenantFor = () => LOCAL_TENANT_ID, render = null, nodes = null }) {
   if (!token || token.length < 32) throw new Error("ATLAS_LOCAL_TOKEN must contain at least 32 characters.");
   const expected = createHash("sha256").update(token).digest();
   const limiter = createRateLimiter();
@@ -195,7 +203,7 @@ export function createLocalControlServer({ store, token, runTask, model = "qwen2
     if (agentRoutes && request.method === "GET" && request.url === "/v1/models/health") { if (await agentRoutes.handle(request, response, identity)) return; }
     if (!runtime && (request.url ?? "").startsWith("/v1/sessions")) return send(response, 503, { message: "The Atlas agent runtime is not running in this process." });
     if (request.method === "GET" && request.url === "/v1/tasks") return send(response, 200, { tasks: store.list() });
-    if (request.method === "GET" && request.url === "/v1/models") { try { return send(response, 200, await discoverModels()); } catch (error) { return send(response, 503, { message: error instanceof Error ? error.message : "Model discovery failed.", models: [] }); } }
+    if (request.method === "GET" && request.url === "/v1/models") { try { return send(response, 200, await withDefaultModel(await discoverModels(), localCoder)); } catch (error) { return send(response, 503, { message: error instanceof Error ? error.message : "Model discovery failed.", models: [] }); } }
     if (request.method === "POST" && request.url === "/v1/tasks") {
       if (identity.role !== "admin") return send(response, 403, { message: "Only the local owner can create coding tasks." });
       const body = await parseBody(request, response); if (!body) return;
