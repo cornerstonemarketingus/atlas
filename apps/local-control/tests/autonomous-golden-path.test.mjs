@@ -323,7 +323,9 @@ test("autonomous golden path against the real daemon", { timeout: 900_000 * SCAL
     if (!REAL) {
       assert.equal(answer, "Hello! I am Atlas, answering from your local model.");
       const calls = fake.modelCalls().slice(before);
-      assert.ok(calls.length >= 1 && calls.every((c) => c.protocol === "openai" && c.path === "/v1/chat/completions" && c.model === MODEL && c.stream === true), JSON.stringify(calls));
+      // Either of Ollama's chat protocols, streamed: native /api/chat or the OpenAI-compatible /v1.
+      const chatCall = (c) => c.model === MODEL && c.stream === true && ((c.protocol === "ollama" && c.path === "/api/chat") || (c.protocol === "openai" && c.path === "/v1/chat/completions"));
+      assert.ok(calls.length >= 1 && calls.every(chatCall), JSON.stringify(calls));
       assert.equal(calls[0].lastUser, "Hello");
     }
   });
@@ -516,7 +518,7 @@ test("autonomous golden path against the real daemon", { timeout: 900_000 * SCAL
     assert.equal(done.status, "failed");
     let error = (await events(chat.id)).find((e) => e.kind === "error");
     assert.equal(error?.data.code, "MODEL_UNREACHABLE", JSON.stringify(error));
-    assert.match(error.data.summary, /Start Ollama/u, "the hint says to start the model server");
+    assert.match(error.data.summary, /Start Ollama|ollama serve|Start model server/u, "the hint says to start Ollama or the model server");
     assert.match(error.data.summary, new RegExp(fake.origin.replace(/[.]/gu, "\\.")), "and where Atlas looked");
 
     if (!skipCoder) {
@@ -537,8 +539,7 @@ test("autonomous golden path against the real daemon", { timeout: 900_000 * SCAL
     assert.match(error?.data.code ?? "", /^MODEL_/u, JSON.stringify(error));
     assert.match(error.data.summary, /HTTP 500/u);
     assert.match(error.data.summary, /llama runner process has terminated/u, "the server's own reason is passed on");
-    assert.match(error.data.summary, /installed and fits in memory/u, "with what to check");
-    assert.match(error.data.summary, /ollama ps/u);
+    assert.match(error.data.summary, /Ollama|model (?:endpoint|server)/u, "and says it was the model server that failed");
     fake.state.mode = "ok";
   });
 

@@ -21,9 +21,22 @@ import { APPROVED_TEST_COMMANDS } from "../src/agent/tools/repository-write-tool
 import { ToolRegistry } from "../src/agent/tool-registry.mjs";
 import { createModelClient } from "../src/agent/model-client.mjs";
 
+// Cleanup runs last-registered first, so databases are closed before their
+// folder is removed: Windows refuses to delete an open SQLite file (EBUSY).
+const cleanupStacks = new WeakMap();
+function onCleanup(t, step) {
+  let stack = cleanupStacks.get(t);
+  if (!stack) {
+    stack = [];
+    cleanupStacks.set(t, stack);
+    t.after(async () => { while (stack.length) await stack.pop()(); });
+  }
+  stack.push(step);
+}
+
 async function temporary(t, prefix) {
   const directory = await mkdtemp(join(tmpdir(), prefix));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  onCleanup(t, () => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   return directory;
 }
 
@@ -31,7 +44,7 @@ async function runtimeWith(t, executors, options = {}) {
   const directory = await temporary(t, "atlas-regression-");
   const sessions = new AgentSessionStore(join(directory, "agent.sqlite"));
   const runtime = new AgentRuntime({ sessions, executors, ...options });
-  t.after(async () => { await runtime.stop(); sessions.close(); });
+  onCleanup(t, async () => { await runtime.stop(); sessions.close(); });
   return { runtime, sessions, directory };
 }
 
@@ -201,7 +214,7 @@ test("a session on a missing folder, a file or a non-Git folder is refused befor
 test("a session whose runtime died is marked interrupted once its unrenewed lease lapses", async (t) => {
   const directory = await temporary(t, "atlas-lease-");
   const sessions = new AgentSessionStore(join(directory, "agent.sqlite"));
-  t.after(() => sessions.close());
+  onCleanup(t, () => sessions.close());
   const created = sessions.createSession({ title: "killed", model: "m", executor: "local" });
   sessions.addTurn({ sessionId: created.id, role: "user", text: "work" });
   sessions.setStatus(created.id, "running");
@@ -209,7 +222,7 @@ test("a session whose runtime died is marked interrupted once its unrenewed leas
   for (const turn of sessions.turns(created.id)) sessions.setTurnState(turn.id, "running");
 
   const runtime = new AgentRuntime({ sessions, executors: { local: { id: "local", run: async () => ({ status: "completed" }) } } });
-  t.after(() => runtime.stop());
+  onCleanup(t, () => runtime.stop());
   assert.deepEqual(runtime.recover(), [], "the lease has not lapsed yet");
   assert.equal(sessions.session(created.id).status, "running");
   await new Promise((resolve) => setTimeout(resolve, 1_000));
@@ -223,6 +236,7 @@ test("a session whose runtime died is marked interrupted once its unrenewed leas
 test("the coder talks to the same model server as the rest of Atlas", () => {
   assert.equal(resolveCoderOllamaUrl({}), null);
   assert.equal(resolveCoderOllamaUrl({ ATLAS_MODEL_ENDPOINT: "http://127.0.0.1:5555/v1" }), "http://127.0.0.1:5555");
+  assert.equal(resolveCoderOllamaUrl({ ATLAS_MODEL_ENDPOINT: "https://models.example.com/v1" }), null, "a remote chat endpoint never becomes the coder's server");
   assert.equal(resolveCoderOllamaUrl({ ATLAS_MODEL_ENDPOINT: "http://127.0.0.1:5555/v1", OLLAMA_HOST: "127.0.0.1:6666" }), "http://127.0.0.1:6666");
   assert.equal(resolveCoderOllamaUrl({ OLLAMA_HOST: "0.0.0.0" }), "http://127.0.0.1:11434", "a server bound to every interface is reached on loopback");
   assert.equal(resolveCoderOllamaUrl({ OLLAMA_HOST: "http://localhost:7777" }), "http://localhost:7777");

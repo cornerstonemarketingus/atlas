@@ -63,7 +63,9 @@ against a real Ollama instead (see the steps below).
 2. **`code.write` not enforced for coding sessions** — the local executor never
    consulted policy, so `deny` was ignored and `ask` never produced an approval.
 3. **The coder ignored the configured model server** — chat used
-   `ATLAS_MODEL_ENDPOINT`; coding always went to `http://127.0.0.1:11434`
+   `ATLAS_MODEL_ENDPOINT`; coding always went to `http://127.0.0.1:11434`. The coder now
+   follows `ATLAS_OLLAMA_URL`, then `OLLAMA_HOST`, then a loopback `ATLAS_MODEL_ENDPOINT`
+   (never a remote one)
    (`src/agent/models/coder-endpoint.mjs`).
 4. **Sessions on missing folders** were accepted and failed only after a run
    started (`src/agent/repository-check.mjs`).

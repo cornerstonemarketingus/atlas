@@ -11,7 +11,8 @@
  *   1. ATLAS_OLLAMA_URL      Atlas's explicit setting for the coder
  *   2. OLLAMA_HOST           Ollama's own variable (host:port or a URL); a
  *                            server bound to 0.0.0.0 is reached on 127.0.0.1
- *   3. ATLAS_MODEL_ENDPOINT  the endpoint the rest of Atlas uses, as an origin
+ *   3. ATLAS_MODEL_ENDPOINT  the endpoint the rest of Atlas uses, as an origin,
+ *                            when it is on this machine (loopback)
  *   4. null                  the coder's default, http://127.0.0.1:11434
  */
 export function resolveCoderOllamaUrl(env = process.env) {
@@ -26,9 +27,17 @@ export function resolveCoderOllamaUrl(env = process.env) {
       return url.origin;
     } catch { /* fall through to the next source */ }
   }
+  // Only a server on this machine: the coder sends repository content, and a
+  // remote ATLAS_MODEL_ENDPOINT (an opt-in for chat) must not quietly become
+  // where every coding run goes. A remote coder needs ATLAS_OLLAMA_URL.
   const endpoint = env.ATLAS_MODEL_ENDPOINT?.trim();
   if (endpoint) {
-    try { return new URL(endpoint).origin; } catch { /* fall through */ }
+    try {
+      const url = new URL(endpoint);
+      if (LOOPBACK.test(url.hostname)) return url.origin;
+    } catch { /* fall through */ }
   }
   return null;
 }
+
+const LOOPBACK = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/iu;
