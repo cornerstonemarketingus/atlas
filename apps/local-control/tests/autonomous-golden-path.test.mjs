@@ -510,7 +510,9 @@ test("autonomous golden path against the real daemon", { timeout: 900_000 * SCAL
     assert.ok(browserRunning().length > 0, "Atlas launched a new browser");
   });
 
-  await t.test("G1. model unavailable: connection refused and HTTP 500 end in an honest failure naming the model server", { skip: REAL && "needs control of the model server" }, async () => {
+  await t.test("G1. model unavailable: connection refused and HTTP 500 end in an honest failure naming the model server", { skip: REAL && "needs control of the model server" }, async (st) => {
+    // Whatever happens here, later tests get a working model server back.
+    st.after(async () => { fake.state.mode = "ok"; if (!fake.listening()) await fake.listen(); });
     await fake.close();
     const chat = await openSession({ title: "Model down" });
     await say(chat.id, "Hello while the model is down");

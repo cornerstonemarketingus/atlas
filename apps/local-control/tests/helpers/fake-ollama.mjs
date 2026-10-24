@@ -129,6 +129,7 @@ export async function startFakeOllama({ decide, models = ["qwen2.5-coder:7b"], p
     modelCalls: () => requests.filter((r) => r.protocol),
     /** Takes the server down: every later connection is refused. */
     close: () => new Promise((resolve) => { for (const socket of sockets) socket.destroy(); server.close(() => resolve()); }),
+    listening: () => server.listening,
     /** Brings it back on the same port. */
     listen: () => listen(boundPort),
   };
