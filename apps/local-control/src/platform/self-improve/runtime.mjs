@@ -54,8 +54,9 @@ export function createCoderBuilder({ atlasRoot, cli, runsDirectory, endpoint, co
     const auditLog = join(runsDirectory, `${new Date().toISOString().replaceAll(":", "-")}.jsonl`);
     const args = [
       cli, "code", worktree, objective,
-      "--provider", "groq",
-      "--api-key-env", "ATLAS_SELF_IMPROVE_KEY",
+      // A local Ollama is its own provider (per-request context window, no key);
+      // a remote or non-Ollama server stays on the OpenAI-compatible path.
+      ...(isLoopback(endpoint.baseUrl) && !endpoint.apiKey ? ["--provider", "ollama"] : ["--provider", "groq", "--api-key-env", "ATLAS_SELF_IMPROVE_KEY"]),
       "--model", endpoint.model,
       "--base-url", endpoint.baseUrl,
       ...(isLoopback(endpoint.baseUrl) ? ["--context-window", contextWindow, "--max-output-tokens", maxOutputTokens] : []),

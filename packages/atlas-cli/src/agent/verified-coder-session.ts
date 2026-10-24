@@ -222,6 +222,25 @@ export class VerifiedCoderSession {
       mergeEdits(accumulated, last.edits);
 
       if (last.status !== "completed") {
+        // An agent that ran out of turns or hit a failure loop may still have
+        // applied real edits. Those are checked against the same baseline so
+        // the report says what the partial work does to the repository; it
+        // never becomes "verified", because the objective was not finished.
+        if ((last.status === "blocked" || last.status === "failed") && accumulated.size > 0 && baseline !== null) {
+          try {
+            const partial = this.#compare(baseline, await this.#runValidation("post-change"));
+            const action = decideVerificationAction(partial, pass, Number.POSITIVE_INFINITY);
+            const stopped = `The agent stopped with status '${last.status}' after changing ${accumulated.size} file(s), so the objective is not confirmed.`;
+            const [status, detail]: [VerificationStatus, string] = action === "accept"
+              ? ["unverified", "The repository's own checks reported no failures introduced by these edits; that is not a completion claim."]
+              : action === "inconclusive"
+                ? ["inconclusive", "The checks could not be compared reliably, so the effect of these edits is unknown."]
+                : ["regressed", `The repository's own checks report ${partial.summary.new} failure(s) introduced by these edits.`];
+            return this.#result(last, accumulated, this.#report(status, pass, partial, escalatedAtPass, null, undefined, `Partial work: ${stopped} ${detail}`));
+          } catch {
+            /* fall through to the plain report below: partial evidence is best effort */
+          }
+        }
         return this.#result(last, accumulated, {
           status: "not-applicable",
           attempts: pass,

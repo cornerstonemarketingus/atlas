@@ -106,6 +106,7 @@ test("a real bug is repaired by Atlas's real coder and verified again", { skip, 
     assert.equal(result.model, "scripted-coder");
     assert.match(result.commit, /^[0-9a-f]{40}$/u);
     assert.ok(model.requests.some((r) => /failing/u.test(r.objective) && r.tools.includes("repository.propose_change_set")), "the coder offered its edit tools to the model");
+    assert.ok(model.requests.every((r) => r.protocol === "ollama" && r.options?.num_ctx === 16384), "a loopback model is reached through the native Ollama provider with the declared window");
     assert.equal(readFileSync(join(done.workspace, "src", "store.mjs"), "utf8"), original);
   });
 });
