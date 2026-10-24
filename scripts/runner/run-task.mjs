@@ -6,6 +6,7 @@ import path from "node:path";
 import { correlationIdFromEnv, correlationLogSuffix } from "./correlation.mjs";
 import { coderValidationArguments } from "./validation-isolation.mjs";
 import { enforceHostedExecutionLease } from "./claim-execution.mjs";
+import { findMarkers, requestedMarkers } from "./inspect-findings.mjs";
 
 // Also fence cached pre-claim workflow definitions that check out current main policy.
 enforceHostedExecutionLease(process.env);
@@ -145,8 +146,28 @@ if (metadata.mode === "inspect") {
     fs.writeFileSync(path.join(outputDirectory, filename), output, { encoding: "utf8", mode: 0o600 });
   }
 
-  writeStatus("completed", "Read-only inspection completed successfully.");
-  console.log("Atlas read-only inspection completed.");
+  // The inventory above does not depend on the objective. Say what the request
+  // was and whether this run answered it, so a green job is never mistaken for
+  // an answer.
+  const markers = requestedMarkers(metadata.objective);
+  if (markers.length > 0) {
+    const found = findMarkers(repositoryRoot, markers);
+    if (!found.ok) {
+      writeStatus("failed", found.error);
+      console.error(found.error);
+      process.exit(1);
+    }
+    if (!writeRedactedJson("findings.json", { schema_version: 1, kind: "markers", answered: true, ...found })) {
+      writeStatus("failed", "The marker findings could not be written safely.");
+      process.exit(1);
+    }
+    writeStatus("completed", `Read-only inspection completed: ${found.total} ${markers.join("/")} comment(s) found.`, { answered: true });
+    console.log(`Atlas read-only inspection completed: ${found.total} marker comment(s).`);
+  } else {
+    writeJson("findings.json", { schema_version: 1, kind: "inventory", answered: false });
+    writeStatus("completed", "Read-only inspection completed: a repository inventory only. A more specific request was not answered.", { answered: false });
+    console.log("Atlas read-only inspection completed (inventory only).");
+  }
 } else if (metadata.mode === "debug") {
   const packageDirectory = path.join(repositoryRoot, "packages", "atlas-cli");
   if (!fs.existsSync(path.join(packageDirectory, "package.json"))) {
