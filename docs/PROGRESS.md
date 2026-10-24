@@ -721,6 +721,7 @@ separate live-health/business outcome adapters. No live business action claimed.
 
 
 
+
 ## 2026-10-17 — result ownership integration checkpoint (#282)
 
 Integrated main 482948b through #270/#274/#276/#278 into the existing result
@@ -733,12 +734,19 @@ All ten workflow checks pass. Runner/local suite: 86 pass, one failure, one
 Linux-only skip (88 total); isolated process suite: five pass, two fail, one
 Linux-only skip. Windows inherited-pipe deadline and observer timing remain
 unresolved. Do not relabel these failures as a passing acceptance run.
-Fresh web validation is pending: npm ci stalled without an error, then was stopped;
-matching-lockfile dependencies are being copied from the verified parent checkout.
-Initial build/lint attempts before dependency completion failed to find binaries.
+Fresh validation: production Worker build and typecheck pass; complete web suite
+551 pass, four optional browser skips (555 total), including all six result tests
+and the callback race. Dependencies were copied from the verified parent after a
+stalled npm ci; lockfile SHA-256 values match. Initial incomplete-install checks
+failed to find binaries. Corrected regression preserves the run linkage already
+established by the claim. CI at 39cadb3 passes web build/tests/lint and eleven other
+jobs; Windows local-control remains pending at this checkpoint. Local full lint
+was stopped under memory pressure after fresh CI lint passed. No live-provider or physical-phone acceptance is inferred.
 No production migration/deployment, live OIDC, paid infrastructure or secret
 transfer occurred. Migration 0019 and protected owner review remain required.
 Next: finish #282 web validation and fresh CI; then #289 trusted outcome receipts.
+
+
 ## 2026-10-17 coder context recovery (issue #287)
 
 - Live run 38819478158 confirms #269 repaired repo_browser aliases in production. The same run still failed on HTTP 413 after substantial context growth; alias repair alone is not task completion. Hosted authenticated inspection 38848539074 passed.
@@ -1208,3 +1216,4 @@ Native39072449616 at78bde09 compiled/launched but independently viewed UI STILL 
 Native39074439410 at8e21ead passed compile/startup; actual runtime metadata confirms secureContext=true, cryptoRandom=function, nativePromise=function and SecureStoragePlugin header present. This rules out missing crypto/current native bridge/plugin registration as explanations at8seconds. Added DEBUG/env-gated clean-CI nonsecret direct nativePromise set/get/remove probe recording only stage/match/failure booleans to distinguish native storage failure from module proxy timing; no raw errors or credentials, supplemental diagnostics only. Actual readiness remains unresolved.
 
 Native39076451526 at18211ca actual direct nativePromise probe reports storage stage=set, failed=true with bridge/plugin/crypto available. This locates failure at native set, not module-proxy timing. Added DEBUG/env-only direct nonsecret Security.framework SecItemAdd/SecItemDelete probe logging numeric OSStatus only, to distinguish unsigned-simulator entitlement failure from plugin-specific behavior; no production policy change, credential access or raw error text. Next actual compiler run must inspect numeric status before changing signing or native storage.
+
