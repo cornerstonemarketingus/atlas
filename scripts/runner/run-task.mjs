@@ -145,8 +145,16 @@ if (metadata.mode === "inspect") {
     fs.writeFileSync(path.join(outputDirectory, filename), output, { encoding: "utf8", mode: 0o600 });
   }
 
-  writeStatus("completed", "Read-only inspection completed successfully.");
-  console.log("Atlas read-only inspection completed.");
+  // A generic repository inventory cannot satisfy an objective-specific question.
+  // Do not return a misleading success without objective-specific findings.
+  const objective = String(metadata.objective ?? "").trim();
+  if (objective && !/^(inspect|overview|inventory|summari[sz]e)( the)?( repository| codebase| project)?[.!]?$/i.test(objective)) {
+    writeStatus("blocked", "Hosted inspect mode supports repository inventory only. Objective-specific findings were not produced; select a task mode that can search source files.", { objective_fulfilled: false });
+    console.error("Atlas inspection incomplete: objective-specific findings unavailable.");
+    process.exit(1);
+  }
+  writeStatus("completed", "Repository inventory completed successfully.", { objective_fulfilled: true });
+  console.log("Atlas repository inventory completed.");
 } else if (metadata.mode === "debug") {
   const packageDirectory = path.join(repositoryRoot, "packages", "atlas-cli");
   if (!fs.existsSync(path.join(packageDirectory, "package.json"))) {
