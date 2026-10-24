@@ -68,6 +68,15 @@
 .composer-context select{max-width:170px;border:0;background:transparent;color:#aab3ac;font:500 10px var(--font-geist-mono)}
 .composer-context>span{margin-left:auto;color:#606962;font-size:10px}
 .composer-notice{margin:9px 4px 0;color:#d8b675;font-size:11px}
+.composer-notice a,.composer-notice .link-button{color:var(--ws-accent);text-decoration:underline;text-underline-offset:3px}
+.link-button{border:0;background:none;padding:0;font:inherit;cursor:pointer}
+.mode-picker{display:inline-flex;gap:2px;margin:0 4px 8px;padding:2px;border:1px solid #313732;border-radius:9px;background:#202421}
+.mode-picker:disabled{opacity:.6}
+.mode-picker label{position:relative;display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;color:#abb3ad;font:600 10px var(--font-geist-mono);text-transform:uppercase;cursor:pointer}
+.mode-picker input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+.mode-picker label.active{background:#171a18;color:var(--ws-accent);box-shadow:inset 0 0 0 1px var(--ws-accent)}
+.mode-picker label:focus-within{outline:2px solid var(--ws-accent);outline-offset:1px}
+.mode-tag{border:1px solid currentColor;border-radius:5px;padding:1px 4px;font-size:8px;opacity:.8}
 
 /* --- work panel contents -------------------------------------------------- */
 .run-summary{padding:26px;border-bottom:1px solid var(--ws-line)}

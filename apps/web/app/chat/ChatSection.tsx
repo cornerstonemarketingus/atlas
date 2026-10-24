@@ -41,6 +41,13 @@ function activeCapabilities(conversationId: string | null, tasks: Task[], messag
 }
 
 type Suggestion = { text: string; kind: "project_task" | "computer_task" | "new_project_task"; mode?: string; reason: string };
+type ChatMode = "atlas" | "super-atlas";
+type ChatModeChoice = { id: ChatMode; label: string; paid: boolean; available: boolean; reason: string | null; upgradeUrl?: string };
+// Until the catalog loads, Atlas is offered and Super Atlas waits for the server's answer.
+const DEFAULT_MODES: ChatModeChoice[] = [
+  { id: "atlas", label: "Atlas", paid: false, available: true, reason: null },
+  { id: "super-atlas", label: "Super Atlas", paid: true, available: false, reason: null },
+];
 type Device = { id: string; name: string; status: string; revokedAt: string | null };
 const PANEL_KEY = "atlas.workPanel";
 
@@ -67,8 +74,12 @@ export function ChatSection() {
   const [repository, setRepository] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem(PROJECT_STORAGE_KEY) ?? "");
   const [branch, setBranch] = useState("main");
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [ready, setReady] = useState<{ configured: boolean; reason: string | null; providers?: { id: string; label: string; available: boolean; paid?: boolean }[] } | null>(null);
+  const [ready, setReady] = useState<{ configured: boolean; reason: string | null; providers?: { id: string; label: string; available: boolean; paid?: boolean }[]; modes?: ChatModeChoice[] } | null>(null);
   const [provider, setProvider] = useState("auto");
+  // Atlas (free, every provider and model) or Super Atlas (paid models only). Super Atlas never falls back to Atlas by itself.
+  const [mode, setMode] = useState<ChatMode>("atlas");
+  // Set when Super Atlas refused or failed: the person can switch to Atlas in one step.
+  const [offerAtlas, setOfferAtlas] = useState(false);
   const [stored, setStored] = useState(true);
   const [version, setVersion] = useState(0);
   const { threads, close } = useThreads(version);
@@ -122,7 +133,7 @@ export function ChatSection() {
     let active = true;
     void fetch("/api/chat", { cache: "no-store" })
       .then((response) => (response.status === 401 ? (window.location.href = "/", null) : response.ok ? response.json() : null))
-      .then((value) => { if (active && value) setReady(value as { configured: boolean; reason: string | null }); })
+      .then((value) => { if (active && value) setReady(value as { configured: boolean; reason: string | null; modes?: ChatModeChoice[] }); })
       .catch(() => undefined);
     return () => { active = false; };
   }, []);
@@ -257,6 +268,7 @@ export function ChatSection() {
     setDraft("");
     setNotice("");
     setCapReached(false);
+    setOfferAtlas(false);
     const intent = classifyIntent(text, { hasProject: Boolean(repository) });
     if (ready?.configured === false && intent.kind !== "chat") {
       showLocal(text);
@@ -281,14 +293,15 @@ export function ChatSection() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text, repository, branch, stream: true, provider }),
+        body: JSON.stringify({ conversationId, message: text, repository, branch, stream: true, mode, ...(mode === "atlas" ? { provider } : {}) }),
         signal: controller.signal,
       });
       if (current !== generation.current) { await response.body?.cancel(); return; }
       if (!response.ok || !response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) {
-        const result = await response.json().catch(() => ({})) as { message?: string; code?: string; needsModelEndpoint?: boolean; conversationId?: string };
+        const result = await response.json().catch(() => ({})) as { message?: string; code?: string; needsModelEndpoint?: boolean; conversationId?: string; fallbackMode?: string };
         if (current !== generation.current) return;
         if (result.code === "CHAT_CAP_REACHED") setCapReached(true);
+        if (result.fallbackMode === "atlas") setOfferAtlas(true);
         setNotice(result.message ?? "The chat request failed without diagnostic details. Retry, or check the model and GitHub connections in Settings.");
         if (result.needsModelEndpoint) setReady({ configured: false, reason: result.message ?? null });
         return;
@@ -311,7 +324,7 @@ export function ChatSection() {
         if (current !== generation.current) { await reader.cancel(); return; }
         if (done) break;
         for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-          const data = item.data as { conversationId?: string; stored?: boolean; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview } & Partial<AgentNode> | null;
+          const data = item.data as { conversationId?: string; stored?: boolean; text?: string; message?: string; reply?: Message; id?: string; label?: string; state?: string; agentId?: string; preview?: Preview; fallbackMode?: string } & Partial<AgentNode> | null;
           if (item.type === "project") setProjectOperation(item.data as ProjectOperation);
           else if (item.type === "meta" && data?.conversationId) setConversationId(data.conversationId);
           else if (item.type === "thinking" && data?.text) { thought += data.text; setThinking(thought); }
@@ -332,7 +345,7 @@ export function ChatSection() {
             setStreaming((current) => current ?? "");
             addLog({ kind: "agent", state: node.state, who: node.name, text: `${node.state === "running" || node.state === "planning" ? "▸" : node.state === "done" ? "✓" : node.state === "failed" ? "✕" : "·"} ${node.title}${node.summary && (node.state === "done" || node.state === "failed") && node.depth === 0 ? ` (${node.summary})` : ""} · ${node.state}` });
           }
-          else if (item.type === "error") { diagnosed = true; setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `✕ ${data?.message ?? "the reply failed"}` }); }
+          else if (item.type === "error") { diagnosed = true; if (data?.fallbackMode === "atlas") setOfferAtlas(true); setNotice(data?.message ?? "Atlas could not finish that reply."); addLog({ kind: "note", state: "failed", who: "Atlas", text: `✕ ${data?.message ?? "the reply failed"}` }); }
           else if (item.type === "done" && data?.reply) {
             succeeded = true;
             if (data.stored === false) {
@@ -457,7 +470,10 @@ export function ChatSection() {
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(event as unknown as FormEvent); }
   }
 
-  const blocked = ready?.configured === false;
+  const blocked = mode === "atlas" && ready?.configured === false;
+  const modes = ready?.modes ?? DEFAULT_MODES;
+  const superAtlas = modes.find((choice) => choice.id === "super-atlas");
+  const chooseMode = (next: ChatMode) => { setMode(next); setOfferAtlas(false); setNotice(""); };
 
   return <AtlasShell
     section="chat"
@@ -536,16 +552,28 @@ export function ChatSection() {
       <textarea aria-label="Message Atlas" value={draft} rows={3} onKeyDown={keyDown}
         onChange={(event) => setDraft(event.target.value)}
       placeholder={blocked ? "Connect an AI model before asking Atlas a question" : "Ask Atlas anything…"} />
+      <fieldset className="mode-picker" disabled={streaming !== null}>
+        <legend className="sr-only">Chat mode</legend>
+        {modes.map((choice) => <label key={choice.id} className={mode === choice.id ? "active" : undefined}>
+          <input type="radio" name="chat-mode" value={choice.id} checked={mode === choice.id} onChange={() => chooseMode(choice.id)}
+            aria-describedby={choice.id === "super-atlas" && !choice.available && choice.reason ? "mode-reason-super-atlas" : undefined} />
+          {choice.label}{choice.paid ? <span className="mode-tag">Paid</span> : null}
+        </label>)}
+      </fieldset>
+      {/* The reason is read with the Super Atlas option before it is chosen, and shown with its next steps once it is. */}
+      {superAtlas && !superAtlas.available && superAtlas.reason && <p id="mode-reason-super-atlas" className={mode === "super-atlas" ? "composer-notice mode-reason" : "sr-only"}>
+        {superAtlas.reason}{mode === "super-atlas" && <> {superAtlas.upgradeUrl && <Link href={superAtlas.upgradeUrl}>See plans</Link>} <button type="button" className="link-button" onClick={() => chooseMode("atlas")}>Use Atlas</button></>}
+      </p>}
         <div className="composer-actions">
-          <label>Model <select aria-label="Model provider" value={provider} onChange={(event) => setProvider(event.target.value)} disabled={streaming !== null}>
+          {mode === "atlas" ? <label>Model <select aria-label="Model provider" value={provider} onChange={(event) => setProvider(event.target.value)} disabled={streaming !== null}>
             {(ready?.providers ?? [{ id: "auto", label: "Automatic", available: true }]).map((option) => <option key={option.id} value={option.id} disabled={!option.available}>{option.label}{option.paid ? " (paid API)" : ""}{!option.available ? " — not configured" : ""}</option>)}
-          </select></label>
+          </select></label> : <span className="composer-hint">Paid models only</span>}
         <div><span className="composer-hint">Enter sends · Shift+Enter for a new line</span></div>
         {streaming !== null
           ? <button type="button" className="send" onClick={stop} aria-label="Stop the reply">■</button>
           : <button className="send" aria-label="Send" disabled={sending || !draft.trim()}>{sending ? "…" : "↑"}</button>}
       </div>
-      {notice && <p className="composer-notice" role="status">{notice}</p>}
+      {notice && <p className="composer-notice" role="status">{notice}{offerAtlas && mode !== "atlas" && <> <button type="button" className="link-button" onClick={() => chooseMode("atlas")}>Switch to Atlas</button></>}</p>}
       {capReached && <p className="composer-notice cap-options">Keep going free on your own computer: <a href="/guide#local-model">run a local model</a>. Or <a href="/pricing">choose a plan</a> for a higher daily limit.</p>}
     </form>
   </AtlasShell>;

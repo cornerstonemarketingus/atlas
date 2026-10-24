@@ -5,7 +5,7 @@ import { conversationWritable, recallForMemory, tenantAllowlist } from "../../..
 import { resolveTenantContext, tenantScope } from "../auth/tenant-context.mjs";
 import { conversationMessages, conversations } from "../../../db/schema";
 import { authenticatedAccount } from "../tasks/operator-auth.mjs";
-import { checkAndRecordChatUsage } from "../billing/plan.mjs";
+import { checkAndRecordChatUsage, currentPlan } from "../billing/plan.mjs";
 import { isDeploymentOwner } from "../tasks/self-protection.mjs";
 import { POST as startTask } from "../tasks/route";
 import { allowedRepositories } from "../tasks/dispatch.mjs";
@@ -17,6 +17,7 @@ import { SELF_REPOSITORY, TASK_TOOL, atlasSystemPrompt, describeStartedTask, mem
 import { chatTurns } from "./turns.mjs";
 import { threadTitle } from "./model-endpoint.mjs";
 import { resolveChatProvider, chatProviderChoices } from "./providers.mjs";
+import { SUPER_ATLAS, chatModeChoices, normalizeChatMode, resolveChatMode, superAtlasEntitlement, superAtlasFailure } from "./chat-modes.mjs";
 import { chatEventStream } from "./stream.mjs";
 import { converse } from "./agent-loop.mjs";
 import { governChain } from "../inference/governor-client.mjs";
@@ -38,7 +39,7 @@ export async function POST(request: Request) {
   const account = await authenticatedAccount(request);
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
 
-  let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown; stream?: unknown; provider?: unknown };
+  let body: { conversationId?: unknown; message?: unknown; repository?: unknown; branch?: unknown; stream?: unknown; provider?: unknown; mode?: unknown };
   try { body = await request.json() as typeof body; } catch { return Response.json({ message: "Request body must be valid JSON." }, { status: 400 }); }
 
   if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ message: "Request body must be a JSON object." }, { status: 400 });
@@ -52,10 +53,15 @@ export async function POST(request: Request) {
 
   // Checked before anything is written: a thread whose only content is a
   // question that was never sent anywhere is worse than no thread.
-  const selection = body.provider ?? "auto";
+  // Atlas (free) keeps the whole provider fabric and every model choice;
+  // Super Atlas routes only to paid models, for paid accounts (chat-modes.mjs).
+  const mode = normalizeChatMode(body.mode);
+  if (!mode) return Response.json({ message: "Choose Atlas or Super Atlas." }, { status: 400 });
   const workersAI = { ai: (workerEnv as { AI?: unknown }).AI };
-  if (typeof selection !== "string" || !chatProviderChoices(process.env, workersAI).some((choice) => choice.id === selection)) return Response.json({ message: "Unknown model provider." }, { status: 400 });
-  const resolved = resolveChatProvider(process.env, selection, workersAI);
+  const routed = await resolveChatMode({ mode, provider: body.provider, environment: process.env, bindings: workersAI,
+    entitlement: () => superAtlasEntitlement(account, (id: number) => currentPlan(getDb(), id)) });
+  if (routed.refusal) return Response.json(routed.refusal.body, { status: routed.refusal.status });
+  const resolved = routed.endpoint as ReturnType<typeof resolveChatProvider>;
   if (!resolved.configured) {
     return Response.json({ message: resolved.reason, needsModelEndpoint: true }, { status: 503 });
   }
@@ -134,11 +140,11 @@ export async function POST(request: Request) {
   };
 
   if (body.stream === true) {
-    return streamReply({ ...loop, conversationId, stored, db, userId: account.userId });
+    return streamReply({ ...loop, conversationId, stored, db, userId: account.userId, mode });
   }
 
   const outcome = await converse({ ...loop, stream: false, emit: () => {} });
-  if ("error" in outcome) return Response.json({ message: outcome.error, conversationId }, { status: outcome.status });
+  if ("error" in outcome) return Response.json({ ...(mode === SUPER_ATLAS ? superAtlasFailure(outcome.error) : { message: outcome.error }), conversationId }, { status: outcome.status });
   const reply = outcome.reply;
   if (!reply) return Response.json({ message: "The model endpoint returned an empty reply.", conversationId }, { status: 502 });
 
@@ -251,9 +257,9 @@ async function startRequestedTasks(request: Request, { requests, errors }: TaskR
  * a message a person can act on. The reply is persisted once, when the model
  * finishes, while the request is still open.
  */
-function streamReply({ conversationId, stored, db, userId, ...loop }: {
+function streamReply({ conversationId, stored, db, userId, mode, ...loop }: {
   endpoint: Endpoint; turns: ChatTurn[]; toolContext: ToolContext; conversationId: string; stored: boolean;
-  db: ReturnType<typeof getDb> | undefined; userId: string; defaultRepository: string; userMessage: string;
+  db: ReturnType<typeof getDb> | undefined; userId: string; mode: string; defaultRepository: string; userMessage: string;
   startTasks: (calls: TaskRequests) => Promise<string[]>;
   tools: object[]; handlers: Parameters<typeof converse>[0]["handlers"];
 }) {
@@ -263,7 +269,7 @@ function streamReply({ conversationId, stored, db, userId, ...loop }: {
       emit("meta", { conversationId });
       const outcome = await converse({ ...loop, stream: true, emit });
       if ("error" in outcome) {
-        emit("error", { message: outcome.error });
+        emit("error", mode === SUPER_ATLAS ? superAtlasFailure(outcome.error) : { message: outcome.error });
         return;
       }
       const reply = outcome.reply;
@@ -295,5 +301,6 @@ export async function GET(request: Request) {
   if (!account) return Response.json({ message: "Sign in is required." }, { status: 401 });
   const bindings = { ai: (workerEnv as { AI?: unknown }).AI };
   const endpoint = resolveChatProvider(process.env, "auto", bindings);
-  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null, providers: chatProviderChoices(process.env, bindings) }, { headers: { "cache-control": "no-store" } });
+  const modes = await chatModeChoices({ environment: process.env, bindings, entitlement: () => superAtlasEntitlement(account, (id: number) => currentPlan(getDb(), id)) });
+  return Response.json({ configured: endpoint.configured, reason: endpoint.reason ?? null, providers: chatProviderChoices(process.env, bindings), modes }, { headers: { "cache-control": "no-store" } });
 }

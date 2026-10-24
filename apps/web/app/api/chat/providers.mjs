@@ -1,6 +1,6 @@
 import { providerKind, resolveChatModel } from "./model-endpoint.mjs";
 import { workersAIBindingModel } from "./workers-ai-binding.mjs";
-import { vendorEndpoint } from "../../../../../packages/atlas-inference/src/catalog.mjs";
+import { TRUST, vendorEndpoint } from "../../../../../packages/atlas-inference/src/catalog.mjs";
 
 /**
  * Free and no-card vendors after the built-in ones: Cerebras (vendor terms),
@@ -106,6 +106,31 @@ export function resolveChatProvider(environment = process.env, selection = "auto
   // OpenAI (a provider already in the route is not repeated), each with its
   // own fallback model. A refusal from one bounces to the next.
   return chain([lead, workers, groqModel(environment), ...freeVendors(environment), openai]);
+}
+
+/**
+ * The paid route Super Atlas uses (docs/atlas-os/ATLAS-CHAT-TIERS.md): only
+ * models this deployment pays for, strongest first, each one's
+ * providerFallback the next. A configured main model on the OpenAI API (the
+ * operator's own model choice, with OPENAI_API_KEY), then OpenAI's default,
+ * then a free-tier vendor the owner has marked as a paid plan
+ * (ATLAS_<VENDOR>_TIER=paid, so it is on vendor terms). Free providers are
+ * never in this route, so a paid reply can fail but never quietly turn into
+ * a free one. Null when the deployment pays for no model.
+ */
+export function paidChatRoute(environment = process.env) {
+  const openai = openAIModel(environment);
+  const primary = resolveChatModel(environment);
+  const operatorOpenAI = primary.configured && new URL(primary.baseUrl).origin === "https://api.openai.com" && (primary.apiKey || openai)
+    ? { ...primary, apiKey: primary.apiKey || openai.apiKey, provider: "openai" } : null;
+  // These three are training tiers by default; vendor terms here mean the owner marked a paid plan.
+  const upgraded = ["gemini", "openrouter", "mistral"]
+    .map((id) => vendorEndpoint(id, environment))
+    .filter((endpoint) => endpoint?.tier === TRUST.VENDOR);
+  const providers = [operatorOpenAI, openai, ...upgraded].filter(Boolean);
+  if (!providers.length) return null;
+  const fallbackDisabled = (environment.ATLAS_CHAT_FALLBACK_MODEL || "").trim().toLowerCase() === "none";
+  return fallbackDisabled ? providers[0] : chain(providers);
 }
 
 /** Automatic's route as provider kinds ("self-hosted", "workers-ai", "groq", a free vendor's id, "openai"), never addresses or keys. */

@@ -155,6 +155,43 @@ test("hitting the daily cap shows the local model first, then plans, keeps the d
   assert.doesNotMatch(JSON.stringify(chat.render()), /cap-options/u, "an unrelated failure does not show the cap options");
 });
 
+test("the mode picker is a labelled radio group; Super Atlas sends no provider and a refusal offers Atlas", async () => {
+  const chat = screen();
+  const all = (node, match, found = []) => {
+    if (!node || typeof node !== "object") return found;
+    if (match(node)) found.push(node);
+    for (const child of [node.props?.children].flat(Infinity)) all(child, match, found);
+    return found;
+  };
+  const modelSelect = (node) => node.type === "select" && node.props["aria-label"] === "Model provider";
+  const radio = (value) => all(chat.render(), (node) => node.type === "input" && node.props.value === value)[0];
+  const picker = all(chat.render(), (node) => node.type === "fieldset")[0];
+  assert.ok(picker, "a fieldset groups the modes");
+  assert.equal(all(picker, (node) => node.type === "legend")[0].props.children, "Chat mode");
+  const radios = all(picker, (node) => node.type === "input" && node.props.type === "radio");
+  assert.deepEqual(radios.map((input) => [input.props.value, input.props.name, input.props.checked]), [["atlas", "chat-mode", true], ["super-atlas", "chat-mode", false]]);
+  assert.equal(all(chat.render(), modelSelect).length, 1, "Atlas keeps the model choice");
+  chat.type("Hello");
+  const free = chat.send();
+  const freeBody = JSON.parse(chat.requests[0].options.body);
+  assert.deepEqual([freeBody.mode, freeBody.provider], ["atlas", "auto"]);
+  chat.requests[0].resolve(Response.json({ message: "Unavailable" }, { status: 503 }));
+  await free;
+
+  radio("super-atlas").props.onChange();
+  assert.equal(all(chat.render(), modelSelect).length, 0, "Super Atlas picks its own paid models");
+  const premium = chat.send();
+  const sent = JSON.parse(chat.requests[1].options.body);
+  assert.deepEqual([sent.mode, sent.provider], ["super-atlas", undefined]);
+  chat.requests[1].resolve(Response.json({ message: "Super Atlas needs an active Pro or Team subscription.", code: "SUBSCRIPTION_REQUIRED", fallbackMode: "atlas" }, { status: 403 }));
+  await premium;
+  const offer = all(chat.render(), (node) => node.type === "button" && node.props.children === "Switch to Atlas")[0];
+  assert.ok(offer, "the refusal offers Atlas in one step");
+  assert.equal(radio("super-atlas").props.checked, true, "and does not switch by itself");
+  offer.props.onClick();
+  assert.equal(radio("atlas").props.checked, true);
+});
+
 test("a 200 stream that goes silent after a step ends with a clear error and the draft ready to retry", { timeout: 5000 }, async () => {
   // Reproduces the hosted hang: HTTP 200, a meta and one tool step, then no
   // further bytes and no close. The UI must not stay on "1 step" forever.
