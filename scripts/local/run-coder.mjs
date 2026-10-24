@@ -22,7 +22,7 @@ if (process.argv.includes("--help")) {
   node scripts/local/run-coder.mjs --repository <path> --objective <text> [options]
 
 Options:
-  --provider <id>           ollama (default, native API) or groq (generic OpenAI-compatible server)
+  --provider <id>           ollama (default, native API), local (credential-free OpenAI-compatible, loopback only) or groq
   --model <name>            Model (default: $ATLAS_LOCAL_CODER_MODEL, else qwen2.5-coder:7b)
   --base-url <url>          OpenAI-compatible base URL (default: http://127.0.0.1:11434/v1)
   --context-window <n>      Served context window (default: 16384)
@@ -40,7 +40,7 @@ const objective = option("--objective");
 if (!repository || !objective) throw new Error("--repository and --objective are required. Run with --help for usage.");
 
 const provider = option("--provider", "ollama");
-if (!["ollama", "groq"].includes(provider)) throw new Error("--provider must be ollama or groq for a local run.");
+if (!["ollama", "local", "groq"].includes(provider)) throw new Error("--provider must be ollama, local or groq for a local run.");
 const model = option("--model", process.env.ATLAS_LOCAL_CODER_MODEL || "qwen2.5-coder:7b");
 const baseUrl = option("--base-url", "http://127.0.0.1:11434/v1");
 const contextWindow = option("--context-window", "16384");
@@ -50,7 +50,8 @@ const defaultAudit = join(homedir(), ".atlas", "runs", `${new Date().toISOString
 const auditLog = resolve(option("--audit-log", defaultAudit));
 
 const endpoint = new URL(baseUrl);
-if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(endpoint.hostname))) {
+const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname);
+if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && loopback)) {
   throw new Error("Self-hosted endpoints must use HTTPS unless they are loopback URLs.");
 }
 

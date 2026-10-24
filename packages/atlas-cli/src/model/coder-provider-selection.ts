@@ -7,7 +7,7 @@
  * observable in production.
  */
 
-export type CoderProviderId = "anthropic" | "ollama" | "groq" | "openai" | "workers-ai" | "cerebras" | "gemini" | "openrouter" | "mistral";
+export type CoderProviderId = "local" | "anthropic" | "ollama" | "groq" | "openai" | "workers-ai" | "cerebras" | "gemini" | "openrouter" | "mistral";
 
 export interface CoderProviderProfile {
   readonly providerId: CoderProviderId;
@@ -23,6 +23,7 @@ export interface CoderProviderProfile {
 }
 
 const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
+  local: { providerId: "local", displayName: "Local OpenAI-compatible model", defaultApiKeyEnvironmentVariable: "ATLAS_LOCAL_MODEL_KEY", contextWindowTokens: 16_384, maxOutputTokensPerTurn: 2_048 },
   // A server you run: keyless, and the window is whatever --context-window declares.
   ollama: { providerId: "ollama", displayName: "Ollama (local)", defaultApiKeyEnvironmentVariable: "", contextWindowTokens: 16_384, maxOutputTokensPerTurn: 2_048 },
   openai: { providerId: "openai", displayName: "OpenAI", defaultApiKeyEnvironmentVariable: "OPENAI_API_KEY", contextWindowTokens: 128_000, maxOutputTokensPerTurn: 8_192 },
@@ -58,7 +59,7 @@ const PROFILES: Readonly<Record<CoderProviderId, CoderProviderProfile>> = {
   },
 };
 
-export const CODER_PROVIDER_IDS: readonly CoderProviderId[] = ["anthropic", "groq", "openai", "workers-ai", "cerebras", "gemini", "openrouter", "mistral", "ollama"];
+export const CODER_PROVIDER_IDS: readonly CoderProviderId[] = ["local", "anthropic", "groq", "openai", "workers-ai", "cerebras", "gemini", "openrouter", "mistral", "ollama"];
 
 /** Providers that run on a machine the operator controls and need no credential. */
 export function isKeylessCoderProvider(providerId: CoderProviderId): boolean {
