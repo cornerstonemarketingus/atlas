@@ -1,6 +1,6 @@
 import type { RepositoryCommandSummary } from "../domain/repository-commands.js";
 import type { ValidationCommandProfile } from "../domain/validation-profile.js";
-import type { ValidationComparison, ValidationKind } from "../domain/validation-result.js";
+import type { ValidationComparison, ValidationKind, ValidationSnapshot } from "../domain/validation-result.js";
 
 /**
  * Categories worth running to verify a code change, cheapest-and-most-specific
@@ -146,6 +146,23 @@ const MAX_FAILURE_TEXT = 8_000;
  * invites the model to "fix" unrelated pre-existing breakage, which widens
  * the change beyond what was asked and makes the pull request unreviewable.
  */
+/**
+ * What the repository's own checks said before the agent touched anything,
+ * stated as measured fact. A small model told to "fix the failing tests" will
+ * otherwise describe a failure it never saw; this puts the real answer in front
+ * of it, including the case where nothing is failing.
+ */
+export function describeBaseline(snapshot: ValidationSnapshot): string {
+  const rows = snapshot.observations.map((observation) => `- [${observation.kind}] ${observation.caseId}: ${observation.outcome}`);
+  const failing = snapshot.observations.filter((observation) => observation.outcome !== "passed");
+  const detail = failing.flatMap((observation) => observation.diagnostics.slice(0, 3).map((item) => `  ${observation.caseId}: ${item.message}`)).slice(0, 12);
+  const verdict = failing.length === 0
+    ? "Every check passed before any edit. If the objective says a check or test is failing, that is NOT reproduced here: do not edit code to match an assertion you have not seen fail. Say that nothing is failing and stop, unless the objective asks for something else."
+    : "Only the failures listed above are real. Do not claim any other failure.";
+  const body = ["Measured before your first edit:", ...rows, ...(detail.length > 0 ? ["Failure messages:", ...detail] : []), "", verdict].join("\n");
+  return body.length <= MAX_FAILURE_TEXT ? body : `${body.slice(0, MAX_FAILURE_TEXT)}…`;
+}
+
 export function describeNewFailures(comparison: ValidationComparison): string {
   const introduced = comparison.diagnostics.filter((item) => item.classification === "new");
   if (introduced.length === 0) return "";
