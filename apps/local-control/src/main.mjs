@@ -354,6 +354,8 @@ const emergencyStop = createEmergencyStop({
 const server = createLocalControlServer({
   store,
   token,
+  model: process.env.ATLAS_MODEL || "qwen2.5-coder:7b",
+  runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory }),
   localCoder: (installed) => resolveLocalCoder({ modelPlan, installed }),
   runTask: (task) => runIsolatedLocalCoder(task, { dataDirectory, modelPlan }),
   license,

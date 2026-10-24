@@ -1,5 +1,13 @@
 # Atlas — pending work
 
+## Immediate owner-PC launch queue (2026-10-21)
+
+Start with [the key-free local LLM launch queue](docs/LOCAL-LLM-LAUNCH-QUEUE.md)
+and [the current open-PR triage](docs/OPEN-PR-LAUNCH-TRIAGE-2026-10-21.md).
+Local chat has completed on the owner's PC; performance, coding qualification,
+installer and visual acceptance remain open. Preserve #230/#200's existing
+work instead of duplicating local-model setup.
+
 Companion to `HANDOFF.md`. Updated 2026-09-14 after the production setup completed.
 
 > **Naming:** this file is *not* `todo.md`. The repository already has `TODO.md`
