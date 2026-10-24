@@ -71,22 +71,48 @@ export function isCoderProviderId(value: string): value is CoderProviderId {
 }
 
 /**
- * Infers the vendor from the model identifier when `--provider` is omitted.
- *
- * Model namespaces do not overlap between these vendors — Groq does not serve
- * Claude and Anthropic does not serve Llama — so this is a safe default rather
- * than a guess, and it keeps `--model claude-sonnet-5` working without a
- * second flag. Anything unrecognised falls back to Groq, which is what every
- * existing caller (including the workflow) already means.
+ * Model names only Groq's hosted catalog uses (its `vendor/model` ids and its
+ * own `-versatile`/`-instant` aliases). An Ollama tag never looks like these:
+ * Ollama names a size after a colon (`llama3.1:8b`).
  */
-export function inferCoderProviderId(model: string): CoderProviderId {
+const GROQ_CATALOG = /^(?:groq\/|openai\/gpt-oss-|moonshotai\/|meta-llama\/|qwen\/|deepseek-ai\/|allam-|compound(?:-|$)|llama-3\.\d+-\d+b-(?:versatile|instant)|llama3-\d+b-\d+|gemma2-\d+b-it$|mixtral-8x7b-32768$|deepseek-r1-distill-)/iu;
+
+export interface CoderProviderInferenceContext {
+  /** True when `--base-url` / ATLAS_CODER_BASE_URL names a server the operator runs. */
+  readonly customEndpoint?: boolean;
+}
+
+/**
+ * Infers the provider from the model identifier when `--provider` is omitted.
+ *
+ * A hosted vendor is inferred only from a name that vendor alone uses
+ * (`claude-*`, `gpt-*`, `gemini-*`, `@cf/...`, `...:free`, Groq's catalog
+ * ids), so naming the model is naming the vendor. Anything else is a model on
+ * the operator's own machine: the local Ollama, or the OpenAI-compatible
+ * server `--base-url` names. An unrecognised name never sends a repository to
+ * a hosted vendor just because that vendor's key happens to be set.
+ */
+export function inferCoderProviderId(model: string, context: CoderProviderInferenceContext = {}): CoderProviderId {
   const name = model.trim();
   if (name.startsWith("@cf/")) return "workers-ai";
   if (name.endsWith(":free")) return "openrouter";
+  if (/^ft:/iu.test(name)) return "openai";
+  // An Ollama tag (`gpt-oss:20b`, `mistral-small:24b`, `qwen2.5-coder:7b`): no
+  // hosted vendor names its models with a size or quantisation after a colon.
+  if (/^[^:]+:[^:]+$/u.test(name)) return context.customEndpoint === true ? "groq" : "ollama";
   if (/^gemini-/iu.test(name)) return "gemini";
   if (/^(?:mistral|devstral|codestral|magistral)-/iu.test(name)) return "mistral";
   if (/^(?:gpt-|o[134](?:-|$))/iu.test(name)) return "openai";
-  return /^(anthropic\/)?claude[-.]/iu.test(name) ? "anthropic" : "groq";
+  if (/^(anthropic\/)?claude[-.]/iu.test(name)) return "anthropic";
+  if (GROQ_CATALOG.test(name)) return "groq";
+  // The OpenAI-compatible client at the operator's own --base-url (vLLM, llama.cpp, LM Studio).
+  if (context.customEndpoint === true) return "groq";
+  return "ollama";
+}
+
+/** Providers whose requests leave the machine unless --base-url points them at loopback. */
+export function isHostedCoderProvider(providerId: CoderProviderId): boolean {
+  return providerId !== "ollama" && providerId !== "local";
 }
 
 export interface CoderProviderSelectionInput {
@@ -101,6 +127,8 @@ export interface CoderProviderSelectionInput {
    * suits its free tier; a paid tier has the headroom for full-file edits.
    */
   readonly outputTokensPerTurn?: number | undefined;
+  /** True when a --base-url was given; an unrecognised model then means that server, not Ollama. */
+  readonly customEndpoint?: boolean | undefined;
 }
 
 /** Bounds for an operator-chosen per-turn output ceiling. */
@@ -124,7 +152,7 @@ export function selectCoderProvider(input: CoderProviderSelectionInput): CoderPr
   let providerId: CoderProviderId;
   let inferred: boolean;
   if (requested === undefined || requested.length === 0) {
-    providerId = inferCoderProviderId(input.model);
+    providerId = inferCoderProviderId(input.model, { customEndpoint: input.customEndpoint === true });
     inferred = true;
   } else if (isCoderProviderId(requested)) {
     providerId = requested;

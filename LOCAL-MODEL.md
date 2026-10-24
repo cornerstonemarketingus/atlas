@@ -22,6 +22,15 @@ Set `ATLAS_CHAT_BASE_URL`, `ATLAS_CHAT_MODEL`, and comma-separated
 localhost: use the existing authenticated model gateway and HTTPS tunnel for
 hosted self-hosted chat, or an already configured hosted provider.
 
+**Local daemon and `atlas code`:** with only Ollama installed they run
+locally and never fall back to a hosted or paid API. The exact guarantee, and
+how to opt in to a remote provider, are in
+[SOVEREIGN-MODE.md](SOVEREIGN-MODE.md#the-local-only-guarantee-daemon-and-coder-cli).
+The default local model is `qwen3:0.6b`, which fits almost any machine but is
+too small for reliable multi-file coding; for coding pull
+`qwen2.5-coder:7b` (or a larger coder the Models page recommends) and apply
+the plan, or set `ATLAS_LOCAL_CODER_MODEL`.
+
 Atlas can drive a model you host instead of a vendor API. The agent's client is
 an ordinary OpenAI chat-completions client, so anything that speaks that
 protocol works: vLLM, Ollama, llama.cpp's server, TGI, LM Studio, or a rented

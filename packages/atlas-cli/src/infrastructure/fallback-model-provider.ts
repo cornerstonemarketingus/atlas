@@ -15,6 +15,12 @@ export interface FallbackModelProviderOptions {
    */
   readonly capacityWaitMs?: number;
   readonly sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  /**
+   * Told every time a failed route hands the request to the next one, so the
+   * switch is visible (the CLI prints it, naming whether the next route is
+   * remote). Never given request or response content.
+   */
+  readonly onFallback?: (event: { readonly from: string; readonly to: string; readonly code: string; readonly toIndex: number }) => void;
 }
 
 /** When no route said how long to wait, check again after this long. */
@@ -38,6 +44,7 @@ export class FallbackModelProvider implements ModelProvider {
   readonly #routes: readonly FallbackModelRoute[];
   readonly #capacityWaitMs: number;
   readonly #sleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  readonly #onFallback: FallbackModelProviderOptions["onFallback"];
   #waitedMs = 0;
 
   public constructor(routes: readonly FallbackModelRoute[], options: FallbackModelProviderOptions = {}) {
@@ -47,6 +54,7 @@ export class FallbackModelProvider implements ModelProvider {
     this.#routes = [...routes];
     this.#capacityWaitMs = capacityWaitMs;
     this.#sleep = options.sleep ?? defaultSleep;
+    this.#onFallback = options.onFallback;
     this.metadata = {
       id: "fallback",
       displayName: "Explicit model fallback chain",
@@ -64,7 +72,7 @@ export class FallbackModelProvider implements ModelProvider {
       let capacityLimited = 0;
       let otherFailures = 0;
       let soonestMs = Number.POSITIVE_INFINITY;
-      for (const route of this.#routes) {
+      for (const [index, route] of this.#routes.entries()) {
         const capabilities = route.provider.metadata.models.find((item) => item.model === route.model);
         if (!capabilities) throw new TypeError(`Provider '${route.provider.metadata.id}' does not declare model '${route.model}'.`);
         try {
@@ -81,6 +89,8 @@ export class FallbackModelProvider implements ModelProvider {
           if (isOutOfCapacity(error)) { capacityLimited += 1; soonestMs = Math.min(soonestMs, error.retryAfterMs ?? UNSTATED_CAPACITY_WAIT_MS); }
           else if (isUnusable(error)) unusable += 1;
           else otherFailures += 1;
+          const next = this.#routes[index + 1];
+          if (next !== undefined) this.#onFallback?.({ from: `${route.provider.metadata.id}/${route.model}`, to: `${next.provider.metadata.id}/${next.model}`, code: error.code, toIndex: index + 1 });
         }
       }
       const allOutOfCapacity = capacityLimited > 0 && otherFailures === 0;

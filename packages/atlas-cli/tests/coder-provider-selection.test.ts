@@ -21,17 +21,37 @@ describe("inferCoderProviderId", () => {
     }
   });
 
-  it("routes everything else to Groq, which is what existing callers mean", () => {
-    for (const model of ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct"]) {
+  it("routes Groq's own catalog names to Groq", () => {
+    for (const model of ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "moonshotai/kimi-k2-instruct", "meta-llama/llama-4-scout-17b-16e-instruct", "qwen/qwen3-32b"]) {
       assert.equal(inferCoderProviderId(model), "groq", model);
     }
+  });
+
+  it("keeps every other name on this machine: Ollama, or the operator's own --base-url server", () => {
+    // An unrecognised name used to mean Groq, so `--model qwen2.5-coder:7b`
+    // sent the repository to a hosted API whenever GROQ_API_KEY was set.
+    for (const model of ["qwen2.5-coder:7b", "qwen3:0.6b", "llama3.1:8b", "devstral:24b", "gpt-oss:20b", "mistral-small:24b", "gemini-ish:2b", "claude-like:7b", "deepseek-r1:14b", "my-finetune", "hf.co/org/model:Q4_K_M"]) {
+      assert.equal(inferCoderProviderId(model), "ollama", model);
+      assert.equal(inferCoderProviderId(model, { customEndpoint: true }), "groq", `${model} with --base-url uses the OpenAI-compatible client at that URL`);
+    }
+  });
+
+  it("still names hosted vendors from names only they use", () => {
+    assert.equal(inferCoderProviderId("gpt-5.4-mini"), "openai");
+    assert.equal(inferCoderProviderId("ft:gpt-4o-mini:org::abc"), "openai");
+    assert.equal(inferCoderProviderId("gemini-2.5-flash"), "gemini");
+    assert.equal(inferCoderProviderId("mistral-small-latest"), "mistral");
+    assert.equal(inferCoderProviderId("@cf/openai/gpt-oss-120b"), "workers-ai");
+    assert.equal(inferCoderProviderId("openai/gpt-oss-20b:free"), "openrouter");
   });
 
   it("does not mistake an unrelated model whose name merely contains 'claude'", () => {
     // The anchor matters: a hypothetical "notclaude-1" is not an Anthropic model,
     // and silently routing it there would send content to the wrong vendor.
-    assert.equal(inferCoderProviderId("notclaude-1"), "groq");
-    assert.equal(inferCoderProviderId("meta/claudel-7b"), "groq");
+    assert.notEqual(inferCoderProviderId("notclaude-1"), "anthropic");
+    assert.notEqual(inferCoderProviderId("meta/claudel-7b"), "anthropic");
+    assert.equal(inferCoderProviderId("notclaude-1"), "ollama");
+    assert.equal(inferCoderProviderId("meta/claudel-7b"), "ollama");
   });
 
   it("tolerates surrounding whitespace and casing", () => {

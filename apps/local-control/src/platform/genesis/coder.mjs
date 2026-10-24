@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyDifficulty, modelForDifficulty } from "../../agent/models/difficulty.mjs";
 import { DEFAULT_MODEL_ENDPOINT, assertSafeEndpoint, buildCoderCli, createCoderBuilder, isLoopback } from "../self-improve/runtime.mjs";
+import { checkModelEgress, modelEgressPolicy, resolveOllamaBaseUrl } from "../../agent/models/egress.mjs";
 
 /**
  * Genesis's coder: Atlas's existing coder (packages/atlas-cli `atlas code`),
@@ -21,9 +22,10 @@ import { DEFAULT_MODEL_ENDPOINT, assertSafeEndpoint, buildCoderCli, createCoderB
  * used when the owner sets ATLAS_GENESIS_BASE_URL (and a key variable), so
  * Genesis never spends paid API credits on its own.
  */
-export function createGenesisCoder({ atlasRoot, dataDirectory, environment = process.env, modelPlan = null, intelligence = null, fetchImpl = fetch, onOutput = null }) {
-  const baseUrl = environment.ATLAS_GENESIS_BASE_URL || DEFAULT_MODEL_ENDPOINT.baseUrl;
+export function createGenesisCoder({ atlasRoot, dataDirectory, environment = process.env, modelPlan = null, intelligence = null, fetchImpl = fetch, onOutput = null, egress = undefined, onRemote = null }) {
+  const baseUrl = environment.ATLAS_GENESIS_BASE_URL || `${resolveOllamaBaseUrl(environment)}/v1`;
   assertSafeEndpoint(baseUrl);
+  const policy = egress ?? modelEgressPolicy(environment);
   const explicitModel = environment.ATLAS_GENESIS_MODEL || null;
   const apiKey = environment.ATLAS_GENESIS_API_KEY_ENV ? environment[environment.ATLAS_GENESIS_API_KEY_ENV] ?? "" : "";
   let cli = null;
@@ -41,7 +43,10 @@ export function createGenesisCoder({ atlasRoot, dataDirectory, environment = pro
   }
 
   const coder = async ({ workspace, objective, task, attempt, kind }) => {
+    // The project's code goes only where the owner configured (local-only by default).
+    const destination = checkModelEgress(`${baseUrl.replace(/\/+$/u, "")}/chat/completions`, policy, "coding");
     const model = await chooseModel(task, attempt, kind);
+    if (destination.remote) onRemote?.({ host: destination.host, variable: destination.variable, model: model.tag, purpose: "coding" });
     cli ??= buildCoderCli(atlasRoot, { stdio: "ignore" });
     const builder = createCoderBuilder({ atlasRoot, cli, runsDirectory: join(dataDirectory, "genesis", "runs"), endpoint: { baseUrl, model: model.tag, apiKey }, contextWindow: String(model.context ?? 16_384), onOutput });
     const result = await builder({ worktree: workspace, objective, verifyDirectory: "." });
@@ -52,6 +57,7 @@ export function createGenesisCoder({ atlasRoot, dataDirectory, environment = pro
   coder.available = async () => {
     // An installed Atlas without its own source has no coder to run.
     if (!existsSync(join(atlasRoot, "packages", "atlas-cli", "package.json"))) return false;
+    try { checkModelEgress(baseUrl, policy, "coding"); } catch { return false; }
     if (!isLoopback(baseUrl)) return true;
     try {
       const response = await fetchImpl(`${baseUrl.replace(/\/+$/u, "")}/models`, { signal: AbortSignal.timeout(2_000) });

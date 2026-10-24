@@ -5,6 +5,80 @@ hosted vendor is removed. The customer owns the model, repository, browser,
 credentials, logs, and storage. Hosted services are convenience products, not
 runtime dependencies.
 
+## The local-only guarantee (daemon and coder CLI)
+
+The local daemon (`apps/local-control`) and the coder CLI (`atlas code`)
+run entirely on a model server on this machine. A hosted or paid provider is
+used only when you name it; it is never a default and never a silent
+fallback. A provider API key that merely exists in the environment
+(`GROQ_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...) does not cause a
+request to be sent anywhere.
+
+**What happens with only Ollama installed**
+
+- Chat, conversation sessions, team missions (planner, agents, verifier),
+  coder lanes, business reviews, Genesis (coder and vision review),
+  self-improvement, model discovery and health all talk to Ollama at
+  `OLLAMA_HOST` (Ollama's own variable; `0.0.0.0` means this machine) or
+  `ATLAS_OLLAMA_URL`, default `http://127.0.0.1:11434` (self-improvement
+  always uses `127.0.0.1:11434` unless `ATLAS_SELF_IMPROVE_BASE_URL` is set).
+  Dictation uses a local whisper server at `http://127.0.0.1:8080/v1` by
+  default.
+- Chat and team turns use Ollama's native `/api/chat` with `options.num_ctx`,
+  so the context window the conversation is fitted to (16,384 tokens unless
+  `ATLAS_MODEL_CONTEXT_WINDOW` says otherwise) is the window the model gets.
+  Ollama's OpenAI-compatible `/v1` path cannot be told a window and would
+  silently drop the start of a long prompt.
+- Any model, transcription, vision or discovery request to a non-loopback
+  host is refused with `REMOTE_MODEL_REFUSED` before a connection is opened.
+  The daemon prints its mode at startup (`Model egress: local-only.`), writes
+  it to the audit log (`model.egress`) and reports it in
+  `GET /v1/models/health` (`egress`).
+- When Ollama is not running or the model is not installed, the request fails
+  with a message that says so (`Start it (run "ollama serve" ...)`,
+  `ollama pull <model>`). Atlas does not switch to a hosted provider.
+- `atlas code` with no `--provider` sends an Ollama-style model name
+  (`qwen2.5-coder:7b`, `gpt-oss:20b`, anything not recognisably a hosted
+  vendor's) to the local Ollama. A hosted vendor is inferred only from a name
+  that vendor alone uses (`claude-*`, `gpt-*`, `gemini-*`, `@cf/...`,
+  `...:free`, Groq's catalog ids such as `openai/gpt-oss-120b`), and the run
+  prints `Atlas: the primary model route ... sends requests off this machine`
+  before the first request. Local-model requests get a ten-minute timeout for
+  CPU inference.
+- `scripts/local/run-coder.mjs` and the daemon's local coder pass
+  `--local-only` whenever the model server is on loopback.
+
+**Forcing it.** `ATLAS_LOCAL_ONLY=1` (daemon and CLI) or `atlas code
+--local-only` refuses every remote route even when one is configured:
+primary, `--fallback`, `--escalate`, a remote `--base-url`, a remote
+`ATLAS_MODEL_ENDPOINT`. The daemon lists the overridden endpoints in its
+startup line and health report, and turns self-improvement off if
+`ATLAS_SELF_IMPROVE_BASE_URL` is remote.
+
+**Opting in to a remote or paid provider.** Name it; that is the opt-in, and
+every request is then visible and logged.
+
+| Where | How | What you see |
+| --- | --- | --- |
+| Daemon chat, missions, team | `ATLAS_MODEL_ENDPOINT=https://host/v1` (and `ATLAS_MODEL_PROTOCOL=ollama` for a remote Ollama), or a route in `ATLAS_MODEL_ROUTES` | Startup line naming each remote host and the variable that set it; one `model.remote` audit event per request |
+| Local route falling back to a remote route | `ATLAS_MODEL_REMOTE_FALLBACK=1` as well as the remote route | Without it the local failure is reported and the remote route is listed as "not tried" |
+| Dictation, Genesis, self-improvement | `ATLAS_SPEECH_ENDPOINT`, `ATLAS_GENESIS_BASE_URL` / `ATLAS_GENESIS_VISION_BASE_URL`, `ATLAS_SELF_IMPROVE_BASE_URL` (plus their `_API_KEY_ENV`) | `model.remote` audit events |
+| `atlas code` | `--provider groq` (or openai, anthropic, ...), a vendor-only model name, `--fallback provider:model:KEY_ENV`, `--escalate ...` | A stderr line before the first request; a stderr line whenever a failed route hands over to the next |
+
+Only the endpoints you named are allowed; any other remote host is still
+refused. Remote endpoints must be HTTPS.
+
+**Tested at the boundary.** `apps/local-control/tests/local-only-daemon.test.mjs`
+boots the real daemon and `packages/atlas-cli/tests/cli-local-only.test.ts`
+runs the real CLI, each with every vendor key set and a network guard that
+fails any connection to a non-loopback host, against a protocol-accurate fake
+Ollama server. The fake proves where requests go and what they carry, not how
+a real model behaves.
+
+**Not covered here.** The hosted web app (`apps/web`) and the GitHub Actions
+coder (`scripts/runner`) are cloud deployments with their own provider
+routing; see [`docs/atlas-os/INFERENCE-FABRIC.md`](docs/atlas-os/INFERENCE-FABRIC.md).
+
 ## Working today
 
 ### Local control plane
@@ -114,7 +188,8 @@ Then run Atlas directly against any local Git checkout:
 node scripts/local/run-coder.mjs --repository C:\path\to\project --objective "Fix the failing test and verify the result"
 ```
 
-The default endpoint is `http://127.0.0.1:11434/v1`. Repository evidence,
+The default endpoint is `$ATLAS_OLLAMA_URL` or `$OLLAMA_HOST`, else
+`http://127.0.0.1:11434/v1`, and the run is `--local-only`. Repository evidence,
 tool calls, edits, and validation remain on the machine. Audit records are
 written under the user's `.atlas/runs` directory. Use `--help` for model,
 context-window, verification-directory, and endpoint options.
@@ -204,7 +279,7 @@ and hosted-browser APIs entirely.
 
 | Capability | Sovereign path | Optional hosted path |
 | --- | --- | --- |
-| Model inference | Ollama or compatible local server | Groq/Anthropic/customer endpoint |
+| Model inference | Ollama or compatible local server (the enforced default; see the local-only guarantee) | Groq/Anthropic/customer endpoint, only when named |
 | Code repository | Local Git checkout | GitHub |
 | Browser execution | Windows companion | Cloudflare Browser Rendering |
 | Audit history | Local SQLite and encrypted export | Cloudflare D1/artifacts |

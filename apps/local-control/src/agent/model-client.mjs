@@ -7,6 +7,8 @@
  * names a vendor, and the credential — when there is one — never leaves the
  * Authorization header.
  */
+import { checkModelEgress, modelEgressPolicy } from "./models/egress.mjs";
+
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
 
 export class ModelRequestError extends Error {
@@ -26,7 +28,13 @@ export function assertReachableEndpoint(baseUrl) {
   return url;
 }
 
-export function createModelClient({ baseUrl = DEFAULT_BASE_URL, apiKey = null, fetchImpl = fetch } = {}) {
+/**
+ * `egress` is the local-only policy (models/egress.mjs), read from the
+ * environment unless given: a remote endpoint the owner did not configure is
+ * refused before any connection is opened. `onRemote` is told about every
+ * request that does leave the machine, so it can be audited.
+ */
+export function createModelClient({ baseUrl = DEFAULT_BASE_URL, apiKey = null, fetchImpl = fetch, egress = undefined, onRemote = null } = {}) {
   const endpoint = assertReachableEndpoint(baseUrl);
 
   return {
@@ -39,6 +47,8 @@ export function createModelClient({ baseUrl = DEFAULT_BASE_URL, apiKey = null, f
      */
     async *stream({ model, messages, tools = [], maxOutputTokens = 2048, temperature = 0, signal }) {
       const url = new URL("chat/completions", endpoint);
+      const destination = checkModelEgress(url, egress ?? modelEgressPolicy());
+      if (destination.remote) onRemote?.({ host: destination.host, variable: destination.variable, model, purpose: "chat" });
       const body = {
         model,
         messages,
